@@ -1,0 +1,337 @@
+import React, { useState, useMemo } from 'react';
+import { 
+  ArrowLeft, Search, Calendar, ChevronDown, ChevronUp, 
+  Printer, RotateCcw, AlertCircle, Check, X, FileText, 
+  User, DollarSign, Box, Filter
+} from 'lucide-react';
+import { Transaction, BusinessConfig, CartItem } from '../types';
+
+interface TicketHistoryProps {
+  transactions: Transaction[];
+  config: BusinessConfig;
+  onClose: () => void;
+  onRefundTransaction: (originalTx: Transaction, refundedItems: CartItem[], reason: string) => void;
+}
+
+type ReturnReason = 'DAMAGED' | 'DISLIKE' | 'ERROR' | 'EXPIRED';
+
+const REASONS: { id: ReturnReason; label: string }[] = [
+  { id: 'DAMAGED', label: 'Producto Dañado / Defectuoso' },
+  { id: 'DISLIKE', label: 'No era lo que esperaba' },
+  { id: 'ERROR', label: 'Error en Cobro / Digitacion' },
+  { id: 'EXPIRED', label: 'Producto Vencido' },
+];
+
+const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onClose, onRefundTransaction }) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  
+  // Return Mode State
+  const [returnModeId, setReturnModeId] = useState<string | null>(null);
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set()); // Set of CartItem.cartId
+  const [returnReason, setReturnReason] = useState<ReturnReason>('ERROR');
+
+  // --- SMART SEARCH LOGIC ---
+  const filteredTransactions = useMemo(() => {
+    let data = [...transactions].reverse(); // Newest first
+    const lowerTerm = searchTerm.toLowerCase().trim();
+
+    if (!lowerTerm) return data;
+
+    // Predictive Filters
+    if (lowerTerm === 'ayer' || lowerTerm === 'yesterday') {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      return data.filter(t => new Date(t.date).toDateString() === yesterday.toDateString());
+    }
+    
+    if (lowerTerm === 'hoy' || lowerTerm === 'today') {
+      const today = new Date();
+      return data.filter(t => new Date(t.date).toDateString() === today.toDateString());
+    }
+
+    if (lowerTerm.startsWith('#')) {
+      return data.filter(t => t.id.toLowerCase().includes(lowerTerm.replace('#', '')));
+    }
+
+    return data.filter(t => 
+      t.customerName?.toLowerCase().includes(lowerTerm) ||
+      t.userName.toLowerCase().includes(lowerTerm) ||
+      t.id.toLowerCase().includes(lowerTerm) ||
+      t.total.toString().includes(lowerTerm)
+    );
+  }, [transactions, searchTerm]);
+
+  // --- HANDLERS ---
+  const toggleExpand = (id: string) => {
+    if (returnModeId) return; // Disable expand toggle during return mode
+    setExpandedId(prev => prev === id ? null : id);
+  };
+
+  const startReturnMode = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setReturnModeId(id);
+    setExpandedId(id); // Ensure it's open
+    setSelectedItems(new Set());
+    setReturnReason('ERROR');
+  };
+
+  const cancelReturnMode = () => {
+    setReturnModeId(null);
+    setSelectedItems(new Set());
+  };
+
+  const toggleItemSelection = (cartId: string) => {
+    const newSet = new Set(selectedItems);
+    if (newSet.has(cartId)) {
+      newSet.delete(cartId);
+    } else {
+      newSet.add(cartId);
+    }
+    setSelectedItems(newSet);
+  };
+
+  const confirmRefund = (transaction: Transaction) => {
+    if (selectedItems.size === 0) return;
+    if (confirm("¿Confirmar devolución de los artículos seleccionados?")) {
+      const itemsToRefund = transaction.items.filter(item => selectedItems.has(item.cartId));
+      onRefundTransaction(transaction, itemsToRefund, REASONS.find(r => r.id === returnReason)?.label || 'Devolución');
+      setReturnModeId(null);
+      setSelectedItems(new Set());
+    }
+  };
+
+  // Calculate Refund Total
+  const currentRefundTotal = useMemo(() => {
+    if (!returnModeId) return 0;
+    const tx = transactions.find(t => t.id === returnModeId);
+    if (!tx) return 0;
+    
+    return tx.items
+      .filter(item => selectedItems.has(item.cartId))
+      .reduce((acc, item) => acc + (item.price * item.quantity), 0) * (1 + config.taxRate);
+  }, [returnModeId, selectedItems, transactions, config.taxRate]);
+
+
+  // --- RENDER HELPERS ---
+  const themeText = config.themeColor === 'orange' ? 'text-orange-600' : 'text-blue-600';
+  const themeBg = config.themeColor === 'orange' ? 'bg-orange-600' : 'bg-blue-600';
+  const themeRing = config.themeColor === 'orange' ? 'focus:ring-orange-500' : 'focus:ring-blue-500';
+
+  return (
+    <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden">
+      
+      {/* Header */}
+      <header className="bg-white border-b border-gray-200 p-4 shadow-sm z-20">
+        <div className="flex items-center gap-4 mb-4">
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition-colors">
+            <ArrowLeft size={24} />
+          </button>
+          <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+            <FileText size={20} className={themeText} />
+            Historial de Ventas
+          </h1>
+        </div>
+
+        {/* Smart Search Bar */}
+        <div className="relative max-w-2xl mx-auto">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+          <input 
+            type="text" 
+            placeholder="Buscar 'Ayer', 'Juan Pérez', '#1234'..." 
+            className={`w-full pl-12 pr-4 py-3 bg-gray-100 border-none rounded-2xl focus:bg-white focus:ring-2 ${themeRing} focus:shadow-md outline-none transition-all text-gray-700 placeholder:text-gray-400`}
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+          {searchTerm && (
+             <div className="absolute right-4 top-1/2 -translate-y-1/2 text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded font-bold uppercase tracking-wider">
+                Filtro Activo
+             </div>
+          )}
+        </div>
+        
+        {/* Quick Chips */}
+        <div className="flex justify-center gap-2 mt-3 text-xs">
+           {['Hoy', 'Ayer', 'Devoluciones'].map(filter => (
+              <button 
+                 key={filter} 
+                 onClick={() => setSearchTerm(filter === 'Devoluciones' ? 'refund' : filter)}
+                 className="px-3 py-1 bg-white border border-gray-200 rounded-full text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
+              >
+                 {filter}
+              </button>
+           ))}
+        </div>
+      </header>
+
+      {/* Transactions List */}
+      <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 max-w-4xl mx-auto w-full">
+        {filteredTransactions.length === 0 ? (
+           <div className="text-center py-20 opacity-50">
+              <Box size={48} className="mx-auto mb-2 text-gray-400" />
+              <p className="text-gray-500 font-medium">No se encontraron tickets</p>
+           </div>
+        ) : (
+           filteredTransactions.map((tx) => {
+             const isExpanded = expandedId === tx.id;
+             const isReturnActive = returnModeId === tx.id;
+             const isRefunded = tx.status === 'REFUNDED' || tx.status === 'PARTIAL_REFUND';
+
+             return (
+               <div 
+                  key={tx.id} 
+                  className={`bg-white rounded-2xl shadow-sm border transition-all duration-300 overflow-hidden ${
+                     isReturnActive ? 'ring-2 ring-red-400 border-red-200 shadow-xl scale-[1.01] z-10' : 'border-gray-100 hover:shadow-md'
+                  }`}
+               >
+                  {/* Card Header (Always Visible) */}
+                  <div 
+                     onClick={() => toggleExpand(tx.id)}
+                     className="p-5 flex items-center justify-between cursor-pointer active:bg-gray-50"
+                  >
+                     <div className="flex items-center gap-4">
+                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-white shadow-sm ${isRefunded ? 'bg-red-500' : themeBg}`}>
+                           {isRefunded ? <RotateCcw size={20} /> : <Check size={24} strokeWidth={3} />}
+                        </div>
+                        <div>
+                           <div className="flex items-center gap-2">
+                              <h3 className="font-bold text-gray-900 text-lg">Ticket #{tx.id}</h3>
+                              {isRefunded && (
+                                 <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[10px] font-bold uppercase rounded-md tracking-wide">
+                                    Reembolsado
+                                 </span>
+                              )}
+                           </div>
+                           <div className="flex items-center gap-3 text-sm text-gray-500 mt-1">
+                              <span className="flex items-center gap-1"><Calendar size={14} /> {new Date(tx.date).toLocaleDateString()}</span>
+                              <span className="flex items-center gap-1"><User size={14} /> {tx.customerName || 'Cliente General'}</span>
+                           </div>
+                        </div>
+                     </div>
+                     <div className="text-right">
+                        <p className={`text-xl font-black ${isRefunded ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+                           {config.currencySymbol}{tx.total.toFixed(2)}
+                        </p>
+                        <p className="text-xs text-gray-400 font-medium">{new Date(tx.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
+                     </div>
+                  </div>
+
+                  {/* Expanded Content (Accordion) */}
+                  {(isExpanded || isReturnActive) && (
+                     <div className="border-t border-gray-100 bg-gray-50/50 animate-in slide-in-from-top-2 duration-200">
+                        {/* Items List */}
+                        <div className="p-2 space-y-1">
+                           {tx.items.map((item, idx) => (
+                              <div 
+                                 key={idx} 
+                                 onClick={() => isReturnActive && toggleItemSelection(item.cartId)}
+                                 className={`flex justify-between items-center p-3 rounded-xl transition-colors ${
+                                    isReturnActive 
+                                       ? 'cursor-pointer hover:bg-white border border-transparent' 
+                                       : ''
+                                 } ${
+                                    selectedItems.has(item.cartId) ? 'bg-red-50 border-red-200' : ''
+                                 }`}
+                              >
+                                 <div className="flex items-center gap-3">
+                                    {isReturnActive && (
+                                       <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
+                                          selectedItems.has(item.cartId) ? 'bg-red-500 border-red-500 text-white' : 'bg-white border-gray-300'
+                                       }`}>
+                                          {selectedItems.has(item.cartId) && <Check size={12} strokeWidth={3} />}
+                                       </div>
+                                    )}
+                                    <span className={`font-bold bg-white w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 text-xs ${isReturnActive ? 'opacity-50' : ''}`}>
+                                       {item.quantity}x
+                                    </span>
+                                    <div>
+                                       <p className="font-medium text-gray-800 text-sm">{item.name}</p>
+                                       {item.modifiers && <p className="text-xs text-gray-400">{item.modifiers.join(', ')}</p>}
+                                    </div>
+                                 </div>
+                                 <span className="font-bold text-gray-700 text-sm">
+                                    {config.currencySymbol}{(item.price * item.quantity).toFixed(2)}
+                                 </span>
+                              </div>
+                           ))}
+                        </div>
+
+                        {/* Controls Footer */}
+                        <div className="p-4 bg-white border-t border-gray-200 flex justify-between items-center gap-4">
+                           {!isReturnActive ? (
+                              <>
+                                 <button className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg font-bold text-sm hover:bg-gray-200 transition-colors">
+                                    <Printer size={16} /> Re-imprimir
+                                 </button>
+                                 {!isRefunded && (
+                                    <button 
+                                       onClick={(e) => startReturnMode(e, tx.id)}
+                                       className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 border border-red-100 rounded-lg font-bold text-sm hover:bg-red-100 transition-colors"
+                                    >
+                                       <RotateCcw size={16} /> Devolución
+                                    </button>
+                                 )}
+                              </>
+                           ) : (
+                              /* RETURN MODE CONTROLS */
+                              <div className="w-full animate-in fade-in">
+                                 <div className="flex items-center justify-between mb-4 bg-red-50 p-3 rounded-xl border border-red-100">
+                                    <div className="flex items-center gap-2 text-red-700 font-bold text-sm">
+                                       <AlertCircle size={18} />
+                                       <span>Modo Devolución Activo</span>
+                                    </div>
+                                    <div className="text-right">
+                                       <p className="text-[10px] text-red-400 uppercase font-bold">Total a Reembolsar</p>
+                                       <p className="text-xl font-black text-red-600">{config.currencySymbol}{currentRefundTotal.toFixed(2)}</p>
+                                    </div>
+                                 </div>
+
+                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                    <div>
+                                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Motivo</label>
+                                       <select 
+                                          value={returnReason}
+                                          onChange={(e) => setReturnReason(e.target.value as ReturnReason)}
+                                          className="w-full p-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-medium outline-none focus:border-red-400"
+                                       >
+                                          {REASONS.map(r => (
+                                             <option key={r.id} value={r.id}>{r.label}</option>
+                                          ))}
+                                       </select>
+                                    </div>
+                                    <div className="flex items-end text-xs text-gray-400 pb-2">
+                                       * El inventario se ajustará automáticamente si aplica.
+                                    </div>
+                                 </div>
+
+                                 <div className="flex gap-3">
+                                    <button 
+                                       onClick={cancelReturnMode}
+                                       className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200"
+                                    >
+                                       Cancelar
+                                    </button>
+                                    <button 
+                                       onClick={() => confirmRefund(tx)}
+                                       disabled={selectedItems.size === 0}
+                                       className="flex-[2] py-3 bg-red-600 text-white rounded-xl font-bold shadow-lg shadow-red-200 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                    >
+                                       <Check size={18} /> Confirmar Reembolso
+                                    </button>
+                                 </div>
+                              </div>
+                           )}
+                        </div>
+                     </div>
+                  )}
+               </div>
+             );
+           })
+        )}
+      </div>
+
+    </div>
+  );
+};
+
+export default TicketHistory;
