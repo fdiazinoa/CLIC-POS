@@ -1,8 +1,10 @@
+
 import React, { useState, useMemo } from 'react';
 import { 
   ArrowLeft, Search, ChevronRight, 
   Store, Users, Package, Printer, CreditCard, 
-  History, ToggleLeft, ToggleRight, Building2, UserPlus, Edit2, Trash2, CheckSquare, Square, User as UserIcon, FileText, PlusCircle, Receipt, Truck, Tag, Ticket
+  History, ToggleLeft, ToggleRight, Building2, UserPlus, Edit2, Trash2, CheckSquare, Square, User as UserIcon, FileText, PlusCircle, Receipt, Truck, Tag, Ticket,
+  ScanBarcode, Coins, Globe, Database, AlertOctagon
 } from 'lucide-react';
 import { BusinessConfig, User, RoleDefinition, Transaction, VerticalType, SubVertical, Product } from '../types';
 import { AVAILABLE_PERMISSIONS, getInitialConfig, RETAIL_PRODUCTS, FOOD_PRODUCTS } from '../constants';
@@ -10,6 +12,12 @@ import ProductForm from './ProductForm';
 import HardwareSettings from './HardwareSettings';
 import ReceiptDesigner from './ReceiptDesigner';
 import PromotionBuilder from './PromotionBuilder';
+import TeamHub from './TeamHub';
+import PaymentSettings from './PaymentSettings';
+import LabelDesigner from './LabelDesigner';
+import TipsSettings from './TipsSettings';
+import DataSecurityHub from './DataSecurityHub';
+import ActivityLog from './ActivityLog';
 
 interface SettingsProps {
   config: BusinessConfig;
@@ -21,11 +29,12 @@ interface SettingsProps {
   onUpdateRoles: (newRoles: RoleDefinition[]) => void;
   onOpenZReport: () => void;
   onOpenSupplyChain: () => void;
+  onOpenFranchise: () => void;
   onClose: () => void;
 }
 
 // --- CONFIGURATION GROUPS ---
-type SettingsSection = 'HOME' | 'CATALOG' | 'STORE' | 'TEAM' | 'HARDWARE' | 'PAYMENTS' | 'HISTORY' | 'TICKET' | 'SUPPLY' | 'PROMOS';
+type SettingsSection = 'HOME' | 'CATALOG' | 'STORE' | 'TEAM' | 'HARDWARE' | 'PAYMENTS' | 'HISTORY' | 'TICKET' | 'SUPPLY' | 'PROMOS' | 'LABELS' | 'TIPS' | 'FRANCHISE' | 'DATA_SECURITY' | 'AUDIT';
 
 interface SettingModule {
   id: SettingsSection;
@@ -44,6 +53,22 @@ const MODULES: SettingModule[] = [
     icon: Package,
     color: 'bg-blue-500',
     keywords: ['productos', 'inventario', 'stock', 'precios', 'sku', 'código', 'tallas']
+  },
+  {
+    id: 'TIPS',
+    title: 'Propinas',
+    description: 'Sugerencias y Auto-Cargo',
+    icon: Coins,
+    color: 'bg-amber-500',
+    keywords: ['propina', 'servicio', 'service charge', 'gratuity', 'mesero']
+  },
+  {
+    id: 'LABELS',
+    title: 'Diseñador Etiquetas',
+    description: 'Códigos de Barras, Precios',
+    icon: ScanBarcode,
+    color: 'bg-rose-500',
+    keywords: ['impresora', 'etiqueta', 'barcode', 'qr', 'diseño']
   },
   {
     id: 'PROMOS',
@@ -79,11 +104,11 @@ const MODULES: SettingModule[] = [
   },
   {
     id: 'TEAM',
-    title: 'Equipo',
-    description: 'Usuarios, Roles, Permisos',
+    title: 'Equipo & Turnos',
+    description: 'Usuarios, Roles, Fichaje',
     icon: Users,
     color: 'bg-orange-500',
-    keywords: ['usuarios', 'empleados', 'pin', 'clave', 'acceso', 'roles', 'permisos', 'seguridad', 'admin']
+    keywords: ['usuarios', 'empleados', 'pin', 'clave', 'acceso', 'roles', 'permisos', 'seguridad', 'admin', 'fichaje', 'horarios']
   },
   {
     id: 'HARDWARE',
@@ -102,12 +127,36 @@ const MODULES: SettingModule[] = [
     keywords: ['tarjeta', 'efectivo', 'qr', 'divisa', 'propina', 'descuento', 'moneda']
   },
   {
+    id: 'AUDIT',
+    title: 'Auditoría',
+    description: 'Logs, Traza y Seguridad',
+    icon: AlertOctagon,
+    color: 'bg-red-500',
+    keywords: ['logs', 'seguridad', 'robo', 'historial', 'traza', 'acciones']
+  },
+  {
+    id: 'DATA_SECURITY',
+    title: 'Datos y Backup',
+    description: 'Exportación, Bloqueo Kiosco',
+    icon: Database,
+    color: 'bg-slate-500',
+    keywords: ['exportar', 'csv', 'excel', 'kiosco', 'pin', 'bloqueo', 'seguridad', 'backup']
+  },
+  {
     id: 'HISTORY',
     title: 'Historial',
     description: 'Transacciones y Cierres',
     icon: History,
     color: 'bg-cyan-600',
     keywords: ['ventas', 'reportes', 'cierre', 'z', 'ayer', 'transacciones']
+  },
+  {
+    id: 'FRANCHISE',
+    title: 'Panel Franquicia',
+    description: 'Gestión Multitienda y Red',
+    icon: Globe,
+    color: 'bg-slate-900',
+    keywords: ['red', 'tiendas', 'global', 'admin', 'hq']
   }
 ];
 
@@ -125,23 +174,17 @@ const SUB_VERTICAL_OPTIONS: Record<string, { value: SubVertical; label: string }
   ]
 };
 
-const Settings: React.FC<SettingsProps> = ({ config, users, roles, transactions, onUpdateConfig, onUpdateUsers, onUpdateRoles, onOpenZReport, onOpenSupplyChain, onClose }) => {
+const Settings: React.FC<SettingsProps> = ({ config, users, roles, transactions, onUpdateConfig, onUpdateUsers, onUpdateRoles, onOpenZReport, onOpenSupplyChain, onOpenFranchise, onClose }) => {
   const [currentView, setCurrentView] = useState<SettingsSection>('HOME');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Sub-states for specific modals
-  const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [isUserModalOpen, setIsUserModalOpen] = useState(false);
-  const [userFormData, setUserFormData] = useState<Partial<User>>({ name: '', pin: '', role: 'CASHIER', photo: '' });
-  const [editingRole, setEditingRole] = useState<RoleDefinition | null>(null);
-  const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
-  const [roleFormData, setRoleFormData] = useState<Partial<RoleDefinition>>({ name: '', permissions: [] });
+  // Sub-states for specific modals (Legacy User Modal removed as TeamHub handles it, but keeping refs for Product)
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
 
   // Product State
   const initialProducts = config.vertical === VerticalType.RESTAURANT ? FOOD_PRODUCTS : RETAIL_PRODUCTS;
   const [products, setProducts] = useState<Product[]>(initialProducts);
-  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
   // --- SEARCH LOGIC ---
   const filteredModules = useMemo(() => {
@@ -162,60 +205,6 @@ const Settings: React.FC<SettingsProps> = ({ config, users, roles, transactions,
     } else {
       onClose();
     }
-  };
-
-  const toggleFeature = (key: keyof typeof config.features) => {
-    onUpdateConfig({
-      ...config,
-      features: {
-        ...config.features,
-        [key]: !config.features[key]
-      }
-    });
-  };
-
-  /* --- User Logic Handlers --- */
-  const handleEditUser = (user: User) => { setEditingUser(user); setUserFormData(user); setIsUserModalOpen(true); };
-  const handleCreateUser = () => { setEditingUser(null); setUserFormData({ name: '', pin: '', role: roles[0]?.id || 'CASHIER', photo: '' }); setIsUserModalOpen(true); };
-  const handleDeleteUser = (id: string) => {
-     if(confirm('¿Eliminar usuario?')) onUpdateUsers(users.filter(u => u.id !== id));
-  };
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => setUserFormData(prev => ({ ...prev, photo: reader.result as string }));
-      reader.readAsDataURL(file);
-    }
-  };
-  const handleSaveUser = () => {
-    if (!userFormData.name || !userFormData.pin || !userFormData.role) return;
-    if (editingUser) {
-      onUpdateUsers(users.map(u => u.id === editingUser.id ? { ...u, ...userFormData } as User : u));
-    } else {
-      onUpdateUsers([...users, { ...userFormData, id: Math.random().toString(36).substr(2, 9) } as User]);
-    }
-    setIsUserModalOpen(false);
-  };
-
-  /* --- Role Logic Handlers --- */
-  const handleEditRole = (role: RoleDefinition) => { setEditingRole(role); setRoleFormData(role); setIsRoleModalOpen(true); };
-  const handleCreateRole = () => { setEditingRole(null); setRoleFormData({ name: '', permissions: [] }); setIsRoleModalOpen(true); };
-  const handleDeleteRole = (id: string) => { if(confirm('¿Eliminar rol?')) onUpdateRoles(roles.filter(r => r.id !== id)); };
-  const togglePermission = (key: string) => {
-    setRoleFormData(prev => {
-      const perms = prev.permissions || [];
-      return perms.includes(key) ? { ...prev, permissions: perms.filter(p => p !== key) } : { ...prev, permissions: [...perms, key] };
-    });
-  };
-  const handleSaveRole = () => {
-    if (!roleFormData.name) return;
-    if (editingRole) {
-       onUpdateRoles(roles.map(r => r.id === editingRole.id ? { ...r, ...roleFormData } as RoleDefinition : r));
-    } else {
-      onUpdateRoles([...roles, { ...roleFormData, id: Math.random().toString(36).substr(2, 9), isSystem: false } as RoleDefinition]);
-    }
-    setIsRoleModalOpen(false);
   };
 
   /* --- Product Logic Handlers --- */
@@ -256,6 +245,8 @@ const Settings: React.FC<SettingsProps> = ({ config, users, roles, transactions,
                    onClick={() => {
                       if (mod.id === 'SUPPLY') {
                          onOpenSupplyChain();
+                      } else if (mod.id === 'FRANCHISE') {
+                         onOpenFranchise();
                       } else {
                          setCurrentView(mod.id);
                       }
@@ -277,41 +268,43 @@ const Settings: React.FC<SettingsProps> = ({ config, users, roles, transactions,
           </div>
         );
 
+      case 'PAYMENTS':
+        return (
+          <PaymentSettings 
+            config={config} 
+            onUpdateConfig={onUpdateConfig} 
+            onClose={() => setCurrentView('HOME')} 
+          />
+        );
+
+      case 'TIPS':
+        return (
+          <TipsSettings 
+            config={config} 
+            onUpdateConfig={onUpdateConfig} 
+            onClose={() => setCurrentView('HOME')} 
+          />
+        );
+
       case 'TEAM':
         return (
-          <div className="animate-in slide-in-from-right-10 duration-300 space-y-8 max-w-5xl mx-auto">
-             <section>
-                <div className="flex justify-between items-center mb-4">
-                   <h2 className="text-xl font-bold text-gray-800">Usuarios</h2>
-                   <button onClick={handleCreateUser} className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 shadow-sm">
-                      <UserPlus size={18} /> Nuevo
-                   </button>
-                </div>
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                   <div className="divide-y divide-gray-100">
-                      {users.map(user => (
-                         <div key={user.id} className="p-4 flex items-center justify-between hover:bg-orange-50/50 transition-colors">
-                            <div className="flex items-center gap-3">
-                               {user.photo ? (
-                                  <img src={user.photo} alt={user.name} className="w-10 h-10 rounded-full object-cover" />
-                               ) : (
-                                  <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-500"><UserIcon size={20} /></div>
-                               )}
-                               <div>
-                                  <p className="font-bold text-gray-800">{user.name}</p>
-                                  <span className="text-xs bg-gray-100 px-2 py-0.5 rounded text-gray-500">{roles.find(r => r.id === user.role)?.name}</span>
-                               </div>
-                            </div>
-                            <div className="flex gap-2">
-                               <button onClick={() => handleEditUser(user)} className="p-2 text-gray-400 hover:text-orange-500"><Edit2 size={18} /></button>
-                               <button onClick={() => handleDeleteUser(user.id)} className="p-2 text-gray-400 hover:text-red-500"><Trash2 size={18} /></button>
-                            </div>
-                         </div>
-                      ))}
-                   </div>
-                </div>
-             </section>
-          </div>
+          <TeamHub 
+            users={users} 
+            roles={roles} 
+            onUpdateUsers={onUpdateUsers} 
+            onUpdateRoles={onUpdateRoles} 
+            onClose={() => setCurrentView('HOME')} 
+          />
+        );
+      
+      case 'DATA_SECURITY':
+        return (
+          <DataSecurityHub onClose={() => setCurrentView('HOME')} />
+        );
+
+      case 'AUDIT':
+        return (
+          <ActivityLog onClose={() => setCurrentView('HOME')} />
         );
 
       case 'STORE':
@@ -376,6 +369,9 @@ const Settings: React.FC<SettingsProps> = ({ config, users, roles, transactions,
         
       case 'PROMOS':
         return <PromotionBuilder products={products} config={config} onClose={() => setCurrentView('HOME')} />;
+
+      case 'LABELS':
+        return <LabelDesigner onClose={() => setCurrentView('HOME')} />;
 
       case 'CATALOG':
          return (
@@ -522,27 +518,6 @@ const Settings: React.FC<SettingsProps> = ({ config, users, roles, transactions,
       <main className="flex-1 overflow-y-auto p-4 md:p-8 relative">
          {renderContent()}
       </main>
-
-      {/* MODALS */}
-      {isUserModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
-           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
-              <h3 className="font-bold text-lg mb-4">{editingUser ? 'Editar' : 'Nuevo'} Usuario</h3>
-              <div className="space-y-4">
-                 <div className="flex justify-center"><label className="cursor-pointer relative group"><div className="w-20 h-20 rounded-full bg-gray-200 overflow-hidden"><img src={userFormData.photo || ''} className="w-full h-full object-cover" /></div><input type="file" className="hidden" onChange={handlePhotoUpload} /></label></div>
-                 <input className="w-full p-2 border rounded" placeholder="Nombre" value={userFormData.name} onChange={e => setUserFormData({...userFormData, name: e.target.value})} />
-                 <input className="w-full p-2 border rounded" placeholder="PIN (4 dígitos)" maxLength={4} value={userFormData.pin} onChange={e => setUserFormData({...userFormData, pin: e.target.value})} />
-                 <select className="w-full p-2 border rounded" value={userFormData.role} onChange={e => setUserFormData({...userFormData, role: e.target.value})}>
-                    {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                 </select>
-              </div>
-              <div className="flex justify-end gap-2 mt-6">
-                 <button onClick={() => setIsUserModalOpen(false)} className="px-4 py-2 text-gray-600">Cancelar</button>
-                 <button onClick={handleSaveUser} className="px-4 py-2 bg-blue-600 text-white rounded-lg">Guardar</button>
-              </div>
-           </div>
-        </div>
-      )}
 
       {isProductModalOpen && (
          <ProductForm 

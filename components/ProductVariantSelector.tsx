@@ -35,15 +35,24 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
   const [groups, setGroups] = useState<VariantGroup[]>([]);
 
   // Simulate Variant Data parsing based on Product Category or Mock Data
-  // In a real scenario, this would come from the database structure
   useEffect(() => {
     // MOCK DATA GENERATION FOR DEMO PURPOSES
-    // This allows the UI to demonstrate the requested functionality
-    // regardless of the backend limitations in the current 'types.ts'
     let mockGroups: VariantGroup[] = [];
 
-    if (product.category === 'Ropa' || product.category === 'Calzado' || product.category === 'Camisetas') {
+    if (['Ropa', 'Calzado', 'Camisetas', 'Vestidos', 'Pantalones'].includes(product.category)) {
       mockGroups = [
+        {
+          id: 'color',
+          name: 'Color',
+          type: 'COLOR',
+          options: [
+            { id: 'c1', label: 'Negro', value: '#1F2937', stock: 10, priceModifier: 0 },
+            { id: 'c2', label: 'Blanco', value: '#F3F4F6', stock: 10, priceModifier: 0 },
+            { id: 'c3', label: 'Azul', value: '#3B82F6', stock: 0, priceModifier: 0 }, // Out of stock
+            { id: 'c4', label: 'Rojo', value: '#EF4444', stock: 5, priceModifier: 0 },
+            { id: 'c5', label: 'Verde', value: '#10B981', stock: 8, priceModifier: 0 },
+          ]
+        },
         {
           id: 'size',
           name: 'Talla',
@@ -55,17 +64,6 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
             { id: 'xl', label: 'XL', value: 'XL', stock: 8, priceModifier: 1.00 },
           ]
         },
-        {
-          id: 'color',
-          name: 'Color',
-          type: 'COLOR',
-          options: [
-            { id: 'c1', label: 'Negro', value: '#1F2937', stock: 10, priceModifier: 0 },
-            { id: 'c2', label: 'Blanco', value: '#F3F4F6', stock: 10, priceModifier: 0 },
-            { id: 'c3', label: 'Azul', value: '#3B82F6', stock: 0, priceModifier: 0 }, // Out of stock
-            { id: 'c4', label: 'Rojo', value: '#EF4444', stock: 5, priceModifier: 0 },
-          ]
-        }
       ];
     } else if (product.category === 'Pizzas' || product.category === 'Platos') {
       // Fallback for restaurant items using existing modifiers if available
@@ -156,7 +154,7 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
                     )}
                   </div>
 
-                  {/* COLOR SELECTOR */}
+                  {/* COLOR SELECTOR: CIRCLES */}
                   {group.type === 'COLOR' && (
                      <div className="flex flex-wrap gap-3">
                         {group.options.map(option => {
@@ -169,9 +167,9 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
                                disabled={isOutOfStock}
                                onClick={() => handleSelect(group.id, option)}
                                className={`
-                                 w-12 h-12 rounded-full relative shadow-sm transition-all duration-200 flex items-center justify-center
-                                 ${isOutOfStock ? 'opacity-40 cursor-not-allowed scale-90 grayscale' : 'hover:scale-110 active:scale-95'}
-                                 ${isSelected ? 'ring-2 ring-offset-2 ring-blue-500 scale-110' : 'ring-1 ring-gray-200'}
+                                 w-12 h-12 rounded-full relative shadow-sm transition-all duration-200 flex items-center justify-center border-2
+                                 ${isOutOfStock ? 'opacity-20 cursor-not-allowed grayscale border-gray-100' : 'hover:scale-110 active:scale-95 cursor-pointer'}
+                                 ${isSelected ? 'ring-2 ring-offset-2 ring-blue-500 scale-110 border-transparent' : 'border-gray-200'}
                                `}
                                style={{ backgroundColor: option.value }}
                                title={`${option.label} ${isOutOfStock ? '(Agotado)' : ''}`}
@@ -190,8 +188,8 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
                      </div>
                   )}
 
-                  {/* SIZE / TEXT SELECTOR */}
-                  {(group.type === 'SIZE' || group.type === 'TEXT') && (
+                  {/* SIZE SELECTOR: SQUARES/RECTANGLES */}
+                  {group.type === 'SIZE' && (
                      <div className="flex flex-wrap gap-2">
                         {group.options.map(option => {
                            const isSelected = selections[group.id]?.id === option.id;
@@ -208,11 +206,35 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
                                      ? 'bg-gray-50 border-gray-100 text-gray-300 decoration-gray-400 line-through cursor-not-allowed' 
                                      : isSelected 
                                         ? 'bg-gray-900 border-gray-900 text-white shadow-lg scale-105' 
-                                        : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400'
+                                        : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400 hover:bg-gray-50'
                                   }
                                 `}
                               >
                                  <span>{option.label}</span>
+                              </button>
+                           );
+                        })}
+                     </div>
+                  )}
+
+                  {/* TEXT SELECTOR: PILLS (Fallback) */}
+                  {group.type === 'TEXT' && (
+                     <div className="flex flex-wrap gap-2">
+                        {group.options.map(option => {
+                           const isSelected = selections[group.id]?.id === option.id;
+                           return (
+                              <button
+                                key={option.id}
+                                onClick={() => handleSelect(group.id, option)}
+                                className={`
+                                  px-4 py-2 rounded-lg font-medium text-sm border transition-all
+                                  ${isSelected 
+                                     ? 'bg-blue-50 text-blue-700 border-blue-200 ring-1 ring-blue-200' 
+                                     : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                                  }
+                                `}
+                              >
+                                 {option.label}
                               </button>
                            );
                         })}
@@ -236,7 +258,7 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
              className={`
                flex-1 py-4 px-6 rounded-xl font-bold text-white shadow-lg flex items-center justify-center gap-2 transition-all
                ${!isReadyToAdd 
-                  ? 'bg-gray-300 cursor-not-allowed' 
+                  ? 'bg-gray-300 cursor-not-allowed shadow-none' 
                   : 'bg-blue-600 hover:bg-blue-500 hover:shadow-blue-500/30 active:scale-95'
                }
              `}

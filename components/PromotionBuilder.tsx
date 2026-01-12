@@ -99,12 +99,12 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, o
     <div className="h-full flex flex-col bg-gray-50 animate-in slide-in-from-right-10 duration-300">
       
       {/* Header */}
-      <div className="flex justify-between items-center p-6 bg-white border-b border-gray-200">
+      <div className="flex justify-between items-center p-6 bg-white border-b border-gray-200 shadow-sm shrink-0 z-10">
         <div>
           <h2 className="text-2xl font-black text-gray-800">Nueva Promoción</h2>
           <p className="text-sm text-gray-500">Crea reglas dinámicas de precios</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 bg-gray-100 rounded-full p-1 pr-4">
              <button 
                onClick={() => setIsActive(!isActive)}
@@ -114,13 +114,24 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, o
              </button>
              <span className="text-xs font-bold text-gray-600">{isActive ? 'ACTIVA' : 'INACTIVA'}</span>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-gray-600">
+
+          <button 
+            onClick={handleSave}
+            className={`px-6 py-2.5 rounded-xl font-bold text-white shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 text-sm ${currentTypeConfig?.color || 'bg-blue-600'}`}
+          >
+            <Save size={18} />
+            <span className="hidden sm:inline">Guardar</span>
+          </button>
+
+          <div className="h-8 w-px bg-gray-200 mx-2"></div>
+
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
             <X size={24} />
           </button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full space-y-8">
+      <div className="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full space-y-8 pb-20">
         
         {/* Step 1: Promotion Type */}
         <section>
@@ -303,19 +314,6 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, o
            </div>
         </section>
 
-      </div>
-
-      {/* Footer */}
-      <div className="p-6 bg-white border-t border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] flex justify-end gap-4">
-         <button onClick={onClose} className="px-6 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-50 transition-colors">
-            Cancelar
-         </button>
-         <button 
-            onClick={handleSave}
-            className={`px-8 py-3 rounded-xl font-bold text-white shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 ${currentTypeConfig?.color || 'bg-blue-600'}`}
-         >
-            <Save size={20} /> Guardar Promoción
-         </button>
       </div>
 
     </div>

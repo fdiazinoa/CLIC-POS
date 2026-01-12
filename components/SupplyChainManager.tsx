@@ -1,10 +1,13 @@
+
 import React, { useState, useMemo } from 'react';
 import { 
   ArrowLeft, Truck, Package, AlertTriangle, Search, Plus, 
   ShoppingCart, Check, X, FileText, Calendar, Archive,
-  ClipboardList, ArrowRight, Save, User, Minus, Box
+  ClipboardList, ArrowRight, Save, User, Minus, Box,
+  ScanBarcode, LayoutList
 } from 'lucide-react';
 import { BusinessConfig, Product, Supplier, PurchaseOrder, PurchaseOrderItem } from '../types';
+import InventoryAudit from './InventoryAudit';
 
 interface SupplyChainManagerProps {
   products: Product[];
@@ -17,7 +20,7 @@ interface SupplyChainManagerProps {
   onReceiveStock: (items: PurchaseOrderItem[]) => void; 
 }
 
-type Tab = 'ALERTS' | 'CREATE' | 'RECEIVE';
+type Tab = 'ALERTS' | 'CREATE' | 'RECEIVE' | 'INVENTORY';
 
 const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({ 
   products, 
@@ -38,6 +41,9 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
 
   // Receive Order State
   const [receivingOrderId, setReceivingOrderId] = useState<string | null>(null);
+
+  // Inventory Audit State
+  const [isAuditMode, setIsAuditMode] = useState(false);
 
   // --- DERIVED DATA ---
   const lowStockProducts = useMemo(() => {
@@ -107,6 +113,33 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
     setActiveTab('RECEIVE');
   };
 
+  const handleAuditCommit = (adjustments: { productId: string; newStock: number }[]) => {
+    // In a real app, this would call an API to create a stock adjustment movement
+    // For now, we simulate receiving stock to trigger the update logic in App.tsx 
+    // or we should add a specific prop for adjustments. 
+    // Reusing onReceiveStock with a hack since App.tsx logic adds, but we need to SET.
+    // Ideally, App.tsx should have onUpdateProductStock(id, newStock).
+    // Assuming for this demo we just alert or reuse existing props.
+    
+    // Simulating updates via PurchaseOrderItem interface to piggyback existing handler
+    // NOTE: Real implementation needs dedicated stock adjustment handler
+    const fakeItems: PurchaseOrderItem[] = adjustments.map(adj => {
+       const current = products.find(p => p.id === adj.productId)?.stock || 0;
+       const diff = adj.newStock - current;
+       return {
+          productId: adj.productId,
+          productName: 'Audit Adjustment',
+          quantityOrdered: 0,
+          quantityReceived: diff, // This will ADD diff to current stock in App.tsx handleReceiveStock
+          cost: 0
+       };
+    });
+    
+    onReceiveStock(fakeItems);
+    setIsAuditMode(false);
+    alert("Inventario actualizado correctamente.");
+  };
+
   // --- TOUCH FRIENDLY COMPONENTS ---
 
   const BigStepper = ({ value, onDecrease, onIncrease }: { value: number; onDecrease: () => void; onIncrease: () => void }) => (
@@ -165,6 +198,72 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
           </div>
         ))}
       </div>
+    </div>
+  );
+
+  const renderInventoryList = () => (
+    <div className="animate-in fade-in slide-in-from-right-4 pb-20 flex flex-col h-full">
+       <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-bold text-gray-800">Inventario Actual</h2>
+          <button 
+             onClick={() => setIsAuditMode(true)}
+             className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-500 transition-all flex items-center gap-2"
+          >
+             <ScanBarcode size={20} />
+             Hacer Auditoría (Stocktake)
+          </button>
+       </div>
+
+       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex-1 flex flex-col">
+          <div className="p-4 border-b border-gray-100 bg-gray-50/50">
+             <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+                <input 
+                   type="text" 
+                   placeholder="Filtrar inventario..." 
+                   value={productSearch}
+                   onChange={(e) => setProductSearch(e.target.value)}
+                   className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20"
+                />
+             </div>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto">
+             <table className="w-full text-left text-sm">
+                <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
+                   <tr>
+                      <th className="p-4 font-bold text-gray-500">Producto</th>
+                      <th className="p-4 font-bold text-gray-500">Categoría</th>
+                      <th className="p-4 font-bold text-gray-500 text-center">Stock</th>
+                      <th className="p-4 font-bold text-gray-500 text-right">Valor Total</th>
+                   </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                   {filteredProducts.map(p => (
+                      <tr key={p.id} className="hover:bg-gray-50">
+                         <td className="p-4">
+                            <div className="font-bold text-gray-800">{p.name}</div>
+                            <div className="text-xs text-gray-400 font-mono">{p.barcode || 'N/A'}</div>
+                         </td>
+                         <td className="p-4 text-gray-600">
+                            <span className="px-2 py-1 bg-gray-100 rounded-lg text-xs font-bold">{p.category}</span>
+                         </td>
+                         <td className="p-4 text-center">
+                            <span className={`font-bold ${
+                               (p.stock || 0) <= (p.minStock || 0) ? 'text-red-600 bg-red-50 px-2 py-1 rounded' : 'text-gray-800'
+                            }`}>
+                               {p.stock}
+                            </span>
+                         </td>
+                         <td className="p-4 text-right font-mono text-gray-600">
+                            {config.currencySymbol}{((p.stock || 0) * (p.cost || 0)).toFixed(2)}
+                         </td>
+                      </tr>
+                   ))}
+                </tbody>
+             </table>
+          </div>
+       </div>
     </div>
   );
 
@@ -420,7 +519,12 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
     );
   };
 
-  // --- MAIN RENDER ---
+  // --- RENDER MAIN ---
+  
+  if (isAuditMode) {
+     return <InventoryAudit products={products} onClose={() => setIsAuditMode(false)} onCommit={handleAuditCommit} />;
+  }
+
   return (
     <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden">
       
@@ -437,7 +541,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
         </div>
         
         {/* Navigation Tabs (Big Touch Targets) */}
-        <div className="flex bg-gray-100 p-1.5 rounded-2xl overflow-x-auto no-scrollbar max-w-[60vw]">
+        <div className="flex bg-gray-100 p-1.5 rounded-2xl overflow-x-auto no-scrollbar max-w-[70vw]">
            <button 
               onClick={() => setActiveTab('CREATE')}
               className={`px-6 py-3 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeTab === 'CREATE' ? 'bg-white text-indigo-600 shadow-md' : 'text-gray-500'}`}
@@ -450,6 +554,12 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
            >
               <Archive size={20} /> Recepción
               {activeOrders.length > 0 && <span className="bg-green-500 text-white text-[10px] px-1.5 rounded-full">{activeOrders.length}</span>}
+           </button>
+           <button 
+              onClick={() => setActiveTab('INVENTORY')}
+              className={`px-6 py-3 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeTab === 'INVENTORY' ? 'bg-white text-blue-600 shadow-md' : 'text-gray-500'}`}
+           >
+              <LayoutList size={20} /> Inventario
            </button>
            <button 
               onClick={() => setActiveTab('ALERTS')}
@@ -466,6 +576,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
          {activeTab === 'ALERTS' && renderAlerts()}
          {activeTab === 'CREATE' && renderCreateOrder()}
          {activeTab === 'RECEIVE' && renderReception()}
+         {activeTab === 'INVENTORY' && renderInventoryList()}
       </div>
 
     </div>

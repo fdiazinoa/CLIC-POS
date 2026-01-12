@@ -204,7 +204,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   };
 
   const handleProductClick = (product: Product) => {
-    if (product.variants && product.variants.length > 0) {
+    // Check for explicit variants OR implicit variants based on category (Simulation for Ropa/Calzado)
+    const hasImplicitVariants = ['Ropa', 'Calzado', 'Camisetas', 'Vestidos', 'Pantalones'].includes(product.category);
+    
+    if ((product.variants && product.variants.length > 0) || hasImplicitVariants) {
        setActiveVariantId(product.id);
     } else if (product.availableModifiers && product.availableModifiers.length > 0) {
        setSelectedProductForModifiers(product);

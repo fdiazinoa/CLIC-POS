@@ -2,14 +2,14 @@ import { Product, SubVertical, VerticalType, BusinessConfig, User, RoleDefinitio
 
 // Catalog of all available permissions in the system
 export const AVAILABLE_PERMISSIONS: PermissionDetail[] = [
-  { key: 'CAN_ACCESS_SETTINGS', label: 'Acceso a Configuración', description: 'Permite entrar al módulo de ajustes y usuarios.' },
-  { key: 'CAN_APPLY_DISCOUNT', label: 'Aplicar Descuentos', description: 'Permite modificar precios o aplicar descuentos manuales.' },
-  { key: 'CAN_VOID_ITEM', label: 'Anular/Eliminar Items', description: 'Permite borrar productos de una orden activa.' },
-  { key: 'CAN_FINALIZE_PAYMENT', label: 'Cobrar/Facturar', description: 'Permite acceder a la pantalla de pagos y cerrar mesas.' },
-  { key: 'CAN_MANAGE_TABLES', label: 'Gestionar Mesas', description: 'Permite asignar, mover o liberar mesas.' },
-  { key: 'CAN_VIEW_REPORTS', label: 'Ver Reportes', description: 'Acceso a cierre de caja y reportes de venta.' },
-  { key: 'CAN_CLOSE_REGISTER', label: 'Cierre de Caja', description: 'Permite realizar el corte Z.' },
-  { key: 'CAN_MANAGE_CUSTOMERS', label: 'Gestionar Clientes', description: 'Crear, editar y ver base de datos de clientes.' }
+  { key: 'CAN_ACCESS_SETTINGS', label: 'Acceso a Configuración', description: 'Permite entrar al módulo de ajustes y usuarios.', category: 'ADMIN' },
+  { key: 'CAN_APPLY_DISCOUNT', label: 'Aplicar Descuentos', description: 'Permite modificar precios o aplicar descuentos manuales.', category: 'SALES' },
+  { key: 'CAN_VOID_ITEM', label: 'Anular/Eliminar Items', description: 'Permite borrar productos de una orden activa.', category: 'SALES' },
+  { key: 'CAN_FINALIZE_PAYMENT', label: 'Cobrar/Facturar', description: 'Permite acceder a la pantalla de pagos y cerrar mesas.', category: 'CASH' },
+  { key: 'CAN_MANAGE_TABLES', label: 'Gestionar Mesas', description: 'Permite asignar, mover o liberar mesas.', category: 'SALES' },
+  { key: 'CAN_VIEW_REPORTS', label: 'Ver Reportes', description: 'Acceso a cierre de caja y reportes de venta.', category: 'ADMIN' },
+  { key: 'CAN_CLOSE_REGISTER', label: 'Cierre de Caja', description: 'Permite realizar el corte Z.', category: 'CASH' },
+  { key: 'CAN_MANAGE_CUSTOMERS', label: 'Gestionar Clientes', description: 'Crear, editar y ver base de datos de clientes.', category: 'ADMIN' }
 ];
 
 // Default Roles Configuration

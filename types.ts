@@ -23,6 +23,7 @@ export interface PermissionDetail {
   key: string;
   label: string;
   description: string;
+  category: 'SALES' | 'ADMIN' | 'CASH' | 'SYSTEM'; // Added category for grouping
 }
 
 export interface RoleDefinition {
@@ -39,6 +40,24 @@ export interface User {
   role: RoleType; // Maps to RoleDefinition.id
   pin: string;
   photo?: string; // URL or Base64 string of user photo
+}
+
+export interface TimeRecord {
+  id: string;
+  userId: string;
+  type: 'IN' | 'OUT';
+  timestamp: string; // ISO String
+  method: 'PIN' | 'FACE_ID';
+}
+
+export interface Shift {
+  id: string;
+  userId: string | null; // Null if unassigned
+  dayOfWeek: number; // 0 = Sunday, 1 = Monday...
+  startTime: string; // "09:00"
+  endTime: string; // "17:00"
+  label: string; // "Turno Mañana"
+  color: string; // Tailwind color class
 }
 
 export interface CustomerTransaction {
@@ -137,7 +156,41 @@ export interface CartItem extends Product {
   isSent?: boolean; // If true, item has been sent to kitchen/bar
 }
 
-export type PaymentMethod = 'CASH' | 'CARD' | 'QR';
+export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'CREDIT' | 'OTHER';
+export type PaymentIntegration = 'NONE' | 'CARNET' | 'VISANET' | 'STRIPE' | 'PAYPAL';
+
+export interface PaymentMethodDefinition {
+  id: string;
+  name: string;
+  type: PaymentMethod;
+  isEnabled: boolean;
+  icon: string; // Lucide icon name
+  color: string; // Tailwind color class (e.g., 'bg-green-500')
+  opensDrawer: boolean;
+  requiresSignature: boolean;
+  integration?: PaymentIntegration; // Only relevant if type === 'CARD' or 'QR'
+}
+
+export interface CurrencyConfig {
+  code: string; // USD, EUR, MXN
+  name: string;
+  symbol: string;
+  rate: number; // Exchange rate relative to base currency (1 Base = X This)
+  isEnabled: boolean;
+  isBase: boolean;
+}
+
+export interface TipConfiguration {
+  enabled: boolean;
+  defaultOptions: [number, number, number]; // e.g. [10, 15, 20]
+  allowCustomTip: boolean;
+  serviceCharge: {
+    enabled: boolean;
+    percentage: number;
+    applyIfTotalOver?: number; // Apply if ticket > X
+    applyIfGuestsOver?: number; // Apply if guests > X
+  };
+}
 
 export interface PaymentEntry {
   id: string;
@@ -158,6 +211,31 @@ export interface Transaction {
   customerName?: string;
   status?: 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND';
   refundReason?: string;
+}
+
+// --- LABEL DESIGNER TYPES ---
+export type LabelElementType = 'TEXT' | 'BARCODE' | 'QR' | 'IMAGE';
+export type LabelDataSource = 'PRODUCT_NAME' | 'PRODUCT_PRICE' | 'PRODUCT_SKU' | 'CUSTOM_TEXT';
+
+export interface LabelElement {
+  id: string;
+  type: LabelElementType;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize?: number;
+  isBold?: boolean;
+  content: string; // Or placeholder text
+  dataSource: LabelDataSource;
+}
+
+export interface LabelTemplate {
+  id: string;
+  name: string;
+  widthMm: number;
+  heightMm: number;
+  elements: LabelElement[];
 }
 
 // --- SUPPLY CHAIN INTERFACES ---
@@ -242,6 +320,13 @@ export interface BusinessConfig {
   themeColor: string;
   companyInfo: CompanyInfo;
   receiptConfig?: ReceiptConfig;
+  // New Payment & Currency Configs
+  paymentMethods?: PaymentMethodDefinition[];
+  currencies?: CurrencyConfig[];
+  // Label Config
+  labelTemplates?: LabelTemplate[];
+  // Tip Config
+  tipsConfig?: TipConfiguration;
 }
 
 export interface SavedTicket {
@@ -266,4 +351,4 @@ export interface Table {
   ticketId?: string; // Links to a SavedTicket
 }
 
-export type ViewState = 'SETUP' | 'LOGIN' | 'POS' | 'SETTINGS' | 'CUSTOMERS' | 'Z_REPORT' | 'HISTORY' | 'FINANCE' | 'SUPPLY_CHAIN';
+export type ViewState = 'SETUP' | 'WIZARD' | 'LOGIN' | 'POS' | 'SETTINGS' | 'CUSTOMERS' | 'Z_REPORT' | 'HISTORY' | 'FINANCE' | 'SUPPLY_CHAIN' | 'FRANCHISE_DASHBOARD';
