@@ -63,7 +63,7 @@ export interface Shift {
 export interface CustomerTransaction {
   id: string;
   date: string;
-  type: 'SALE' | 'PAYMENT' | 'ADJUSTMENT';
+  type: 'SALE' | 'PAYMENT' | 'REFUND';
   amount: number;
   description: string;
 }
@@ -73,25 +73,16 @@ export interface Customer {
   name: string;
   phone?: string;
   email?: string;
-  taxId?: string; // RNC or ID
+  taxId?: string; // RNC / NIF
   address?: string;
-  loyaltyPoints: number;
   notes?: string;
+  loyaltyPoints?: number;
   createdAt: string;
-  // Credit Fields
+  
+  // Credit / Debt Logic
   creditLimit?: number;
   currentDebt?: number;
   creditHistory?: CustomerTransaction[];
-}
-
-export interface CashMovement {
-  id: string;
-  type: 'IN' | 'OUT';
-  amount: number;
-  reason: string;
-  timestamp: string; // ISO String
-  userId: string;
-  userName: string;
 }
 
 export interface Modifier {
@@ -100,28 +91,25 @@ export interface Modifier {
   price: number;
 }
 
-// Retail Variant Definitions (Attributes)
 export interface ProductAttributeOption {
   id: string;
-  name: string; // e.g., "Rojo", "XL"
-  value?: string; // Hex color code or raw value
+  name: string; // e.g. "Red", "XL"
 }
 
 export interface ProductAttribute {
   id: string;
-  name: string; // e.g., "Color", "Talla"
+  name: string; // e.g. "Color", "Size"
   options: ProductAttributeOption[];
 }
 
-// Retail Concrete Variant (Matrix Result)
 export interface ProductVariant {
   id: string;
-  name: string; // "Camiseta - Rojo / XL"
+  name: string; // "Red / XL"
   price: number;
-  cost: number;
   stock: number;
   sku: string;
-  combination: Record<string, string>; // { "Color": "Rojo", "Talla": "XL" }
+  cost?: number;
+  combination: Record<string, string>; // { "Color": "Red", "Size": "XL" }
 }
 
 export interface Product {
@@ -129,125 +117,82 @@ export interface Product {
   name: string;
   price: number;
   category: string;
-  image?: string;
   stock?: number;
-  isWeighted?: boolean; // For supermarket
-  hasModifiers?: boolean; // For restaurant
+  minStock?: number; // Alert threshold
   barcode?: string;
+  image?: string;
+  isWeighted?: boolean; // For scales
+  hasModifiers?: boolean;
   availableModifiers?: Modifier[];
-  // Retail Specifics
+  
+  // Advanced Fields
   cost?: number;
-  margin?: number;
-  minStock?: number;
+  margin?: number; // %
   trackStock?: boolean;
-  askPrice?: boolean; // Open price item
-  taxRate?: number; // Specific tax override
-  attributes?: ProductAttribute[]; // Definitions
-  variants?: ProductVariant[]; // The generated matrix
+  askPrice?: boolean; // Open Price Item
+  
+  // Variants
+  attributes?: ProductAttribute[];
+  variants?: ProductVariant[];
 }
 
 export interface CartItem extends Product {
-  cartId: string;
+  cartId: string; // Unique ID for cart instance
   quantity: number;
+  originalPrice?: number; // Track if discounted
   modifiers?: string[]; // Array of modifier names
-  note?: string;
-  originalPrice?: number; // Base price before item-specific discounts/overrides
-  discountReason?: string;
-  isSent?: boolean; // If true, item has been sent to kitchen/bar
+  note?: string; // Kitchen notes
+  isSent?: boolean; // For kitchen orders
 }
 
-export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'CREDIT' | 'OTHER';
-export type PaymentIntegration = 'NONE' | 'CARNET' | 'VISANET' | 'STRIPE' | 'PAYPAL';
-
-export interface PaymentMethodDefinition {
-  id: string;
-  name: string;
-  type: PaymentMethod;
-  isEnabled: boolean;
-  icon: string; // Lucide icon name
-  color: string; // Tailwind color class (e.g., 'bg-green-500')
-  opensDrawer: boolean;
-  requiresSignature: boolean;
-  integration?: PaymentIntegration; // Only relevant if type === 'CARD' or 'QR'
-}
-
-export interface CurrencyConfig {
-  code: string; // USD, EUR, MXN
-  name: string;
-  symbol: string;
-  rate: number; // Exchange rate relative to base currency (1 Base = X This)
-  isEnabled: boolean;
-  isBase: boolean;
-}
-
-export interface TipConfiguration {
-  enabled: boolean;
-  defaultOptions: [number, number, number]; // e.g. [10, 15, 20]
-  allowCustomTip: boolean;
-  serviceCharge: {
-    enabled: boolean;
-    percentage: number;
-    applyIfTotalOver?: number; // Apply if ticket > X
-    applyIfGuestsOver?: number; // Apply if guests > X
-  };
-}
+export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'OTHER';
 
 export interface PaymentEntry {
   id: string;
   method: PaymentMethod;
   amount: number;
-  timestamp: Date; // Note: When parsing from JSON, this might be a string
+  timestamp: Date;
 }
 
 export interface Transaction {
   id: string;
-  date: string; // ISO string
+  date: string;
   items: CartItem[];
   total: number;
   payments: PaymentEntry[];
   userId: string;
   userName: string;
-  customerId?: string;
-  customerName?: string;
   status?: 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND';
   refundReason?: string;
+  customerId?: string;
+  customerName?: string;
 }
 
-// --- LABEL DESIGNER TYPES ---
-export type LabelElementType = 'TEXT' | 'BARCODE' | 'QR' | 'IMAGE';
-export type LabelDataSource = 'PRODUCT_NAME' | 'PRODUCT_PRICE' | 'PRODUCT_SKU' | 'CUSTOM_TEXT';
-
-export interface LabelElement {
+export interface CashMovement {
   id: string;
-  type: LabelElementType;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  fontSize?: number;
-  isBold?: boolean;
-  content: string; // Or placeholder text
-  dataSource: LabelDataSource;
+  type: 'IN' | 'OUT';
+  amount: number;
+  reason: string;
+  timestamp: string;
+  userId: string;
+  userName: string;
 }
 
-export interface LabelTemplate {
-  id: string;
+export interface CompanyInfo {
   name: string;
-  widthMm: number;
-  heightMm: number;
-  elements: LabelElement[];
+  address: string;
+  phone: string;
+  rnc: string;
+  email: string;
 }
 
-// --- SUPPLY CHAIN INTERFACES ---
 export interface Supplier {
   id: string;
   name: string;
-  contactName?: string;
-  phone?: string;
-  email?: string;
+  contactName: string;
+  phone: string;
+  email: string;
 }
-
-export type PurchaseOrderStatus = 'DRAFT' | 'ORDERED' | 'PARTIAL' | 'COMPLETED';
 
 export interface PurchaseOrderItem {
   productId: string;
@@ -260,48 +205,143 @@ export interface PurchaseOrderItem {
 export interface PurchaseOrder {
   id: string;
   supplierId: string;
-  date: string; // ISO
-  status: PurchaseOrderStatus;
+  date: string;
+  status: 'DRAFT' | 'ORDERED' | 'PARTIAL' | 'COMPLETED';
   items: PurchaseOrderItem[];
   totalCost: number;
-  notes?: string;
 }
 
-// --- PROMOTION ENGINE TYPES ---
+// Configuration Types
+
+export interface ReceiptConfig {
+  logo?: string;
+  footerMessage?: string;
+  showCustomerInfo?: boolean;
+  showSavings?: boolean;
+  showQr?: boolean;
+}
+
+export interface EmailConfig {
+  subjectTemplate: string;
+  accentColor: string;
+  bannerImage?: string;
+  customFooter?: string;
+  showSocialLinks: boolean;
+}
+
+export interface PaymentMethodDefinition {
+  id: string;
+  name: string;
+  type: PaymentMethod;
+  isEnabled: boolean;
+  icon: string; // Lucide Icon Name
+  color: string; // Tailwind class
+  opensDrawer: boolean;
+  requiresSignature: boolean;
+  integration?: 'NONE' | 'CARNET' | 'VISANET' | 'STRIPE'; // Mock integrations
+}
+
+export interface CurrencyConfig {
+  code: string;
+  name: string;
+  symbol: string;
+  rate: number;
+  isEnabled: boolean;
+  isBase: boolean;
+}
+
+export interface LabelElement {
+  id: string;
+  type: 'TEXT' | 'BARCODE' | 'QR' | 'IMAGE';
+  x: number; // mm
+  y: number; // mm
+  width: number; // mm
+  height: number; // mm
+  content: string; // Template string or static
+  dataSource: 'PRODUCT_NAME' | 'PRODUCT_PRICE' | 'PRODUCT_SKU' | 'CUSTOM_TEXT';
+  fontSize?: number;
+  isBold?: boolean;
+}
+
+export type LabelElementType = LabelElement['type'];
+export type LabelDataSource = LabelElement['dataSource'];
+
+export interface LabelTemplate {
+  id: string;
+  name: string;
+  widthMm: number;
+  heightMm: number;
+  elements: LabelElement[];
+}
+
+export interface TipConfiguration {
+  enabled: boolean;
+  defaultOptions: [number, number, number]; // e.g. [10, 15, 20]
+  allowCustomTip: boolean;
+  serviceCharge: {
+    enabled: boolean;
+    percentage: number;
+    applyIfTotalOver?: number; // Only apply if ticket > X
+    applyIfGuestsOver?: number; // Only apply if guests > Y
+  };
+}
+
 export type PromotionType = 'DISCOUNT' | 'BOGO' | 'BUNDLE' | 'HAPPY_HOUR';
-
-export interface PromotionSchedule {
-  days: string[]; // ['MON', 'TUE', ...]
-  startTime: string; // "17:00"
-  endTime: string; // "20:00"
-  isActive: boolean;
-}
 
 export interface Promotion {
   id: string;
   name: string;
   type: PromotionType;
+  isActive: boolean;
+  priority: number;
+  
+  // Schedule
+  daysOfWeek: string[]; // ['L', 'M', ...]
+  timeStart: string; // "00:00"
+  timeEnd: string; // "23:59"
+  startDate?: string;
+  endDate?: string;
+
+  // Rules
   targetType: 'PRODUCT' | 'CATEGORY' | 'ALL';
-  targetValue: string; // Product ID or Category Name
-  benefitValue: number; // e.g. 50 (for 50%) or 100 (for free item)
-  schedule: PromotionSchedule;
+  targetValue: string; // ID of product/category
+  
+  // Benefits
+  discountPercent?: number;
+  discountFixed?: number;
+  fixedPrice?: number;
+  buyQuantity?: number; // For BOGO/Bundle
+  getQuantity?: number; // For BOGO
 }
 
-export interface CompanyInfo {
-  name: string;
-  address: string;
-  phone: string;
-  rnc: string;
-  email: string;
+// --- NEW: Behavior Configuration ---
+export interface BehaviorConfig {
+  // Sales
+  allowNegativeStock: boolean;
+  askGuestsOnTicketOpen: boolean; // Restaurant specific
+  
+  // Security
+  autoLogoutMinutes: number; // 0 to disable
+  requireManagerForRefunds: boolean;
+  
+  // Closing
+  autoPrintZReport: boolean;
 }
 
-export interface ReceiptConfig {
-  logo?: string; // Base64
-  headerText?: string; // Additional header info
-  footerMessage: string;
-  showCustomerInfo: boolean;
-  showSavings: boolean;
-  showQr: boolean;
+// --- NEW: Hardware Extensions ---
+export interface CustomerDisplayConfig {
+  isEnabled: boolean;
+  welcomeMessage: string;
+  idleImage?: string;
+  showItemDetails: boolean;
+}
+
+export interface CashDroConfig {
+  isEnabled: boolean;
+  ipAddress: string;
+  port: string;
+  user: string;
+  password?: string;
 }
 
 export interface BusinessConfig {
@@ -309,26 +349,32 @@ export interface BusinessConfig {
   subVertical: SubVertical;
   currencySymbol: string;
   taxRate: number;
+  themeColor: 'blue' | 'orange' | 'purple' | 'gray';
+  companyInfo: CompanyInfo;
   features: {
     tableManagement: boolean;
     kitchenPrinting: boolean;
     stockTracking: boolean;
     barcodeScanning: boolean;
     tips: boolean;
-    prescriptionCheck: boolean; // Pharmacy
+    prescriptionCheck: boolean;
   };
-  themeColor: string;
-  companyInfo: CompanyInfo;
+  // Advanced Configs
   receiptConfig?: ReceiptConfig;
-  // New Payment & Currency Configs
+  emailConfig?: EmailConfig;
   paymentMethods?: PaymentMethodDefinition[];
   currencies?: CurrencyConfig[];
-  // Label Config
   labelTemplates?: LabelTemplate[];
-  // Tip Config
   tipsConfig?: TipConfiguration;
+  promotions?: Promotion[];
+  behaviorConfig?: BehaviorConfig;
+  
+  // Hardware Specific
+  customerDisplayConfig?: CustomerDisplayConfig;
+  cashDroConfig?: CashDroConfig;
 }
 
+// --- Helper Types for UI ---
 export interface SavedTicket {
   id: string;
   alias: string;
@@ -336,19 +382,19 @@ export interface SavedTicket {
   items: CartItem[];
   customer: Customer | null;
   total: number;
-  tableId?: number | null; // Linked table ID
-  guestCount?: number; // Number of diners
+  tableId: number | null;
+  guestCount?: number;
 }
 
 export interface Table {
   id: number;
   name: string;
   zone: string;
-  status: 'AVAILABLE' | 'OCCUPIED';
+  status: 'AVAILABLE' | 'OCCUPIED' | 'RESERVED';
   guests: number;
   time: string | null;
   amount: number | null;
-  ticketId?: string; // Links to a SavedTicket
+  ticketId?: string;
 }
 
-export type ViewState = 'SETUP' | 'WIZARD' | 'LOGIN' | 'POS' | 'SETTINGS' | 'CUSTOMERS' | 'Z_REPORT' | 'HISTORY' | 'FINANCE' | 'SUPPLY_CHAIN' | 'FRANCHISE_DASHBOARD';
+export type ViewState = 'SETUP' | 'WIZARD' | 'LOGIN' | 'POS' | 'SETTINGS' | 'CUSTOMERS' | 'HISTORY' | 'FINANCE' | 'Z_REPORT' | 'SUPPLY_CHAIN' | 'FRANCHISE_DASHBOARD';

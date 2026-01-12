@@ -1,7 +1,7 @@
 import React from 'react';
 import { 
   UserPlus, Split, PieChart, Percent, Clock, X, Save, Trash2, 
-  Coins, Receipt, History, ArrowDownToLine
+  Coins, Receipt, History, ArrowDownToLine, Printer
 } from 'lucide-react';
 
 interface TicketOptionsModalProps {
@@ -51,12 +51,13 @@ const TicketOptionsModal: React.FC<TicketOptionsModalProps> = ({ onClose, onActi
       color: 'text-rose-600',
       bg: 'bg-rose-50'
     },
+    // NUEVO: Print Subtotal (Proforma)
     { 
-      id: 'TIPS', // Nueva funcionalidad requerida
-      label: 'Propinas', 
-      icon: Coins, 
-      color: 'text-amber-600',
-      bg: 'bg-amber-50'
+      id: 'PRINT_SUBTOTAL',
+      label: 'Proforma', 
+      icon: Printer, 
+      color: 'text-cyan-600',
+      bg: 'bg-cyan-50'
     },
     // Utilidades
     { 
@@ -72,13 +73,6 @@ const TicketOptionsModal: React.FC<TicketOptionsModalProps> = ({ onClose, onActi
       icon: Save, 
       color: 'text-indigo-600',
       bg: 'bg-indigo-50'
-    },
-    { 
-      id: 'RETRIEVE', // Acceso directo a recuperar (si se desea en este menú)
-      label: 'Recuperar', 
-      icon: History, 
-      color: 'text-sky-600',
-      bg: 'bg-sky-50'
     },
     // Destructivas / Limpieza
     { 
@@ -148,7 +142,7 @@ const TicketOptionsModal: React.FC<TicketOptionsModalProps> = ({ onClose, onActi
 
         {/* Pro Tip Footer (Optional visual filler) */}
         <div className="bg-slate-50 py-3 text-center border-t border-slate-100">
-           <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest">Antigravity OS 2.0</p>
+           <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest">CLIC OS 2.0</p>
         </div>
 
       </div>

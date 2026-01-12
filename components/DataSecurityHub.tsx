@@ -109,7 +109,7 @@ const DataSecurityHub: React.FC<DataSecurityHubProps> = ({ onClose }) => {
            </div>
         </div>
         <div className="absolute bottom-6 text-slate-600 text-xs font-mono">
-           Antigravity OS Secure Lock v2.4
+           CLIC OS Secure Lock v2.4
         </div>
       </div>
     );
@@ -214,7 +214,7 @@ const DataSecurityHub: React.FC<DataSecurityHubProps> = ({ onClose }) => {
 
             <button 
                onClick={handleLock}
-               className="relative z-10 px-8 py-4 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-bold text-lg shadow-lg shadow-red-900/50 flex items-center gap-3 transition-transform active:scale-95 group"
+               className="relative z-10 px-8 py-4 bg-red-600 hover:bg-red-50 text-white rounded-2xl font-bold text-lg shadow-lg shadow-red-900/50 flex items-center gap-3 transition-transform active:scale-95 group"
             >
                <KeyRound size={24} className="group-hover:rotate-12 transition-transform" />
                Bloquear Terminal

@@ -30,7 +30,9 @@ const VerticalSelector: React.FC<VerticalSelectorProps> = ({ onSelect }) => {
     <div className="min-h-screen bg-gray-900 flex items-center justify-center p-6">
       <div className="max-w-4xl w-full">
         <div className="text-center mb-12">
-          <h1 className="text-4xl font-extrabold text-white mb-2 tracking-tight">Antigravity <span className="text-blue-400">POS</span></h1>
+          <h1 className="text-4xl font-extrabold text-white mb-2 tracking-tight">
+            <span className="text-orange-500">CLIC</span> <span className="text-blue-400">POS</span>
+          </h1>
           <p className="text-gray-400 text-lg">Selecciona la vertical de tu negocio para configurar el entorno.</p>
         </div>
 

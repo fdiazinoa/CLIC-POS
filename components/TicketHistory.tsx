@@ -1,8 +1,9 @@
+
 import React, { useState, useMemo } from 'react';
 import { 
   ArrowLeft, Search, Calendar, ChevronDown, ChevronUp, 
   Printer, RotateCcw, AlertCircle, Check, X, FileText, 
-  User, DollarSign, Box, Filter
+  User, DollarSign, Box, Filter, Gift, QrCode
 } from 'lucide-react';
 import { Transaction, BusinessConfig, CartItem } from '../types';
 
@@ -30,6 +31,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
   const [returnModeId, setReturnModeId] = useState<string | null>(null);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set()); // Set of CartItem.cartId
   const [returnReason, setReturnReason] = useState<ReturnReason>('ERROR');
+
+  // Gift Receipt State
+  const [giftReceiptTx, setGiftReceiptTx] = useState<Transaction | null>(null);
 
   // --- SMART SEARCH LOGIC ---
   const filteredTransactions = useMemo(() => {
@@ -101,6 +105,11 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
     }
   };
 
+  const handlePrintGiftReceipt = (e: React.MouseEvent, tx: Transaction) => {
+    e.stopPropagation();
+    setGiftReceiptTx(tx);
+  };
+
   // Calculate Refund Total
   const currentRefundTotal = useMemo(() => {
     if (!returnModeId) return 0;
@@ -119,7 +128,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
   const themeRing = config.themeColor === 'orange' ? 'focus:ring-orange-500' : 'focus:ring-blue-500';
 
   return (
-    <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden">
+    <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden relative">
       
       {/* Header */}
       <header className="bg-white border-b border-gray-200 p-4 shadow-sm z-20">
@@ -260,9 +269,17 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
                         <div className="p-4 bg-white border-t border-gray-200 flex justify-between items-center gap-4">
                            {!isReturnActive ? (
                               <>
-                                 <button className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg font-bold text-sm hover:bg-gray-200 transition-colors">
-                                    <Printer size={16} /> Re-imprimir
-                                 </button>
+                                 <div className="flex gap-2">
+                                    <button className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg font-bold text-sm hover:bg-gray-200 transition-colors">
+                                       <Printer size={16} /> Re-imprimir
+                                    </button>
+                                    <button 
+                                      onClick={(e) => handlePrintGiftReceipt(e, tx)}
+                                      className="flex items-center gap-2 px-4 py-2 bg-purple-50 text-purple-600 border border-purple-100 rounded-lg font-bold text-sm hover:bg-purple-100 transition-colors"
+                                    >
+                                       <Gift size={16} /> Ticket Regalo
+                                    </button>
+                                 </div>
                                  {!isRefunded && (
                                     <button 
                                        onClick={(e) => startReturnMode(e, tx.id)}
@@ -329,6 +346,73 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
            })
         )}
       </div>
+
+      {/* GIFT RECEIPT PREVIEW MODAL */}
+      {giftReceiptTx && (
+        <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+           <div className="bg-white rounded-2xl shadow-2xl overflow-hidden w-full max-w-sm flex flex-col">
+              <div className="p-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
+                 <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                    <Gift className="text-purple-600" size={20} />
+                    Ticket Regalo (Vista Previa)
+                 </h3>
+                 <button onClick={() => setGiftReceiptTx(null)} className="text-gray-400 hover:text-gray-600">
+                    <X size={20} />
+                 </button>
+              </div>
+              
+              {/* Receipt Content */}
+              <div className="p-6 bg-white overflow-y-auto max-h-[60vh] font-mono text-sm leading-relaxed text-gray-700">
+                 <div className="text-center mb-6">
+                    <h2 className="font-bold text-lg uppercase">{config.companyInfo.name}</h2>
+                    <p className="text-xs">{config.companyInfo.address}</p>
+                    <p className="text-xs mt-2 font-bold">*** TICKET DE REGALO ***</p>
+                    <p className="text-xs">No válido como factura fiscal</p>
+                 </div>
+
+                 <div className="border-b-2 border-dashed border-gray-300 pb-2 mb-2 text-xs">
+                    <p>Fecha: {new Date(giftReceiptTx.date).toLocaleString()}</p>
+                    <p>Ref: {giftReceiptTx.id}</p>
+                 </div>
+
+                 <table className="w-full text-xs mb-4">
+                    <thead>
+                       <tr className="border-b border-gray-800">
+                          <th className="text-left py-1">Cant</th>
+                          <th className="text-left py-1">Descripción</th>
+                       </tr>
+                    </thead>
+                    <tbody>
+                       {giftReceiptTx.items.map((item, i) => (
+                          <tr key={i}>
+                             <td className="py-1 align-top w-8">{item.quantity}</td>
+                             <td className="py-1 align-top">{item.name}</td>
+                          </tr>
+                       ))}
+                    </tbody>
+                 </table>
+
+                 <div className="border-t-2 border-dashed border-gray-300 pt-4 text-center space-y-4">
+                    <p className="text-xs">Este documento permite realizar cambios o devoluciones sin mostrar el importe de compra.</p>
+                    <div className="flex flex-col items-center">
+                       <QrCode size={64} className="text-gray-800" />
+                       <span className="text-[10px] mt-1">{giftReceiptTx.id}</span>
+                    </div>
+                    <p className="text-xs font-bold">¡Gracias por su preferencia!</p>
+                 </div>
+              </div>
+
+              <div className="p-4 bg-gray-50 border-t border-gray-200">
+                 <button 
+                    onClick={() => { alert("Imprimiendo..."); setGiftReceiptTx(null); }}
+                    className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold shadow-lg hover:bg-purple-700 transition-transform active:scale-95 flex items-center justify-center gap-2"
+                 >
+                    <Printer size={20} /> Imprimir Ticket
+                 </button>
+              </div>
+           </div>
+        </div>
+      )}
 
     </div>
   );

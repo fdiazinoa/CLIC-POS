@@ -4,13 +4,14 @@ import {
   ArrowLeft, Search, ChevronRight, 
   Store, Users, Package, Printer, CreditCard, 
   History, ToggleLeft, ToggleRight, Building2, UserPlus, Edit2, Trash2, CheckSquare, Square, User as UserIcon, FileText, PlusCircle, Receipt, Truck, Tag, Ticket,
-  ScanBarcode, Coins, Globe, Database, AlertOctagon
+  ScanBarcode, Coins, Globe, Database, AlertOctagon, Files, ArrowRightLeft, Cpu, Cloud, Mail
 } from 'lucide-react';
 import { BusinessConfig, User, RoleDefinition, Transaction, VerticalType, SubVertical, Product } from '../types';
 import { AVAILABLE_PERMISSIONS, getInitialConfig, RETAIL_PRODUCTS, FOOD_PRODUCTS } from '../constants';
 import ProductForm from './ProductForm';
 import HardwareSettings from './HardwareSettings';
 import ReceiptDesigner from './ReceiptDesigner';
+import EmailSettings from './EmailSettings';
 import PromotionBuilder from './PromotionBuilder';
 import TeamHub from './TeamHub';
 import PaymentSettings from './PaymentSettings';
@@ -18,6 +19,10 @@ import LabelDesigner from './LabelDesigner';
 import TipsSettings from './TipsSettings';
 import DataSecurityHub from './DataSecurityHub';
 import ActivityLog from './ActivityLog';
+import DocumentSettings from './DocumentSettings';
+import CurrencySettings from './CurrencySettings';
+import BehaviorSettings from './BehaviorSettings';
+import SyncStatusHub from './SyncStatusHub';
 
 interface SettingsProps {
   config: BusinessConfig;
@@ -34,7 +39,7 @@ interface SettingsProps {
 }
 
 // --- CONFIGURATION GROUPS ---
-type SettingsSection = 'HOME' | 'CATALOG' | 'STORE' | 'TEAM' | 'HARDWARE' | 'PAYMENTS' | 'HISTORY' | 'TICKET' | 'SUPPLY' | 'PROMOS' | 'LABELS' | 'TIPS' | 'FRANCHISE' | 'DATA_SECURITY' | 'AUDIT';
+type SettingsSection = 'HOME' | 'CATALOG' | 'STORE' | 'TEAM' | 'HARDWARE' | 'PAYMENTS' | 'HISTORY' | 'TICKET' | 'EMAIL' | 'SUPPLY' | 'PROMOS' | 'LABELS' | 'TIPS' | 'FRANCHISE' | 'DATA_SECURITY' | 'AUDIT' | 'DOCUMENTS' | 'EXCHANGE' | 'BEHAVIOR' | 'SYNC';
 
 interface SettingModule {
   id: SettingsSection;
@@ -53,6 +58,38 @@ const MODULES: SettingModule[] = [
     icon: Package,
     color: 'bg-blue-500',
     keywords: ['productos', 'inventario', 'stock', 'precios', 'sku', 'código', 'tallas']
+  },
+  {
+    id: 'SYNC',
+    title: 'Sincronización',
+    description: 'Estado de Red, Nube y Offline',
+    icon: Cloud,
+    color: 'bg-sky-500',
+    keywords: ['internet', 'nube', 'offline', 'backup', 'datos', 'subir']
+  },
+  {
+    id: 'DOCUMENTS',
+    title: 'Documentos & Series',
+    description: 'Facturas, NCF, Prefijos',
+    icon: Files,
+    color: 'bg-cyan-500',
+    keywords: ['factura', 'ncf', 'fiscal', 'serie', 'numeracion', 'contador', 'ticket']
+  },
+  {
+    id: 'BEHAVIOR',
+    title: 'Comportamiento',
+    description: 'Reglas Técnicas, Stock Negativo',
+    icon: Cpu,
+    color: 'bg-indigo-600',
+    keywords: ['reglas', 'stock', 'negativo', 'logout', 'seguridad', 'z', 'cierre']
+  },
+  {
+    id: 'EXCHANGE',
+    title: 'Divisas & Cambio',
+    description: 'Tasas, Monedas Extranjeras',
+    icon: ArrowRightLeft,
+    color: 'bg-emerald-600',
+    keywords: ['dolar', 'euro', 'tasa', 'cambio', 'moneda', 'divisa']
   },
   {
     id: 'TIPS',
@@ -101,6 +138,14 @@ const MODULES: SettingModule[] = [
     icon: Receipt,
     color: 'bg-purple-500',
     keywords: ['recibo', 'factura', 'logo', 'diseño', 'papel', 'qr']
+  },
+  {
+    id: 'EMAIL',
+    title: 'Plantillas Email',
+    description: 'Diseño de recibos digitales',
+    icon: Mail,
+    color: 'bg-fuchsia-500',
+    keywords: ['correo', 'email', 'plantilla', 'marketing', 'digital', 'recibo']
   },
   {
     id: 'TEAM',
@@ -268,6 +313,26 @@ const Settings: React.FC<SettingsProps> = ({ config, users, roles, transactions,
           </div>
         );
 
+      case 'DOCUMENTS':
+        return (
+          <DocumentSettings onClose={() => setCurrentView('HOME')} />
+        );
+
+      case 'BEHAVIOR':
+        return (
+          <BehaviorSettings onClose={() => setCurrentView('HOME')} />
+        );
+
+      case 'EXCHANGE':
+        return (
+          <CurrencySettings onClose={() => setCurrentView('HOME')} />
+        );
+
+      case 'SYNC':
+        return (
+          <SyncStatusHub onClose={() => setCurrentView('HOME')} />
+        );
+
       case 'PAYMENTS':
         return (
           <PaymentSettings 
@@ -367,6 +432,9 @@ const Settings: React.FC<SettingsProps> = ({ config, users, roles, transactions,
       case 'TICKET':
         return <ReceiptDesigner config={config} onUpdateConfig={onUpdateConfig} />;
         
+      case 'EMAIL':
+        return <EmailSettings config={config} onUpdateConfig={onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
+
       case 'PROMOS':
         return <PromotionBuilder products={products} config={config} onClose={() => setCurrentView('HOME')} />;
 

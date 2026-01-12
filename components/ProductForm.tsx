@@ -1,10 +1,12 @@
+
 import React, { useState, useEffect } from 'react';
 import { 
   X, Save, Image as ImageIcon, Barcode, ScanBarcode, 
   DollarSign, Package, Layers, AlertCircle, Camera, 
-  Tags, Plus, Trash2, CheckSquare, Wand2, Grid, Copy
+  Tags, Plus, Trash2, CheckSquare, Wand2, Grid, Copy, Calculator
 } from 'lucide-react';
 import { Product, BusinessConfig, ProductAttribute, ProductVariant } from '../types';
+import ProfitCalculator from './ProfitCalculator';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -28,6 +30,7 @@ const PRESET_COLORS = [
 
 const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, onSave, onClose }) => {
   const [activeTab, setActiveTab] = useState<TabType>('GENERAL');
+  const [showCalculator, setShowCalculator] = useState(false);
   
   // Form State
   const [formData, setFormData] = useState<Partial<Product>>({
@@ -75,6 +78,16 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, onSave, 
       newMargin = ((val - (formData.cost || 0)) / (formData.cost || 0)) * 100;
     }
     setFormData(prev => ({ ...prev, price: val, margin: parseFloat(newMargin.toFixed(1)) }));
+  };
+
+  const handleCalculatorApply = (values: { cost: number; price: number; margin: number }) => {
+    setFormData(prev => ({
+      ...prev,
+      cost: values.cost,
+      price: values.price,
+      margin: values.margin
+    }));
+    setShowCalculator(false);
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -357,7 +370,15 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, onSave, 
           {activeTab === 'PRICING' && (
             <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
               
-              <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 flex flex-col items-center justify-center text-center">
+              <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 flex flex-col items-center justify-center text-center relative group">
+                 <button 
+                    onClick={() => setShowCalculator(true)}
+                    className="absolute top-4 right-4 p-2 bg-white rounded-xl shadow-sm text-blue-600 hover:scale-110 transition-transform"
+                    title="Calculadora de Rentabilidad"
+                 >
+                    <Calculator size={20} />
+                 </button>
+
                  <h3 className="text-sm font-bold text-blue-800 uppercase tracking-widest mb-2">Precio Final</h3>
                  <div className="relative flex items-center justify-center">
                     <span className="text-3xl text-blue-400 mr-1 font-medium">{config.currencySymbol}</span>
@@ -667,6 +688,18 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, onSave, 
         </div>
 
       </div>
+
+      {showCalculator && (
+        <ProfitCalculator 
+          initialCost={formData.cost || 0}
+          initialPrice={formData.price || 0}
+          initialMargin={formData.margin || 0}
+          taxRate={config.taxRate}
+          currencySymbol={config.currencySymbol}
+          onApply={handleCalculatorApply}
+          onClose={() => setShowCalculator(false)}
+        />
+      )}
     </div>
   );
 };

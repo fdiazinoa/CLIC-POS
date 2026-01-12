@@ -90,6 +90,15 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
     }));
   };
 
+  const updateCartCost = (productId: string, newCost: number) => {
+    setOrderCart(prev => prev.map(i => {
+      if (i.productId === productId) {
+        return { ...i, cost: isNaN(newCost) ? 0 : newCost };
+      }
+      return i;
+    }));
+  };
+
   const removeFromCart = (productId: string) => {
     setOrderCart(prev => prev.filter(i => i.productId !== productId));
   };
@@ -337,7 +346,21 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                        </button>
                     </div>
                     <div className="flex items-center justify-between">
-                       <p className="text-sm font-medium text-gray-500">{config.currencySymbol}{item.cost.toFixed(2)} c/u</p>
+                       <div className="flex flex-col">
+                          <label className="text-[10px] text-gray-400 font-bold uppercase mb-1">Costo Unitario</label>
+                          <div className="flex items-center gap-1 bg-gray-50 rounded-lg px-2 py-1 border border-gray-200 focus-within:border-indigo-400 focus-within:bg-white transition-all">
+                             <span className="text-xs text-gray-500 font-bold">{config.currencySymbol}</span>
+                             <input 
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={item.cost}
+                                onChange={(e) => updateCartCost(item.productId, parseFloat(e.target.value))}
+                                className="w-20 bg-transparent text-sm font-bold text-gray-800 outline-none"
+                                placeholder="0.00"
+                             />
+                          </div>
+                       </div>
                        <BigStepper 
                           value={item.quantityOrdered} 
                           onDecrease={() => updateCartQuantity(item.productId, -1)} 

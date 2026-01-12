@@ -1,8 +1,10 @@
-import React, { useState, useRef } from 'react';
+
+import React, { useState, useRef, useMemo } from 'react';
 import { 
   Users, Calendar, ShieldCheck, Clock, Check, X, 
   UserPlus, ScanFace, ChevronRight, Lock, 
-  Trash2, GripVertical, AlertCircle, LogIn, LogOut, Plus
+  Trash2, GripVertical, AlertCircle, LogIn, LogOut, Plus,
+  FileBarChart, AlertOctagon, Download
 } from 'lucide-react';
 import { User, RoleDefinition, Shift, TimeRecord, PermissionDetail } from '../types';
 import { AVAILABLE_PERMISSIONS } from '../constants';
@@ -26,6 +28,18 @@ const UNASSIGNED_SHIFTS: Shift[] = [
   { id: 'new_m', userId: null, dayOfWeek: 0, startTime: '09:00', endTime: '15:00', label: 'Mañana', color: 'bg-blue-100 border-blue-300 text-blue-800' },
   { id: 'new_t', userId: null, dayOfWeek: 0, startTime: '15:00', endTime: '22:00', label: 'Tarde', color: 'bg-purple-100 border-purple-300 text-purple-800' },
   { id: 'new_n', userId: null, dayOfWeek: 0, startTime: '22:00', endTime: '02:00', label: 'Noche', color: 'bg-indigo-100 border-indigo-300 text-indigo-800' },
+];
+
+// MOCK DATA FOR REPORT DEMO (Usually comes from DB)
+const MOCK_TIME_RECORDS: TimeRecord[] = [
+   // User 2: Normal Day
+   { id: 'tr1', userId: 'u2', type: 'IN', timestamp: new Date(new Date().setHours(8, 55)).toISOString(), method: 'PIN' },
+   { id: 'tr2', userId: 'u2', type: 'OUT', timestamp: new Date(new Date().setHours(17, 5)).toISOString(), method: 'PIN' },
+   // User 3: Missing Out
+   { id: 'tr3', userId: 'u3', type: 'IN', timestamp: new Date(new Date().setHours(14, 58)).toISOString(), method: 'PIN' },
+   // User 4: Overtime
+   { id: 'tr4', userId: 'u4', type: 'IN', timestamp: new Date(new Date().setHours(9, 0)).toISOString(), method: 'PIN' },
+   { id: 'tr5', userId: 'u4', type: 'OUT', timestamp: new Date(new Date().setHours(20, 30)).toISOString(), method: 'PIN' },
 ];
 
 // --- HELPER COMPONENTS ---
@@ -84,13 +98,13 @@ const SlideUnlock: React.FC<{ onUnlock: () => void; label: string; mode: 'IN' | 
 };
 
 const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdateRoles, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'CLOCK' | 'SCHEDULE' | 'ROLES'>('CLOCK');
+  const [activeTab, setActiveTab] = useState<'CLOCK' | 'SCHEDULE' | 'ROLES' | 'REPORTS'>('CLOCK');
   
   // Clock-in State
   const [pin, setPin] = useState('');
   const [authenticatedUser, setAuthenticatedUser] = useState<User | null>(null);
   const [isFaceScanning, setIsFaceScanning] = useState(false);
-  const [timeRecords, setTimeRecords] = useState<TimeRecord[]>([]);
+  const [timeRecords, setTimeRecords] = useState<TimeRecord[]>(MOCK_TIME_RECORDS);
 
   // Schedule State
   const [shifts, setShifts] = useState<Shift[]>(INITIAL_SHIFTS);
@@ -184,6 +198,48 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
     onUpdateRoles(updatedRoles);
   };
 
+  // --- LOGIC: REPORTS ---
+  const dailyReports = useMemo(() => {
+     // This logic pairs INs with OUTs for a very simple view. 
+     // Real world needs more robust handling for overnight shifts, etc.
+     const reports: any[] = [];
+     
+     users.forEach(user => {
+        const userRecords = timeRecords.filter(r => r.userId === user.id).sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        
+        // Simple daily grouper (Mock)
+        if (userRecords.length > 0) {
+           const firstIn = userRecords.find(r => r.type === 'IN');
+           const lastOut = userRecords.reverse().find(r => r.type === 'OUT');
+           
+           let totalHours = 0;
+           let status = 'OK';
+
+           if (firstIn && lastOut && new Date(lastOut.timestamp) > new Date(firstIn.timestamp)) {
+              const diffMs = new Date(lastOut.timestamp).getTime() - new Date(firstIn.timestamp).getTime();
+              totalHours = diffMs / (1000 * 60 * 60);
+              
+              if (totalHours > 8) status = 'OVERTIME';
+           } else if (firstIn && !lastOut) {
+              status = 'MISSING_OUT';
+           }
+
+           if (firstIn) {
+              reports.push({
+                 id: user.id + firstIn.timestamp,
+                 userName: user.name,
+                 date: new Date(firstIn.timestamp).toLocaleDateString(),
+                 inTime: new Date(firstIn.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
+                 outTime: lastOut ? new Date(lastOut.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '-',
+                 totalHours: totalHours.toFixed(2),
+                 status
+              });
+           }
+        }
+     });
+     return reports;
+  }, [timeRecords, users]);
+
   // --- RENDER CONTENT ---
 
   return (
@@ -203,6 +259,12 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
             className={`pb-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === 'SCHEDULE' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
           >
             <Calendar size={18} /> Turnos & Horarios
+          </button>
+          <button 
+            onClick={() => setActiveTab('REPORTS')}
+            className={`pb-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === 'REPORTS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+          >
+            <FileBarChart size={18} /> Reporte de Horas
           </button>
           <button 
             onClick={() => setActiveTab('ROLES')}
@@ -293,26 +355,23 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
             <div className="mt-8 w-full max-w-md">
                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 ml-2">Actividad Reciente</h3>
                <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-200 max-h-40 overflow-y-auto">
-                  {timeRecords.length === 0 ? (
-                     <p className="text-center text-gray-400 text-xs py-2">Sin registros hoy</p>
-                  ) : (
-                     timeRecords.map(rec => {
-                        const user = users.find(u => u.id === rec.userId);
-                        return (
-                           <div key={rec.id} className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
-                              <div className="flex items-center gap-2">
-                                 <div className={`p-1.5 rounded-lg ${rec.type === 'IN' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                    {rec.type === 'IN' ? <LogIn size={14} /> : <LogOut size={14} />}
-                                 </div>
-                                 <span className="text-sm font-bold text-gray-700">{user?.name}</span>
+                  {timeRecords.slice(0, 5).map(rec => {
+                     const user = users.find(u => u.id === rec.userId);
+                     return (
+                        <div key={rec.id} className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
+                           <div className="flex items-center gap-2">
+                              <div className={`p-1.5 rounded-lg ${rec.type === 'IN' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                 {rec.type === 'IN' ? <LogIn size={14} /> : <LogOut size={14} />}
                               </div>
-                              <span className="text-xs text-gray-500 font-mono">
-                                 {new Date(rec.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
-                              </span>
+                              <span className="text-sm font-bold text-gray-700">{user?.name}</span>
                            </div>
-                        );
-                     })
-                  )}
+                           <span className="text-xs text-gray-500 font-mono">
+                              {new Date(rec.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+                           </span>
+                        </div>
+                     );
+                  })}
+                  {timeRecords.length === 0 && <p className="text-center text-gray-400 text-xs py-2">Sin registros hoy</p>}
                </div>
             </div>
 
@@ -367,7 +426,7 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
                          {/* User Cell */}
                          <div className="bg-white p-3 rounded-xl border border-gray-100 flex items-center gap-3 shadow-sm sticky left-0 z-10">
                             <div className="w-8 h-8 rounded-full bg-gray-200 overflow-hidden">
-                               {user.photo ? <img src={user.photo} className="w-full h-full object-cover" /> : <Users size={16} className="m-2 text-gray-500" />}
+                               {user.photo ? <img src={user.photo} alt="User" className="w-full h-full object-cover" /> : <Users size={16} className="m-2 text-gray-500" />}
                             </div>
                             <div>
                                <p className="text-sm font-bold text-gray-800 leading-tight">{user.name}</p>
@@ -417,10 +476,74 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
           </div>
         )}
 
+        {/* === TAB: REPORTS (HR ANALYTICS) === */}
+        {activeTab === 'REPORTS' && (
+           <div className="h-full flex flex-col bg-gray-50 p-8 overflow-hidden">
+              <div className="flex justify-between items-end mb-6">
+                 <div>
+                    <h2 className="text-2xl font-black text-gray-800 flex items-center gap-2">
+                       <FileBarChart className="text-emerald-600" /> Reporte de Jornada
+                    </h2>
+                    <p className="text-gray-500 mt-1">Resumen de horas trabajadas y alertas de asistencia.</p>
+                 </div>
+                 <button className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-gray-600 font-bold text-sm shadow-sm hover:bg-gray-50 flex items-center gap-2">
+                    <Download size={16} /> Exportar Excel
+                 </button>
+              </div>
+
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex-1 flex flex-col">
+                 <div className="overflow-x-auto flex-1">
+                    <table className="w-full text-left">
+                       <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
+                          <tr>
+                             <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider">Empleado</th>
+                             <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider">Fecha</th>
+                             <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider">Entrada</th>
+                             <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider">Salida</th>
+                             <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider text-right">Total Horas</th>
+                             <th className="p-4 font-bold text-gray-500 text-xs uppercase tracking-wider text-center">Estado</th>
+                          </tr>
+                       </thead>
+                       <tbody className="divide-y divide-gray-100 text-sm">
+                          {dailyReports.map((report) => (
+                             <tr key={report.id} className="hover:bg-gray-50 transition-colors">
+                                <td className="p-4 font-bold text-gray-800">{report.userName}</td>
+                                <td className="p-4 text-gray-600">{report.date}</td>
+                                <td className="p-4 font-mono text-gray-600">{report.inTime}</td>
+                                <td className="p-4 font-mono text-gray-600">{report.outTime}</td>
+                                <td className="p-4 font-mono font-bold text-right">{report.totalHours}h</td>
+                                <td className="p-4 text-center">
+                                   {report.status === 'OK' && (
+                                      <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-bold">Normal</span>
+                                   )}
+                                   {report.status === 'OVERTIME' && (
+                                      <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs font-bold flex items-center justify-center gap-1">
+                                         <AlertOctagon size={10} /> Extras
+                                      </span>
+                                   )}
+                                   {report.status === 'MISSING_OUT' && (
+                                      <span className="px-2 py-1 bg-red-100 text-red-700 rounded text-xs font-bold flex items-center justify-center gap-1">
+                                         <AlertCircle size={10} /> Sin Salida
+                                      </span>
+                                   )}
+                                </td>
+                             </tr>
+                          ))}
+                          {dailyReports.length === 0 && (
+                             <tr>
+                                <td colSpan={6} className="p-8 text-center text-gray-400 italic">No hay registros de jornada para este período.</td>
+                             </tr>
+                          )}
+                       </tbody>
+                    </table>
+                 </div>
+              </div>
+           </div>
+        )}
+
         {/* === TAB: ROLES & PERMISSIONS === */}
         {activeTab === 'ROLES' && (
           <div className="h-full flex overflow-hidden">
-             
              {/* Roles List */}
              <div className="w-64 bg-white border-r border-gray-200 overflow-y-auto">
                 {roles.map(role => (
@@ -455,16 +578,8 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                          {['SALES', 'CASH', 'ADMIN', 'SYSTEM'].map(category => {
-                            // Filter logic would go here if PermissionDetail had category
-                            // Since types were updated, we assume mocked AVAILABLE_PERMISSIONS needs categories update
-                            // For visual demo, we group by what we have or mock it.
-                            
-                            // Let's filter AVAILABLE_PERMISSIONS manually based on key prefix or list
-                            let perms = [];
-                            if (category === 'SALES') perms = AVAILABLE_PERMISSIONS.filter(p => ['CAN_APPLY_DISCOUNT', 'CAN_VOID_ITEM', 'CAN_MANAGE_TABLES'].includes(p.key));
-                            if (category === 'CASH') perms = AVAILABLE_PERMISSIONS.filter(p => ['CAN_FINALIZE_PAYMENT', 'CAN_CLOSE_REGISTER'].includes(p.key));
-                            if (category === 'ADMIN') perms = AVAILABLE_PERMISSIONS.filter(p => ['CAN_ACCESS_SETTINGS', 'CAN_VIEW_REPORTS', 'CAN_MANAGE_CUSTOMERS'].includes(p.key));
-                            
+                            // Filter logic matches AVAILABLE_PERMISSIONS categories
+                            const perms = AVAILABLE_PERMISSIONS.filter(p => p.category === category);
                             if (perms.length === 0) return null;
 
                             return (

@@ -109,7 +109,7 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
 
   // --- CALCS FOR X-REPORT ---
   const payments = transactions.flatMap(t => t.payments);
-  const totalsByMethod = payments.reduce((acc, p) => {
+  const totalsByMethod = payments.reduce((acc: Record<string, number>, p) => {
      acc[p.method] = (acc[p.method] || 0) + p.amount;
      return acc;
   }, {} as Record<string, number>);
@@ -119,7 +119,7 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
   const cashOut = cashMovements.filter(m => m.type === 'OUT').reduce((acc, m) => acc + m.amount, 0);
   
   const expectedCashInDrawer = cashSalesTotal + cashIn - cashOut;
-  const totalSales = Object.values(totalsByMethod).reduce((acc, val) => acc + val, 0);
+  const totalSales = (Object.values(totalsByMethod) as number[]).reduce((acc: number, val: number) => acc + val, 0);
 
   return (
     <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden">
