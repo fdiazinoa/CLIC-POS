@@ -1,8 +1,9 @@
+
 import React, { useState, useEffect } from 'react';
 import { 
   X, CreditCard, Banknote, QrCode, CheckCircle2, 
   Smartphone, Trash2, Plus, Wallet, Printer, Mail, 
-  ArrowRight, Repeat, Calculator 
+  ArrowRight, Repeat, Calculator, ChevronDown 
 } from 'lucide-react';
 import { PaymentEntry, PaymentMethod } from '../types';
 
@@ -21,6 +22,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, currencySymbo
   const [inputAmount, setInputAmount] = useState<string>('');
   const [isSuccessScreen, setIsSuccessScreen] = useState(false);
   const [email, setEmail] = useState('');
+  
+  // Mobile specific: show payments list
+  const [showMobileHistory, setShowMobileHistory] = useState(false);
   
   // Tracks if the input is currently auto-filled and should be overwritten on next keystroke
   const [shouldClearInput, setShouldClearInput] = useState(true);
@@ -163,7 +167,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, currencySymbo
   if (isSuccessScreen) {
     return (
       <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/90 backdrop-blur-md animate-in fade-in duration-300">
-        <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl flex flex-col items-center text-center relative overflow-hidden">
+        <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl flex flex-col items-center text-center relative overflow-hidden m-4">
           
           {/* Confetti / Decoration Background */}
           <div className="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-green-300 via-transparent to-transparent pointer-events-none"></div>
@@ -228,11 +232,47 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, currencySymbo
 
   // --- RENDER MAIN INTERFACE ---
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-2 md:p-6 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-white w-full max-w-6xl h-full md:h-[85vh] md:rounded-[2.5rem] shadow-2xl flex overflow-hidden">
+    <div className="fixed inset-0 z-[60] flex items-end md:items-center justify-center md:p-6 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-white w-full max-w-6xl h-[95vh] md:h-[85vh] rounded-t-[2rem] md:rounded-[2.5rem] shadow-2xl flex flex-col md:flex-row overflow-hidden">
         
-        {/* === LEFT COLUMN: SUMMARY & HISTORY === */}
-        <div className="w-[35%] bg-gray-50 border-r border-gray-200 flex flex-col relative">
+        {/* === MOBILE HEADER === */}
+        <div className="md:hidden bg-gray-50 p-4 border-b border-gray-200 flex justify-between items-center shrink-0">
+           <button onClick={onClose} className="p-2 bg-white rounded-full text-gray-500 shadow-sm border border-gray-100"><X size={20} /></button>
+           <div className="flex flex-col items-end">
+              <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Total: {currencySymbol}{total.toFixed(2)}</span>
+              <div 
+                onClick={() => payments.length > 0 && setShowMobileHistory(!showMobileHistory)}
+                className="flex items-center gap-2 cursor-pointer"
+              >
+                 <span className="text-sm font-bold text-gray-500">Restante:</span>
+                 <span className={`text-2xl font-black ${remaining > 0 ? 'text-red-500' : 'text-green-500'}`}>
+                    {currencySymbol}{remaining.toFixed(2)}
+                 </span>
+                 {payments.length > 0 && <ChevronDown size={16} className={`text-gray-400 transition-transform ${showMobileHistory ? 'rotate-180' : ''}`} />}
+              </div>
+           </div>
+        </div>
+
+        {/* === MOBILE HISTORY DROPDOWN === */}
+        {showMobileHistory && (
+           <div className="md:hidden bg-gray-50 border-b border-gray-200 p-4 animate-in slide-in-from-top-5 max-h-40 overflow-y-auto">
+              <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Pagos Realizados</h4>
+              <div className="space-y-2">
+                 {payments.map(p => (
+                    <div key={p.id} className="flex justify-between items-center bg-white p-2 rounded-lg border border-gray-100 shadow-sm">
+                       <span className="text-sm font-bold text-gray-700">{p.method === 'CASH' ? 'Efectivo' : 'Tarjeta'}</span>
+                       <div className="flex items-center gap-3">
+                          <span className="font-bold">{currencySymbol}{p.amount.toFixed(2)}</span>
+                          <button onClick={() => handleRemovePayment(p.id)} className="text-red-400"><Trash2 size={16} /></button>
+                       </div>
+                    </div>
+                 ))}
+              </div>
+           </div>
+        )}
+
+        {/* === LEFT COLUMN: SUMMARY & HISTORY (DESKTOP) === */}
+        <div className="hidden md:flex w-[35%] bg-gray-50 border-r border-gray-200 flex-col relative">
            <button onClick={onClose} className="absolute top-4 left-4 p-2 text-gray-400 hover:bg-gray-200 rounded-full transition-colors z-10">
               <X size={24} />
            </button>
@@ -311,10 +351,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, currencySymbo
         </div>
 
         {/* === RIGHT COLUMN: INPUT & METHODS === */}
-        <div className="w-[65%] flex flex-col bg-white">
+        <div className="w-full md:w-[65%] flex flex-col bg-white h-full relative">
            
            {/* Method Tabs */}
-           <div className="flex p-4 gap-4">
+           <div className="flex p-3 md:p-4 gap-3 md:gap-4 overflow-x-auto no-scrollbar shrink-0">
               {[
                  { id: 'CASH', label: 'Efectivo', icon: Banknote },
                  { id: 'CARD', label: 'Tarjeta', icon: CreditCard },
@@ -323,39 +363,30 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, currencySymbo
                  <button
                    key={m.id}
                    onClick={() => setActiveMethod(m.id as PaymentMethod)}
-                   className={`flex-1 py-6 rounded-2xl border-2 flex flex-col items-center gap-2 transition-all duration-200 ${
+                   className={`flex-1 min-w-[100px] py-4 md:py-6 rounded-2xl border-2 flex flex-col items-center gap-2 transition-all duration-200 ${
                       activeMethod === m.id 
                          ? `border-current ${themeClass} bg-gray-50 shadow-sm` 
                          : 'border-transparent hover:bg-gray-50 text-gray-400'
                    }`}
                  >
-                    <m.icon size={32} />
-                    <span className="font-bold text-sm uppercase tracking-wide">{m.label}</span>
+                    <m.icon size={24} className="md:w-8 md:h-8" />
+                    <span className="font-bold text-xs md:text-sm uppercase tracking-wide">{m.label}</span>
                  </button>
               ))}
            </div>
 
            {/* Input Display */}
-           <div className="px-8 mt-4">
-              <div className={`bg-gray-100 rounded-3xl p-6 flex justify-between items-center relative overflow-hidden border transition-colors ${shouldClearInput ? 'border-blue-400 ring-2 ring-blue-100' : 'border-gray-200'}`}>
-                 <span className="text-3xl text-gray-400 font-medium">{currencySymbol}</span>
+           <div className="px-4 md:px-8 mt-2 md:mt-4 shrink-0">
+              <div className={`bg-gray-100 rounded-3xl p-4 md:p-6 flex justify-between items-center relative overflow-hidden border transition-colors ${shouldClearInput ? 'border-blue-400 ring-2 ring-blue-100' : 'border-gray-200'}`}>
+                 <span className="text-2xl md:text-3xl text-gray-400 font-medium">{currencySymbol}</span>
                  <input 
                     type="text" 
                     readOnly 
                     value={inputAmount} 
-                    className="bg-transparent text-right text-6xl font-mono font-bold text-gray-800 w-full outline-none z-10 cursor-text"
+                    className="bg-transparent text-right text-5xl md:text-6xl font-mono font-bold text-gray-800 w-full outline-none z-10 cursor-text"
                     placeholder="0.00"
-                    onClick={() => {
-                        // Optional: if clicked and not already set to clear, maybe select all? 
-                        // For now, relying on initial state. 
-                    }}
+                    onClick={() => {}}
                  />
-                 {activeMethod === 'CARD' && (
-                    <div className="absolute left-6 bottom-4 flex gap-2 opacity-50">
-                       <div className="h-6 w-10 bg-gray-300 rounded"></div> {/* Fake Visa Icon */}
-                       <div className="h-6 w-10 bg-gray-300 rounded"></div> {/* Fake MC Icon */}
-                    </div>
-                 )}
               </div>
               <p className="text-xs text-center text-gray-400 mt-2">
                  {shouldClearInput ? "Escribe para modificar el monto" : "Ingresa el monto a cobrar"}
@@ -364,12 +395,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, currencySymbo
 
            {/* Smart Suggestions (Only for Cash) */}
            {activeMethod === 'CASH' && remaining > 0 && (
-              <div className="px-8 mt-6 flex gap-3 overflow-x-auto no-scrollbar pb-2">
+              <div className="px-4 md:px-8 mt-4 md:mt-6 flex gap-3 overflow-x-auto no-scrollbar pb-2 shrink-0">
                  {getSmartSuggestions().map(sugg => (
                     <button 
                       key={sugg}
                       onClick={() => handleAddPayment(sugg)}
-                      className="flex-1 min-w-[100px] py-4 bg-green-50 text-green-700 border border-green-200 rounded-2xl font-bold text-xl hover:bg-green-100 hover:scale-105 transition-all shadow-sm"
+                      className="flex-1 min-w-[90px] py-3 md:py-4 bg-green-50 text-green-700 border border-green-200 rounded-2xl font-bold text-lg md:text-xl hover:bg-green-100 active:scale-95 transition-all shadow-sm"
                     >
                        {currencySymbol}{sugg}
                     </button>
@@ -378,36 +409,51 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, currencySymbo
            )}
 
            {/* Numeric Keypad */}
-           <div className="flex-1 p-8 grid grid-cols-4 gap-4">
+           <div className="flex-1 p-4 md:p-8 grid grid-cols-4 gap-3 md:gap-4 overflow-y-auto">
               {[1, 2, 3].map(n => (
-                 <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 rounded-3xl text-3xl font-bold text-gray-700 transition-all active:scale-95">
+                 <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 rounded-2xl md:rounded-3xl text-2xl md:text-3xl font-bold text-gray-700 transition-all active:scale-95">
                     {n}
                  </button>
               ))}
-              <button onClick={() => handleAddPayment()} className={`row-span-2 rounded-3xl font-bold text-white shadow-lg flex flex-col items-center justify-center gap-2 transition-all active:scale-95 ${themeBgClass} ${(!inputAmount || parseFloat(inputAmount) === 0) ? 'opacity-50 cursor-not-allowed' : 'hover:brightness-110'}`}>
-                 <Plus size={32} />
-                 <span className="text-sm uppercase">Agregar</span>
+              <button onClick={() => handleAddPayment()} className={`row-span-2 rounded-2xl md:rounded-3xl font-bold text-white shadow-lg flex flex-col items-center justify-center gap-1 md:gap-2 transition-all active:scale-95 ${themeBgClass} ${(!inputAmount || parseFloat(inputAmount) === 0) ? 'opacity-50 cursor-not-allowed' : 'hover:brightness-110'}`}>
+                 <Plus size={24} className="md:w-8 md:h-8" />
+                 <span className="text-xs md:text-sm uppercase">Agregar</span>
               </button>
 
               {[4, 5, 6].map(n => (
-                 <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 rounded-3xl text-3xl font-bold text-gray-700 transition-all active:scale-95">
+                 <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 rounded-2xl md:rounded-3xl text-2xl md:text-3xl font-bold text-gray-700 transition-all active:scale-95">
                     {n}
                  </button>
               ))}
 
               {[7, 8, 9].map(n => (
-                 <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 rounded-3xl text-3xl font-bold text-gray-700 transition-all active:scale-95">
+                 <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 rounded-2xl md:rounded-3xl text-2xl md:text-3xl font-bold text-gray-700 transition-all active:scale-95">
                     {n}
                  </button>
               ))}
-              <button onClick={() => handleNumPad('BACK')} className="rounded-3xl bg-red-50 text-red-500 font-bold hover:bg-red-100 transition-all flex items-center justify-center">
+              <button onClick={() => handleNumPad('BACK')} className="rounded-2xl md:rounded-3xl bg-red-50 text-red-500 font-bold hover:bg-red-100 transition-all flex items-center justify-center active:scale-95">
                  <Trash2 size={24} />
               </button>
 
-              <button onClick={() => handleNumPad('C')} className="rounded-3xl bg-gray-100 text-gray-500 font-bold hover:bg-gray-200 transition-all text-xl">C</button>
-              <button onClick={() => handleNumPad('0')} className="rounded-3xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 text-3xl font-bold text-gray-700 transition-all active:scale-95">0</button>
-              <button onClick={() => handleNumPad('.')} className="rounded-3xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 text-3xl font-bold text-gray-700 transition-all active:scale-95">.</button>
+              <button onClick={() => handleNumPad('C')} className="rounded-2xl md:rounded-3xl bg-gray-100 text-gray-500 font-bold hover:bg-gray-200 transition-all text-xl">C</button>
+              <button onClick={() => handleNumPad('0')} className="rounded-2xl md:rounded-3xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 text-2xl md:text-3xl font-bold text-gray-700 transition-all active:scale-95">0</button>
+              <button onClick={() => handleNumPad('.')} className="rounded-2xl md:rounded-3xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 text-2xl md:text-3xl font-bold text-gray-700 transition-all active:scale-95">.</button>
+              
+              {/* Spacer for bottom padding on mobile if needed */}
+              <div className="col-span-4 h-20 md:hidden"></div>
            </div>
+
+           {/* MOBILE FLOATING ACTION BUTTON */}
+           {remaining === 0 && (
+              <div className="md:hidden absolute bottom-6 left-6 right-6 z-20">
+                 <button 
+                    onClick={handleProcessSale}
+                    className={`w-full py-4 rounded-2xl font-bold text-white text-xl shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-transform animate-in slide-in-from-bottom-10 ${themeBgClass}`}
+                 >
+                    <CheckCircle2 size={24} /> FINALIZAR VENTA
+                 </button>
+              </div>
+           )}
 
         </div>
       </div>

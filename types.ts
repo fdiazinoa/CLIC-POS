@@ -68,21 +68,60 @@ export interface CustomerTransaction {
   description: string;
 }
 
+export interface CustomerAddress {
+  id: string;
+  type: 'BILLING' | 'SHIPPING'; // Facturación vs Envío
+  isDefault: boolean;
+  
+  // Location
+  country: string;
+  state: string; // Provincia/Estado
+  city: string;
+  zipCode: string;
+  street: string;
+  number: string;
+  
+  // Logistics Improvements
+  latitude?: number;
+  longitude?: number;
+  contactPhone?: string; // Teléfono específico para esta dirección
+  receptionHours?: string; // Ej: "L-V 8am-5pm"
+  notes?: string; // "Dejar en recepción"
+}
+
 export interface Customer {
   id: string;
   name: string;
   phone?: string;
   email?: string;
   taxId?: string; // RNC / NIF
-  address?: string;
+  address?: string; // Legacy simple address field (optional now)
   notes?: string;
   loyaltyPoints?: number;
   createdAt: string;
+  
+  // CRM 2.0 Fields
+  tags?: string[]; // ['VIP', 'Bad Payer']
+  tier?: 'BRONZE' | 'SILVER' | 'GOLD';
+  totalSpent?: number;
+  lastVisit?: string;
   
   // Credit / Debt Logic
   creditLimit?: number;
   currentDebt?: number;
   creditHistory?: CustomerTransaction[];
+
+  // --- NEW: Fiscal & Logic Configuration ---
+  requiresFiscalInvoice?: boolean; // Generar factura
+  prefersEmail?: boolean; // Enviar documento por email
+  isTaxExempt?: boolean; // Exento de impuestos
+  applyChainedTax?: boolean; // Aplicar impuesto encadenado
+  
+  creditDays?: number; // Días de crédito
+  preferredCurrency?: string; // Moneda preferida (DOP, USD)
+
+  // --- NEW: Multi-Address ---
+  addresses?: CustomerAddress[];
 }
 
 export interface Modifier {
@@ -143,6 +182,7 @@ export interface CartItem extends Product {
   modifiers?: string[]; // Array of modifier names
   note?: string; // Kitchen notes
   isSent?: boolean; // For kitchen orders
+  salespersonId?: string; // NEW: Specific salesperson for this item (Commission)
 }
 
 export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'OTHER';
@@ -166,6 +206,7 @@ export interface Transaction {
   refundReason?: string;
   customerId?: string;
   customerName?: string;
+  globalDiscount?: { value: number, type: 'PERCENT' | 'FIXED' }; // Added for history
 }
 
 export interface CashMovement {
@@ -384,6 +425,7 @@ export interface SavedTicket {
   total: number;
   tableId: number | null;
   guestCount?: number;
+  discount?: { value: number; type: 'PERCENT' | 'FIXED' }; // NEW: Save discount with ticket
 }
 
 export interface Table {

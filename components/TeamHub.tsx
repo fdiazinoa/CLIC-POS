@@ -1,12 +1,12 @@
 
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   Users, Calendar, ShieldCheck, Clock, Check, X, 
   UserPlus, ScanFace, ChevronRight, Lock, 
-  Trash2, GripVertical, AlertCircle, LogIn, LogOut, Plus,
-  FileBarChart, AlertOctagon, Download
+  Trash2, AlertCircle, LogIn, LogOut, Plus,
+  FileBarChart, AlertOctagon, Download, Edit2, User as UserIcon
 } from 'lucide-react';
-import { User, RoleDefinition, Shift, TimeRecord, PermissionDetail } from '../types';
+import { User, RoleDefinition, Shift, TimeRecord } from '../types';
 import { AVAILABLE_PERMISSIONS } from '../constants';
 
 interface TeamHubProps {
@@ -46,7 +46,6 @@ const MOCK_TIME_RECORDS: TimeRecord[] = [
 
 const SlideUnlock: React.FC<{ onUnlock: () => void; label: string; mode: 'IN' | 'OUT' }> = ({ onUnlock, label, mode }) => {
   const [sliderValue, setSliderValue] = useState(0);
-  const containerRef = useRef<HTMLDivElement>(null);
   
   const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value);
@@ -98,7 +97,7 @@ const SlideUnlock: React.FC<{ onUnlock: () => void; label: string; mode: 'IN' | 
 };
 
 const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdateRoles, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'CLOCK' | 'SCHEDULE' | 'ROLES' | 'REPORTS'>('CLOCK');
+  const [activeTab, setActiveTab] = useState<'CLOCK' | 'USERS' | 'SCHEDULE' | 'ROLES' | 'REPORTS'>('CLOCK');
   
   // Clock-in State
   const [pin, setPin] = useState('');
@@ -112,6 +111,11 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
 
   // Roles State
   const [editingRole, setEditingRole] = useState<RoleDefinition | null>(null);
+
+  // Users Management State
+  const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [userForm, setUserForm] = useState<Partial<User>>({});
 
   // --- LOGIC: CLOCK IN/OUT ---
   
@@ -161,6 +165,44 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
     setAuthenticatedUser(null);
   };
 
+  // --- LOGIC: USER MANAGEMENT ---
+  const handleSaveUser = () => {
+    if (!userForm.name || !userForm.pin || !userForm.role) return alert("Completa todos los campos");
+    
+    if (editingUser) {
+      onUpdateUsers(users.map(u => u.id === editingUser.id ? { ...editingUser, ...userForm } as User : u));
+    } else {
+      const newUser: User = {
+        id: `u-${Date.now()}`,
+        name: userForm.name!,
+        pin: userForm.pin!,
+        role: userForm.role!,
+        photo: userForm.photo
+      };
+      onUpdateUsers([...users, newUser]);
+    }
+    setIsUserModalOpen(false);
+    setUserForm({});
+    setEditingUser(null);
+  };
+
+  const handleDeleteUser = (id: string) => {
+    if (confirm("¿Eliminar usuario?")) {
+      onUpdateUsers(users.filter(u => u.id !== id));
+    }
+  };
+
+  const openUserModal = (user?: User) => {
+    if (user) {
+      setEditingUser(user);
+      setUserForm(user);
+    } else {
+      setEditingUser(null);
+      setUserForm({ role: 'CASHIER' }); // Default role
+    }
+    setIsUserModalOpen(true);
+  };
+
   // --- LOGIC: SCHEDULE DRAG & DROP ---
 
   const handleDrop = (e: React.DragEvent, userId: string, dayIdx: number) => {
@@ -200,30 +242,21 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
 
   // --- LOGIC: REPORTS ---
   const dailyReports = useMemo(() => {
-     // This logic pairs INs with OUTs for a very simple view. 
-     // Real world needs more robust handling for overnight shifts, etc.
      const reports: any[] = [];
-     
      users.forEach(user => {
         const userRecords = timeRecords.filter(r => r.userId === user.id).sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-        
-        // Simple daily grouper (Mock)
         if (userRecords.length > 0) {
            const firstIn = userRecords.find(r => r.type === 'IN');
            const lastOut = userRecords.reverse().find(r => r.type === 'OUT');
-           
            let totalHours = 0;
            let status = 'OK';
-
            if (firstIn && lastOut && new Date(lastOut.timestamp) > new Date(firstIn.timestamp)) {
               const diffMs = new Date(lastOut.timestamp).getTime() - new Date(firstIn.timestamp).getTime();
               totalHours = diffMs / (1000 * 60 * 60);
-              
               if (totalHours > 8) status = 'OVERTIME';
            } else if (firstIn && !lastOut) {
               status = 'MISSING_OUT';
            }
-
            if (firstIn) {
               reports.push({
                  id: user.id + firstIn.timestamp,
@@ -255,6 +288,12 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
             <Clock size={18} /> Fichaje
           </button>
           <button 
+            onClick={() => setActiveTab('USERS')}
+            className={`pb-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === 'USERS' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+          >
+            <Users size={18} /> Equipo
+          </button>
+          <button 
             onClick={() => setActiveTab('SCHEDULE')}
             className={`pb-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === 'SCHEDULE' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
           >
@@ -280,104 +319,239 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
 
       <div className="flex-1 overflow-hidden relative">
         
-        {/* === TAB: CLOCK IN/OUT === */}
+        {/* === TAB: CLOCK IN/OUT (REDESIGNED) === */}
         {activeTab === 'CLOCK' && (
-          <div className="h-full flex flex-col items-center justify-center p-6 bg-gray-50">
+          <div className="h-full flex flex-col items-center justify-center p-6 bg-gray-50/50">
             
-            <div className="w-full max-w-md bg-white rounded-[2.5rem] shadow-xl p-8 border border-gray-100 flex flex-col items-center relative overflow-hidden">
+            <div className="w-full max-w-[380px] flex flex-col gap-6">
                
-               {/* Status Header */}
-               <div className="mb-8 text-center">
-                  <div className="w-20 h-20 rounded-full bg-blue-50 mx-auto mb-4 flex items-center justify-center shadow-inner">
-                     {authenticatedUser ? (
-                        <img src={authenticatedUser.photo || ''} alt="User" className="w-full h-full rounded-full object-cover" />
-                     ) : (
-                        <Lock size={32} className="text-blue-400" />
-                     )}
+               {/* MAIN CARD */}
+               <div className="bg-white rounded-[2.5rem] shadow-[0_20px_60px_-15px_rgba(0,0,0,0.1)] p-8 flex flex-col items-center relative z-10">
+                  
+                  {/* Status Header */}
+                  <div className="mb-8 text-center w-full">
+                     <div className="w-20 h-20 rounded-full bg-blue-50 mx-auto mb-6 flex items-center justify-center shadow-inner border border-blue-100/50">
+                        {authenticatedUser ? (
+                           <img src={authenticatedUser.photo || ''} alt="User" className="w-full h-full rounded-full object-cover" />
+                        ) : (
+                           <Lock size={32} className="text-blue-500" strokeWidth={2.5} />
+                        )}
+                     </div>
+                     <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
+                        {authenticatedUser ? `Hola, ${authenticatedUser.name.split(' ')[0]}` : 'Ingresa tu PIN'}
+                     </h2>
+                     <p className="text-slate-400 text-sm font-medium mt-2 uppercase tracking-wide text-[10px]">
+                        {authenticatedUser ? 'Desliza para registrar' : 'Control de Asistencia'}
+                     </p>
                   </div>
-                  <h2 className="text-2xl font-black text-gray-800">
-                     {authenticatedUser ? `Hola, ${authenticatedUser.name}` : 'Ingresa tu PIN'}
-                  </h2>
-                  <p className="text-gray-400 text-sm mt-1">
-                     {authenticatedUser ? 'Desliza para registrar actividad' : 'Control de Asistencia'}
-                  </p>
-               </div>
 
-               {/* PIN Dots (Hidden if Auth) */}
-               {!authenticatedUser && (
-                  <div className="flex gap-4 mb-8">
-                     {[0,1,2,3].map(i => (
-                        <div key={i} className={`w-4 h-4 rounded-full transition-all ${pin.length > i ? 'bg-blue-500 scale-110' : 'bg-gray-200'}`} />
-                     ))}
-                  </div>
-               )}
-
-               {/* Actions or Keypad */}
-               {authenticatedUser ? (
-                  <div className="w-full space-y-4 animate-in slide-in-from-bottom-10">
-                     <SlideUnlock label="Desliza para Entrar" mode="IN" onUnlock={() => handleClockAction('IN')} />
-                     <SlideUnlock label="Desliza para Salir" mode="OUT" onUnlock={() => handleClockAction('OUT')} />
-                     
-                     <button onClick={() => { setAuthenticatedUser(null); setPin(''); }} className="w-full py-3 text-gray-400 text-sm font-medium hover:text-gray-600">
-                        Cancelar / Cambiar Usuario
-                     </button>
-                  </div>
-               ) : (
-                  <div className="w-full">
-                     <div className="grid grid-cols-3 gap-4 mb-6">
-                        {[1,2,3,4,5,6,7,8,9].map(n => (
-                           <button key={n} onClick={() => handlePinPress(n.toString())} className="h-16 rounded-2xl bg-gray-50 hover:bg-gray-100 text-2xl font-bold text-gray-700 transition-all active:scale-95 shadow-sm border border-gray-100">
-                              {n}
-                           </button>
+                  {/* PIN Dots (Hidden if Auth) */}
+                  {!authenticatedUser && (
+                     <div className="flex gap-4 mb-10 justify-center">
+                        {[0,1,2,3].map(i => (
+                           <div 
+                              key={i} 
+                              className={`w-3.5 h-3.5 rounded-full transition-all duration-300 ${
+                                 pin.length > i 
+                                    ? 'bg-blue-500 scale-110 shadow-sm shadow-blue-200' 
+                                    : 'bg-slate-200'
+                              }`} 
+                           />
                         ))}
-                        <button onClick={handleFaceId} className="h-16 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center active:scale-95 relative overflow-hidden">
-                           {isFaceScanning ? (
-                              <div className="absolute inset-0 bg-blue-100 flex items-center justify-center">
-                                 <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                              </div>
-                           ) : (
-                              <ScanFace size={28} />
-                           )}
-                        </button>
-                        <button onClick={() => handlePinPress('0')} className="h-16 rounded-2xl bg-gray-50 hover:bg-gray-100 text-2xl font-bold text-gray-700 transition-all active:scale-95 shadow-sm border border-gray-100">
-                           0
-                        </button>
-                        <button onClick={() => handlePinPress('BACK')} className="h-16 rounded-2xl bg-red-50 text-red-500 flex items-center justify-center active:scale-95">
-                           <Trash2 size={24} />
+                     </div>
+                  )}
+
+                  {/* Actions or Keypad */}
+                  {authenticatedUser ? (
+                     <div className="w-full space-y-4 animate-in slide-in-from-bottom-10 fade-in duration-500">
+                        <SlideUnlock label="Entrada" mode="IN" onUnlock={() => handleClockAction('IN')} />
+                        <SlideUnlock label="Salida" mode="OUT" onUnlock={() => handleClockAction('OUT')} />
+                        
+                        <button onClick={() => { setAuthenticatedUser(null); setPin(''); }} className="w-full py-3 text-slate-400 text-xs font-bold uppercase tracking-wider hover:text-slate-600 transition-colors mt-2">
+                           Cancelar
                         </button>
                      </div>
-                  </div>
-               )}
-
-            </div>
-
-            {/* Recent Activity Log */}
-            <div className="mt-8 w-full max-w-md">
-               <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 ml-2">Actividad Reciente</h3>
-               <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-200 max-h-40 overflow-y-auto">
-                  {timeRecords.slice(0, 5).map(rec => {
-                     const user = users.find(u => u.id === rec.userId);
-                     return (
-                        <div key={rec.id} className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
-                           <div className="flex items-center gap-2">
-                              <div className={`p-1.5 rounded-lg ${rec.type === 'IN' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                 {rec.type === 'IN' ? <LogIn size={14} /> : <LogOut size={14} />}
-                              </div>
-                              <span className="text-sm font-bold text-gray-700">{user?.name}</span>
-                           </div>
-                           <span className="text-xs text-gray-500 font-mono">
-                              {new Date(rec.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
-                           </span>
+                  ) : (
+                     <div className="w-full px-2">
+                        <div className="grid grid-cols-3 gap-3 mb-2">
+                           {[1,2,3,4,5,6,7,8,9].map(n => (
+                              <button 
+                                 key={n} 
+                                 onClick={() => handlePinPress(n.toString())} 
+                                 className="h-16 rounded-2xl bg-white hover:bg-slate-50 text-2xl font-bold text-slate-700 transition-all active:scale-95 shadow-[0_2px_10px_rgba(0,0,0,0.03)] border border-slate-100"
+                              >
+                                 {n}
+                              </button>
+                           ))}
+                           <div className="h-16"></div> {/* Spacer */}
+                           <button 
+                              onClick={() => handlePinPress('0')} 
+                              className="h-16 rounded-2xl bg-white hover:bg-slate-50 text-2xl font-bold text-slate-700 transition-all active:scale-95 shadow-[0_2px_10px_rgba(0,0,0,0.03)] border border-slate-100"
+                           >
+                              0
+                           </button>
+                           <button 
+                              onClick={() => handlePinPress('BACK')} 
+                              className="h-16 rounded-2xl flex items-center justify-center active:scale-95 transition-all text-slate-400 hover:text-red-500 hover:bg-red-50"
+                           >
+                              <Trash2 size={24} />
+                           </button>
                         </div>
-                     );
-                  })}
-                  {timeRecords.length === 0 && <p className="text-center text-gray-400 text-xs py-2">Sin registros hoy</p>}
+                     </div>
+                  )}
                </div>
-            </div>
 
+               {/* Recent Activity Log */}
+               <div className="w-full mt-4">
+                  <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4 text-center">Actividad Reciente</h3>
+                  <div className="space-y-2">
+                     {timeRecords.slice(0, 3).map(rec => {
+                        const user = users.find(u => u.id === rec.userId);
+                        return (
+                           <div key={rec.id} className="flex justify-between items-center p-3 bg-white/60 backdrop-blur-sm rounded-xl border border-white/50 shadow-sm">
+                              <div className="flex items-center gap-3">
+                                 <div className={`p-1.5 rounded-lg ${rec.type === 'IN' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                                    {rec.type === 'IN' ? <LogIn size={14} /> : <LogOut size={14} />}
+                                 </div>
+                                 <div>
+                                    <p className="text-xs font-bold text-slate-700">{user?.name}</p>
+                                 </div>
+                              </div>
+                              <span className="text-[10px] font-mono font-bold text-slate-500">
+                                 {new Date(rec.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+                              </span>
+                           </div>
+                        );
+                     })}
+                  </div>
+               </div>
+
+            </div>
           </div>
         )}
 
+        {/* === TAB: USER MANAGEMENT === */}
+        {activeTab === 'USERS' && (
+           <div className="h-full flex flex-col p-8 bg-gray-50">
+              <div className="flex justify-between items-center mb-6">
+                 <div>
+                    <h2 className="text-2xl font-black text-gray-800">Directorio de Equipo</h2>
+                    <p className="text-gray-500 text-sm">Gestiona accesos y roles de empleados.</p>
+                 </div>
+                 <button 
+                    onClick={() => openUserModal()}
+                    className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 active:scale-95 transition-all flex items-center gap-2"
+                 >
+                    <UserPlus size={18} /> Nuevo Usuario
+                 </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 overflow-y-auto pb-20">
+                 {users.map(user => {
+                    const role = roles.find(r => r.id === user.role);
+                    return (
+                       <div key={user.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all group relative overflow-hidden">
+                          <div className={`absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-${role?.id === 'ADMIN' ? 'red' : 'indigo'}-50 to-transparent rounded-bl-full opacity-50`}></div>
+                          
+                          <div className="flex items-start justify-between mb-4">
+                             <div className="flex items-center gap-4">
+                                <div className="w-14 h-14 rounded-full bg-gray-100 overflow-hidden border-2 border-white shadow-sm">
+                                   {user.photo ? (
+                                      <img src={user.photo} alt={user.name} className="w-full h-full object-cover" />
+                                   ) : (
+                                      <div className="w-full h-full flex items-center justify-center text-gray-400">
+                                         <UserIcon size={24} />
+                                      </div>
+                                   )}
+                                </div>
+                                <div>
+                                   <h3 className="font-bold text-gray-800 text-lg leading-tight">{user.name}</h3>
+                                   <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full uppercase tracking-wide">
+                                      {role?.name || user.role}
+                                   </span>
+                                </div>
+                             </div>
+                             
+                             <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button onClick={() => openUserModal(user)} className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
+                                   <Edit2 size={16} />
+                                </button>
+                                <button onClick={() => handleDeleteUser(user.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                                   <Trash2 size={16} />
+                                </button>
+                             </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 text-xs text-gray-400 font-mono bg-gray-50 p-2 rounded-lg">
+                             <Lock size={12} />
+                             <span>PIN: ••••</span>
+                          </div>
+                       </div>
+                    );
+                 })}
+              </div>
+
+              {/* User Modal */}
+              {isUserModalOpen && (
+                 <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+                    <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
+                       <h3 className="text-xl font-bold text-gray-800 mb-6">{editingUser ? 'Editar Usuario' : 'Nuevo Usuario'}</h3>
+                       <div className="space-y-4">
+                          <div>
+                             <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre Completo</label>
+                             <input 
+                                type="text" 
+                                value={userForm.name || ''}
+                                onChange={e => setUserForm({...userForm, name: e.target.value})}
+                                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                                placeholder="Ej. Juan Pérez"
+                             />
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                             <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">PIN (4 Dígitos)</label>
+                                <input 
+                                   type="password" 
+                                   maxLength={4}
+                                   value={userForm.pin || ''}
+                                   onChange={e => setUserForm({...userForm, pin: e.target.value})}
+                                   className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-mono tracking-widest text-center"
+                                   placeholder="0000"
+                                />
+                             </div>
+                             <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Rol</label>
+                                <select 
+                                   value={userForm.role || 'CASHIER'}
+                                   onChange={e => setUserForm({...userForm, role: e.target.value})}
+                                   className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                                >
+                                   {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                </select>
+                             </div>
+                          </div>
+                          <div>
+                             <label className="block text-xs font-bold text-gray-500 uppercase mb-1">URL Foto (Opcional)</label>
+                             <input 
+                                type="text" 
+                                value={userForm.photo || ''}
+                                onChange={e => setUserForm({...userForm, photo: e.target.value})}
+                                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs text-gray-600"
+                                placeholder="https://..."
+                             />
+                          </div>
+                       </div>
+                       <div className="flex gap-3 mt-8">
+                          <button onClick={() => setIsUserModalOpen(false)} className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl">Cancelar</button>
+                          <button onClick={handleSaveUser} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-md">Guardar</button>
+                       </div>
+                    </div>
+                 </div>
+              )}
+           </div>
+        )}
+
+        {/* ... Other Tabs (Schedule, Reports, Roles) remain mostly unchanged but wrapped in condition ... */}
         {/* === TAB: SCHEDULE === */}
         {activeTab === 'SCHEDULE' && (
           <div className="h-full flex flex-col lg:flex-row">

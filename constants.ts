@@ -1,3 +1,4 @@
+
 import { Product, SubVertical, VerticalType, BusinessConfig, User, RoleDefinition, PermissionDetail, Customer } from './types';
 
 // Catalog of all available permissions in the system
@@ -53,9 +54,59 @@ export const MOCK_USERS: User[] = [
 ];
 
 export const MOCK_CUSTOMERS: Customer[] = [
-  { id: 'c1', name: 'Juan Cliente', phone: '809-555-1234', email: 'juan@email.com', loyaltyPoints: 120, createdAt: new Date().toISOString() },
-  { id: 'c2', name: 'Maria VIP', phone: '809-555-9876', email: 'maria@vip.com', taxId: '402-1234567-1', loyaltyPoints: 550, notes: 'Cliente frecuente, prefiere mesa en terraza.', createdAt: new Date().toISOString() },
-  { id: 'c3', name: 'Empresa ABC S.R.L', phone: '809-555-5555', taxId: '101-55555-5', address: 'Calle Industrial #5', loyaltyPoints: 0, createdAt: new Date().toISOString() }
+  { 
+    id: 'c1', 
+    name: 'Juan Cliente', 
+    phone: '809-555-1234', 
+    email: 'juan@email.com', 
+    loyaltyPoints: 120, 
+    createdAt: new Date().toISOString(),
+    tags: ['REGULAR'],
+    tier: 'BRONZE',
+    totalSpent: 450.00,
+    lastVisit: new Date().toISOString(),
+    addresses: [
+      { id: 'a1', type: 'BILLING', isDefault: true, country: 'RD', state: 'Distrito Nacional', city: 'Santo Domingo', zipCode: '10101', street: 'Calle Falsa', number: '123' }
+    ]
+  },
+  { 
+    id: 'c2', 
+    name: 'Maria VIP', 
+    phone: '809-555-9876', 
+    email: 'maria@vip.com', 
+    taxId: '402-1234567-1', 
+    loyaltyPoints: 2550, 
+    notes: 'Cliente frecuente, prefiere mesa en terraza.', 
+    createdAt: new Date().toISOString(),
+    tags: ['VIP', 'CORPORATE'],
+    tier: 'GOLD',
+    totalSpent: 12500.00,
+    lastVisit: new Date().toISOString(),
+    creditLimit: 5000,
+    currentDebt: 0,
+    requiresFiscalInvoice: true,
+    addresses: []
+  },
+  { 
+    id: 'c3', 
+    name: 'Empresa ABC S.R.L', 
+    phone: '809-555-5555', 
+    taxId: '101-55555-5', 
+    address: 'Calle Industrial #5', 
+    loyaltyPoints: 0, 
+    createdAt: new Date().toISOString(),
+    tags: ['WHOLESALE'],
+    tier: 'SILVER',
+    totalSpent: 3200.50,
+    creditLimit: 10000,
+    currentDebt: 1500,
+    prefersEmail: true,
+    creditDays: 30,
+    addresses: [
+      { id: 'a2', type: 'BILLING', isDefault: true, country: 'RD', state: 'Santo Domingo', city: 'Santo Domingo Este', zipCode: '11501', street: 'Av. Industrial', number: '55', contactPhone: '809-555-5555' },
+      { id: 'a3', type: 'SHIPPING', isDefault: true, country: 'RD', state: 'Santiago', city: 'Santiago', zipCode: '51000', street: 'Calle Sol', number: '20', receptionHours: '8am - 12pm' }
+    ]
+  }
 ];
 
 // Mock Products
