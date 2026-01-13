@@ -26,6 +26,17 @@ export interface ReceiptConfig {
   showQr?: boolean;
 }
 
+export interface DocumentSeries {
+  id: string;
+  name: string;
+  description: string;
+  prefix: string;
+  nextNumber: number;
+  padding: number;
+  icon: string; 
+  color: string; 
+}
+
 export interface TerminalConfig {
   defaultWarehouseId?: string;
   security: {
@@ -33,6 +44,10 @@ export interface TerminalConfig {
     requirePinForVoid: boolean;
     requirePinForDiscount: boolean;
     autoLogoutMinutes: number;
+  };
+  pricing: {
+    allowedTariffIds: string[];
+    defaultTariffId: string;
   };
   workflow: {
     inventory: {
@@ -46,6 +61,8 @@ export interface TerminalConfig {
       blindClose: boolean;
       allowSalesWithOpenZ: boolean;
       maxCashInDrawer: number;
+      askGuestsOnTicketOpen: boolean;
+      autoPrintZReport: boolean;
     };
     offline: {
       mode: 'OPTIMISTIC' | 'STRICT' | 'READ_ONLY';
@@ -59,6 +76,7 @@ export interface TerminalConfig {
     returnChangeInBaseCurrency: boolean;
     acceptedCurrencies: string[];
   };
+  documentSeries: DocumentSeries[];
   hardware: {
     cashDrawerTrigger: 'PRINTER' | 'DIRECT';
     receiptPrinterId?: string;
@@ -115,14 +133,6 @@ export interface EmailConfig {
   showSocialLinks: boolean;
 }
 
-export interface BehaviorConfig {
-  allowNegativeStock: boolean;
-  askGuestsOnTicketOpen: boolean;
-  autoLogoutMinutes: number;
-  requireManagerForRefunds: boolean;
-  autoPrintZReport: boolean;
-}
-
 export interface BusinessConfig {
   vertical: VerticalType;
   subVertical: SubVertical;
@@ -136,6 +146,7 @@ export interface BusinessConfig {
   currencies: CurrencyConfig[];
   paymentMethods: PaymentMethodDefinition[];
   terminals: { id: string; config: TerminalConfig }[];
+  tariffs: Tariff[]; // Global tariffs master list
   receiptConfig?: ReceiptConfig;
   tipsConfig?: TipConfiguration;
   emailConfig?: EmailConfig;
@@ -221,12 +232,11 @@ export interface TariffPrice {
   tariffId?: string;
   productId?: string;
   name?: string;
-  price?: number;
+  price: number; // Final calculated price for this tariff
   lockPrice?: boolean;
   costBase?: number;
   margin?: number;
   tax?: number;
-  finalPrice?: number;
 }
 
 export interface Product {
@@ -454,4 +464,12 @@ export interface VariantTemplate {
   name: string;
   attributeId: string;
   valueIds: string[];
+}
+
+export interface BehaviorConfig {
+  allowNegativeStock: boolean;
+  askGuestsOnTicketOpen: boolean;
+  autoLogoutMinutes: number;
+  requireManagerForRefunds: boolean;
+  autoPrintZReport: boolean;
 }

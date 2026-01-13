@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { X, ShoppingCart, Check, AlertCircle } from 'lucide-react';
+import { X, ShoppingCart, Check, AlertCircle, Layers } from 'lucide-react';
 import { Product } from '../types';
 
 // Mapeo de colores en español para visualización CSS
@@ -21,11 +21,10 @@ const COLOR_MAP: Record<string, string> = {
   'Celeste': '#0EA5E9',
 };
 
-// Extended interfaces for local UI logic
 interface VariantOption {
   id: string;
   label: string;
-  value: string; // Hex for colors, Text for sizes
+  value: string; // Hex para colores, Texto para talles
   stock: number;
   priceModifier: number;
 }
@@ -53,67 +52,36 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
   const [selections, setSelections] = useState<Record<string, VariantOption>>({});
   const [groups, setGroups] = useState<VariantGroup[]>([]);
 
-  // Simulate Variant Data parsing based on Product Category or Mock Data
   useEffect(() => {
     if (!product) return;
 
-    // MOCK DATA GENERATION FOR DEMO PURPOSES
     let mockGroups: VariantGroup[] = [];
 
-    // Check if product has explicit attributes defined in data (from ProductForm)
+    // Mapeo de atributos desde la data del producto
     if (product.attributes && product.attributes.length > 0) {
         mockGroups = product.attributes.map(attr => ({
             id: attr.id,
             name: attr.name,
             type: attr.name.toLowerCase().includes('color') ? 'COLOR' : 'TEXT',
             options: attr.options.map((optName, oIdx) => {
-                // Si es color, intentamos mapear el nombre a HEX
                 let colorVal = optName;
                 if (attr.name.toLowerCase().includes('color')) {
                     colorVal = COLOR_MAP[optName] || optName;
                 }
                 return {
-                    id: `opt-${oIdx}`,
+                    id: `${attr.id}-opt-${oIdx}`,
                     label: optName,
                     value: colorVal, 
-                    stock: 99,
+                    stock: 99, // Simulado
                     priceModifier: 0
                 };
             })
         }));
     }
-    // Fallback Mock Logic
-    else if (['Ropa', 'Calzado', 'Camisetas', 'Vestidos', 'Pantalones'].includes(product.category)) {
-      mockGroups = [
-        {
-          id: 'color',
-          name: 'Color',
-          type: 'COLOR',
-          options: [
-            { id: 'c1', label: 'Negro', value: '#1F2937', stock: 10, priceModifier: 0 },
-            { id: 'c2', label: 'Blanco', value: '#F3F4F6', stock: 10, priceModifier: 0 },
-            { id: 'c3', label: 'Azul', value: '#3B82F6', stock: 0, priceModifier: 0 },
-            { id: 'c4', label: 'Rojo', value: '#EF4444', stock: 5, priceModifier: 0 },
-            { id: 'c5', label: 'Verde', value: '#10B981', stock: 8, priceModifier: 0 },
-          ]
-        },
-        {
-          id: 'size',
-          name: 'Talla',
-          type: 'SIZE',
-          options: [
-            { id: 's', label: 'S', value: 'S', stock: 10, priceModifier: 0 },
-            { id: 'm', label: 'M', value: 'M', stock: 15, priceModifier: 0 },
-            { id: 'l', label: 'L', value: 'L', stock: 8, priceModifier: 0 },
-            { id: 'xl', label: 'XL', value: 'XL', stock: 5, priceModifier: 2.00 },
-          ]
-        }
-      ];
-    }
 
     setGroups(mockGroups);
     
-    // Auto-select first available options if any
+    // Auto-seleccionar primera opción disponible para cada grupo
     const initialSelections: Record<string, VariantOption> = {};
     mockGroups.forEach(g => {
         const firstAvailable = g.options.find(o => o.stock > 0);
@@ -138,9 +106,7 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
   const handleConfirmSelection = () => {
     if (!product) return;
     const allSelected = groups.every(g => selections[g.id]);
-    if (!allSelected) {
-       return;
-    }
+    if (!allSelected) return;
 
     const modifiersList = Object.values(selections).map((opt: VariantOption) => opt.label);
     onConfirm(product, modifiersList, calculateTotal());
@@ -156,9 +122,14 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
         
         {/* Header */}
         <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-           <div>
-              <h3 className="font-bold text-lg text-gray-800">Seleccionar Opciones</h3>
-              <p className="text-xs text-gray-500">{product.name}</p>
+           <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl">
+                 <Layers size={20} />
+              </div>
+              <div>
+                 <h3 className="font-bold text-lg text-gray-800">Opciones de Artículo</h3>
+                 <p className="text-xs text-gray-500">{product.name}</p>
+              </div>
            </div>
            <button onClick={onClose} className="p-2 bg-gray-200 rounded-full hover:bg-gray-300 text-gray-600 transition-colors">
              <X size={20} />
@@ -166,7 +137,7 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
         </div>
 
         {/* Groups */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="flex-1 overflow-y-auto p-6 space-y-8">
            {groups.length === 0 ? (
               <div className="text-center py-10 text-gray-400">
                  <AlertCircle size={48} className="mx-auto mb-2 opacity-50" />
@@ -175,9 +146,9 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
            ) : (
               groups.map(group => (
                  <div key={group.id}>
-                    <h4 className="text-sm font-bold text-gray-700 uppercase mb-3 flex justify-between">
+                    <h4 className="text-sm font-black text-gray-400 uppercase tracking-widest mb-4 flex justify-between items-center">
                        {group.name}
-                       {selections[group.id] && <span className="text-blue-600">{selections[group.id].label}</span>}
+                       {selections[group.id] && <span className="text-blue-600 font-bold">{selections[group.id].label}</span>}
                     </h4>
                     
                     <div className="flex flex-wrap gap-3">
@@ -214,15 +185,14 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
                                 key={option.id}
                                 onClick={() => handleSelect(group.id, option)}
                                 disabled={isOutOfStock}
-                                className={`px-4 py-3 rounded-xl border-2 text-sm font-bold transition-all relative ${
+                                className={`min-w-[60px] px-4 py-3 rounded-2xl border-2 text-sm font-black transition-all relative ${
                                    isSelected 
                                       ? 'border-blue-600 bg-blue-50 text-blue-700' 
-                                      : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
-                                } ${isOutOfStock ? 'opacity-40 cursor-not-allowed bg-gray-50' : ''}`}
+                                      : 'border-gray-100 bg-gray-50 text-gray-400 hover:border-gray-300'
+                                } ${isOutOfStock ? 'opacity-40 cursor-not-allowed' : ''}`}
                              >
                                 {option.label}
                                 {option.priceModifier > 0 && <span className="text-[10px] ml-1 opacity-70">+{currencySymbol}{option.priceModifier.toFixed(2)}</span>}
-                                {isOutOfStock && <div className="absolute inset-0 flex items-center justify-center"><div className="w-full h-0.5 bg-gray-400 rotate-45"></div></div>}
                              </button>
                           );
                        })}
@@ -233,20 +203,20 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-5 border-t border-gray-100 bg-white">
+        <div className="p-6 border-t border-gray-100 bg-white shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
            <div className="flex justify-between items-center mb-4">
-              <span className="text-gray-500 font-medium">Precio Total</span>
-              <span className="text-2xl font-black text-gray-900">{currencySymbol}{calculateTotal().toFixed(2)}</span>
+              <span className="text-gray-500 font-bold uppercase tracking-wider text-xs">Total Artículo</span>
+              <span className="text-3xl font-black text-gray-900">{currencySymbol}{calculateTotal().toFixed(2)}</span>
            </div>
            <button 
              onClick={handleConfirmSelection}
              disabled={!allGroupsSelected}
-             className={`w-full py-4 rounded-2xl font-bold text-white shadow-lg flex items-center justify-center gap-2 transition-all active:scale-95 ${
+             className={`w-full py-5 rounded-2xl font-black text-white shadow-xl flex items-center justify-center gap-2 transition-all active:scale-95 ${
                 allGroupsSelected ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-300 cursor-not-allowed'
              }`}
            >
-              <ShoppingCart size={20} />
-              Agregar al Carrito
+              <ShoppingCart size={24} />
+              AGREGAR AL TICKET
            </button>
         </div>
 

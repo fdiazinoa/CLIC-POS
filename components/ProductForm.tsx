@@ -1,3 +1,4 @@
+
 import React, { useState, useRef } from 'react';
 import { 
   X, Save, Barcode, DollarSign, Box, Plus, Trash2, 
@@ -120,7 +121,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         costBase: baseCost,
         margin: marginPct,
         tax: taxPct,
-        finalPrice: baseCost * (1 + marginPct / 100) * (1 + taxPct / 100)
+        /* Error fix on line 123: renamed 'finalPrice' to 'price' to match TariffPrice interface */
+        price: baseCost * (1 + marginPct / 100) * (1 + taxPct / 100)
       };
       setFormData(prev => ({
         ...prev,
@@ -134,11 +136,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       const newTariffs = prev.tariffs.map(t => {
         if (t.tariffId === tariffId) {
           const updated = { ...t, [field]: value };
-          if (field !== 'finalPrice') {
-             updated.finalPrice = updated.costBase * (1 + updated.margin / 100) * (1 + updated.tax / 100);
+          /* Error fix on line 137: renamed 'finalPrice' to 'price' and fixed logic to use available optional fields safely */
+          if (field !== 'price') {
+             updated.price = (updated.costBase || 0) * (1 + (updated.margin || 0) / 100) * (1 + (updated.tax || 0) / 100);
           } else {
-             if (updated.costBase > 0) {
-                const netPrice = value / (1 + updated.tax / 100);
+             if (updated.costBase && updated.costBase > 0) {
+                const netPrice = value / (1 + (updated.tax || 0) / 100);
                 updated.margin = ((netPrice - updated.costBase) / updated.costBase) * 100;
              }
           }
@@ -337,7 +340,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                         <span className="text-xs font-bold text-gray-400 group-hover:text-blue-600">Subir Imagen</span>
                       </>
                     )}
-                    <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleImageUpload} />
+                    <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
                   </div>
                   
                   {formData.images.length > 0 && (
@@ -375,7 +378,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                         <select 
                           value={formData.type} 
                           onChange={e => setFormData({ ...formData, type: e.target.value as any })} 
-                          className="w-full p-4 bg-gray-50 border-none rounded-2xl font-bold text-gray-700 shadow-inner outline-none"
+                          className="w-full p-4 bg-gray-50 border-none rounded-2xl font-bold text-gray-700 shadow-inner font-bold text-gray-700 shadow-inner outline-none"
                         >
                           <option value="PRODUCT">Producto</option>
                           <option value="SERVICE">Servicio</option>
@@ -537,8 +540,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                           <input 
                                              type="number" 
                                              step="any"
-                                             value={activeTariff.finalPrice} 
-                                             onChange={e => updateTariffDetail(tariff.id, 'finalPrice', parseFloat(e.target.value) || 0)}
+                                             /* Error fix on line 541: Argument of type '"finalPrice"' is not assignable to parameter of type 'keyof TariffPrice'. Renamed to 'price'. */
+                                             value={activeTariff.price} 
+                                             onChange={e => updateTariffDetail(tariff.id, 'price', parseFloat(e.target.value) || 0)}
                                              className="p-3 pl-8 bg-blue-50 rounded-xl font-black text-blue-700 outline-none w-40 text-right text-xl focus:ring-2 focus:ring-blue-200"
                                           />
                                        </div>

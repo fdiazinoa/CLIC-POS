@@ -1,5 +1,36 @@
 
-import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical } from './types';
+import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff } from './types';
+
+export const DEFAULT_DOCUMENT_SERIES: DocumentSeries[] = [
+  { id: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar para clientes finales.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
+  { id: 'INVOICE', name: 'Factura Fiscal', description: 'Documento con valor fiscal (B01).', prefix: 'B01', nextNumber: 1, padding: 8, icon: 'FileText', color: 'indigo' },
+  { id: 'REFUND', name: 'Devolución / Abono', description: 'Notas de crédito por devoluciones.', prefix: 'NC', nextNumber: 1, padding: 6, icon: 'RotateCcw', color: 'orange' },
+];
+
+export const INITIAL_TARIFFS: Tariff[] = [
+  { 
+    id: 'trf-gen', 
+    name: 'General (PVP)', 
+    active: true, 
+    currency: 'DOP', 
+    taxIncluded: true, 
+    strategy: { type: 'MANUAL', rounding: 'NONE' }, 
+    scope: { storeIds: ['ALL'], priority: 0 }, 
+    schedule: { daysOfWeek: [0,1,2,3,4,5,6], timeStart: '00:00', timeEnd: '23:59' }, 
+    items: {} 
+  },
+  { 
+    id: 'trf-vip', 
+    name: 'VIP / Cliente Oro', 
+    active: true, 
+    currency: 'DOP', 
+    taxIncluded: true, 
+    strategy: { type: 'MANUAL', rounding: 'NONE' }, 
+    scope: { storeIds: ['ALL'], priority: 5 }, 
+    schedule: { daysOfWeek: [0,1,2,3,4,5,6], timeStart: '00:00', timeEnd: '23:59' }, 
+    items: {} 
+  }
+];
 
 export const DEFAULT_TERMINAL_CONFIG = {
   security: {
@@ -7,6 +38,10 @@ export const DEFAULT_TERMINAL_CONFIG = {
     requirePinForVoid: true,
     requirePinForDiscount: true,
     autoLogoutMinutes: 15
+  },
+  pricing: {
+    allowedTariffIds: ['trf-gen', 'trf-vip'],
+    defaultTariffId: 'trf-gen'
   },
   workflow: {
     inventory: {
@@ -19,7 +54,9 @@ export const DEFAULT_TERMINAL_CONFIG = {
     session: {
       blindClose: true,
       allowSalesWithOpenZ: false,
-      maxCashInDrawer: 20000
+      maxCashInDrawer: 20000,
+      askGuestsOnTicketOpen: false,
+      autoPrintZReport: true
     },
     offline: {
       mode: 'OPTIMISTIC' as const,
@@ -33,6 +70,7 @@ export const DEFAULT_TERMINAL_CONFIG = {
     returnChangeInBaseCurrency: true,
     acceptedCurrencies: ['USD', 'EUR']
   },
+  documentSeries: DEFAULT_DOCUMENT_SERIES,
   hardware: {
     cashDrawerTrigger: 'PRINTER' as const
   },
@@ -61,56 +99,84 @@ export const MOCK_CUSTOMERS: Customer[] = [
 ];
 
 export const RETAIL_PRODUCTS: Product[] = [
-  { id: 'p1', name: 'Camiseta Algodón Premium', price: 25.00, category: 'Ropa', stock: 45, minStock: 10, cost: 12.00, barcode: '74210001', images: [], attributes: [], variants: [], tariffs: [] },
-  { id: 'p2', name: 'Jeans Slim Fit Blue', price: 45.00, category: 'Ropa', stock: 12, minStock: 5, cost: 20.00, barcode: '74210002', images: [], attributes: [], variants: [], tariffs: [] },
-  { id: 'p3', name: 'Tenis Deportivos Runner', price: 85.00, category: 'Calzado', stock: 8, minStock: 10, cost: 40.00, barcode: '74210003', images: [], attributes: [], variants: [], tariffs: [] },
-  { id: 'p4', name: 'Gorra Urban Style', price: 15.00, category: 'Accesorios', stock: 60, minStock: 15, cost: 5.00, barcode: '74210004', images: [], attributes: [], variants: [], tariffs: [] },
-  { id: 'p5', name: 'Reloj Digital Sport', price: 30.00, category: 'Accesorios', stock: 4, minStock: 5, cost: 12.00, barcode: '74210005', images: [], attributes: [], variants: [], tariffs: [] },
-  { id: 'p6', name: 'Sudadera con Capucha', price: 35.00, category: 'Ropa', stock: 20, minStock: 8, cost: 15.00, barcode: '74210006', images: [], attributes: [], variants: [], tariffs: [] },
-  // NUEVO: Artículo con Balanza
+  // --- PRODUCTOS PESADOS ---
   { 
-    id: 'p7', 
-    name: 'Pollo Fresco (Peso)', 
+    id: 'p-pesado-1', 
+    name: 'Tomates Orgánicos (Peso)', 
     price: 3.50, 
-    category: 'Carnicería', 
-    stock: 200, 
-    minStock: 20, 
-    cost: 1.80, 
+    category: 'Verduras', 
+    stock: 150, 
+    cost: 1.20, 
     barcode: 'SC001', 
-    type: 'SERVICE', // Activa balanza por tipo servicio + nombre 'peso'
-    images: ['https://images.unsplash.com/photo-1587593810167-a84920ea0781?q=80&w=200&auto=format&fit=crop'], 
+    type: 'SERVICE', // Identificador para disparar báscula
+    images: ['https://images.unsplash.com/photo-1592924357228-91a4daadcfea?q=80&w=200&auto=format&fit=crop'], 
+    image: 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?q=80&w=200&auto=format&fit=crop',
     attributes: [], 
     variants: [], 
-    tariffs: [] 
+    tariffs: [{ tariffId: 'trf-gen', price: 3.50 }] 
   },
-  // NUEVO: Artículo con Talla y Color
   { 
-    id: 'p8', 
-    name: 'Camisa Oxford Premium', 
-    price: 35.00, 
-    category: 'Ropa', 
+    id: 'p-pesado-2', 
+    name: 'Pollo Entero (Peso)', 
+    price: 5.99, 
+    category: 'Carnicería', 
+    stock: 80, 
+    cost: 3.50, 
+    barcode: 'SC002', 
+    type: 'SERVICE', 
+    images: ['https://images.unsplash.com/photo-1587593810167-a84920ea0781?q=80&w=200&auto=format&fit=crop'], 
+    image: 'https://images.unsplash.com/photo-1587593810167-a84920ea0781?q=80&w=200&auto=format&fit=crop',
+    attributes: [], 
+    variants: [], 
+    tariffs: [{ tariffId: 'trf-gen', price: 5.99 }] 
+  },
+  // --- PRODUCTOS CON VARIANTE (Talle y Color) ---
+  { 
+    id: 'p-var-1', 
+    name: 'Zapatillas Runner 5.0', 
+    price: 85.00, 
+    category: 'Calzado', 
     stock: 100, 
-    minStock: 10, 
-    cost: 15.00, 
-    barcode: 'VAR001', 
+    cost: 40.00, 
+    barcode: 'RUN-001', 
     type: 'PRODUCT', 
-    images: ['https://images.unsplash.com/photo-1596755094514-f87e34085b2c?q=80&w=200&auto=format&fit=crop'], 
+    images: ['https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=200&auto=format&fit=crop'], 
+    image: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=200&auto=format&fit=crop',
     attributes: [
-      { id: 'attr_size', name: 'Talla', options: ['S', 'M', 'L', 'XL'], optionCodes: ['S', 'M', 'L', 'XL'] },
-      { id: 'attr_color', name: 'Color', options: ['Blanco', 'Azul', 'Gris'], optionCodes: ['BL', 'AZ', 'GR'] }
+      { id: 'attr_size', name: 'Talla', options: ['38', '39', '40', '41', '42'], optionCodes: ['38', '39', '40', '41', '42'] },
+      { id: 'attr_color', name: 'Color', options: ['Rojo', 'Azul', 'Negro'], optionCodes: ['RJ', 'AZ', 'NG'] }
     ], 
     variants: [], 
-    tariffs: [] 
-  }
+    tariffs: [{ tariffId: 'trf-gen', price: 85.00 }] 
+  },
+  { 
+    id: 'p-var-2', 
+    name: 'Camisa Oxford Slim', 
+    price: 45.00, 
+    category: 'Ropa', 
+    stock: 200, 
+    cost: 15.00, 
+    barcode: 'OXF-001', 
+    type: 'PRODUCT', 
+    images: ['https://images.unsplash.com/photo-1596755094514-f87e34085b2c?q=80&w=200&auto=format&fit=crop'], 
+    image: 'https://images.unsplash.com/photo-1596755094514-f87e34085b2c?q=80&w=200&auto=format&fit=crop',
+    attributes: [
+      { id: 'attr_size', name: 'Talla', options: ['S', 'M', 'L', 'XL'], optionCodes: ['S', 'M', 'L', 'XL'] },
+      { id: 'attr_color', name: 'Color', options: ['Blanco', 'Celeste', 'Gris'], optionCodes: ['BL', 'CL', 'GR'] }
+    ], 
+    variants: [], 
+    tariffs: [{ tariffId: 'trf-gen', price: 45.00 }] 
+  },
+  // --- PRODUCTOS EXISTENTES ---
+  { id: 'p1', name: 'Camiseta Algodón Premium', price: 25.00, category: 'Ropa', stock: 45, minStock: 10, cost: 12.00, barcode: '74210001', images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 25.00 }, { tariffId: 'trf-vip', price: 20.00 }] },
+  { id: 'p2', name: 'Jeans Slim Fit Blue', price: 45.00, category: 'Ropa', stock: 12, minStock: 5, cost: 20.00, barcode: '74210002', images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 45.00 }] },
+  { id: 'p3', name: 'Tenis Deportivos Runner', price: 85.00, category: 'Calzado', stock: 8, minStock: 10, cost: 40.00, barcode: '74210003', images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 85.00 }, { tariffId: 'trf-vip', price: 75.00 }] }
 ];
 
 export const FOOD_PRODUCTS: Product[] = [
-  { id: 'f1', name: 'Hamburguesa Especial', price: 12.50, category: 'Comida', stock: 99, cost: 4.50, images: [], attributes: [], variants: [], tariffs: [] },
-  { id: 'f2', name: 'Pizza Pepperoni Mediana', price: 15.00, category: 'Comida', stock: 99, cost: 6.00, images: [], attributes: [], variants: [], tariffs: [] },
-  { id: 'f3', name: 'Refresco 500ml', price: 2.50, category: 'Bebidas', stock: 150, cost: 0.80, images: [], attributes: [], variants: [], tariffs: [] },
-  { id: 'f4', name: 'Cerveza Nacional 12oz', price: 4.00, category: 'Bebidas', stock: 80, cost: 1.50, images: [], attributes: [], variants: [], tariffs: [] },
-  { id: 'f5', name: 'Ensalada Caesar', price: 9.00, category: 'Comida', stock: 30, cost: 3.00, images: [], attributes: [], variants: [], tariffs: [] },
-  { id: 'f6', name: 'Papas Fritas XL', price: 4.50, category: 'Comida', stock: 100, cost: 1.00, images: [], attributes: [], variants: [], tariffs: [] }
+  { id: 'f1', name: 'Hamburguesa Especial', price: 12.50, category: 'Comida', stock: 99, cost: 4.50, images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 12.50 }, { tariffId: 'trf-vip', price: 10.00 }] },
+  { id: 'f2', name: 'Pizza Pepperoni Mediana', price: 15.00, category: 'Comida', stock: 99, cost: 6.00, images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 15.00 }] },
+  { id: 'f3', name: 'Refresco 500ml', price: 2.50, category: 'Bebidas', stock: 150, cost: 0.80, images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 2.50 }] }
 ];
 
 export const AVAILABLE_PERMISSIONS = [
@@ -122,6 +188,7 @@ export const AVAILABLE_PERMISSIONS = [
 
 export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
   const isFood = [SubVertical.RESTAURANT, SubVertical.FAST_FOOD, SubVertical.BAR].includes(subVertical);
+  
   return {
     vertical: isFood ? 'RESTAURANT' : 'RETAIL',
     subVertical,
@@ -135,6 +202,7 @@ export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
       { id: 'cash', name: 'Efectivo', type: 'CASH', isEnabled: true, icon: 'Banknote', color: 'bg-green-500', opensDrawer: true, requiresSignature: false, integration: 'NONE' },
       { id: 'card', name: 'Tarjeta', type: 'CARD', isEnabled: true, icon: 'CreditCard', color: 'bg-blue-500', opensDrawer: false, requiresSignature: false, integration: 'NONE' }
     ],
+    tariffs: INITIAL_TARIFFS,
     terminals: [{ id: 't1', config: DEFAULT_TERMINAL_CONFIG }]
   };
 };

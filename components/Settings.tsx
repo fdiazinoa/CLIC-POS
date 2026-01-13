@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { 
   Settings as SettingsIcon, X, CreditCard, Receipt, 
@@ -17,9 +18,7 @@ import CurrencySettings from './CurrencySettings';
 import ReceiptDesigner from './ReceiptDesigner';
 import EmailSettings from './EmailSettings';
 import TipsSettings from './TipsSettings';
-import DocumentSettings from './DocumentSettings';
 import DataSecurityHub from './DataSecurityHub';
-import BehaviorSettings from './BehaviorSettings';
 import SyncStatusHub from './SyncStatusHub';
 import ActivityLog from './ActivityLog';
 import TeamHub from './TeamHub';
@@ -41,7 +40,7 @@ interface SettingsProps {
   onClose: () => void;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'DOCUMENTS' | 'BEHAVIOR' | 'EXCHANGE' | 'SYNC' | 'EMAIL' | 'TIPS';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'SYNC' | 'EMAIL' | 'TIPS';
 
 const Settings: React.FC<SettingsProps> = (props) => {
   const [currentView, setCurrentView] = useState<SettingsView>('HOME');
@@ -76,8 +75,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
         return <EmailSettings config={props.config} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
       case 'TIPS':
         return <TipsSettings config={props.config} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
-      case 'DOCUMENTS':
-        return <DocumentSettings onClose={() => setCurrentView('HOME')} />;
       case 'SECURITY':
         return (
           <div className="p-8 h-full overflow-y-auto">
@@ -88,8 +85,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
              <DataSecurityHub onClose={() => setCurrentView('HOME')} />
           </div>
         );
-      case 'BEHAVIOR':
-        return <BehaviorSettings onClose={() => setCurrentView('HOME')} />;
       case 'SYNC':
         return <SyncStatusHub onClose={() => setCurrentView('HOME')} />;
       case 'LOGS':
@@ -145,10 +140,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
                       onClick={() => setCurrentView('EXCHANGE')} 
                     />
                     <SettingsCard 
-                      icon={FileText} label="Series y Folios" description="Facturación Fiscal y Legal" color="bg-slate-700" 
-                      onClick={() => setCurrentView('DOCUMENTS')} 
-                    />
-                    <SettingsCard 
                       icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" 
                       onClick={props.onOpenZReport} 
                     />
@@ -160,16 +151,12 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Configuración Local</h2>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                     <SettingsCard 
-                      icon={Monitor} label="Terminales POS" description="Perfiles de Caja y UI" color="bg-blue-500" 
+                      icon={Monitor} label="Terminales POS" description="Perfiles de Caja, Folios y Reglas" color="bg-blue-500" 
                       onClick={() => setCurrentView('TERMINALS')} 
                     />
                     <SettingsCard 
                       icon={Printer} label="Hardware" description="Impresoras, Balanzas, VFD" color="bg-gray-700" 
                       onClick={() => setCurrentView('HARDWARE')} 
-                    />
-                    <SettingsCard 
-                      icon={Cpu} label="Comportamiento" description="Reglas de Negocio y Flujos" color="bg-amber-600" 
-                      onClick={() => setCurrentView('BEHAVIOR')} 
                     />
                     <SettingsCard 
                       icon={Coins} label="Propinas" description="Cargos por Servicio y Tips" color="bg-yellow-500" 

@@ -21,7 +21,8 @@ import {
   MOCK_CUSTOMERS, 
   RETAIL_PRODUCTS, 
   FOOD_PRODUCTS, 
-  getInitialConfig 
+  getInitialConfig,
+  INITIAL_TARIFFS
 } from './constants';
 
 // Component Imports
@@ -51,7 +52,7 @@ const App: React.FC = () => {
   const [products, setProducts] = useState<Product[]>(RETAIL_PRODUCTS);
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   
-  // Estados persistentes del POS para evitar pérdida de datos al navegar
+  // POS Persistent State
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
 
@@ -84,8 +85,8 @@ const App: React.FC = () => {
 
   const handleTransactionComplete = (txn: Transaction) => {
     setTransactions(prev => [...prev, txn]);
-    setCart([]); // Limpiar carrito global
-    setSelectedCustomer(null); // Limpiar cliente global
+    setCart([]); 
+    setSelectedCustomer(null); 
     
     if (config.features.stockTracking) {
       const itemsMap = new Map<string, number>();
@@ -202,7 +203,6 @@ const App: React.FC = () => {
           onOpenFinance={() => setCurrentView('FINANCE')}
           onTransactionComplete={handleTransactionComplete}
           onAddCustomer={(c) => setCustomers([...customers, c])}
-          // Pass handleUpdateConfig as onUpdateConfig prop
           onUpdateConfig={handleUpdateConfig}
         />
       );
