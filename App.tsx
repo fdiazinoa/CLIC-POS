@@ -13,7 +13,7 @@ import {
   PurchaseOrderItem, 
   CartItem,
   ViewState,
-  VerticalType
+  Tariff
 } from './types';
 import { 
   MOCK_USERS, 
@@ -39,11 +39,11 @@ import FranchiseDashboard from './components/FranchiseDashboard';
 
 const App: React.FC = () => {
   // --- GLOBAL STATE ---
-  const [currentView, setCurrentView] = useState<ViewState>('SETUP'); // Start at SETUP to show the full flow
-  const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any)); // Default start
+  const [currentView, setCurrentView] = useState<ViewState>('SETUP'); 
+  const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any)); 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   
-  // --- DATA STORES (In-Memory Mock) ---
+  // --- DATA STORES ---
   const [users, setUsers] = useState<User[]>(MOCK_USERS);
   const [roles, setRoles] = useState<RoleDefinition[]>(DEFAULT_ROLES);
   const [customers, setCustomers] = useState<Customer[]>(MOCK_CUSTOMERS);
@@ -51,6 +51,10 @@ const App: React.FC = () => {
   const [products, setProducts] = useState<Product[]>(RETAIL_PRODUCTS);
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   
+  // Estados persistentes del POS para evitar pérdida de datos al navegar
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+
   // Supply Chain Data
   const [suppliers, setSuppliers] = useState<Supplier[]>([
     { id: 'sup1', name: 'Distribuidora Central', contactName: 'Carlos', phone: '555-0101', email: 'pedidos@central.com' },
@@ -59,10 +63,8 @@ const App: React.FC = () => {
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
 
   // --- EFFECTS ---
-  
-  // Switch product catalog when vertical changes
   useEffect(() => {
-    if (config.vertical === VerticalType.RESTAURANT) {
+    if (config.vertical === 'RESTAURANT') {
       setProducts(prev => prev[0]?.category === 'Lácteos' ? FOOD_PRODUCTS : prev);
     } else {
       setProducts(prev => prev[0]?.category === 'Platos' ? RETAIL_PRODUCTS : prev);
@@ -70,7 +72,6 @@ const App: React.FC = () => {
   }, [config.vertical]);
 
   // --- HANDLERS ---
-
   const handleLogin = (user: User) => {
     setCurrentUser(user);
     setCurrentView('POS');
@@ -83,8 +84,9 @@ const App: React.FC = () => {
 
   const handleTransactionComplete = (txn: Transaction) => {
     setTransactions(prev => [...prev, txn]);
+    setCart([]); // Limpiar carrito global
+    setSelectedCustomer(null); // Limpiar cliente global
     
-    // Simple Stock Deduction Logic
     if (config.features.stockTracking) {
       const itemsMap = new Map<string, number>();
       txn.items.forEach(item => {
@@ -101,7 +103,6 @@ const App: React.FC = () => {
   };
 
   const handleRefundTransaction = (originalTx: Transaction, itemsToRefund: CartItem[], reason: string) => {
-    // 1. Create Refund Transaction
     const refundTotal = itemsToRefund.reduce((acc, item) => acc + (item.price * item.quantity), 0);
     const taxRefund = refundTotal * config.taxRate;
     const totalRefund = refundTotal + taxRefund;
@@ -110,7 +111,7 @@ const App: React.FC = () => {
       id: `REF-${Math.random().toString(36).substr(2, 6)}`,
       date: new Date().toISOString(),
       items: itemsToRefund,
-      total: -totalRefund, // Negative amount
+      total: -totalRefund, 
       payments: [{ id: 'ref_pay', method: 'CASH', amount: -totalRefund, timestamp: new Date() }],
       userId: currentUser?.id || 'sys',
       userName: currentUser?.name || 'System',
@@ -122,7 +123,6 @@ const App: React.FC = () => {
 
     setTransactions(prev => prev.map(t => t.id === originalTx.id ? { ...t, status: 'PARTIAL_REFUND' as const } : t).concat(refundTx));
 
-    // 2. Restore Stock if applicable
     if (reason !== 'DAMAGED' && config.features.stockTracking) {
        setProducts(prev => prev.map(p => {
           const item = itemsToRefund.find(i => i.id === p.id);
@@ -149,13 +149,10 @@ const App: React.FC = () => {
   };
 
   const handleZReportClose = (counted: number, notes: string) => {
-    // In a real app, this would archive current transactions and reset daily counters
-    console.log("Z Report Closed", { counted, notes });
-    alert("Cierre Z realizado correctamente. Se ha generado el reporte.");
+    alert("Cierre Z realizado correctamente.");
     setCurrentView('POS');
   };
 
-  // Supply Chain Handlers
   const handleReceiveStock = (items: PurchaseOrderItem[]) => {
      setProducts(prev => prev.map(prod => {
         const receivedItem = items.find(i => i.productId === prod.id);
@@ -166,11 +163,10 @@ const App: React.FC = () => {
      }));
   };
 
-  // Configuration Update
   const handleUpdateConfig = (newConfig: BusinessConfig, shouldRestart = false) => {
     setConfig(newConfig);
     if (shouldRestart) {
-      setCurrentView('LOGIN'); // Or 'SETUP'
+      setCurrentView('LOGIN'); 
     }
   };
 
@@ -178,34 +174,13 @@ const App: React.FC = () => {
 
   switch (currentView) {
     case 'SETUP':
-      return (
-        <VerticalSelector 
-          onSelect={(initialCfg) => {
-             setConfig(initialCfg);
-             setCurrentView('WIZARD');
-          }} 
-        />
-      );
+      return <VerticalSelector onSelect={(initialCfg) => { setConfig(initialCfg); setCurrentView('WIZARD'); }} />;
 
     case 'WIZARD':
-      return (
-        <SetupWizard 
-          initialConfig={config}
-          onComplete={(finalConfig) => {
-             setConfig(finalConfig);
-             setCurrentView('LOGIN');
-          }}
-        />
-      );
+      return <SetupWizard initialConfig={config} onComplete={(finalConfig) => { setConfig(finalConfig); setCurrentView('LOGIN'); }} />;
       
     case 'LOGIN':
-      return (
-        <LoginScreen 
-          onLogin={handleLogin} 
-          availableUsers={users}
-          subVertical={config.subVertical}
-        />
-      );
+      return <LoginScreen onLogin={handleLogin} availableUsers={users} subVertical={config.subVertical} />;
 
     case 'POS':
       if (!currentUser) return <LoginScreen onLogin={handleLogin} availableUsers={users} subVertical={config.subVertical} />;
@@ -216,6 +191,10 @@ const App: React.FC = () => {
           roles={roles}
           customers={customers}
           products={products}
+          cart={cart}
+          onUpdateCart={setCart}
+          selectedCustomer={selectedCustomer}
+          onSelectCustomer={setSelectedCustomer}
           onLogout={handleLogout}
           onOpenSettings={() => setCurrentView('SETTINGS')}
           onOpenCustomers={() => setCurrentView('CUSTOMERS')}
@@ -223,6 +202,8 @@ const App: React.FC = () => {
           onOpenFinance={() => setCurrentView('FINANCE')}
           onTransactionComplete={handleTransactionComplete}
           onAddCustomer={(c) => setCustomers([...customers, c])}
+          // Pass handleUpdateConfig as onUpdateConfig prop
+          onUpdateConfig={handleUpdateConfig}
         />
       );
 
@@ -234,9 +215,11 @@ const App: React.FC = () => {
           users={users}
           roles={roles}
           transactions={transactions}
+          products={products}
           onUpdateConfig={handleUpdateConfig}
           onUpdateUsers={setUsers}
           onUpdateRoles={setRoles}
+          onUpdateProducts={setProducts}
           onOpenZReport={() => setCurrentView('Z_REPORT')}
           onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
           onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
@@ -252,6 +235,7 @@ const App: React.FC = () => {
           onAddCustomer={(c) => setCustomers([...customers, c])}
           onUpdateCustomer={(c) => setCustomers(prev => prev.map(cust => cust.id === c.id ? c : cust))}
           onDeleteCustomer={(id) => setCustomers(prev => prev.filter(c => c.id !== id))}
+          onSelect={(c) => { setSelectedCustomer(c); setCurrentView('POS'); }}
           onClose={() => setCurrentView('POS')}
         />
       );
@@ -297,7 +281,7 @@ const App: React.FC = () => {
           suppliers={suppliers}
           purchaseOrders={purchaseOrders}
           config={config}
-          onClose={() => setCurrentView('SETTINGS')} // Return to settings usually
+          onClose={() => setCurrentView('SETTINGS')} 
           onCreateOrder={(po) => setPurchaseOrders(prev => [...prev, po])}
           onUpdateOrder={(po) => setPurchaseOrders(prev => prev.map(o => o.id === po.id ? po : o))}
           onReceiveStock={handleReceiveStock}
@@ -305,11 +289,7 @@ const App: React.FC = () => {
       );
 
     case 'FRANCHISE_DASHBOARD':
-      return (
-        <FranchiseDashboard 
-          onBack={() => setCurrentView('POS')}
-        />
-      );
+      return <FranchiseDashboard onBack={() => setCurrentView('POS')} />;
 
     default:
       return <div>Error: Vista desconocida</div>;

@@ -1,7 +1,7 @@
 import React from 'react';
 import { 
   UserPlus, Split, PieChart, Percent, Clock, X, Save, Trash2, 
-  Coins, Receipt, History, ArrowDownToLine, Printer
+  Coins, Receipt, History, ArrowDownToLine, Printer, Wallet
 } from 'lucide-react';
 
 interface TicketOptionsModalProps {
@@ -20,14 +20,6 @@ interface ActionItem {
 const TicketOptionsModal: React.FC<TicketOptionsModalProps> = ({ onClose, onAction }) => {
   
   const actions: ActionItem[] = [
-    // CRM & Clientes
-    { 
-      id: 'ASSIGN_CUSTOMER', 
-      label: 'Cliente', 
-      icon: UserPlus, 
-      color: 'text-blue-600',
-      bg: 'bg-blue-50'
-    },
     // Gestión de Cuenta
     { 
       id: 'SPLIT_BILL', 
@@ -51,13 +43,21 @@ const TicketOptionsModal: React.FC<TicketOptionsModalProps> = ({ onClose, onActi
       color: 'text-rose-600',
       bg: 'bg-rose-50'
     },
-    // NUEVO: Print Subtotal (Proforma)
+    // Print Subtotal (Proforma)
     { 
       id: 'PRINT_SUBTOTAL',
       label: 'Proforma', 
       icon: Printer, 
       color: 'text-cyan-600',
       bg: 'bg-cyan-50'
+    },
+    // Finanzas (Nueva ubicación)
+    { 
+      id: 'FINANCE', 
+      label: 'Finanzas', 
+      icon: Wallet, 
+      color: 'text-emerald-600',
+      bg: 'bg-emerald-50'
     },
     // Utilidades
     { 
@@ -66,22 +66,7 @@ const TicketOptionsModal: React.FC<TicketOptionsModalProps> = ({ onClose, onActi
       icon: Clock, 
       color: 'text-teal-600',
       bg: 'bg-teal-50'
-    },
-    { 
-      id: 'PARK_SALE', 
-      label: 'Aparcar', 
-      icon: Save, 
-      color: 'text-indigo-600',
-      bg: 'bg-indigo-50'
-    },
-    // Destructivas / Limpieza
-    { 
-      id: 'CLEAR_CART', 
-      label: 'Limpiar', 
-      icon: Trash2, 
-      color: 'text-slate-500',
-      bg: 'bg-slate-100'
-    },
+    }
   ];
 
   return (
@@ -112,7 +97,7 @@ const TicketOptionsModal: React.FC<TicketOptionsModalProps> = ({ onClose, onActi
 
         {/* Action Grid */}
         <div className="px-6 pb-8">
-          <div className="grid grid-cols-4 gap-y-6 gap-x-2">
+          <div className="grid grid-cols-3 gap-y-6 gap-x-2">
             {actions.map((action) => (
               <button
                 key={action.id}

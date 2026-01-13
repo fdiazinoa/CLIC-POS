@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { 
   Receipt, Upload, Type, LayoutTemplate, QrCode, 
@@ -10,11 +11,11 @@ interface ReceiptDesignerProps {
   onUpdateConfig: (newConfig: BusinessConfig) => void;
 }
 
-// Dummy data for preview
+// Datos de prueba mejorados para mostrar pesos y fotos claramente
 const PREVIEW_ITEMS = [
-  { name: 'Coca Cola 500ml', qty: 2, price: 2.50, total: 5.00 },
-  { name: 'Sandwich Mixto', qty: 1, price: 5.00, total: 5.00 },
-  { name: 'Papas Fritas', qty: 1, price: 3.00, total: 3.00 },
+  { name: 'Pollo Fresco (Peso)', qty: 2.450, unit: 'lb', price: 3.50, total: 8.58, isWeight: true, img: 'https://images.unsplash.com/photo-1587593810167-a84920ea0781?q=80&w=50&auto=format&fit=crop' },
+  { name: 'Coca Cola 500ml', qty: 2, unit: 'un', price: 2.50, total: 5.00, isWeight: false, img: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?q=80&w=50&auto=format&fit=crop' },
+  { name: 'Sandwich Mixto', qty: 1, unit: 'un', price: 5.00, total: 5.00, isWeight: false, img: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af?q=80&w=50&auto=format&fit=crop' },
 ];
 
 const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfig }) => {
@@ -26,7 +27,8 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
     showQr: config.receiptConfig?.showQr ?? true,
   });
 
-  // Sync with parent when saving
+  const showImagesInTicket = config.terminals?.[0]?.config?.workflow?.inventory?.showProductImagesInReceipt ?? false;
+
   const handleSave = () => {
     onUpdateConfig({
       ...config,
@@ -44,8 +46,6 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
     }
   };
 
-  // --- UI COMPONENTS ---
-  
   const ToggleSwitch: React.FC<{ label: string; checked: boolean; onChange: (val: boolean) => void }> = ({ label, checked, onChange }) => (
     <div 
       onClick={() => onChange(!checked)} 
@@ -168,7 +168,6 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
          {/* THE TICKET */}
          <div className="w-[380px] bg-white shadow-2xl relative transition-all duration-300 shrink-0">
             
-            {/* Ticket Content */}
             <div className="p-6 pb-12 font-mono text-gray-800 text-sm leading-snug">
                
                {/* Header */}
@@ -200,22 +199,42 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                   )}
                </div>
 
-               {/* Items */}
+               {/* Items Table - Enhanced for Weights and Optional Images */}
                <table className="w-full text-xs mb-4">
                   <thead>
                      <tr className="text-left border-b border-gray-800">
-                        <th className="pb-1 w-8">CANT</th>
-                        <th className="pb-1">DESC</th>
+                        <th className="pb-1 w-12">CANT.</th>
+                        <th className="pb-1">DESCRIPCIÓN</th>
                         <th className="pb-1 text-right">TOTAL</th>
                      </tr>
                   </thead>
                   <tbody>
                      {PREVIEW_ITEMS.map((item, idx) => (
-                        <tr key={idx}>
-                           <td className="py-1 align-top">{item.qty}</td>
-                           <td className="py-1 align-top">{item.name}</td>
-                           <td className="py-1 align-top text-right">{config.currencySymbol}{item.total.toFixed(2)}</td>
-                        </tr>
+                        <React.Fragment key={idx}>
+                          <tr>
+                             <td className="py-1 align-top font-bold">
+                                {item.isWeight ? item.qty.toFixed(3) : item.qty}
+                             </td>
+                             <td className="py-1 align-top">
+                                <div className="flex items-start gap-2">
+                                   {showImagesInTicket && (
+                                      <img src={item.img} className="w-6 h-6 rounded-sm object-cover grayscale shrink-0 border border-gray-200" alt="prod" />
+                                   )}
+                                   <span>{item.name}</span>
+                                </div>
+                             </td>
+                             <td className="py-1 align-top text-right font-bold">{config.currencySymbol}{item.total.toFixed(2)}</td>
+                          </tr>
+                          {item.isWeight && (
+                            <tr>
+                              <td colSpan={showImagesInTicket ? 1 : 1}></td>
+                              <td className="pb-2 text-[10px] text-gray-500 italic pl-8">
+                                Detalle: {item.qty.toFixed(3)} {item.unit} x {config.currencySymbol}{item.price.toFixed(2)}
+                              </td>
+                              <td></td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                      ))}
                   </tbody>
                </table>
@@ -224,21 +243,16 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                <div className="border-t-2 border-gray-800 pt-2 mb-6">
                   <div className="flex justify-between text-xs mb-1">
                      <span>SUBTOTAL</span>
-                     <span>{config.currencySymbol}11.60</span>
+                     <span>{config.currencySymbol}18.58</span>
                   </div>
                   <div className="flex justify-between text-xs mb-1">
                      <span>IMPUESTOS (18%)</span>
-                     <span>{config.currencySymbol}2.09</span>
+                     <span>{config.currencySymbol}3.34</span>
                   </div>
                   <div className="flex justify-between text-lg font-bold mt-2">
-                     <span>TOTAL</span>
-                     <span>{config.currencySymbol}13.69</span>
+                     <span>TOTAL A PAGAR</span>
+                     <span>{config.currencySymbol}21.92</span>
                   </div>
-                  {localConfig.showSavings && (
-                     <div className="mt-2 text-center text-xs font-bold border border-gray-800 rounded p-1">
-                        *** AHORRO TOTAL: {config.currencySymbol}1.50 ***
-                     </div>
-                  )}
                </div>
 
                {/* Footer */}
@@ -248,15 +262,14 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                   {localConfig.showQr && (
                      <div className="flex flex-col items-center gap-1">
                         <QrCode size={64} className="text-gray-800" />
-                        <span className="text-[10px] text-gray-400">Escanea para factura digital</span>
+                        <span className="text-[10px] text-gray-400">#000458-VERIFICAR</span>
                      </div>
                   )}
                   
-                  <p className="text-[10px] text-gray-400 mt-4 uppercase">*** COPIA CLIENTE ***</p>
+                  <p className="text-[10px] text-gray-400 mt-4 uppercase font-bold tracking-widest">*** COPIA DEL CLIENTE ***</p>
                </div>
             </div>
 
-            {/* Paper Cut Effect (CSS Generated ZigZag) */}
             <div 
                className="absolute bottom-0 left-0 w-full h-4 bg-gray-200/0"
                style={{

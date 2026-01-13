@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { ShoppingBag, Coffee, Pill, Shirt, ShoppingCart, Beer, Utensils, Briefcase } from 'lucide-react';
 import { SubVertical, BusinessConfig } from '../types';

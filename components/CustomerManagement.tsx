@@ -15,6 +15,7 @@ interface CustomerManagementProps {
   onAddCustomer: (customer: Customer) => void;
   onUpdateCustomer: (customer: Customer) => void;
   onDeleteCustomer: (id: string) => void;
+  onSelect?: (customer: Customer) => void; // Prop para modo selección
   onClose: () => void;
 }
 
@@ -24,6 +25,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
   onAddCustomer, 
   onUpdateCustomer, 
   onDeleteCustomer, 
+  onSelect,
   onClose 
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -216,12 +218,22 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
              <Users className={themeText} /> Directorio de Clientes
           </h1>
         </div>
-        <button 
-          onClick={handleCreateClick}
-          className={`px-4 py-2.5 rounded-xl font-bold text-white shadow-lg shadow-blue-100 flex items-center gap-2 active:scale-95 transition-all ${themeBg}`}
-        >
-          <UserPlus size={18} /> Nuevo Cliente
-        </button>
+        <div className="flex gap-2">
+          {onSelect && selectedCustomer && (
+            <button 
+              onClick={() => onSelect(selectedCustomer)}
+              className="px-6 py-2.5 rounded-xl font-black bg-emerald-600 text-white shadow-lg animate-in zoom-in"
+            >
+              Asignar al Ticket
+            </button>
+          )}
+          <button 
+            onClick={handleCreateClick}
+            className={`px-4 py-2.5 rounded-xl font-bold text-white shadow-lg shadow-blue-100 flex items-center gap-2 active:scale-95 transition-all ${themeBg}`}
+          >
+            <UserPlus size={18} /> Nuevo Cliente
+          </button>
+        </div>
       </header>
 
       {/* MAIN CONTENT SPLIT */}
@@ -295,10 +307,13 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
               <div className="flex-1 flex flex-col h-full overflow-hidden">
                  
                  {/* Mobile Back Button */}
-                 <div className="md:hidden p-4 bg-white border-b border-gray-200">
+                 <div className="md:hidden p-4 bg-white border-b border-gray-200 flex justify-between items-center">
                     <button onClick={() => setSelectedCustomerId(null)} className="flex items-center gap-2 text-sm font-bold text-gray-500">
                        <ArrowLeft size={16} /> Volver a la lista
                     </button>
+                    {onSelect && (
+                      <button onClick={() => onSelect(selectedCustomer)} className="bg-emerald-600 text-white px-4 py-1.5 rounded-lg text-xs font-black">Asignar</button>
+                    )}
                  </div>
 
                  {/* Profile Header Card */}
@@ -328,7 +343,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                 <div className="flex flex-col gap-1 mt-2 text-sm text-gray-500">
                                    {selectedCustomer.phone && <span className="flex items-center gap-1"><Phone size={12}/> {selectedCustomer.phone}</span>}
                                    {selectedCustomer.email && <span className="flex items-center gap-1"><Mail size={12}/> {selectedCustomer.email}</span>}
-                                   {/* Show default billing address summary if exists */}
                                    {selectedCustomer.addresses?.find(a => a.isDefault && a.type === 'BILLING') && (
                                       <span className="flex items-center gap-1 text-xs text-gray-400 mt-1">
                                          <MapPin size={12}/> {selectedCustomer.addresses.find(a => a.isDefault && a.type === 'BILLING')?.city}
@@ -340,6 +354,14 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
                           {/* Actions */}
                           <div className="flex gap-2 w-full md:w-auto">
+                             {onSelect && (
+                               <button 
+                                 onClick={() => onSelect(selectedCustomer)}
+                                 className="flex-1 md:flex-none py-2 px-6 bg-emerald-600 text-white rounded-xl font-black text-sm shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
+                               >
+                                 <Check size={18} /> Asignar al Ticket
+                               </button>
+                             )}
                              <button onClick={handleWhatsApp} className="flex-1 md:flex-none py-2 px-4 bg-green-50 text-green-600 rounded-xl font-bold text-sm hover:bg-green-100 transition-colors flex items-center justify-center gap-2">
                                 <MessageCircle size={18} /> <span className="hidden lg:inline">WhatsApp</span>
                              </button>
@@ -398,7 +420,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                     <div className="animate-in fade-in">
                        {activeProfileTab === 'HISTORY' && (
                           <div className="space-y-3">
-                             {/* Mock Transactions */}
                              {[1,2,3].map(i => (
                                 <div key={i} className="bg-white p-4 rounded-xl border border-gray-100 flex items-center justify-between hover:shadow-sm transition-shadow">
                                    <div className="flex items-center gap-4">
@@ -421,7 +442,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
                        {activeProfileTab === 'WALLET' && (
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                             {/* Credit Card Visualization */}
                              <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-6 text-white relative overflow-hidden shadow-xl">
                                 <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-10 -mt-10 blur-xl"></div>
                                 <div className="relative z-10 flex flex-col h-full justify-between min-h-[180px]">
@@ -437,18 +457,17 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                    <div>
                                       <p className="text-xs text-slate-400 mb-1">Límite Total: {config.currencySymbol}{selectedCustomer.creditLimit?.toLocaleString()}</p>
                                       <div className="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
-                                         <div className="bg-emerald-500 h-full" style={{ width: '80%' }}></div>
+                                         <div className="bg-emerald-50 h-full" style={{ width: '80%' }}></div>
                                       </div>
                                    </div>
                                 </div>
                              </div>
 
-                             {/* Debt Actions */}
                              <div className="bg-white rounded-2xl p-6 border border-gray-200">
                                 <h3 className="font-bold text-gray-800 mb-4">Estado de Cuenta</h3>
                                 <div className="flex justify-between items-center mb-6">
                                    <span className="text-gray-500 text-sm">Deuda Pendiente</span>
-                                   <span className="text-2xl font-black text-red-500">{config.currencySymbol}{selectedCustomer.currentDebt?.toLocaleString() || '0.00'}</p>
+                                   <span className="text-2xl font-black text-red-500">{config.currencySymbol}{selectedCustomer.currentDebt?.toLocaleString() || '0.00'}</span>
                                 </div>
                                 <div className="grid grid-cols-2 gap-4 text-xs text-gray-500 mb-6">
                                    <div>
@@ -507,14 +526,12 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       {isEditModalOpen && (
          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
             <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-               {/* Modal Header */}
                <div className="p-5 border-b border-gray-100 bg-gray-50">
                   <div className="flex justify-between items-center mb-4">
                      <h3 className="font-bold text-lg text-gray-800">{formData.id ? 'Editar Cliente' : 'Nuevo Cliente'}</h3>
                      <button onClick={() => setIsEditModalOpen(false)} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X size={20} /></button>
                   </div>
                   
-                  {/* Modal Tabs */}
                   <div className="flex gap-4">
                      <button 
                         onClick={() => setEditModalTab('GENERAL')}
@@ -534,7 +551,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                <div className="flex-1 overflow-y-auto p-6">
                   {editModalTab === 'GENERAL' ? (
                      <form onSubmit={handleSubmit} className="space-y-6">
-                        {/* BASIC INFO */}
                         <div className="space-y-4">
                            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Información Básica</h4>
                            <div>
@@ -557,7 +573,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                            </div>
                         </div>
 
-                        {/* FINANCIALS & FLAGS */}
                         <div className="pt-4 border-t border-gray-100 space-y-4">
                            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Datos Financieros</h4>
                            <div className="grid grid-cols-2 gap-4">
@@ -571,7 +586,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                               </div>
                            </div>
                            
-                           {/* BOOLEAN FLAGS GRID */}
                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
                               <BooleanField label="Generar Factura Fiscal" checked={formData.requiresFiscalInvoice || false} onChange={v => setFormData({...formData, requiresFiscalInvoice: v})} />
                               <BooleanField label="Enviar Doc. por Email" checked={formData.prefersEmail || false} onChange={v => setFormData({...formData, prefersEmail: v})} />
@@ -581,7 +595,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                         </div>
                      </form>
                   ) : (
-                     /* ADDRESSES TAB */
                      <div className="space-y-4">
                         <div className="flex justify-between items-center mb-4">
                            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Mis Direcciones</h4>
@@ -713,7 +726,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
                   <div className="h-px bg-gray-100 my-2"></div>
                   
-                  {/* LOGISTIC IMPROVEMENTS */}
                   <div className="grid grid-cols-2 gap-3">
                      <div>
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Latitud</label>

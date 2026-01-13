@@ -1,99 +1,54 @@
-
 import React, { useState, useEffect } from 'react';
 import { 
   X, CreditCard, Banknote, QrCode, CheckCircle2, 
-  Smartphone, Trash2, Plus, Wallet, Printer, Mail, 
-  ArrowRight, Repeat, Calculator, ChevronDown 
+  Trash2, Plus, Wallet, Printer, Mail, 
+  ArrowRight, Repeat, ChevronDown, ArrowRightLeft
 } from 'lucide-react';
-import { PaymentEntry, PaymentMethod } from '../types';
+import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig } from '../types';
 
 interface PaymentModalProps {
   total: number;
   currencySymbol: string;
+  config?: BusinessConfig;
   onClose: () => void;
   onConfirm: (payments: PaymentEntry[]) => void;
   themeColor: string;
 }
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, currencySymbol, onClose, onConfirm, themeColor }) => {
-  // --- STATE ---
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, currencySymbol, config, onClose, onConfirm, themeColor }) => {
   const [payments, setPayments] = useState<PaymentEntry[]>([]);
   const [activeMethod, setActiveMethod] = useState<PaymentMethod>('CASH');
   const [inputAmount, setInputAmount] = useState<string>('');
   const [isSuccessScreen, setIsSuccessScreen] = useState(false);
-  const [email, setEmail] = useState('');
-  
-  // Mobile specific: show payments list
-  const [showMobileHistory, setShowMobileHistory] = useState(false);
-  
-  // Tracks if the input is currently auto-filled and should be overwritten on next keystroke
   const [shouldClearInput, setShouldClearInput] = useState(true);
+  
+  const currencies = config?.currencies || [];
+  const baseCurrency = currencies.find(c => c.isBase) || { code: 'DOP', symbol: 'RD$', rate: 1 };
+  const [selectedCurrency, setSelectedCurrency] = useState<CurrencyConfig>(baseCurrency as CurrencyConfig);
 
-  // --- CALCULATIONS ---
   const totalPaid = payments.reduce((acc, p) => acc + p.amount, 0);
   const remaining = Math.max(0, parseFloat((total - totalPaid).toFixed(2)));
   const change = Math.max(0, parseFloat((totalPaid - total).toFixed(2)));
-  const isComplete = remaining === 0;
 
-  // --- EFFECTS ---
-  // Auto-fill input with remaining amount when switching context or updating remaining
+  const denominations = selectedCurrency.code === 'USD' ? [1, 5, 10, 20, 50, 100] : [50, 100, 200, 500, 1000, 2000];
+
   useEffect(() => {
     if (remaining > 0) {
-      setInputAmount(remaining.toFixed(2));
+      const suggestedAmount = (remaining / selectedCurrency.rate).toFixed(2);
+      setInputAmount(suggestedAmount);
       setShouldClearInput(true);
     } else {
       setInputAmount('');
       setShouldClearInput(false);
     }
-  }, [remaining, activeMethod]);
+  }, [remaining, activeMethod, selectedCurrency]);
 
-  // --- SMART CASH LOGIC ---
-  const getSmartSuggestions = () => {
-    if (remaining <= 0) return [];
-    
-    const amount = remaining;
-    const suggestions = new Set<number>();
-    
-    suggestions.add(amount); // Exacto
-
-    // Next round numbers (multiples of 5, 10, 20, 50, 100)
-    [5, 10, 20, 50, 100].forEach(bill => {
-      if (bill > amount) suggestions.add(bill);
-      else {
-         // Logic for e.g. amount is 12, suggest 15 (10+5) or 20
-         const nextMultiple = Math.ceil(amount / bill) * bill;
-         if (nextMultiple > amount) suggestions.add(nextMultiple);
-      }
-    });
-
-    return Array.from(suggestions).sort((a, b) => a - b).slice(0, 4); // Top 4 suggestions
-  };
-
-  // --- HANDLERS ---
   const handleNumPad = (key: string) => {
-    if (key === 'C') {
-      setInputAmount('');
-      setShouldClearInput(false);
-      return;
-    } 
-
-    if (key === 'BACK') {
-      if (shouldClearInput) {
-          setInputAmount('');
-          setShouldClearInput(false);
-      } else {
-          setInputAmount(prev => prev.slice(0, -1));
-      }
-      return;
-    }
-
+    if (key === 'C') { setInputAmount(''); setShouldClearInput(false); return; } 
+    if (key === 'BACK') { setInputAmount(prev => prev.slice(0, -1)); return; }
     if (shouldClearInput) {
        setShouldClearInput(false);
-       if (key === '.') {
-          setInputAmount('0.');
-       } else {
-          setInputAmount(key);
-       }
+       setInputAmount(key === '.' ? '0.' : key);
     } else {
        if (key === '.' && inputAmount.includes('.')) return;
        if (inputAmount.includes('.') && inputAmount.split('.')[1].length >= 2) return;
@@ -101,360 +56,204 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, currencySymbo
     }
   };
 
-  // Keyboard Support
-  useEffect(() => {
-     const handleKeyDown = (e: KeyboardEvent) => {
-        if (isSuccessScreen) return;
-        
-        // Allow default behavior for inputs if not our main input
-        const target = e.target as HTMLElement;
-        if (target.tagName === 'INPUT' && target.getAttribute('type') === 'email') return;
-
-        if (/^[0-9.]$/.test(e.key)) {
-           handleNumPad(e.key);
-        } else if (e.key === 'Backspace') {
-           handleNumPad('BACK');
-        } else if (e.key === 'Escape') {
-           onClose();
-        } else if (e.key === 'Enter') {
-           handleAddPayment();
-        }
-     };
-     window.addEventListener('keydown', handleKeyDown);
-     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [shouldClearInput, inputAmount, isSuccessScreen, remaining, activeMethod]);
-
   const handleAddPayment = (amountOverride?: number) => {
-    const val = amountOverride !== undefined ? amountOverride : parseFloat(inputAmount);
-    if (!val || val <= 0) return;
+    const valInSelectedCurrency = amountOverride !== undefined ? amountOverride : parseFloat(inputAmount);
+    if (!valInSelectedCurrency || valInSelectedCurrency <= 0) return;
+
+    const amountInBase = valInSelectedCurrency * selectedCurrency.rate;
 
     const newPayment: PaymentEntry = {
       id: Math.random().toString(36).substr(2, 9),
       method: activeMethod,
-      amount: val,
-      timestamp: new Date()
+      amount: parseFloat(amountInBase.toFixed(2)),
+      timestamp: new Date(),
+      currencyCode: selectedCurrency.code,
+      amountOriginal: valInSelectedCurrency,
+      exchangeRate: selectedCurrency.rate
     };
 
     setPayments(prev => [...prev, newPayment]);
+    setShouldClearInput(true);
   };
 
-  const handleRemovePayment = (id: string) => {
-    setPayments(prev => prev.filter(p => p.id !== id));
-  };
+  const handleRemovePayment = (id: string) => { setPayments(prev => prev.filter(p => p.id !== id)); };
+  const handleProcessSale = () => { setIsSuccessScreen(true); };
+  const handleFinalize = () => { onConfirm(payments); };
 
-  const handleProcessSale = () => {
-    setIsSuccessScreen(true);
-  };
+  const themeBgClass = { blue: 'bg-blue-600', orange: 'bg-orange-600', gray: 'bg-gray-800' }[themeColor] || 'bg-indigo-600';
+  const themeTextClass = { blue: 'text-blue-600', orange: 'text-orange-600', gray: 'text-gray-800' }[themeColor] || 'text-indigo-600';
 
-  const handleFinalize = () => {
-    onConfirm(payments);
-  };
-
-  // --- THEME ---
-  const themeClass = {
-    blue: 'text-blue-600',
-    orange: 'text-orange-600',
-    gray: 'text-gray-800'
-  }[themeColor] || 'text-indigo-600';
-
-  const themeBgClass = {
-    blue: 'bg-blue-600',
-    orange: 'bg-orange-600',
-    gray: 'bg-gray-800'
-  }[themeColor] || 'bg-indigo-600';
-
-  // --- RENDER SUCCESS SCREEN ---
   if (isSuccessScreen) {
     return (
-      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/90 backdrop-blur-md animate-in fade-in duration-300">
-        <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl flex flex-col items-center text-center relative overflow-hidden m-4">
-          
-          {/* Confetti / Decoration Background */}
-          <div className="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-green-300 via-transparent to-transparent pointer-events-none"></div>
-
-          <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mb-6 animate-in zoom-in duration-500">
-            <CheckCircle2 size={48} className="text-green-600" />
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/90 backdrop-blur-md p-4">
+        <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl flex flex-col items-center text-center">
+          <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6">
+            <CheckCircle2 size={40} className="text-green-600" />
           </div>
-
-          <h2 className="text-4xl font-black text-gray-900 mb-2">¡Venta Exitosa!</h2>
-          <p className="text-gray-500 mb-8">La transacción se ha registrado correctamente.</p>
-
+          <h2 className="text-3xl font-black text-gray-900 mb-2">¡Venta Exitosa!</h2>
           <div className="w-full bg-gray-50 rounded-2xl p-6 mb-8 border border-gray-100">
-             <div className="flex justify-between items-center text-sm mb-2">
-                <span className="text-gray-500">Total Cobrado</span>
-                <span className="font-bold text-gray-900 text-lg">{currencySymbol}{totalPaid.toFixed(2)}</span>
-             </div>
-             {change > 0 && (
-               <div className="flex justify-between items-center text-sm pt-2 border-t border-gray-200 mt-2">
-                  <span className="text-green-600 font-bold uppercase">Su Cambio</span>
-                  <span className="font-black text-green-600 text-2xl">{currencySymbol}{change.toFixed(2)}</span>
-               </div>
-             )}
+             <div className="flex justify-between text-sm mb-2 text-gray-500"><span>Cobrado</span><span>{currencySymbol}{totalPaid.toFixed(2)}</span></div>
+             {change > 0 && <div className="flex justify-between items-center pt-2 border-t border-gray-200 mt-2"><span className="text-green-600 font-bold">Cambio</span><span className="font-black text-green-600 text-2xl">{currencySymbol}{change.toFixed(2)}</span></div>}
           </div>
-
           <div className="w-full space-y-3">
              <div className="flex gap-3">
-                <button 
-                  onClick={() => alert("Imprimiendo ticket...")}
-                  className="flex-1 py-4 rounded-xl bg-gray-100 font-bold text-gray-700 hover:bg-gray-200 transition-colors flex items-center justify-center gap-2"
-                >
-                   <Printer size={20} /> Imprimir
-                </button>
-                <div className="flex-1 relative">
-                   <input 
-                     type="email" 
-                     placeholder="Email cliente" 
-                     value={email}
-                     onChange={(e) => setEmail(e.target.value)}
-                     className="w-full h-full pl-10 pr-4 rounded-xl bg-gray-100 border-none outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                   />
-                   <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                   {email && (
-                      <button onClick={() => alert(`Enviado a ${email}`)} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 bg-blue-500 text-white rounded-full">
-                         <ArrowRight size={12} />
-                      </button>
-                   )}
-                </div>
+                <button onClick={() => alert("Imprimiendo...")} className="flex-1 py-3 rounded-xl bg-gray-100 font-bold text-gray-700 flex items-center justify-center gap-2"><Printer size={18}/> Ticket</button>
+                <button onClick={() => alert("Enviando...")} className="flex-1 py-3 rounded-xl bg-gray-100 font-bold text-gray-700 flex items-center justify-center gap-2"><Mail size={18}/> Email</button>
              </div>
-             
-             <button 
-               onClick={handleFinalize}
-               className={`w-full py-4 rounded-xl font-bold text-white shadow-xl flex items-center justify-center gap-2 transition-transform active:scale-95 ${themeBgClass}`}
-             >
-                <Repeat size={20} /> Nueva Venta
-             </button>
+             <button onClick={handleFinalize} className={`w-full py-4 rounded-xl font-bold text-white shadow-xl flex items-center justify-center gap-2 ${themeBgClass}`}><Repeat size={20} /> Nueva Venta</button>
           </div>
-
         </div>
       </div>
     );
   }
 
-  // --- RENDER MAIN INTERFACE ---
   return (
-    <div className="fixed inset-0 z-[60] flex items-end md:items-center justify-center md:p-6 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-white w-full max-w-6xl h-[95vh] md:h-[85vh] rounded-t-[2rem] md:rounded-[2.5rem] shadow-2xl flex flex-col md:flex-row overflow-hidden">
+    <div className="fixed inset-0 z-[60] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="bg-white w-full max-w-6xl h-full md:h-[85vh] md:rounded-[2.5rem] shadow-2xl flex flex-col md:flex-row overflow-hidden">
         
-        {/* === MOBILE HEADER === */}
-        <div className="md:hidden bg-gray-50 p-4 border-b border-gray-200 flex justify-between items-center shrink-0">
-           <button onClick={onClose} className="p-2 bg-white rounded-full text-gray-500 shadow-sm border border-gray-100"><X size={20} /></button>
-           <div className="flex flex-col items-end">
-              <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Total: {currencySymbol}{total.toFixed(2)}</span>
-              <div 
-                onClick={() => payments.length > 0 && setShowMobileHistory(!showMobileHistory)}
-                className="flex items-center gap-2 cursor-pointer"
-              >
-                 <span className="text-sm font-bold text-gray-500">Restante:</span>
-                 <span className={`text-2xl font-black ${remaining > 0 ? 'text-red-500' : 'text-green-500'}`}>
-                    {currencySymbol}{remaining.toFixed(2)}
-                 </span>
-                 {payments.length > 0 && <ChevronDown size={16} className={`text-gray-400 transition-transform ${showMobileHistory ? 'rotate-180' : ''}`} />}
-              </div>
-           </div>
-        </div>
-
-        {/* === MOBILE HISTORY DROPDOWN === */}
-        {showMobileHistory && (
-           <div className="md:hidden bg-gray-50 border-b border-gray-200 p-4 animate-in slide-in-from-top-5 max-h-40 overflow-y-auto">
-              <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Pagos Realizados</h4>
-              <div className="space-y-2">
-                 {payments.map(p => (
-                    <div key={p.id} className="flex justify-between items-center bg-white p-2 rounded-lg border border-gray-100 shadow-sm">
-                       <span className="text-sm font-bold text-gray-700">{p.method === 'CASH' ? 'Efectivo' : 'Tarjeta'}</span>
-                       <div className="flex items-center gap-3">
-                          <span className="font-bold">{currencySymbol}{p.amount.toFixed(2)}</span>
-                          <button onClick={() => handleRemovePayment(p.id)} className="text-red-400"><Trash2 size={16} /></button>
-                       </div>
-                    </div>
+        {/* SUMMARY SECTION (Collapsible/Header on mobile, Sidebar on desktop) */}
+        <div className="flex md:w-[35%] w-full bg-gray-50 border-b md:border-b-0 md:border-r border-gray-200 flex-col p-4 md:p-8 shrink-0">
+           <div className="flex justify-between items-center mb-4 md:mb-8">
+              <button onClick={onClose} className="p-2 -ml-2 text-gray-400 hover:bg-gray-200 rounded-full transition-colors"><X size={24} /></button>
+              <div className="flex md:hidden gap-1">
+                 {currencies.filter(c => c.isEnabled).map(c => (
+                    <button 
+                       key={c.code}
+                       onClick={() => setSelectedCurrency(c)}
+                       className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all border ${selectedCurrency.code === c.code ? `border-blue-600 text-blue-600 bg-white` : 'border-transparent text-gray-400 bg-gray-100'}`}
+                    >
+                       {c.code}
+                    </button>
                  ))}
               </div>
            </div>
-        )}
 
-        {/* === LEFT COLUMN: SUMMARY & HISTORY (DESKTOP) === */}
-        <div className="hidden md:flex w-[35%] bg-gray-50 border-r border-gray-200 flex-col relative">
-           <button onClick={onClose} className="absolute top-4 left-4 p-2 text-gray-400 hover:bg-gray-200 rounded-full transition-colors z-10">
-              <X size={24} />
-           </button>
-
-           <div className="flex-1 flex flex-col p-8 pt-16">
-              <div className="mb-8">
-                 <p className="text-gray-500 font-medium uppercase tracking-wider text-xs mb-1">Total a Cobrar</p>
-                 <h1 className="text-6xl font-black text-gray-900 tracking-tighter">{currencySymbol}{total.toFixed(2)}</h1>
-              </div>
-
-              {/* Payment History List */}
-              <div className="flex-1 overflow-y-auto space-y-3 pr-2">
-                 {payments.map(p => (
-                    <div key={p.id} className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 animate-in slide-in-from-left-5">
-                       <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
-                             {p.method === 'CASH' && <Banknote size={20} />}
-                             {p.method === 'CARD' && <CreditCard size={20} />}
-                             {p.method === 'QR' && <QrCode size={20} />}
-                          </div>
-                          <div>
-                             <p className="font-bold text-gray-800 text-sm">
-                                {p.method === 'CASH' ? 'Efectivo' : p.method === 'CARD' ? 'Tarjeta' : 'Digital'}
-                             </p>
-                             <p className="text-xs text-gray-400">{p.timestamp.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
-                          </div>
-                       </div>
-                       <div className="flex items-center gap-4">
-                          <span className="font-bold text-lg text-gray-900">{currencySymbol}{p.amount.toFixed(2)}</span>
-                          <button onClick={() => handleRemovePayment(p.id)} className="text-gray-300 hover:text-red-500 transition-colors">
-                             <Trash2 size={18} />
-                          </button>
-                       </div>
-                    </div>
+           <div className="mb-4 md:mb-8 flex flex-col md:block items-center md:items-start text-center md:text-left">
+              <p className="text-gray-500 font-medium uppercase text-[10px] md:text-xs tracking-widest mb-1">Total a Cobrar</p>
+              <h1 className="text-3xl md:text-5xl font-black text-gray-900 leading-none">{currencySymbol}{total.toFixed(2)}</h1>
+              
+              <div className="hidden md:flex mt-6 gap-2">
+                 {currencies.filter(c => c.isEnabled).map(c => (
+                    <button 
+                       key={c.code}
+                       onClick={() => setSelectedCurrency(c)}
+                       className={`px-3 py-2 rounded-xl text-xs font-black transition-all border-2 ${selectedCurrency.code === c.code ? `border-current ${themeTextClass} bg-white shadow-sm` : 'border-transparent text-gray-400 bg-gray-100'}`}
+                    >
+                       {c.code}
+                    </button>
                  ))}
-                 
-                 {payments.length === 0 && (
-                    <div className="text-center py-10 text-gray-400 border-2 border-dashed border-gray-200 rounded-3xl">
-                       <Wallet size={32} className="mx-auto mb-2 opacity-50" />
-                       <p className="text-sm">Sin pagos registrados</p>
-                    </div>
-                 )}
               </div>
            </div>
 
-           {/* Bottom Status Panel */}
-           <div className="p-8 bg-white border-t border-gray-200">
-              <div className="flex justify-between items-end mb-6">
+           {/* Payments List (Compact on mobile) */}
+           <div className="flex-1 overflow-y-auto space-y-2 md:space-y-3 no-scrollbar max-h-[15vh] md:max-h-full">
+              {payments.map(p => (
+                 <div key={p.id} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-xl md:rounded-2xl shadow-sm border border-gray-100 animate-in slide-in-from-left-2">
+                    <div className="flex items-center gap-2 md:gap-3">
+                       <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
+                          {p.method === 'CASH' ? <Banknote size={16}/> : p.method === 'CARD' ? <CreditCard size={16}/> : <QrCode size={16}/>}
+                       </div>
+                       <div>
+                          <span className="font-bold text-[10px] md:text-xs text-gray-800 block">{p.method}</span>
+                          {p.currencyCode !== baseCurrency.code && (
+                             <span className="text-[9px] md:text-[10px] text-gray-400 font-bold">{p.amountOriginal} {p.currencyCode}</span>
+                          )}
+                       </div>
+                    </div>
+                    <div className="flex items-center gap-2 md:gap-4">
+                       <span className="font-bold text-sm md:text-gray-900">{currencySymbol}{p.amount.toFixed(2)}</span>
+                       <button onClick={() => handleRemovePayment(p.id)} className="text-gray-300 hover:text-red-500"><X size={16}/></button>
+                    </div>
+                 </div>
+              ))}
+           </div>
+
+           <div className="p-3 md:p-4 bg-white border-t border-gray-200 rounded-xl md:rounded-2xl mt-4 shadow-inner shrink-0">
+              <div className="flex justify-between items-end mb-3 md:mb-4">
                  <div>
-                    <p className="text-sm font-bold text-gray-400 uppercase">Restante</p>
-                    <p className={`text-4xl font-black ${remaining > 0 ? 'text-red-500' : 'text-gray-300'}`}>
-                       {currencySymbol}{remaining.toFixed(2)}
-                    </p>
+                    <p className="text-[9px] md:text-[10px] font-bold text-gray-400 uppercase tracking-widest">Restante</p>
+                    <p className={`text-xl md:text-3xl font-black ${remaining > 0 ? 'text-red-500' : 'text-green-500'}`}>{currencySymbol}{remaining.toFixed(2)}</p>
                  </div>
                  {change > 0 && (
-                    <div className="text-right animate-in zoom-in">
-                       <p className="text-sm font-bold text-green-600 uppercase">Su Cambio</p>
-                       <p className="text-4xl font-black text-green-600">{currencySymbol}{change.toFixed(2)}</p>
+                    <div className="text-right">
+                       <p className="text-[9px] md:text-[10px] font-bold text-green-600 uppercase tracking-widest">Cambio</p>
+                       <p className="text-xl md:text-3xl font-black text-green-600">{currencySymbol}{change.toFixed(2)}</p>
                     </div>
                  )}
               </div>
-
               <button 
-                 onClick={handleProcessSale}
-                 disabled={remaining > 0}
-                 className={`w-full py-5 rounded-2xl font-bold text-xl text-white shadow-xl flex items-center justify-center gap-3 transition-all duration-300 ${
-                    remaining > 0 
-                       ? 'bg-gray-200 text-gray-400 cursor-not-allowed' 
-                       : `${themeBgClass} hover:scale-[1.02] hover:shadow-2xl`
-                 }`}
+                 onClick={handleProcessSale} 
+                 disabled={remaining > 0.01} 
+                 className={`w-full py-3 md:py-4 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${remaining > 0.01 ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} hover:brightness-110`}`}
               >
-                 {remaining > 0 ? `Faltan ${currencySymbol}${remaining.toFixed(2)}` : 'FINALIZAR VENTA'}
-                 {remaining === 0 && <CheckCircle2 size={24} />}
+                 FINALIZAR VENTA
               </button>
            </div>
         </div>
 
-        {/* === RIGHT COLUMN: INPUT & METHODS === */}
-        <div className="w-full md:w-[65%] flex flex-col bg-white h-full relative">
-           
-           {/* Method Tabs */}
+        {/* INPUT SECTION */}
+        <div className="flex-1 flex flex-col bg-white overflow-y-auto">
+           {/* Payment Methods */}
            <div className="flex p-3 md:p-4 gap-3 md:gap-4 overflow-x-auto no-scrollbar shrink-0">
-              {[
-                 { id: 'CASH', label: 'Efectivo', icon: Banknote },
-                 { id: 'CARD', label: 'Tarjeta', icon: CreditCard },
-                 { id: 'QR', label: 'Digital / QR', icon: QrCode },
+              {[ 
+                 { id: 'CASH', label: 'Efectivo', icon: Banknote }, 
+                 { id: 'CARD', label: 'Tarjeta', icon: CreditCard }, 
+                 { id: 'QR', label: 'Digital', icon: QrCode } 
               ].map(m => (
-                 <button
-                   key={m.id}
-                   onClick={() => setActiveMethod(m.id as PaymentMethod)}
-                   className={`flex-1 min-w-[100px] py-4 md:py-6 rounded-2xl border-2 flex flex-col items-center gap-2 transition-all duration-200 ${
-                      activeMethod === m.id 
-                         ? `border-current ${themeClass} bg-gray-50 shadow-sm` 
-                         : 'border-transparent hover:bg-gray-50 text-gray-400'
-                   }`}
-                 >
-                    <m.icon size={24} className="md:w-8 md:h-8" />
-                    <span className="font-bold text-xs md:text-sm uppercase tracking-wide">{m.label}</span>
+                 <button key={m.id} onClick={() => setActiveMethod(m.id as PaymentMethod)} className={`flex-1 min-w-[100px] py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center gap-1 md:gap-2 transition-all ${activeMethod === m.id ? `border-current ${themeTextClass} bg-gray-50 shadow-sm` : 'border-transparent text-gray-400 hover:bg-gray-50'}`}>
+                    <m.icon size={24} className="md:w-8 md:h-8" /><span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{m.label}</span>
                  </button>
               ))}
            </div>
 
-           {/* Input Display */}
-           <div className="px-4 md:px-8 mt-2 md:mt-4 shrink-0">
-              <div className={`bg-gray-100 rounded-3xl p-4 md:p-6 flex justify-between items-center relative overflow-hidden border transition-colors ${shouldClearInput ? 'border-blue-400 ring-2 ring-blue-100' : 'border-gray-200'}`}>
-                 <span className="text-2xl md:text-3xl text-gray-400 font-medium">{currencySymbol}</span>
+           {/* Amount Input */}
+           <div className="px-4 md:px-8 mt-1 shrink-0">
+              <div className="bg-gray-100 rounded-2xl md:rounded-[2rem] p-4 md:p-6 flex justify-between items-center border border-gray-200 shadow-inner">
+                 <span className="text-xl md:text-3xl text-gray-400 font-black">{selectedCurrency.symbol}</span>
                  <input 
                     type="text" 
                     readOnly 
                     value={inputAmount} 
-                    className="bg-transparent text-right text-5xl md:text-6xl font-mono font-bold text-gray-800 w-full outline-none z-10 cursor-text"
-                    placeholder="0.00"
-                    onClick={() => {}}
+                    className="bg-transparent text-right text-3xl md:text-5xl font-mono font-black text-gray-800 w-full outline-none" 
+                    placeholder="0.00" 
                  />
               </div>
-              <p className="text-xs text-center text-gray-400 mt-2">
-                 {shouldClearInput ? "Escribe para modificar el monto" : "Ingresa el monto a cobrar"}
-              </p>
-           </div>
-
-           {/* Smart Suggestions (Only for Cash) */}
-           {activeMethod === 'CASH' && remaining > 0 && (
-              <div className="px-4 md:px-8 mt-4 md:mt-6 flex gap-3 overflow-x-auto no-scrollbar pb-2 shrink-0">
-                 {getSmartSuggestions().map(sugg => (
-                    <button 
-                      key={sugg}
-                      onClick={() => handleAddPayment(sugg)}
-                      className="flex-1 min-w-[90px] py-3 md:py-4 bg-green-50 text-green-700 border border-green-200 rounded-2xl font-bold text-lg md:text-xl hover:bg-green-100 active:scale-95 transition-all shadow-sm"
-                    >
-                       {currencySymbol}{sugg}
-                    </button>
-                 ))}
-              </div>
-           )}
-
-           {/* Numeric Keypad */}
-           <div className="flex-1 p-4 md:p-8 grid grid-cols-4 gap-3 md:gap-4 overflow-y-auto">
-              {[1, 2, 3].map(n => (
-                 <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 rounded-2xl md:rounded-3xl text-2xl md:text-3xl font-bold text-gray-700 transition-all active:scale-95">
-                    {n}
-                 </button>
-              ))}
-              <button onClick={() => handleAddPayment()} className={`row-span-2 rounded-2xl md:rounded-3xl font-bold text-white shadow-lg flex flex-col items-center justify-center gap-1 md:gap-2 transition-all active:scale-95 ${themeBgClass} ${(!inputAmount || parseFloat(inputAmount) === 0) ? 'opacity-50 cursor-not-allowed' : 'hover:brightness-110'}`}>
-                 <Plus size={24} className="md:w-8 md:h-8" />
-                 <span className="text-xs md:text-sm uppercase">Agregar</span>
-              </button>
-
-              {[4, 5, 6].map(n => (
-                 <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 rounded-2xl md:rounded-3xl text-2xl md:text-3xl font-bold text-gray-700 transition-all active:scale-95">
-                    {n}
-                 </button>
-              ))}
-
-              {[7, 8, 9].map(n => (
-                 <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 rounded-2xl md:rounded-3xl text-2xl md:text-3xl font-bold text-gray-700 transition-all active:scale-95">
-                    {n}
-                 </button>
-              ))}
-              <button onClick={() => handleNumPad('BACK')} className="rounded-2xl md:rounded-3xl bg-red-50 text-red-500 font-bold hover:bg-red-100 transition-all flex items-center justify-center active:scale-95">
-                 <Trash2 size={24} />
-              </button>
-
-              <button onClick={() => handleNumPad('C')} className="rounded-2xl md:rounded-3xl bg-gray-100 text-gray-500 font-bold hover:bg-gray-200 transition-all text-xl">C</button>
-              <button onClick={() => handleNumPad('0')} className="rounded-2xl md:rounded-3xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 text-2xl md:text-3xl font-bold text-gray-700 transition-all active:scale-95">0</button>
-              <button onClick={() => handleNumPad('.')} className="rounded-2xl md:rounded-3xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-gray-200 text-2xl md:text-3xl font-bold text-gray-700 transition-all active:scale-95">.</button>
               
-              {/* Spacer for bottom padding on mobile if needed */}
-              <div className="col-span-4 h-20 md:hidden"></div>
+              {activeMethod === 'CASH' && (
+                 <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-3 md:mt-4">
+                    {denominations.map(d => (
+                       <button 
+                          key={d} 
+                          onClick={() => handleAddPayment(d)}
+                          className="py-2 bg-white border border-gray-200 rounded-lg md:rounded-xl text-[10px] md:text-xs font-black text-gray-600 hover:border-blue-500 hover:text-blue-600 transition-all shadow-sm"
+                       >
+                          {selectedCurrency.symbol}{d}
+                       </button>
+                    ))}
+                 </div>
+              )}
            </div>
 
-           {/* MOBILE FLOATING ACTION BUTTON */}
-           {remaining === 0 && (
-              <div className="md:hidden absolute bottom-6 left-6 right-6 z-20">
-                 <button 
-                    onClick={handleProcessSale}
-                    className={`w-full py-4 rounded-2xl font-bold text-white text-xl shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-transform animate-in slide-in-from-bottom-10 ${themeBgClass}`}
-                 >
-                    <CheckCircle2 size={24} /> FINALIZAR VENTA
-                 </button>
-              </div>
-           )}
+           {/* Numpad */}
+           <div className="flex-1 p-4 md:p-8 grid grid-cols-4 gap-2 md:gap-3 min-h-[350px]">
+              {[1,2,3].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
+              
+              <button 
+                 onClick={() => handleAddPayment()} 
+                 className={`row-span-2 rounded-2xl md:rounded-[2rem] font-black text-white shadow-xl flex flex-col items-center justify-center gap-1 md:gap-2 ${themeBgClass} active:scale-95 hover:brightness-110`}
+              >
+                 <Plus size={28} className="md:w-8 md:h-8" />
+                 <span className="text-[10px] tracking-widest uppercase">Agregar</span>
+              </button>
 
+              {[4,5,6].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
+              {[7,8,9].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
+              
+              <button onClick={() => handleNumPad('BACK')} className="rounded-xl md:rounded-2xl bg-red-50 text-red-500 flex items-center justify-center active:scale-95 border border-red-100"><Trash2 size={24} className="md:w-7 md:h-7" /></button>
+              <button onClick={() => handleNumPad('C')} className="rounded-xl md:rounded-2xl bg-gray-200 text-gray-600 font-black text-lg md:text-xl active:scale-95 transition-all shadow-inner">C</button>
+              <button onClick={() => handleNumPad('0')} className="rounded-xl md:rounded-2xl bg-white border border-gray-100 text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">0</button>
+              <button onClick={() => handleNumPad('.')} className="rounded-xl md:rounded-2xl bg-white border border-gray-100 text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">.</button>
+           </div>
         </div>
       </div>
     </div>

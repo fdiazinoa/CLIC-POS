@@ -255,7 +255,11 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
                                     </span>
                                     <div>
                                        <p className="font-medium text-gray-800 text-sm">{item.name}</p>
-                                       {item.modifiers && <p className="text-xs text-gray-400">{item.modifiers.join(', ')}</p>}
+                                       {item.modifiers && item.modifiers.length > 0 && (
+                                         <p className="text-[10px] font-bold text-blue-500 uppercase tracking-tight">
+                                           {item.modifiers.join(' • ')}
+                                         </p>
+                                       )}
                                     </div>
                                  </div>
                                  <span className="font-bold text-gray-700 text-sm">
@@ -386,7 +390,14 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
                        {giftReceiptTx.items.map((item, i) => (
                           <tr key={i}>
                              <td className="py-1 align-top w-8">{item.quantity}</td>
-                             <td className="py-1 align-top">{item.name}</td>
+                             <td className="py-1 align-top">
+                                {item.name}
+                                {item.modifiers && item.modifiers.length > 0 && (
+                                  <div className="text-[9px] uppercase font-bold text-gray-500">
+                                    {item.modifiers.join(' • ')}
+                                  </div>
+                                )}
+                             </td>
                           </tr>
                        ))}
                     </tbody>

@@ -1,249 +1,140 @@
 
-import { Product, SubVertical, VerticalType, BusinessConfig, User, RoleDefinition, PermissionDetail, Customer } from './types';
+import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical } from './types';
 
-// Catalog of all available permissions in the system
-export const AVAILABLE_PERMISSIONS: PermissionDetail[] = [
-  { key: 'CAN_ACCESS_SETTINGS', label: 'Acceso a Configuración', description: 'Permite entrar al módulo de ajustes y usuarios.', category: 'ADMIN' },
-  { key: 'CAN_APPLY_DISCOUNT', label: 'Aplicar Descuentos', description: 'Permite modificar precios o aplicar descuentos manuales.', category: 'SALES' },
-  { key: 'CAN_VOID_ITEM', label: 'Anular/Eliminar Items', description: 'Permite borrar productos de una orden activa.', category: 'SALES' },
-  { key: 'CAN_FINALIZE_PAYMENT', label: 'Cobrar/Facturar', description: 'Permite acceder a la pantalla de pagos y cerrar mesas.', category: 'CASH' },
-  { key: 'CAN_MANAGE_TABLES', label: 'Gestionar Mesas', description: 'Permite asignar, mover o liberar mesas.', category: 'SALES' },
-  { key: 'CAN_VIEW_REPORTS', label: 'Ver Reportes', description: 'Acceso a cierre de caja y reportes de venta.', category: 'ADMIN' },
-  { key: 'CAN_CLOSE_REGISTER', label: 'Cierre de Caja', description: 'Permite realizar el corte Z.', category: 'CASH' },
-  { key: 'CAN_MANAGE_CUSTOMERS', label: 'Gestionar Clientes', description: 'Crear, editar y ver base de datos de clientes.', category: 'ADMIN' }
-];
-
-// Default Roles Configuration
-export const DEFAULT_ROLES: RoleDefinition[] = [
-  { 
-    id: 'ADMIN', 
-    name: 'Administrador', 
-    permissions: AVAILABLE_PERMISSIONS.map(p => p.key), // All permissions
-    isSystem: true,
-    icon: 'ShieldAlert'
+export const DEFAULT_TERMINAL_CONFIG = {
+  security: {
+    deviceBindingToken: 'dev_token_init',
+    requirePinForVoid: true,
+    requirePinForDiscount: true,
+    autoLogoutMinutes: 15
   },
-  { 
-    id: 'SUPERVISOR', 
-    name: 'Supervisor', 
-    permissions: ['CAN_APPLY_DISCOUNT', 'CAN_VOID_ITEM', 'CAN_FINALIZE_PAYMENT', 'CAN_MANAGE_TABLES', 'CAN_VIEW_REPORTS', 'CAN_CLOSE_REGISTER', 'CAN_MANAGE_CUSTOMERS'],
-    isSystem: false,
-    icon: 'ShieldCheck'
+  workflow: {
+    inventory: {
+      realTimeValidation: true,
+      allowNegativeStock: false,
+      reserveStockOnCart: true,
+      showStockOnTiles: true,
+      showProductImagesInReceipt: false
+    },
+    session: {
+      blindClose: true,
+      allowSalesWithOpenZ: false,
+      maxCashInDrawer: 20000
+    },
+    offline: {
+      mode: 'OPTIMISTIC' as const,
+      maxOfflineTransactionLimit: 500
+    }
   },
-  { 
-    id: 'CASHIER', 
-    name: 'Cajero', 
-    permissions: ['CAN_FINALIZE_PAYMENT', 'CAN_MANAGE_CUSTOMERS'], 
-    isSystem: false,
-    icon: 'Store'
+  financial: {
+    roundingMethod: 'ROUND_HALF_UP' as const,
+    taxInclusivePrices: true,
+    printTaxBreakdown: true,
+    returnChangeInBaseCurrency: true,
+    acceptedCurrencies: ['USD', 'EUR']
   },
-  { 
-    id: 'WAITER', 
-    name: 'Mesonero', 
-    permissions: ['CAN_MANAGE_TABLES'], 
-    isSystem: false,
-    icon: 'Utensils'
+  hardware: {
+    cashDrawerTrigger: 'PRINTER' as const
+  },
+  ux: {
+    theme: 'LIGHT' as const,
+    gridDensity: 'COMFORTABLE' as const,
+    showProductImages: true,
+    quickKeysLayout: 'A' as const
   }
+};
+
+export const MOCK_USERS: User[] = [
+  { id: 'u1', name: 'Admin Master', pin: '1234', role: 'ADMIN', photo: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Admin' },
+  { id: 'u2', name: 'Cajero Principal', pin: '0000', role: 'CASHIER', photo: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Cashier' }
 ];
 
-// Mock Users for Auth
-export const MOCK_USERS: User[] = [
-  { id: 'u1', name: 'Admin Principal', role: 'ADMIN', pin: '1111', photo: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?ixlib=rb-1.2.1&auto=format&fit=facearea&facepad=2&w=256&h=256&q=80' },
-  { id: 'u2', name: 'Roberto (Supervisor)', role: 'SUPERVISOR', pin: '2222', photo: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?ixlib=rb-1.2.1&auto=format&fit=facearea&facepad=2&w=256&h=256&q=80' },
-  { id: 'u3', name: 'Ana (Cajera)', role: 'CASHIER', pin: '3333', photo: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?ixlib=rb-1.2.1&auto=format&fit=facearea&facepad=2&w=256&h=256&q=80' },
-  { id: 'u4', name: 'Carlos (Mesonero)', role: 'WAITER', pin: '4444' },
+export const DEFAULT_ROLES: RoleDefinition[] = [
+  { id: 'ADMIN', name: 'Administrador', permissions: ['ALL'], isSystem: true },
+  { id: 'CASHIER', name: 'Cajero', permissions: ['SALE', 'OPEN_DRAWER'], isSystem: false }
 ];
 
 export const MOCK_CUSTOMERS: Customer[] = [
-  { 
-    id: 'c1', 
-    name: 'Juan Cliente', 
-    phone: '809-555-1234', 
-    email: 'juan@email.com', 
-    loyaltyPoints: 120, 
-    createdAt: new Date().toISOString(),
-    tags: ['REGULAR'],
-    tier: 'BRONZE',
-    totalSpent: 450.00,
-    lastVisit: new Date().toISOString(),
-    addresses: [
-      { id: 'a1', type: 'BILLING', isDefault: true, country: 'RD', state: 'Distrito Nacional', city: 'Santo Domingo', zipCode: '10101', street: 'Calle Falsa', number: '123' }
-    ]
-  },
-  { 
-    id: 'c2', 
-    name: 'Maria VIP', 
-    phone: '809-555-9876', 
-    email: 'maria@vip.com', 
-    taxId: '402-1234567-1', 
-    loyaltyPoints: 2550, 
-    notes: 'Cliente frecuente, prefiere mesa en terraza.', 
-    createdAt: new Date().toISOString(),
-    tags: ['VIP', 'CORPORATE'],
-    tier: 'GOLD',
-    totalSpent: 12500.00,
-    lastVisit: new Date().toISOString(),
-    creditLimit: 5000,
-    currentDebt: 0,
-    requiresFiscalInvoice: true,
-    addresses: []
-  },
-  { 
-    id: 'c3', 
-    name: 'Empresa ABC S.R.L', 
-    phone: '809-555-5555', 
-    taxId: '101-55555-5', 
-    address: 'Calle Industrial #5', 
-    loyaltyPoints: 0, 
-    createdAt: new Date().toISOString(),
-    tags: ['WHOLESALE'],
-    tier: 'SILVER',
-    totalSpent: 3200.50,
-    creditLimit: 10000,
-    currentDebt: 1500,
-    prefersEmail: true,
-    creditDays: 30,
-    addresses: [
-      { id: 'a2', type: 'BILLING', isDefault: true, country: 'RD', state: 'Santo Domingo', city: 'Santo Domingo Este', zipCode: '11501', street: 'Av. Industrial', number: '55', contactPhone: '809-555-5555' },
-      { id: 'a3', type: 'SHIPPING', isDefault: true, country: 'RD', state: 'Santiago', city: 'Santiago', zipCode: '51000', street: 'Calle Sol', number: '20', receptionHours: '8am - 12pm' }
-    ]
-  }
+  { id: 'c1', name: 'Juan Pérez', phone: '809-555-0123', email: 'juan.perez@email.com', tier: 'GOLD', loyaltyPoints: 1250, currentDebt: 0 },
+  { id: 'c2', name: 'María García', phone: '829-555-0456', email: 'm.garcia@email.com', tier: 'SILVER', loyaltyPoints: 450, currentDebt: 150.00 },
+  { id: 'c3', name: 'Cliente de Contado', phone: '', email: '', tier: 'BRONZE', loyaltyPoints: 0, currentDebt: 0 }
 ];
 
-// Mock Products
 export const RETAIL_PRODUCTS: Product[] = [
-  { id: 'r1', name: 'Leche Entera 1L', price: 1.50, category: 'Lácteos', stock: 50, barcode: '101', image: 'https://picsum.photos/100/100?random=1' },
-  { id: 'r2', name: 'Pan Molde', price: 2.00, category: 'Panadería', stock: 20, barcode: '102', image: 'https://picsum.photos/100/100?random=2' },
-  { id: 'r3', name: 'Camiseta Básica', price: 15.00, category: 'Ropa', stock: 100, barcode: '103', image: 'https://picsum.photos/100/100?random=3' },
-  { id: 'r4', name: 'Zapatillas Deportivas', price: 45.00, category: 'Calzado', stock: 15, barcode: '104', image: 'https://picsum.photos/100/100?random=4' },
-  { id: 'r5', name: 'Paracetamol 500mg', price: 3.50, category: 'Farmacia', stock: 200, barcode: '105', image: 'https://picsum.photos/100/100?random=5' },
-  { id: 'r6', name: 'Manzanas (kg)', price: 2.20, category: 'Frutas', stock: 100, isWeighted: true, barcode: '106', image: 'https://picsum.photos/100/100?random=6' },
-  { id: 'r7', name: 'Champú', price: 5.50, category: 'Higiene', stock: 30, barcode: '107', image: 'https://picsum.photos/100/100?random=7' },
+  { id: 'p1', name: 'Camiseta Algodón Premium', price: 25.00, category: 'Ropa', stock: 45, minStock: 10, cost: 12.00, barcode: '74210001', images: [], attributes: [], variants: [], tariffs: [] },
+  { id: 'p2', name: 'Jeans Slim Fit Blue', price: 45.00, category: 'Ropa', stock: 12, minStock: 5, cost: 20.00, barcode: '74210002', images: [], attributes: [], variants: [], tariffs: [] },
+  { id: 'p3', name: 'Tenis Deportivos Runner', price: 85.00, category: 'Calzado', stock: 8, minStock: 10, cost: 40.00, barcode: '74210003', images: [], attributes: [], variants: [], tariffs: [] },
+  { id: 'p4', name: 'Gorra Urban Style', price: 15.00, category: 'Accesorios', stock: 60, minStock: 15, cost: 5.00, barcode: '74210004', images: [], attributes: [], variants: [], tariffs: [] },
+  { id: 'p5', name: 'Reloj Digital Sport', price: 30.00, category: 'Accesorios', stock: 4, minStock: 5, cost: 12.00, barcode: '74210005', images: [], attributes: [], variants: [], tariffs: [] },
+  { id: 'p6', name: 'Sudadera con Capucha', price: 35.00, category: 'Ropa', stock: 20, minStock: 8, cost: 15.00, barcode: '74210006', images: [], attributes: [], variants: [], tariffs: [] },
+  // NUEVO: Artículo con Balanza
+  { 
+    id: 'p7', 
+    name: 'Pollo Fresco (Peso)', 
+    price: 3.50, 
+    category: 'Carnicería', 
+    stock: 200, 
+    minStock: 20, 
+    cost: 1.80, 
+    barcode: 'SC001', 
+    type: 'SERVICE', // Activa balanza por tipo servicio + nombre 'peso'
+    images: ['https://images.unsplash.com/photo-1587593810167-a84920ea0781?q=80&w=200&auto=format&fit=crop'], 
+    attributes: [], 
+    variants: [], 
+    tariffs: [] 
+  },
+  // NUEVO: Artículo con Talla y Color
+  { 
+    id: 'p8', 
+    name: 'Camisa Oxford Premium', 
+    price: 35.00, 
+    category: 'Ropa', 
+    stock: 100, 
+    minStock: 10, 
+    cost: 15.00, 
+    barcode: 'VAR001', 
+    type: 'PRODUCT', 
+    images: ['https://images.unsplash.com/photo-1596755094514-f87e34085b2c?q=80&w=200&auto=format&fit=crop'], 
+    attributes: [
+      { id: 'attr_size', name: 'Talla', options: ['S', 'M', 'L', 'XL'], optionCodes: ['S', 'M', 'L', 'XL'] },
+      { id: 'attr_color', name: 'Color', options: ['Blanco', 'Azul', 'Gris'], optionCodes: ['BL', 'AZ', 'GR'] }
+    ], 
+    variants: [], 
+    tariffs: [] 
+  }
 ];
 
 export const FOOD_PRODUCTS: Product[] = [
-  { 
-    id: 'f1', 
-    name: 'Hamburguesa Clásica', 
-    price: 8.50, 
-    category: 'Platos', 
-    hasModifiers: true, 
-    barcode: '201', 
-    image: 'https://picsum.photos/100/100?random=10',
-    availableModifiers: [
-      { id: 'm1', name: 'Sin Cebolla', price: 0 },
-      { id: 'm2', name: 'Sin Tomate', price: 0 },
-      { id: 'm3', name: 'Extra Queso', price: 1.50 },
-      { id: 'm4', name: 'Extra Tocino', price: 2.00 },
-      { id: 'm5', name: 'Término Bien Cocido', price: 0 }
-    ]
-  },
-  { 
-    id: 'f2', 
-    name: 'Pizzas Margarita', 
-    price: 10.00, 
-    category: 'Platos', 
-    hasModifiers: true, 
-    barcode: '202', 
-    image: 'https://picsum.photos/100/100?random=11',
-    availableModifiers: [
-      { id: 'm6', name: 'Orilla de Queso', price: 3.00 },
-      { id: 'm7', name: 'Extra Pepperoni', price: 2.50 },
-      { id: 'm8', name: 'Sin Albahaca', price: 0 }
-    ]
-  },
-  { id: 'f3', name: 'Coca Cola', price: 2.00, category: 'Bebidas', stock: 100, barcode: '203', image: 'https://picsum.photos/100/100?random=12' },
-  { id: 'f4', name: 'Cerveza Artesanal', price: 4.50, category: 'Bar', stock: 50, barcode: '204', image: 'https://picsum.photos/100/100?random=13' },
-  { id: 'f5', name: 'Helado Vainilla', price: 3.00, category: 'Postres', barcode: '205', image: 'https://picsum.photos/100/100?random=14' },
-  { id: 'f6', name: 'Café Espresso', price: 1.80, category: 'Cafetería', barcode: '206', image: 'https://picsum.photos/100/100?random=15' },
+  { id: 'f1', name: 'Hamburguesa Especial', price: 12.50, category: 'Comida', stock: 99, cost: 4.50, images: [], attributes: [], variants: [], tariffs: [] },
+  { id: 'f2', name: 'Pizza Pepperoni Mediana', price: 15.00, category: 'Comida', stock: 99, cost: 6.00, images: [], attributes: [], variants: [], tariffs: [] },
+  { id: 'f3', name: 'Refresco 500ml', price: 2.50, category: 'Bebidas', stock: 150, cost: 0.80, images: [], attributes: [], variants: [], tariffs: [] },
+  { id: 'f4', name: 'Cerveza Nacional 12oz', price: 4.00, category: 'Bebidas', stock: 80, cost: 1.50, images: [], attributes: [], variants: [], tariffs: [] },
+  { id: 'f5', name: 'Ensalada Caesar', price: 9.00, category: 'Comida', stock: 30, cost: 3.00, images: [], attributes: [], variants: [], tariffs: [] },
+  { id: 'f6', name: 'Papas Fritas XL', price: 4.50, category: 'Comida', stock: 100, cost: 1.00, images: [], attributes: [], variants: [], tariffs: [] }
 ];
 
-const DEFAULT_COMPANY_INFO = {
-  name: 'Mi Empresa S.A.',
-  address: 'Av. Principal #123',
-  phone: '809-555-0100',
-  rnc: '000000000',
-  email: 'contacto@miempresa.com'
-};
+export const AVAILABLE_PERMISSIONS = [
+  { key: 'SALE', label: 'Realizar Ventas', description: 'Acceso a pantalla de cobro', category: 'SALES' },
+  { key: 'OPEN_DRAWER', label: 'Abrir Cajón', description: 'Sin venta', category: 'CASH' },
+  { key: 'VOID_TICKET', label: 'Anular Ticket', description: 'Cancelar venta completa', category: 'SALES' },
+  { key: 'ALL', label: 'Acceso Total', description: 'Admin', category: 'SYSTEM' }
+];
 
-// Default Config Generators
 export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
-  let config: BusinessConfig;
-
-  switch (subVertical) {
-    case SubVertical.RESTAURANT:
-    case SubVertical.BAR:
-      config = {
-        vertical: VerticalType.RESTAURANT,
-        subVertical,
-        currencySymbol: '$',
-        taxRate: 0.10,
-        features: {
-          tableManagement: true,
-          kitchenPrinting: true,
-          stockTracking: false, // Usually tracked in back-office for F&B
-          barcodeScanning: false,
-          tips: true,
-          prescriptionCheck: false
-        },
-        themeColor: 'orange',
-        companyInfo: DEFAULT_COMPANY_INFO
-      };
-      break;
-    case SubVertical.SUPERMARKET:
-    case SubVertical.CLOTHING:
-    case SubVertical.PHARMACY:
-      config = {
-        vertical: VerticalType.RETAIL,
-        subVertical,
-        currencySymbol: '$',
-        taxRate: 0.12,
-        features: {
-          tableManagement: false,
-          kitchenPrinting: false,
-          stockTracking: true,
-          barcodeScanning: true,
-          tips: false,
-          prescriptionCheck: subVertical === SubVertical.PHARMACY
-        },
-        themeColor: 'blue',
-        companyInfo: DEFAULT_COMPANY_INFO
-      };
-      break;
-    case SubVertical.SERVICES:
-      config = {
-        vertical: VerticalType.SERVICE,
-        subVertical,
-        currencySymbol: '$',
-        taxRate: 0.18,
-        features: {
-          tableManagement: false,
-          kitchenPrinting: false,
-          stockTracking: false,
-          barcodeScanning: false,
-          tips: true,
-          prescriptionCheck: false
-        },
-        themeColor: 'purple',
-        companyInfo: DEFAULT_COMPANY_INFO
-      };
-      break;
-    default:
-      config = {
-        vertical: VerticalType.RETAIL,
-        subVertical: SubVertical.GENERAL,
-        currencySymbol: '$',
-        taxRate: 0.0,
-        features: {
-          tableManagement: false,
-          kitchenPrinting: false,
-          stockTracking: true,
-          barcodeScanning: false,
-          tips: false,
-          prescriptionCheck: false
-        },
-        themeColor: 'gray',
-        companyInfo: DEFAULT_COMPANY_INFO
-      };
-  }
-  return config;
+  const isFood = [SubVertical.RESTAURANT, SubVertical.FAST_FOOD, SubVertical.BAR].includes(subVertical);
+  return {
+    vertical: isFood ? 'RESTAURANT' : 'RETAIL',
+    subVertical,
+    currencySymbol: '$',
+    taxRate: 0.18,
+    themeColor: 'blue',
+    features: { stockTracking: true },
+    companyInfo: { name: 'CLIC POS DEMO', rnc: '131-12345-1', phone: '809-555-POS1', address: 'Av. Principal #1, Santo Domingo' },
+    currencies: [{ code: 'DOP', name: 'Peso Dominicano', symbol: 'RD$', rate: 1, isEnabled: true, isBase: true }],
+    paymentMethods: [
+      { id: 'cash', name: 'Efectivo', type: 'CASH', isEnabled: true, icon: 'Banknote', color: 'bg-green-500', opensDrawer: true, requiresSignature: false, integration: 'NONE' },
+      { id: 'card', name: 'Tarjeta', type: 'CARD', isEnabled: true, icon: 'CreditCard', color: 'bg-blue-500', opensDrawer: false, requiresSignature: false, integration: 'NONE' }
+    ],
+    terminals: [{ id: 't1', config: DEFAULT_TERMINAL_CONFIG }]
+  };
 };

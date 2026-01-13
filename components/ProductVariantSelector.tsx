@@ -3,6 +3,24 @@ import React, { useState, useEffect } from 'react';
 import { X, ShoppingCart, Check, AlertCircle } from 'lucide-react';
 import { Product } from '../types';
 
+// Mapeo de colores en español para visualización CSS
+const COLOR_MAP: Record<string, string> = {
+  'Blanco': '#FFFFFF',
+  'Negro': '#000000',
+  'Azul': '#3B82F6',
+  'Rojo': '#EF4444',
+  'Gris': '#9CA3AF',
+  'Verde': '#10B981',
+  'Amarillo': '#FBBF24',
+  'Naranja': '#F59E0B',
+  'Rosa': '#EC4899',
+  'Morado': '#8B5CF6',
+  'Café': '#78350F',
+  'Marron': '#78350F',
+  'Beige': '#F5F5DC',
+  'Celeste': '#0EA5E9',
+};
+
 // Extended interfaces for local UI logic
 interface VariantOption {
   id: string;
@@ -48,16 +66,23 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
             id: attr.id,
             name: attr.name,
             type: attr.name.toLowerCase().includes('color') ? 'COLOR' : 'TEXT',
-            options: attr.options.map(opt => ({
-                id: opt.id,
-                label: opt.name,
-                value: opt.name, // Usually value is same as label for text
-                stock: 99, // Mock stock for options if not tracked at matrix level yet
-                priceModifier: 0
-            }))
+            options: attr.options.map((optName, oIdx) => {
+                // Si es color, intentamos mapear el nombre a HEX
+                let colorVal = optName;
+                if (attr.name.toLowerCase().includes('color')) {
+                    colorVal = COLOR_MAP[optName] || optName;
+                }
+                return {
+                    id: `opt-${oIdx}`,
+                    label: optName,
+                    value: colorVal, 
+                    stock: 99,
+                    priceModifier: 0
+                };
+            })
         }));
     }
-    // Fallback Mock Logic for Ropa/Calzado categories if no attributes
+    // Fallback Mock Logic
     else if (['Ropa', 'Calzado', 'Camisetas', 'Vestidos', 'Pantalones'].includes(product.category)) {
       mockGroups = [
         {
@@ -114,12 +139,10 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
     if (!product) return;
     const allSelected = groups.every(g => selections[g.id]);
     if (!allSelected) {
-       // Optional: Shake animation or alert
        return;
     }
 
     const modifiersList = Object.values(selections).map((opt: VariantOption) => opt.label);
-    // Passing the original product, list of modifier names (Color, Size), and the calculated final price
     onConfirm(product, modifiersList, calculateTotal());
   };
 
@@ -168,15 +191,20 @@ const ProductVariantSelector: React.FC<ProductVariantSelectorProps> = ({
                                    key={option.id}
                                    onClick={() => handleSelect(group.id, option)}
                                    disabled={isOutOfStock}
-                                   className={`w-10 h-10 rounded-full border-2 shadow-sm flex items-center justify-center transition-all ${
+                                   className={`w-12 h-12 rounded-full border-2 shadow-sm flex items-center justify-center transition-all ${
                                       isSelected 
-                                         ? 'border-blue-600 scale-110 ring-2 ring-blue-200' 
+                                         ? 'border-blue-600 scale-110 ring-4 ring-blue-100' 
                                          : 'border-gray-200 hover:scale-105'
                                    } ${isOutOfStock ? 'opacity-30 cursor-not-allowed' : ''}`}
                                    style={{ backgroundColor: option.value }}
                                    title={option.label}
                                 >
-                                   {isSelected && <Check size={16} className={['#FFFFFF', '#F3F4F6', '#FFFFFF'].includes(option.value.toUpperCase()) ? 'text-black' : 'text-white'} />}
+                                   {isSelected && (
+                                     <Check 
+                                       size={20} 
+                                       className={['#FFFFFF', '#F3F4F6', 'white', 'beige'].includes(option.value.toLowerCase()) || option.value.toUpperCase() === '#FFFFFF' ? 'text-black' : 'text-white'} 
+                                     />
+                                   )}
                                 </button>
                              );
                           }

@@ -1,18 +1,18 @@
 
 import React, { useState } from 'react';
-import { Delete, KeyRound, Lock, User, UserCircle, Globe } from 'lucide-react';
+import { Delete, KeyRound, Lock, User, UserCircle, Globe, ChevronDown } from 'lucide-react';
 import { User as UserType } from '../types';
 
 interface LoginScreenProps {
   onLogin: (user: UserType) => void;
   subVertical: string;
   availableUsers: UserType[];
-  // onEnterFranchiseMode removed
 }
 
 const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availableUsers }) => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
+  const [showUsersList, setShowUsersList] = useState(false);
 
   const handleKeyPress = (key: string) => {
     setError(false);
@@ -45,6 +45,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
     }
   };
 
+  const handleUserClick = (userPin: string) => {
+    setPin(userPin);
+    checkLogin(userPin);
+  };
+
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center p-6 relative overflow-hidden">
       {/* Background decoration */}
@@ -60,7 +65,42 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
              <Lock className="text-blue-400" size={32} />
            </div>
            <h1 className="text-2xl font-bold text-white mb-1">Acceso de Usuario</h1>
-           <p className="text-gray-400 text-sm">{subVertical}</p>
+           <p className="text-gray-400 text-sm mb-2">{subVertical}</p>
+           
+           {/* Demo Users Hint */}
+           <button 
+             onClick={() => setShowUsersList(!showUsersList)}
+             className="text-xs text-blue-400 font-bold hover:text-blue-300 flex items-center justify-center gap-1 mx-auto bg-gray-700/50 px-3 py-1 rounded-full transition-colors"
+           >
+             Ver Credenciales Demo <ChevronDown size={14} className={`transition-transform ${showUsersList ? 'rotate-180' : ''}`} />
+           </button>
+           
+           {showUsersList && (
+             <div className="mt-4 bg-gray-700 rounded-xl p-3 animate-in slide-in-from-top-2 text-left space-y-2 border border-gray-600">
+               {availableUsers.map(u => (
+                 <div 
+                   key={u.id} 
+                   onClick={() => handleUserClick(u.pin)}
+                   className="flex justify-between items-center p-2 hover:bg-gray-600 rounded-lg cursor-pointer transition-colors group"
+                 >
+                   <div className="flex items-center gap-3">
+                     <div className="w-8 h-8 rounded-full bg-gray-500 flex items-center justify-center text-xs font-bold text-white">
+                        {u.name.charAt(0)}
+                     </div>
+                     <div>
+                        <p className="text-sm font-bold text-white">{u.name}</p>
+                        <p className="text-[10px] text-gray-300">{u.role}</p>
+                     </div>
+                   </div>
+                   <div className="text-right">
+                      <span className="text-xs font-mono bg-black/30 px-2 py-1 rounded text-green-400 group-hover:bg-black/50">
+                        {u.pin}
+                      </span>
+                   </div>
+                 </div>
+               ))}
+             </div>
+           )}
         </div>
 
         {/* PIN Display */}
@@ -90,26 +130,26 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
             <button
               key={num}
               onClick={() => handleKeyPress(num.toString())}
-              className="h-16 rounded-2xl bg-gray-700 hover:bg-gray-600 active:bg-blue-600 text-white text-2xl font-semibold shadow-md transition-all active:scale-95"
+              className="h-16 rounded-2xl bg-gray-700 hover:bg-gray-600 active:bg-blue-600 text-white text-2xl font-semibold shadow-md transition-all active:scale-95 border-b-4 border-gray-900 active:border-b-0 active:translate-y-1"
             >
               {num}
             </button>
           ))}
           <button
             onClick={() => handleKeyPress('C')}
-            className="h-16 rounded-2xl bg-gray-700/50 hover:bg-gray-600/50 text-red-400 font-bold transition-all"
+            className="h-16 rounded-2xl bg-gray-700/50 hover:bg-gray-600/50 text-red-400 font-bold transition-all border-b-4 border-transparent active:border-b-0 active:translate-y-1"
           >
             C
           </button>
           <button
             onClick={() => handleKeyPress('0')}
-            className="h-16 rounded-2xl bg-gray-700 hover:bg-gray-600 active:bg-blue-600 text-white text-2xl font-semibold shadow-md transition-all active:scale-95"
+            className="h-16 rounded-2xl bg-gray-700 hover:bg-gray-600 active:bg-blue-600 text-white text-2xl font-semibold shadow-md transition-all active:scale-95 border-b-4 border-gray-900 active:border-b-0 active:translate-y-1"
           >
             0
           </button>
           <button
             onClick={() => handleKeyPress('BACK')}
-            className="h-16 rounded-2xl bg-gray-700/50 hover:bg-gray-600/50 text-gray-300 flex items-center justify-center transition-all"
+            className="h-16 rounded-2xl bg-gray-700/50 hover:bg-gray-600/50 text-gray-300 flex items-center justify-center transition-all border-b-4 border-transparent active:border-b-0 active:translate-y-1"
           >
             <Delete size={24} />
           </button>

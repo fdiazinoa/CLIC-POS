@@ -1,92 +1,175 @@
 
-export enum VerticalType {
-  RETAIL = 'RETAIL',
-  RESTAURANT = 'RESTAURANT',
-  SERVICE = 'SERVICE'
-}
+export type VerticalType = 'RETAIL' | 'RESTAURANT';
 
 export enum SubVertical {
   SUPERMARKET = 'Supermercado',
-  CLOTHING = 'Tienda de Ropa',
+  CLOTHING = 'Tienda Ropa',
   PHARMACY = 'Farmacia',
   SERVICES = 'Servicios',
   RESTAURANT = 'Restaurante',
   FAST_FOOD = 'Fast Food',
-  BAR = 'Discoteca/Bar',
-  GENERAL = 'General'
+  BAR = 'Discoteca/Bar'
 }
 
-// Relaxed RoleType to allow custom IDs, though we keep standard keys for defaults
-export type RoleType = 'ADMIN' | 'SUPERVISOR' | 'CASHIER' | 'WAITER' | string;
+export interface CompanyInfo {
+  name: string;
+  rnc: string;
+  phone: string;
+  address: string;
+}
 
-export interface PermissionDetail {
-  key: string;
-  label: string;
-  description: string;
-  category: 'SALES' | 'ADMIN' | 'CASH' | 'SYSTEM'; // Added category for grouping
+export interface ReceiptConfig {
+  logo?: string;
+  footerMessage?: string;
+  showCustomerInfo?: boolean;
+  showSavings?: boolean;
+  showQr?: boolean;
+}
+
+export interface TerminalConfig {
+  defaultWarehouseId?: string;
+  security: {
+    deviceBindingToken: string;
+    requirePinForVoid: boolean;
+    requirePinForDiscount: boolean;
+    autoLogoutMinutes: number;
+  };
+  workflow: {
+    inventory: {
+      realTimeValidation: boolean;
+      allowNegativeStock: boolean;
+      reserveStockOnCart: boolean;
+      showStockOnTiles: boolean;
+      showProductImagesInReceipt: boolean;
+    };
+    session: {
+      blindClose: boolean;
+      allowSalesWithOpenZ: boolean;
+      maxCashInDrawer: number;
+    };
+    offline: {
+      mode: 'OPTIMISTIC' | 'STRICT' | 'READ_ONLY';
+      maxOfflineTransactionLimit: number;
+    };
+  };
+  financial: {
+    roundingMethod: 'ROUND_HALF_UP' | 'ROUND_FLOOR' | 'NONE';
+    taxInclusivePrices: boolean;
+    printTaxBreakdown: boolean;
+    returnChangeInBaseCurrency: boolean;
+    acceptedCurrencies: string[];
+  };
+  hardware: {
+    cashDrawerTrigger: 'PRINTER' | 'DIRECT';
+    receiptPrinterId?: string;
+  };
+  ux: {
+    theme: 'LIGHT' | 'DARK';
+    gridDensity: 'COMFORTABLE' | 'COMPACT';
+    showProductImages: boolean;
+    quickKeysLayout: 'A' | 'B';
+  };
+}
+
+export interface CurrencyConfig {
+  code: string;
+  name: string;
+  symbol: string;
+  rate: number;
+  isEnabled: boolean;
+  isBase?: boolean;
+}
+
+export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'OTHER';
+
+export interface PaymentMethodDefinition {
+  id: string;
+  name: string;
+  type: PaymentMethod;
+  isEnabled: boolean;
+  icon: string;
+  color: string;
+  opensDrawer: boolean;
+  requiresSignature: boolean;
+  integration: 'NONE' | 'CARNET' | 'VISANET' | 'STRIPE';
+  integrationConfig?: Record<string, string>;
+}
+
+export interface TipConfiguration {
+  enabled: boolean;
+  defaultOptions: number[];
+  allowCustomTip: boolean;
+  serviceCharge: {
+    enabled: boolean;
+    percentage: number;
+    applyIfTotalOver: number;
+    applyIfGuestsOver: number;
+  };
+}
+
+export interface EmailConfig {
+  subjectTemplate: string;
+  accentColor: string;
+  bannerImage: string;
+  customFooter: string;
+  showSocialLinks: boolean;
+}
+
+export interface BehaviorConfig {
+  allowNegativeStock: boolean;
+  askGuestsOnTicketOpen: boolean;
+  autoLogoutMinutes: number;
+  requireManagerForRefunds: boolean;
+  autoPrintZReport: boolean;
+}
+
+export interface BusinessConfig {
+  vertical: VerticalType;
+  subVertical: SubVertical;
+  currencySymbol: string;
+  taxRate: number;
+  themeColor: 'blue' | 'orange' | 'gray';
+  features: {
+    stockTracking: boolean;
+  };
+  companyInfo: CompanyInfo;
+  currencies: CurrencyConfig[];
+  paymentMethods: PaymentMethodDefinition[];
+  terminals: { id: string; config: TerminalConfig }[];
+  receiptConfig?: ReceiptConfig;
+  tipsConfig?: TipConfiguration;
+  emailConfig?: EmailConfig;
 }
 
 export interface RoleDefinition {
   id: string;
   name: string;
-  permissions: string[]; // Array of Permission Keys
-  isSystem?: boolean; // If true, cannot be deleted (like ADMIN)
-  icon?: string; // Lucide Icon Name
+  permissions: string[];
+  isSystem: boolean;
 }
 
 export interface User {
   id: string;
   name: string;
-  role: RoleType; // Maps to RoleDefinition.id
   pin: string;
-  photo?: string; // URL or Base64 string of user photo
-}
-
-export interface TimeRecord {
-  id: string;
-  userId: string;
-  type: 'IN' | 'OUT';
-  timestamp: string; // ISO String
-  method: 'PIN' | 'FACE_ID';
-}
-
-export interface Shift {
-  id: string;
-  userId: string | null; // Null if unassigned
-  dayOfWeek: number; // 0 = Sunday, 1 = Monday...
-  startTime: string; // "09:00"
-  endTime: string; // "17:00"
-  label: string; // "Turno Mañana"
-  color: string; // Tailwind color class
-}
-
-export interface CustomerTransaction {
-  id: string;
-  date: string;
-  type: 'SALE' | 'PAYMENT' | 'REFUND';
-  amount: number;
-  description: string;
+  role: string;
+  photo?: string;
 }
 
 export interface CustomerAddress {
   id: string;
-  type: 'BILLING' | 'SHIPPING'; // Facturación vs Envío
+  type: 'BILLING' | 'SHIPPING';
   isDefault: boolean;
-  
-  // Location
   country: string;
-  state: string; // Provincia/Estado
+  state: string;
   city: string;
-  zipCode: string;
   street: string;
   number: string;
-  
-  // Logistics Improvements
+  zipCode: string;
   latitude?: number;
   longitude?: number;
-  contactPhone?: string; // Teléfono específico para esta dirección
-  receptionHours?: string; // Ej: "L-V 8am-5pm"
-  notes?: string; // "Dejar en recepción"
+  receptionHours?: string;
+  contactPhone?: string;
 }
 
 export interface Customer {
@@ -94,34 +177,23 @@ export interface Customer {
   name: string;
   phone?: string;
   email?: string;
-  taxId?: string; // RNC / NIF
-  address?: string; // Legacy simple address field (optional now)
+  taxId?: string;
+  address?: string;
+  addresses?: CustomerAddress[];
   notes?: string;
   loyaltyPoints?: number;
-  createdAt: string;
-  
-  // CRM 2.0 Fields
-  tags?: string[]; // ['VIP', 'Bad Payer']
-  tier?: 'BRONZE' | 'SILVER' | 'GOLD';
-  totalSpent?: number;
-  lastVisit?: string;
-  
-  // Credit / Debt Logic
   creditLimit?: number;
   currentDebt?: number;
-  creditHistory?: CustomerTransaction[];
-
-  // --- NEW: Fiscal & Logic Configuration ---
-  requiresFiscalInvoice?: boolean; // Generar factura
-  prefersEmail?: boolean; // Enviar documento por email
-  isTaxExempt?: boolean; // Exento de impuestos
-  applyChainedTax?: boolean; // Aplicar impuesto encadenado
-  
-  creditDays?: number; // Días de crédito
-  preferredCurrency?: string; // Moneda preferida (DOP, USD)
-
-  // --- NEW: Multi-Address ---
-  addresses?: CustomerAddress[];
+  tags?: string[];
+  tier?: string;
+  requiresFiscalInvoice?: boolean;
+  prefersEmail?: boolean;
+  isTaxExempt?: boolean;
+  applyChainedTax?: boolean;
+  createdAt?: string;
+  totalSpent?: number;
+  lastVisit?: string;
+  creditDays?: number;
 }
 
 export interface Modifier {
@@ -130,25 +202,31 @@ export interface Modifier {
   price: number;
 }
 
-export interface ProductAttributeOption {
-  id: string;
-  name: string; // e.g. "Red", "XL"
-}
-
 export interface ProductAttribute {
   id: string;
-  name: string; // e.g. "Color", "Size"
-  options: ProductAttributeOption[];
+  name: string;
+  options: string[];
+  optionCodes: string[];
 }
 
 export interface ProductVariant {
-  id: string;
-  name: string; // "Red / XL"
-  price: number;
-  stock: number;
   sku: string;
-  cost?: number;
-  combination: Record<string, string>; // { "Color": "Red", "Size": "XL" }
+  barcode: string[];
+  attributeValues: Record<string, string>;
+  price: number;
+  initialStock: number;
+}
+
+export interface TariffPrice {
+  tariffId?: string;
+  productId?: string;
+  name?: string;
+  price?: number;
+  lockPrice?: boolean;
+  costBase?: number;
+  margin?: number;
+  tax?: number;
+  finalPrice?: number;
 }
 
 export interface Product {
@@ -157,41 +235,41 @@ export interface Product {
   price: number;
   category: string;
   stock?: number;
-  minStock?: number; // Alert threshold
-  barcode?: string;
   image?: string;
-  isWeighted?: boolean; // For scales
-  hasModifiers?: boolean;
-  availableModifiers?: Modifier[];
-  
-  // Advanced Fields
+  barcode?: string;
+  minStock?: number;
   cost?: number;
-  margin?: number; // %
+  type?: 'PRODUCT' | 'SERVICE' | 'KIT';
+  images: string[];
+  attributes: ProductAttribute[];
+  variants: ProductVariant[];
+  tariffs: TariffPrice[];
+  stockBalances?: Record<string, number>;
+  activeInWarehouses?: string[];
   trackStock?: boolean;
-  askPrice?: boolean; // Open Price Item
-  
-  // Variants
-  attributes?: ProductAttribute[];
-  variants?: ProductVariant[];
+  purchaseTax?: number;
+  salesTax?: number;
+  description?: string;
+  availableModifiers?: Modifier[];
 }
 
 export interface CartItem extends Product {
-  cartId: string; // Unique ID for cart instance
   quantity: number;
-  originalPrice?: number; // Track if discounted
-  modifiers?: string[]; // Array of modifier names
-  note?: string; // Kitchen notes
-  isSent?: boolean; // For kitchen orders
-  salespersonId?: string; // NEW: Specific salesperson for this item (Commission)
+  cartId: string;
+  note?: string;
+  salespersonId?: string;
+  originalPrice?: number;
+  modifiers?: string[]; 
 }
-
-export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'OTHER';
 
 export interface PaymentEntry {
   id: string;
   method: PaymentMethod;
   amount: number;
   timestamp: Date;
+  currencyCode?: string;
+  amountOriginal?: number;
+  exchangeRate?: number;
 }
 
 export interface Transaction {
@@ -202,11 +280,10 @@ export interface Transaction {
   payments: PaymentEntry[];
   userId: string;
   userName: string;
-  status?: 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND';
+  status: 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND';
   refundReason?: string;
   customerId?: string;
   customerName?: string;
-  globalDiscount?: { value: number, type: 'PERCENT' | 'FIXED' }; // Added for history
 }
 
 export interface CashMovement {
@@ -217,14 +294,6 @@ export interface CashMovement {
   timestamp: string;
   userId: string;
   userName: string;
-}
-
-export interface CompanyInfo {
-  name: string;
-  address: string;
-  phone: string;
-  rnc: string;
-  email: string;
 }
 
 export interface Supplier {
@@ -247,65 +316,98 @@ export interface PurchaseOrder {
   id: string;
   supplierId: string;
   date: string;
-  status: 'DRAFT' | 'ORDERED' | 'PARTIAL' | 'COMPLETED';
+  status: 'ORDERED' | 'PARTIAL' | 'COMPLETED';
   items: PurchaseOrderItem[];
   totalCost: number;
 }
 
-// Configuration Types
+export type ViewState = 'SETUP' | 'WIZARD' | 'LOGIN' | 'POS' | 'SETTINGS' | 'CUSTOMERS' | 'HISTORY' | 'FINANCE' | 'Z_REPORT' | 'SUPPLY_CHAIN' | 'FRANCHISE_DASHBOARD';
 
-export interface ReceiptConfig {
-  logo?: string;
-  footerMessage?: string;
-  showCustomerInfo?: boolean;
-  showSavings?: boolean;
-  showQr?: boolean;
-}
+export type PricingStrategyType = 'MANUAL' | 'COST_PLUS' | 'DERIVED';
+export type RoundingRule = 'NONE' | 'ENDING_99' | 'CEILING';
 
-export interface EmailConfig {
-  subjectTemplate: string;
-  accentColor: string;
-  bannerImage?: string;
-  customFooter?: string;
-  showSocialLinks: boolean;
-}
-
-export interface PaymentMethodDefinition {
+export interface Tariff {
   id: string;
   name: string;
-  type: PaymentMethod;
-  isEnabled: boolean;
-  icon: string; // Lucide Icon Name
-  color: string; // Tailwind class
-  opensDrawer: boolean;
-  requiresSignature: boolean;
-  integration?: 'NONE' | 'CARNET' | 'VISANET' | 'STRIPE'; // Mock integrations
+  active: boolean;
+  currency: string;
+  taxIncluded: boolean;
+  strategy: {
+    type: PricingStrategyType;
+    rounding: RoundingRule;
+    factor?: number; 
+    baseTariffId?: string;
+  };
+  scope: {
+    storeIds: string[];
+    priority: number;
+  };
+  schedule: {
+    daysOfWeek: number[];
+    timeStart: string;
+    timeEnd: string;
+  };
+  items: Record<string, TariffPrice>;
 }
 
-export interface CurrencyConfig {
-  code: string;
-  name: string;
-  symbol: string;
-  rate: number;
-  isEnabled: boolean;
-  isBase: boolean;
+export interface CustomerTransaction {
+  id: string;
+  date: string;
+  total: number;
+  items: number;
+  status: 'PAID' | 'PENDING' | 'CANCELLED';
 }
+
+export type PromotionType = 'DISCOUNT' | 'BOGO' | 'BUNDLE' | 'HAPPY_HOUR';
+
+export interface Promotion {
+  id: string;
+  name: string;
+  type: PromotionType;
+  targetType: 'PRODUCT' | 'CATEGORY' | 'ALL';
+  targetValue: string;
+  benefitValue: number;
+  schedule: {
+    days: string[];
+    startTime: string;
+    endTime: string;
+    isActive: boolean;
+  };
+}
+
+export interface Shift {
+  id: string;
+  userId: string | null;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  label: string;
+  color: string;
+}
+
+export interface TimeRecord {
+  id: string;
+  userId: string;
+  type: 'IN' | 'OUT';
+  timestamp: string;
+  method: 'PIN' | 'FACE_ID';
+}
+
+export type LabelElementType = 'TEXT' | 'BARCODE' | 'QR' | 'IMAGE';
+export type LabelDataSource = 'CUSTOM_TEXT' | 'PRODUCT_NAME' | 'PRODUCT_PRICE' | 'PRODUCT_SKU';
 
 export interface LabelElement {
   id: string;
-  type: 'TEXT' | 'BARCODE' | 'QR' | 'IMAGE';
-  x: number; // mm
-  y: number; // mm
-  width: number; // mm
-  height: number; // mm
-  content: string; // Template string or static
-  dataSource: 'PRODUCT_NAME' | 'PRODUCT_PRICE' | 'PRODUCT_SKU' | 'CUSTOM_TEXT';
+  type: LabelElementType;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  content: string;
+  dataSource: LabelDataSource;
   fontSize?: number;
   isBold?: boolean;
 }
-
-export type LabelElementType = LabelElement['type'];
-export type LabelDataSource = LabelElement['dataSource'];
 
 export interface LabelTemplate {
   id: string;
@@ -315,128 +417,41 @@ export interface LabelTemplate {
   elements: LabelElement[];
 }
 
-export interface TipConfiguration {
-  enabled: boolean;
-  defaultOptions: [number, number, number]; // e.g. [10, 15, 20]
-  allowCustomTip: boolean;
-  serviceCharge: {
-    enabled: boolean;
-    percentage: number;
-    applyIfTotalOver?: number; // Only apply if ticket > X
-    applyIfGuestsOver?: number; // Only apply if guests > Y
-  };
-}
+export type WarehouseType = 'PHYSICAL' | 'DISTRIBUTION' | 'VIRTUAL' | 'TRANSIT';
 
-export type PromotionType = 'DISCOUNT' | 'BOGO' | 'BUNDLE' | 'HAPPY_HOUR';
-
-export interface Promotion {
+export interface Warehouse {
   id: string;
+  code: string;
   name: string;
-  type: PromotionType;
-  isActive: boolean;
-  priority: number;
-  
-  // Schedule
-  daysOfWeek: string[]; // ['L', 'M', ...]
-  timeStart: string; // "00:00"
-  timeEnd: string; // "23:59"
-  startDate?: string;
-  endDate?: string;
-
-  // Rules
-  targetType: 'PRODUCT' | 'CATEGORY' | 'ALL';
-  targetValue: string; // ID of product/category
-  
-  // Benefits
-  discountPercent?: number;
-  discountFixed?: number;
-  fixedPrice?: number;
-  buyQuantity?: number; // For BOGO/Bundle
-  getQuantity?: number; // For BOGO
-}
-
-// --- NEW: Behavior Configuration ---
-export interface BehaviorConfig {
-  // Sales
+  type: WarehouseType;
+  address: string;
+  allowPosSale: boolean;
   allowNegativeStock: boolean;
-  askGuestsOnTicketOpen: boolean; // Restaurant specific
-  
-  // Security
-  autoLogoutMinutes: number; // 0 to disable
-  requireManagerForRefunds: boolean;
-  
-  // Closing
-  autoPrintZReport: boolean;
+  isMain: boolean;
+  storeId: string;
 }
 
-// --- NEW: Hardware Extensions ---
-export interface CustomerDisplayConfig {
-  isEnabled: boolean;
-  welcomeMessage: string;
-  idleImage?: string;
-  showItemDetails: boolean;
-}
+export type AttributeType = 'TEXT' | 'COLOR' | 'IMAGE' | 'SIZE';
 
-export interface CashDroConfig {
-  isEnabled: boolean;
-  ipAddress: string;
-  port: string;
-  user: string;
-  password?: string;
-}
-
-export interface BusinessConfig {
-  vertical: VerticalType;
-  subVertical: SubVertical;
-  currencySymbol: string;
-  taxRate: number;
-  themeColor: 'blue' | 'orange' | 'purple' | 'gray';
-  companyInfo: CompanyInfo;
-  features: {
-    tableManagement: boolean;
-    kitchenPrinting: boolean;
-    stockTracking: boolean;
-    barcodeScanning: boolean;
-    tips: boolean;
-    prescriptionCheck: boolean;
-  };
-  // Advanced Configs
-  receiptConfig?: ReceiptConfig;
-  emailConfig?: EmailConfig;
-  paymentMethods?: PaymentMethodDefinition[];
-  currencies?: CurrencyConfig[];
-  labelTemplates?: LabelTemplate[];
-  tipsConfig?: TipConfiguration;
-  promotions?: Promotion[];
-  behaviorConfig?: BehaviorConfig;
-  
-  // Hardware Specific
-  customerDisplayConfig?: CustomerDisplayConfig;
-  cashDroConfig?: CashDroConfig;
-}
-
-// --- Helper Types for UI ---
-export interface SavedTicket {
+export interface AttributeValue {
   id: string;
-  alias: string;
-  timestamp: string;
-  items: CartItem[];
-  customer: Customer | null;
-  total: number;
-  tableId: number | null;
-  guestCount?: number;
-  discount?: { value: number; type: 'PERCENT' | 'FIXED' }; // NEW: Save discount with ticket
-}
-
-export interface Table {
-  id: number;
   name: string;
-  zone: string;
-  status: 'AVAILABLE' | 'OCCUPIED' | 'RESERVED';
-  guests: number;
-  time: string | null;
-  amount: number | null;
-  ticketId?: string;
+  shortCode: string;
+  value: string;
 }
 
-export type ViewState = 'SETUP' | 'WIZARD' | 'LOGIN' | 'POS' | 'SETTINGS' | 'CUSTOMERS' | 'HISTORY' | 'FINANCE' | 'Z_REPORT' | 'SUPPLY_CHAIN' | 'FRANCHISE_DASHBOARD';
+export interface AttributeDefinition {
+  id: string;
+  name: string;
+  type: AttributeType;
+  values: AttributeValue[];
+  options?: string[]; 
+  optionCodes?: string[]; 
+}
+
+export interface VariantTemplate {
+  id: string;
+  name: string;
+  attributeId: string;
+  valueIds: string[];
+}
