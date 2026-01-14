@@ -123,15 +123,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
   };
 
   const handleAuditCommit = (adjustments: { productId: string; newStock: number }[]) => {
-    // In a real app, this would call an API to create a stock adjustment movement
-    // For now, we simulate receiving stock to trigger the update logic in App.tsx 
-    // or we should add a specific prop for adjustments. 
-    // Reusing onReceiveStock with a hack since App.tsx logic adds, but we need to SET.
-    // Ideally, App.tsx should have onUpdateProductStock(id, newStock).
-    // Assuming for this demo we just alert or reuse existing props.
-    
-    // Simulating updates via PurchaseOrderItem interface to piggyback existing handler
-    // NOTE: Real implementation needs dedicated stock adjustment handler
     const fakeItems: PurchaseOrderItem[] = adjustments.map(adj => {
        const current = products.find(p => p.id === adj.productId)?.stock || 0;
        const diff = adj.newStock - current;
@@ -139,7 +130,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
           productId: adj.productId,
           productName: 'Audit Adjustment',
           quantityOrdered: 0,
-          quantityReceived: diff, // This will ADD diff to current stock in App.tsx handleReceiveStock
+          quantityReceived: diff, 
           cost: 0
        };
     });
@@ -400,23 +391,60 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
       const order = purchaseOrders.find(o => o.id === receivingOrderId);
       if (!order) return <div>Error: Orden no encontrada</div>;
 
-      const allReceived = order.items.every(i => i.quantityReceived >= i.quantityOrdered);
-      const someReceived = order.items.some(i => i.quantityReceived > 0);
-
-      const handleToggleComplete = (itemId: string, current: number, target: number) => {
-         // Simple toggle for touch: 0 -> Max -> 0
-         const newVal = current >= target ? 0 : target;
+      const updateItemReceived = (itemId: string, newVal: number) => {
          onUpdateOrder({
             ...order,
-            items: order.items.map(i => i.productId === itemId ? { ...i, quantityReceived: newVal } : i)
+            items: order.items.map(i => i.productId === itemId ? { ...i, quantityReceived: Math.max(0, newVal) } : i)
          });
       };
 
       const confirmReception = () => {
-         if (!confirm("¿Confirmar recepción de mercancía y actualizar inventario?")) return;
-         onReceiveStock(order.items);
-         const finalStatus = allReceived ? 'COMPLETED' : 'PARTIAL';
-         onUpdateOrder({ ...order, status: finalStatus });
+         const hasAnyReceived = order.items.some(i => i.quantityReceived > 0);
+         if (!hasAnyReceived) {
+            alert("No ha indicado ninguna cantidad recibida.");
+            return;
+         }
+
+         const isPartial = order.items.some(i => i.quantityReceived < i.quantityOrdered);
+
+         if (isPartial) {
+            const keepPending = confirm(
+               "Hay artículos pendientes por recibir.\n\n" +
+               "¿Desea mantener la orden ABIERTA para recibir los faltantes después?\n" +
+               "OK = Sí, mantener pendientes.\n" +
+               "Cancelar = No, cerrar orden (Ignorar faltantes)."
+            );
+
+            // 1. Receive Stock (Add to inventory)
+            onReceiveStock(order.items);
+
+            if (keepPending) {
+               // 2a. Update Order: Subtract received from ordered, reset received
+               const updatedItems = order.items.map(i => {
+                  const remaining = Math.max(0, i.quantityOrdered - i.quantityReceived);
+                  return {
+                     ...i,
+                     quantityOrdered: remaining,
+                     quantityReceived: 0
+                  };
+               }).filter(i => i.quantityOrdered > 0);
+
+               if (updatedItems.length === 0) {
+                  onUpdateOrder({ ...order, items: updatedItems, status: 'COMPLETED' });
+               } else {
+                  onUpdateOrder({ ...order, items: updatedItems, status: 'PARTIAL' });
+               }
+            } else {
+               // 2b. Close Order
+               onUpdateOrder({ ...order, status: 'COMPLETED' });
+            }
+         } else {
+            // Full Reception
+            if (!confirm("¿Confirmar recepción completa y cerrar orden?")) return;
+            onReceiveStock(order.items);
+            onUpdateOrder({ ...order, status: 'COMPLETED' });
+         }
+         
          setReceivingOrderId(null);
       };
 
@@ -437,29 +465,52 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
             <div className="flex-1 overflow-y-auto space-y-3 pb-20">
                {order.items.map(item => {
                   const isComplete = item.quantityReceived >= item.quantityOrdered;
-                  const isPartial = item.quantityReceived > 0 && !isComplete;
-
+                  
                   return (
                      <div 
                         key={item.productId} 
-                        onClick={() => handleToggleComplete(item.productId, item.quantityReceived, item.quantityOrdered)}
-                        className={`p-5 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between ${
+                        className={`p-4 rounded-2xl border-2 transition-all flex flex-col gap-3 ${
                            isComplete 
                               ? 'bg-green-50 border-green-500 shadow-sm' 
-                              : isPartial ? 'bg-orange-50 border-orange-300' : 'bg-white border-gray-200'
+                              : item.quantityReceived > 0 ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200'
                         }`}
                      >
-                        <div className="flex-1">
-                           <h4 className="font-bold text-gray-800 text-lg">{item.productName}</h4>
-                           <div className="flex gap-4 mt-2 text-sm font-medium text-gray-500">
-                              <span>Solicitado: <strong className="text-gray-800 text-lg">{item.quantityOrdered}</strong></span>
-                              <span>Recibido: <strong className={`text-lg ${isComplete ? 'text-green-600' : 'text-orange-500'}`}>{item.quantityReceived}</strong></span>
+                        <div className="flex justify-between items-start">
+                           <div>
+                              <h4 className="font-bold text-gray-800 text-lg">{item.productName}</h4>
+                              <p className="text-sm text-gray-500">Solicitado: <strong className="text-gray-900">{item.quantityOrdered}</strong></p>
                            </div>
+                           {isComplete && <div className="bg-green-500 text-white p-1 rounded-full"><Check size={16} /></div>}
                         </div>
-                        <div className={`w-14 h-14 rounded-full flex items-center justify-center border-4 ${
-                           isComplete ? 'bg-green-500 border-green-200 text-white' : 'bg-white border-gray-200 text-gray-300'
-                        }`}>
-                           <Check size={32} strokeWidth={3} />
+
+                        <div className="flex items-center gap-3">
+                           <div className="flex items-center bg-white border border-gray-300 rounded-xl overflow-hidden shadow-sm flex-1 max-w-[200px]">
+                              <button 
+                                onClick={() => updateItemReceived(item.productId, item.quantityReceived - 1)}
+                                className="p-3 hover:bg-gray-100 text-gray-600 active:bg-gray-200 border-r border-gray-100"
+                              >
+                                <Minus size={20} />
+                              </button>
+                              <input 
+                                type="number" 
+                                value={item.quantityReceived}
+                                onChange={(e) => updateItemReceived(item.productId, parseFloat(e.target.value) || 0)}
+                                className="flex-1 w-full text-center font-bold text-lg outline-none bg-transparent"
+                              />
+                              <button 
+                                onClick={() => updateItemReceived(item.productId, item.quantityReceived + 1)}
+                                className="p-3 hover:bg-gray-100 text-blue-600 active:bg-gray-200 border-l border-gray-100"
+                              >
+                                <Plus size={20} />
+                              </button>
+                           </div>
+                           
+                           <button 
+                             onClick={() => updateItemReceived(item.productId, item.quantityOrdered)}
+                             className="text-xs font-bold text-blue-600 underline hover:text-blue-800 px-2"
+                           >
+                             Todo
+                           </button>
                         </div>
                      </div>
                   );
@@ -470,11 +521,10 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
             <div className="p-6 bg-white border-t border-gray-200 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] mt-auto">
                <button 
                   onClick={confirmReception}
-                  disabled={!someReceived}
-                  className="w-full py-5 bg-green-600 active:bg-green-700 text-white rounded-2xl font-bold text-xl shadow-lg flex items-center justify-center gap-3 transition-transform active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full py-5 bg-green-600 active:bg-green-700 text-white rounded-2xl font-bold text-xl shadow-lg flex items-center justify-center gap-3 transition-transform active:scale-[0.98]"
                >
                   <Package size={24} />
-                  {allReceived ? 'Confirmar Todo' : 'Recepción Parcial'}
+                  Confirmar Recepción
                </button>
             </div>
          </div>
