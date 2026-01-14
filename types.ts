@@ -31,6 +31,7 @@ export interface ReceiptConfig {
   showCustomerInfo?: boolean;
   showSavings?: boolean;
   showQr?: boolean;
+  showForeignCurrencyTotals?: boolean;
 }
 
 export interface DocumentSeries {

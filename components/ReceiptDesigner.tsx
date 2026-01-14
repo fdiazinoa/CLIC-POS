@@ -25,9 +25,11 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
     showCustomerInfo: config.receiptConfig?.showCustomerInfo ?? true,
     showSavings: config.receiptConfig?.showSavings ?? false,
     showQr: config.receiptConfig?.showQr ?? true,
+    showForeignCurrencyTotals: config.receiptConfig?.showForeignCurrencyTotals ?? false,
   });
 
   const showImagesInTicket = config.terminals?.[0]?.config?.workflow?.inventory?.showProductImagesInReceipt ?? false;
+  const mockTotal = 21.92; // Total of PREVIEW_ITEMS
 
   const handleSave = () => {
     onUpdateConfig({
@@ -133,9 +135,10 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
            </h2>
            
            <div className="space-y-3 mb-6">
-              <ToggleSwitch label="Mostrar Datos del Cliente" checked={localConfig.showCustomerInfo} onChange={v => setLocalConfig(prev => ({...prev, showCustomerInfo: v}))} />
-              <ToggleSwitch label="Mostrar Ahorro Total" checked={localConfig.showSavings} onChange={v => setLocalConfig(prev => ({...prev, showSavings: v}))} />
-              <ToggleSwitch label="Mostrar Código QR Factura" checked={localConfig.showQr} onChange={v => setLocalConfig(prev => ({...prev, showQr: v}))} />
+              <ToggleSwitch label="Mostrar Datos del Cliente" checked={localConfig.showCustomerInfo || false} onChange={v => setLocalConfig(prev => ({...prev, showCustomerInfo: v}))} />
+              <ToggleSwitch label="Mostrar Ahorro Total" checked={localConfig.showSavings || false} onChange={v => setLocalConfig(prev => ({...prev, showSavings: v}))} />
+              <ToggleSwitch label="Mostrar Totales en Otras Monedas" checked={localConfig.showForeignCurrencyTotals || false} onChange={v => setLocalConfig(prev => ({...prev, showForeignCurrencyTotals: v}))} />
+              <ToggleSwitch label="Mostrar Código QR Factura" checked={localConfig.showQr || false} onChange={v => setLocalConfig(prev => ({...prev, showQr: v}))} />
            </div>
 
            <div>
@@ -240,7 +243,7 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                </table>
 
                {/* Totals */}
-               <div className="border-t-2 border-gray-800 pt-2 mb-6">
+               <div className="border-t-2 border-gray-800 pt-2 mb-2">
                   <div className="flex justify-between text-xs mb-1">
                      <span>SUBTOTAL</span>
                      <span>{config.currencySymbol}18.58</span>
@@ -254,6 +257,36 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                      <span>{config.currencySymbol}21.92</span>
                   </div>
                </div>
+
+               {/* Savings Block - Centered and Renamed */}
+               {localConfig.showSavings && (
+                  <div className="w-full text-center text-xs mb-4 font-bold text-gray-800 border-y border-dashed border-gray-300 py-2">
+                     *** Ahorro en Compra: {config.currencySymbol}2.50 ***
+                  </div>
+               )}
+
+               {/* Foreign Currencies */}
+               {localConfig.showForeignCurrencyTotals && (
+                  <div className="border-t border-dashed border-gray-300 pt-2 mb-4">
+                     {config.currencies.filter(c => !c.isBase && c.isEnabled).length > 0 ? (
+                        config.currencies.filter(c => !c.isBase && c.isEnabled).map(c => (
+                           <div key={c.code} className="flex justify-between text-xs font-bold text-gray-600">
+                              <span>Total {c.code}</span>
+                              {/* Assuming rate means 1 Base = X Foreign, or using inverse logic. 
+                                  Standard POS usually stores rate as 1 Unit Foreign = X Units Base (e.g. 1 USD = 58 DOP).
+                                  So TotalForeign = TotalBase / Rate. */}
+                              <span>{c.symbol}{(mockTotal / (c.rate || 1)).toFixed(2)}</span>
+                           </div>
+                        ))
+                     ) : (
+                        // Mock display if no foreign currencies configured yet
+                        <div className="flex justify-between text-xs font-bold text-gray-400">
+                           <span>Total USD</span>
+                           <span>$0.37</span>
+                        </div>
+                     )}
+                  </div>
+               )}
 
                {/* Footer */}
                <div className="text-center space-y-4">
