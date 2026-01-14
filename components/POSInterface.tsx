@@ -7,7 +7,8 @@ import {
   UserPlus, X, Percent, ArrowLeft, ChevronRight,
   Scale as ScaleIcon, PauseCircle, LogOut,
   ArrowRightLeft, Globe, DollarSign,
-  ChevronDown, Check, AlertCircle, Layers
+  ChevronDown, Check, AlertCircle, Layers,
+  ShoppingBag
 } from 'lucide-react';
 import { 
   BusinessConfig, User as UserType, RoleDefinition, 
@@ -469,6 +470,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             <button onClick={() => setShowPaymentModal(true)} disabled={cart.length === 0} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black text-lg shadow-xl shadow-blue-500/30 hover:bg-blue-700 active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center gap-3"><CreditCard size={24} />PAGAR</button>
          </div>
       </div>
+
+      {/* MOBILE BOTTOM CART BAR (Visible only on mobile when items exist) */}
+      {mobileView === 'PRODUCTS' && cart.length > 0 && (
+        <div className="md:hidden fixed bottom-4 left-4 right-4 z-40 animate-in slide-in-from-bottom-4 fade-in duration-300">
+           <button 
+             onClick={() => setMobileView('TICKET')}
+             className="w-full bg-slate-900 text-white p-3 rounded-2xl shadow-2xl flex justify-between items-center border border-slate-800 active:scale-95 transition-transform"
+           >
+              <div className="flex items-center gap-3">
+                 <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center font-black text-lg shadow-lg shadow-blue-900/50">
+                    {cart.reduce((acc, i) => acc + i.quantity, 0)}
+                 </div>
+                 <div className="text-left">
+                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Total a Pagar</p>
+                    <p className="font-black text-xl leading-none">{baseCurrency.symbol}{cartTotal.toFixed(2)}</p>
+                 </div>
+              </div>
+              <div className="flex items-center gap-2 pr-2 bg-white/10 py-2 px-4 rounded-xl">
+                 <span className="font-bold text-sm">Ver Ticket</span>
+                 <ShoppingBag size={18} className="text-white" />
+              </div>
+           </button>
+        </div>
+      )}
 
       {/* --- MODALES --- */}
       {showPaymentModal && <UnifiedPaymentModal total={cartTotal} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} />}
