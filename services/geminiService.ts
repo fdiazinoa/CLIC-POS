@@ -4,9 +4,10 @@ import { CartItem, BusinessConfig } from "../types";
 
 // Helper to initialize GoogleGenAI client using pre-configured API key from environment
 const createClient = () => {
-  if (!process.env.API_KEY) return null;
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey) return null;
   // Always use a named parameter when initializing GoogleGenAI
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  return new GoogleGenAI({ apiKey });
 };
 
 export const getSmartSuggestions = async (
