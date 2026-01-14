@@ -7,7 +7,7 @@ import {
   Cpu, HardDrive, Smartphone, Cloud, Lock, Package, Building2,
   Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag
 } from 'lucide-react';
-import { BusinessConfig, User, RoleDefinition, Transaction, Product } from '../types';
+import { BusinessConfig, User, RoleDefinition, Transaction, Product, Warehouse } from '../types';
 
 // Component Imports
 import WarehouseManager from './WarehouseManager';
@@ -30,10 +30,12 @@ interface SettingsProps {
   roles: RoleDefinition[];
   transactions: Transaction[];
   products: Product[];
+  warehouses: Warehouse[];
   onUpdateConfig: (newConfig: BusinessConfig, restart?: boolean) => void;
   onUpdateUsers: (users: User[]) => void;
   onUpdateRoles: (roles: RoleDefinition[]) => void;
   onUpdateProducts: (products: Product[]) => void;
+  onUpdateWarehouses: (warehouses: Warehouse[]) => void;
   onOpenZReport: () => void;
   onOpenSupplyChain: () => void;
   onOpenFranchise: () => void;
@@ -48,9 +50,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
   const renderContent = () => {
     switch (currentView) {
       case 'WAREHOUSES':
-        return <WarehouseManager onClose={() => setCurrentView('HOME')} />;
+        return <WarehouseManager warehouses={props.warehouses} onUpdateWarehouses={props.onUpdateWarehouses} onClose={() => setCurrentView('HOME')} />;
       case 'CATALOG':
-        return <CatalogManager products={props.products} config={props.config} transactions={props.transactions} onUpdateProducts={props.onUpdateProducts} onClose={() => setCurrentView('HOME')} />;
+        return <CatalogManager products={props.products} warehouses={props.warehouses} config={props.config} transactions={props.transactions} onUpdateProducts={props.onUpdateProducts} onClose={() => setCurrentView('HOME')} />;
       case 'TERMINALS':
         return <TerminalSettings config={props.config} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
       case 'HARDWARE':

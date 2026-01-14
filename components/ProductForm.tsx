@@ -5,22 +5,23 @@ import {
   Info, Layers, RefreshCw, CheckCircle2, Tag, 
   Package, LayoutGrid, FileText, Settings2, Upload,
   Image as ImageIcon, Percent, ShoppingCart, Calculator, Download,
-  ShieldAlert, AlertCircle, Check, LayoutTemplate
+  ShieldAlert, AlertCircle, Check, LayoutTemplate, ClipboardList
 } from 'lucide-react';
 import { 
-  Product, ProductAttribute, ProductVariant, BusinessConfig, Tariff, TariffPrice, TaxDefinition 
+  Product, ProductAttribute, ProductVariant, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse
 } from '../types';
 
 interface ProductFormProps {
   initialData?: Product | null;
   config: BusinessConfig;
   availableTariffs: Tariff[];
+  warehouses?: Warehouse[];
   hasHistory?: boolean;
   onSave: (product: Product) => void;
   onClose: () => void;
 }
 
-type ProductTab = 'GENERAL' | 'PRICING' | 'VARIANTS' | 'TAXES';
+type ProductTab = 'GENERAL' | 'PRICING' | 'VARIANTS' | 'TAXES' | 'STOCKS';
 
 // Mock templates simulating data from VariantManager
 const PREDEFINED_TEMPLATES = [
@@ -31,7 +32,7 @@ const PREDEFINED_TEMPLATES = [
   { id: 'tpl_5', name: 'Materiales', attrName: 'Material', options: ['Algodón', 'Poliéster', 'Lana', 'Seda', 'Lino'] },
 ];
 
-const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, hasHistory = false, onSave, onClose }) => {
+const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], hasHistory = false, onSave, onClose }) => {
   const [activeTab, setActiveTab] = useState<ProductTab>('GENERAL');
   const fileInputRef = useRef<HTMLInputElement>(null);
   
@@ -45,7 +46,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     variants: [],
     tariffs: [],
     stockBalances: {},
-    activeInWarehouses: [],
+    activeInWarehouses: warehouses.map(w => w.id), // Default active in all
     price: 0,
     barcode: '',
     trackStock: true,
@@ -147,6 +148,18 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         return t;
       });
       return { ...prev, tariffs: newTariffs };
+    });
+  };
+
+  // --- LOGIC: STOCK WAREHOUSES ---
+  const toggleWarehouseActive = (whId: string) => {
+    setFormData(prev => {
+      const current = prev.activeInWarehouses || [];
+      const isActive = current.includes(whId);
+      return {
+        ...prev,
+        activeInWarehouses: isActive ? current.filter(id => id !== whId) : [...current, whId]
+      };
     });
   };
 
@@ -309,6 +322,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             { id: 'TAXES', label: 'Impuestos', icon: Percent },
             { id: 'PRICING', label: 'Tarifas', icon: DollarSign },
             { id: 'VARIANTS', label: 'Variantes', icon: Layers },
+            { id: 'STOCKS', label: 'Stock', icon: ClipboardList },
           ].map(tab => (
             <button
               key={tab.id}
@@ -596,7 +610,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                      placeholder="Color, Talla, Sabor..."
                                      className="w-full p-3 bg-white border border-gray-200 rounded-xl font-bold text-gray-800 outline-none focus:border-blue-400"
                                   />
-                               </div>
+                                </div>
                                <div className="md:col-span-2">
                                   <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Opciones (Enter para agregar)</label>
                                   <div className="flex flex-wrap gap-2 p-2 bg-white border border-gray-200 rounded-xl min-h-[50px] items-center">
@@ -716,6 +730,51 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                    </div>
                 )}
              </div>
+          )}
+
+          {/* TAB: STOCKS */}
+          {activeTab === 'STOCKS' && (
+            <div className="max-w-4xl mx-auto space-y-6 animate-in slide-in-from-right-4">
+                <div className="bg-white p-6 rounded-[2rem] border border-gray-200 shadow-sm">
+                    <h3 className="font-bold text-gray-800 mb-4 text-lg">Disponibilidad por Almacén</h3>
+                    <div className="divide-y divide-gray-100">
+                        {warehouses.map(wh => {
+                            const isEnabled = formData.activeInWarehouses?.includes(wh.id) ?? false;
+                            // Stock logic: Use stockBalances if exists for precise location, otherwise fallback to main stock if it's the main warehouse.
+                            const displayStock = formData.stockBalances?.[wh.id] !== undefined 
+                                ? formData.stockBalances[wh.id] 
+                                : (wh.isMain ? (formData.stock || 0) : 0); 
+
+                            return (
+                                <div key={wh.id} className="flex items-center justify-between py-4 first:pt-0 last:pb-0">
+                                    <div>
+                                        <p className="font-bold text-gray-800 text-sm">{wh.name}</p>
+                                        <p className={`text-xs font-bold mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full ${displayStock > 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-500'}`}>
+                                            {displayStock > 0 ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
+                                            {displayStock > 0 ? 'Disponible' : 'Agotado'}
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center gap-8">
+                                        <div className="text-right">
+                                            <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider">Stock Físico</p>
+                                            <p className="text-lg font-black text-gray-700">{displayStock} u.</p>
+                                        </div>
+                                        <div 
+                                            onClick={() => toggleWarehouseActive(wh.id)}
+                                            className={`w-12 h-6 rounded-full relative transition-colors cursor-pointer ${isEnabled ? 'bg-blue-600' : 'bg-gray-300'}`}
+                                        >
+                                            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm ${isEnabled ? 'left-7' : 'left-1'}`} />
+                                        </div>
+                                    </div>
+                                </div>
+                            )
+                        })}
+                        {warehouses.length === 0 && (
+                           <div className="text-center py-4 text-gray-400 italic">No hay almacenes configurados.</div>
+                        )}
+                    </div>
+                </div>
+            </div>
           )}
 
         </div>

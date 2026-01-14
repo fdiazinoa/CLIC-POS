@@ -6,7 +6,7 @@ import {
   Calendar, CheckCircle2, XCircle, Layers, ClipboardList,
   ChevronDown, ChevronRight, Box, AlertCircle, MapPin
 } from 'lucide-react';
-import { Product, BusinessConfig, Tariff, Transaction, ProductVariant } from '../types';
+import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse } from '../types';
 import ProductForm from './ProductForm';
 import TariffForm from './TariffForm';
 import VariantManager from './VariantManager';
@@ -14,6 +14,7 @@ import VariantManager from './VariantManager';
 interface CatalogManagerProps {
   products: Product[];
   config: BusinessConfig;
+  warehouses: Warehouse[];
   transactions: Transaction[];
   onUpdateProducts: (products: Product[]) => void;
   onClose: () => void;
@@ -39,13 +40,6 @@ const MOCK_TARIFFS: Tariff[] = [
     scope: { storeIds: ['ALL'], priority: 5 }, 
     schedule: { daysOfWeek: [0,1,2,3,4,5,6], timeStart: '00:00', timeEnd: '23:59' }, items: {} 
   }
-];
-
-// Mock Warehouses for the Stocks View
-const MOCK_WAREHOUSES = [
-  { id: 'wh1', name: 'Almacén Central', type: 'PHYSICAL', address: 'Calle Industria 45', totalValue: 154200, itemCount: 450, active: true },
-  { id: 'wh2', name: 'Tienda Norte', type: 'PHYSICAL', address: 'Av. Principal 12', totalValue: 42000, itemCount: 120, active: true },
-  { id: 'wh3', name: 'Bodega Mermas', type: 'VIRTUAL', address: 'Virtual', totalValue: 0, itemCount: 0, active: false },
 ];
 
 // --- SUB-COMPONENT: STOCK ROW (Handles Expansion) ---
@@ -159,29 +153,34 @@ const StockRow: React.FC<{ product: Product }> = ({ product }) => {
 };
 
 // --- WAREHOUSE CARD CONTAINER ---
-const WarehouseStockCard: React.FC<{ warehouse: typeof MOCK_WAREHOUSES[0]; filteredProducts: Product[] }> = ({ warehouse, filteredProducts }) => {
+const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Product[] }> = ({ warehouse, filteredProducts }) => {
   const [isCardExpanded, setIsCardExpanded] = useState(false);
 
   // Logic to simulate distinct inventory per warehouse
+  // In a real app, this would use product.stockBalances[warehouse.id]
   const warehouseProducts = filteredProducts.filter((_, idx) => {
-     if (warehouse.id === 'wh1') return true; 
-     if (warehouse.id === 'wh2') return idx % 2 === 0;
+     if (warehouse.id === 'wh_1') return true; 
+     if (warehouse.id === 'wh_2') return idx % 2 === 0;
      return false; 
   });
 
+  // Mock Total Value/Item Count for display
+  const totalValue = 154200; 
+  const itemCount = warehouseProducts.length;
+
   return (
-    <div className={`bg-white rounded-2xl border transition-all overflow-hidden ${isCardExpanded ? 'shadow-lg border-emerald-300 ring-1 ring-emerald-100' : 'shadow-sm border-gray-200 hover:border-emerald-200'} ${!warehouse.active ? 'opacity-70 border-dashed bg-gray-50' : ''}`}>
+    <div className={`bg-white rounded-2xl border transition-all overflow-hidden ${isCardExpanded ? 'shadow-lg border-emerald-300 ring-1 ring-emerald-100' : 'shadow-sm border-gray-200 hover:border-emerald-200'} ${!warehouse.allowPosSale ? 'opacity-70 border-dashed bg-gray-50' : ''}`}>
        
        {/* HEADER CARD */}
        <div className="p-6 flex flex-col md:flex-row gap-6 items-start md:items-center justify-between">
           <div className="flex items-center gap-4">
-             <div className={`p-4 rounded-2xl ${warehouse.active ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-200 text-gray-400'}`}>
+             <div className={`p-4 rounded-2xl ${warehouse.allowPosSale ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-200 text-gray-400'}`}>
                 <Box size={24} />
              </div>
              <div>
                 <div className="flex items-center gap-2">
                    <h3 className="font-bold text-lg text-gray-800">{warehouse.name}</h3>
-                   {!warehouse.active && <span className="text-[10px] font-bold bg-gray-200 text-gray-500 px-2 py-0.5 rounded">SIN STOCK</span>}
+                   {!warehouse.allowPosSale && <span className="text-[10px] font-bold bg-gray-200 text-gray-500 px-2 py-0.5 rounded">VENTA DESACTIVADA</span>}
                 </div>
                 <p className="text-sm text-gray-500 flex items-center gap-1 mt-1">
                    <MapPin size={12} /> {warehouse.address}
@@ -192,21 +191,19 @@ const WarehouseStockCard: React.FC<{ warehouse: typeof MOCK_WAREHOUSES[0]; filte
           <div className="flex items-center gap-8 w-full md:w-auto justify-between md:justify-end">
              <div className="text-right">
                 <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Valorizado</p>
-                <p className="text-lg font-black text-gray-800">${warehouse.totalValue.toLocaleString()}</p>
+                <p className="text-lg font-black text-gray-800">${totalValue.toLocaleString()}</p>
              </div>
              <div className="text-right">
                 <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Artículos</p>
-                <p className="text-lg font-black text-gray-800">{warehouse.itemCount}</p>
+                <p className="text-lg font-black text-gray-800">{itemCount}</p>
              </div>
              
-             {warehouse.active && (
-                <button 
-                   onClick={() => setIsCardExpanded(!isCardExpanded)}
-                   className={`p-2 rounded-full border transition-colors ${isCardExpanded ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'}`}
-                >
-                   {isCardExpanded ? <ChevronDown size={20} className="rotate-180 transition-transform" /> : <ChevronDown size={20} />}
-                </button>
-             )}
+             <button 
+                onClick={() => setIsCardExpanded(!isCardExpanded)}
+                className={`p-2 rounded-full border transition-colors ${isCardExpanded ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'}`}
+             >
+                {isCardExpanded ? <ChevronDown size={20} className="rotate-180 transition-transform" /> : <ChevronDown size={20} />}
+             </button>
           </div>
        </div>
 
@@ -248,7 +245,7 @@ const WarehouseStockCard: React.FC<{ warehouse: typeof MOCK_WAREHOUSES[0]; filte
 
 // --- MAIN CATALOG COMPONENT ---
 const CatalogManager: React.FC<CatalogManagerProps> = ({ 
-  products, config, transactions, onUpdateProducts, onClose 
+  products, config, warehouses, transactions, onUpdateProducts, onClose 
 }) => {
   const [viewMode, setViewMode] = useState<'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS'>('PRODUCTS');
   
@@ -303,6 +300,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       <ProductForm 
         initialData={editingProduct === 'NEW' ? null : editingProduct} 
         config={config} 
+        warehouses={warehouses}
         availableTariffs={tariffs} 
         hasHistory={checkHasHistory(editingProduct)}
         onSave={handleSaveProduct} 
@@ -447,7 +445,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                </div>
 
                <div className="flex-1 overflow-y-auto pb-20 space-y-4">
-                  {MOCK_WAREHOUSES.map(warehouse => (
+                  {warehouses.map(warehouse => (
                      <WarehouseStockCard key={warehouse.id} warehouse={warehouse} filteredProducts={filteredProducts} />
                   ))}
                </div>

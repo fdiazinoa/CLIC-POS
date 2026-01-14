@@ -4,28 +4,28 @@ import { ArrowLeft, Plus, MapPin, Building2, Trash2, Save, Wifi, AlertTriangle }
 import { Warehouse, WarehouseType } from '../types';
 
 interface WarehouseManagerProps {
+  warehouses: Warehouse[];
+  onUpdateWarehouses: (warehouses: Warehouse[]) => void;
   onClose: () => void;
 }
 
-const WarehouseManager: React.FC<WarehouseManagerProps> = ({ onClose }) => {
-  const [warehouses, setWarehouses] = useState<Warehouse[]>([
-    { id: 'wh_1', code: 'CEN-01', name: 'Almacén Central', type: 'DISTRIBUTION', address: 'Calle Industria 45', allowPosSale: false, allowNegativeStock: false, isMain: true, storeId: 'S1' }
-  ]);
+const WarehouseManager: React.FC<WarehouseManagerProps> = ({ warehouses, onUpdateWarehouses, onClose }) => {
   const [editingWh, setEditingWh] = useState<Warehouse | null>(null);
 
   const handleSave = (wh: Warehouse) => {
-    setWarehouses(prev => {
-      const exists = prev.find(i => i.id === wh.id);
-      if (exists) return prev.map(i => i.id === wh.id ? wh : i);
-      return [...prev, wh];
-    });
+    const updatedList = (() => {
+      const exists = warehouses.find(i => i.id === wh.id);
+      if (exists) return warehouses.map(i => i.id === wh.id ? wh : i);
+      return [...warehouses, wh];
+    })();
+    onUpdateWarehouses(updatedList);
     setEditingWh(null);
   };
 
   const deleteWarehouse = (id: string) => {
     // Logic: In real app, check if stock > 0
     if (confirm("¿Estás seguro? Se validará que no existan productos con stock físico.")) {
-      setWarehouses(prev => prev.filter(w => w.id !== id));
+      onUpdateWarehouses(warehouses.filter(w => w.id !== id));
     }
   };
 

@@ -13,7 +13,8 @@ import {
   PurchaseOrderItem, 
   CartItem,
   ViewState,
-  Tariff
+  Tariff,
+  Warehouse
 } from './types';
 import { 
   MOCK_USERS, 
@@ -38,6 +39,12 @@ import VerticalSelector from './components/VerticalSelector';
 import SetupWizard from './components/SetupWizard';
 import FranchiseDashboard from './components/FranchiseDashboard';
 
+const INITIAL_WAREHOUSES: Warehouse[] = [
+  { id: 'wh_1', code: 'CEN', name: 'Almacén Central', type: 'PHYSICAL', address: 'Calle Industria 45', allowPosSale: true, allowNegativeStock: false, isMain: true, storeId: 'S1' },
+  { id: 'wh_2', code: 'NTE', name: 'Tienda Norte', type: 'PHYSICAL', address: 'Av. Principal 12', allowPosSale: true, allowNegativeStock: false, isMain: false, storeId: 'S1' },
+  { id: 'wh_3', code: 'MER', name: 'Bodega Mermas', type: 'VIRTUAL', address: 'Virtual', allowPosSale: false, allowNegativeStock: false, isMain: false, storeId: 'S1' },
+];
+
 const App: React.FC = () => {
   // --- GLOBAL STATE ---
   const [currentView, setCurrentView] = useState<ViewState>('SETUP'); 
@@ -50,6 +57,7 @@ const App: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>(MOCK_CUSTOMERS);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [products, setProducts] = useState<Product[]>(RETAIL_PRODUCTS);
+  const [warehouses, setWarehouses] = useState<Warehouse[]>(INITIAL_WAREHOUSES);
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   
   // POS Persistent State
@@ -216,10 +224,12 @@ const App: React.FC = () => {
           roles={roles}
           transactions={transactions}
           products={products}
+          warehouses={warehouses}
           onUpdateConfig={handleUpdateConfig}
           onUpdateUsers={setUsers}
           onUpdateRoles={setRoles}
           onUpdateProducts={setProducts}
+          onUpdateWarehouses={setWarehouses}
           onOpenZReport={() => setCurrentView('Z_REPORT')}
           onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
           onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
