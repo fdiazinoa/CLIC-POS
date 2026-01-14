@@ -441,8 +441,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          <div className="p-6 bg-white border-t border-gray-100 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] shrink-0">
             <div className="space-y-1 mb-4">
-               <div className="flex justify-between text-xs text-gray-500 font-medium"><span>Neto</span><span>{baseCurrency.symbol}{netSubtotal.toFixed(2)}</span></div>
+               <div className="flex justify-between text-xs text-gray-500 font-medium"><span>Subtotal</span><span>{baseCurrency.symbol}{cartSubtotal.toFixed(2)}</span></div>
                
+               {discountAmount > 0 && (
+                  <div className="flex justify-between text-xs text-rose-500 font-bold animate-in slide-in-from-right-2">
+                     <span className="flex items-center gap-1">
+                        <Percent size={10} strokeWidth={3} />
+                        Descuento {globalDiscount.type === 'PERCENT' ? `(${globalDiscount.value}%)` : ''}
+                     </span>
+                     <span>-{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>
+                  </div>
+               )}
+
                {taxBreakdown.map((t, i) => (
                   <div key={i} className="flex justify-between text-xs text-gray-400 italic">
                      <span>{t.name}</span>
