@@ -11,6 +11,13 @@ export enum SubVertical {
   BAR = 'Discoteca/Bar'
 }
 
+export interface TaxDefinition {
+  id: string;
+  name: string;
+  rate: number; // e.g., 0.18
+  type: 'VAT' | 'SERVICE_CHARGE' | 'EXEMPT' | 'OTHER';
+}
+
 export interface CompanyInfo {
   name: string;
   rnc: string;
@@ -137,7 +144,8 @@ export interface BusinessConfig {
   vertical: VerticalType;
   subVertical: SubVertical;
   currencySymbol: string;
-  taxRate: number;
+  taxRate: number; // Global fallback
+  taxes: TaxDefinition[]; // Multiple tax master list
   themeColor: 'blue' | 'orange' | 'gray';
   features: {
     stockTracking: boolean;
@@ -146,7 +154,7 @@ export interface BusinessConfig {
   currencies: CurrencyConfig[];
   paymentMethods: PaymentMethodDefinition[];
   terminals: { id: string; config: TerminalConfig }[];
-  tariffs: Tariff[]; // Global tariffs master list
+  tariffs: Tariff[];
   receiptConfig?: ReceiptConfig;
   tipsConfig?: TipConfiguration;
   emailConfig?: EmailConfig;
@@ -232,7 +240,7 @@ export interface TariffPrice {
   tariffId?: string;
   productId?: string;
   name?: string;
-  price: number; // Final calculated price for this tariff
+  price: number; 
   lockPrice?: boolean;
   costBase?: number;
   margin?: number;
@@ -259,6 +267,7 @@ export interface Product {
   trackStock?: boolean;
   purchaseTax?: number;
   salesTax?: number;
+  appliedTaxIds: string[]; // Reference to TaxDefinition IDs
   description?: string;
   availableModifiers?: Modifier[];
 }

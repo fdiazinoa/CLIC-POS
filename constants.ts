@@ -1,10 +1,17 @@
 
-import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff } from './types';
+import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff, TaxDefinition } from './types';
 
 export const DEFAULT_DOCUMENT_SERIES: DocumentSeries[] = [
   { id: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar para clientes finales.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
   { id: 'INVOICE', name: 'Factura Fiscal', description: 'Documento con valor fiscal (B01).', prefix: 'B01', nextNumber: 1, padding: 8, icon: 'FileText', color: 'indigo' },
   { id: 'REFUND', name: 'Devolución / Abono', description: 'Notas de crédito por devoluciones.', prefix: 'NC', nextNumber: 1, padding: 6, icon: 'RotateCcw', color: 'orange' },
+];
+
+export const INITIAL_TAXES: TaxDefinition[] = [
+  { id: 'tax-18', name: 'ITBIS 18%', rate: 0.18, type: 'VAT' },
+  { id: 'tax-16', name: 'ITBIS 16%', rate: 0.16, type: 'VAT' },
+  { id: 'tax-propina', name: 'Propina Legal 10%', rate: 0.10, type: 'SERVICE_CHARGE' },
+  { id: 'tax-exempt', name: 'Exento 0%', rate: 0, type: 'EXEMPT' },
 ];
 
 export const INITIAL_TARIFFS: Tariff[] = [
@@ -108,12 +115,13 @@ export const RETAIL_PRODUCTS: Product[] = [
     stock: 150, 
     cost: 1.20, 
     barcode: 'SC001', 
-    type: 'SERVICE', // Identificador para disparar báscula
+    type: 'SERVICE', 
     images: ['https://images.unsplash.com/photo-1592924357228-91a4daadcfea?q=80&w=200&auto=format&fit=crop'], 
     image: 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?q=80&w=200&auto=format&fit=crop',
     attributes: [], 
     variants: [], 
-    tariffs: [{ tariffId: 'trf-gen', price: 3.50 }] 
+    tariffs: [{ tariffId: 'trf-gen', price: 3.50 }],
+    appliedTaxIds: ['tax-exempt']
   },
   { 
     id: 'p-pesado-2', 
@@ -128,9 +136,10 @@ export const RETAIL_PRODUCTS: Product[] = [
     image: 'https://images.unsplash.com/photo-1587593810167-a84920ea0781?q=80&w=200&auto=format&fit=crop',
     attributes: [], 
     variants: [], 
-    tariffs: [{ tariffId: 'trf-gen', price: 5.99 }] 
+    tariffs: [{ tariffId: 'trf-gen', price: 5.99 }],
+    appliedTaxIds: ['tax-18']
   },
-  // --- PRODUCTOS CON VARIANTE (Talle y Color) ---
+  // --- PRODUCTOS CON VARIANTE ---
   { 
     id: 'p-var-1', 
     name: 'Zapatillas Runner 5.0', 
@@ -147,36 +156,15 @@ export const RETAIL_PRODUCTS: Product[] = [
       { id: 'attr_color', name: 'Color', options: ['Rojo', 'Azul', 'Negro'], optionCodes: ['RJ', 'AZ', 'NG'] }
     ], 
     variants: [], 
-    tariffs: [{ tariffId: 'trf-gen', price: 85.00 }] 
+    tariffs: [{ tariffId: 'trf-gen', price: 85.00 }],
+    appliedTaxIds: ['tax-18']
   },
-  { 
-    id: 'p-var-2', 
-    name: 'Camisa Oxford Slim', 
-    price: 45.00, 
-    category: 'Ropa', 
-    stock: 200, 
-    cost: 15.00, 
-    barcode: 'OXF-001', 
-    type: 'PRODUCT', 
-    images: ['https://images.unsplash.com/photo-1596755094514-f87e34085b2c?q=80&w=200&auto=format&fit=crop'], 
-    image: 'https://images.unsplash.com/photo-1596755094514-f87e34085b2c?q=80&w=200&auto=format&fit=crop',
-    attributes: [
-      { id: 'attr_size', name: 'Talla', options: ['S', 'M', 'L', 'XL'], optionCodes: ['S', 'M', 'L', 'XL'] },
-      { id: 'attr_color', name: 'Color', options: ['Blanco', 'Celeste', 'Gris'], optionCodes: ['BL', 'CL', 'GR'] }
-    ], 
-    variants: [], 
-    tariffs: [{ tariffId: 'trf-gen', price: 45.00 }] 
-  },
-  // --- PRODUCTOS EXISTENTES ---
-  { id: 'p1', name: 'Camiseta Algodón Premium', price: 25.00, category: 'Ropa', stock: 45, minStock: 10, cost: 12.00, barcode: '74210001', images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 25.00 }, { tariffId: 'trf-vip', price: 20.00 }] },
-  { id: 'p2', name: 'Jeans Slim Fit Blue', price: 45.00, category: 'Ropa', stock: 12, minStock: 5, cost: 20.00, barcode: '74210002', images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 45.00 }] },
-  { id: 'p3', name: 'Tenis Deportivos Runner', price: 85.00, category: 'Calzado', stock: 8, minStock: 10, cost: 40.00, barcode: '74210003', images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 85.00 }, { tariffId: 'trf-vip', price: 75.00 }] }
+  { id: 'p1', name: 'Camiseta Algodón Premium', price: 25.00, category: 'Ropa', stock: 45, minStock: 10, cost: 12.00, barcode: '74210001', images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 25.00 }, { tariffId: 'trf-vip', price: 20.00 }], appliedTaxIds: ['tax-18'] },
 ];
 
 export const FOOD_PRODUCTS: Product[] = [
-  { id: 'f1', name: 'Hamburguesa Especial', price: 12.50, category: 'Comida', stock: 99, cost: 4.50, images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 12.50 }, { tariffId: 'trf-vip', price: 10.00 }] },
-  { id: 'f2', name: 'Pizza Pepperoni Mediana', price: 15.00, category: 'Comida', stock: 99, cost: 6.00, images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 15.00 }] },
-  { id: 'f3', name: 'Refresco 500ml', price: 2.50, category: 'Bebidas', stock: 150, cost: 0.80, images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 2.50 }] }
+  { id: 'f1', name: 'Hamburguesa Especial', price: 12.50, category: 'Comida', stock: 99, cost: 4.50, images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 12.50 }, { tariffId: 'trf-vip', price: 10.00 }], appliedTaxIds: ['tax-18', 'tax-propina'] },
+  { id: 'f2', name: 'Pizza Pepperoni Mediana', price: 15.00, category: 'Comida', stock: 99, cost: 6.00, images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 15.00 }], appliedTaxIds: ['tax-18', 'tax-propina'] },
 ];
 
 export const AVAILABLE_PERMISSIONS = [
@@ -194,6 +182,7 @@ export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
     subVertical,
     currencySymbol: '$',
     taxRate: 0.18,
+    taxes: INITIAL_TAXES,
     themeColor: 'blue',
     features: { stockTracking: true },
     companyInfo: { name: 'CLIC POS DEMO', rnc: '131-12345-1', phone: '809-555-POS1', address: 'Av. Principal #1, Santo Domingo' },
