@@ -8,8 +8,9 @@ import {
   Scale as ScaleIcon, PauseCircle, LogOut,
   ArrowRightLeft, Globe, DollarSign,
   ChevronDown, Check, AlertCircle, Layers,
-  ShoppingBag, ScanBarcode, ArrowRight, Clock
+  ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera
 } from 'lucide-react';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { 
   BusinessConfig, User as UserType, RoleDefinition, 
   Customer, Product, CartItem, Transaction, CurrencyConfig, Tariff, TaxDefinition, ParkedTicket
@@ -92,6 +93,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   const [selectedProductForVariants, setSelectedProductForVariants] = useState<Product | null>(null);
   const [productForScale, setProductForScale] = useState<Product | null>(null);
 
+  // --- SCANNER STATE ---
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scannerError, setScannerError] = useState<string | null>(null);
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+
   const showImagesInTicket = activeTerminalConfig?.workflow?.inventory?.showProductImagesInReceipt ?? false;
 
   const filteredProducts = useMemo(() => {
@@ -157,6 +163,93 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       cartEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [cart.length]);
+
+  // --- SCANNER EFFECTS ---
+  useEffect(() => {
+    if (isScannerOpen) {
+      // Small delay to ensure DOM element exists
+      const timer = setTimeout(() => {
+        const html5QrCode = new Html5Qrcode("reader");
+        scannerRef.current = html5QrCode;
+
+        const configScan = { 
+          fps: 10, 
+          qrbox: { width: 250, height: 250 },
+          aspectRatio: 1.0
+        };
+        
+        html5QrCode.start(
+          { facingMode: "environment" }, 
+          configScan,
+          (decodedText) => {
+            handleScanSuccess(decodedText);
+          },
+          (errorMessage) => {
+            // parse error, ignore or log
+          }
+        ).catch(err => {
+          console.error("Error starting scanner", err);
+          setScannerError("No se pudo acceder a la cámara. Verifique permisos.");
+        });
+      }, 100);
+
+      return () => {
+        clearTimeout(timer);
+        if (scannerRef.current && scannerRef.current.isScanning) {
+          scannerRef.current.stop().then(() => {
+            scannerRef.current?.clear();
+          }).catch(err => console.error("Failed to stop scanner", err));
+        }
+      };
+    }
+  }, [isScannerOpen]);
+
+  const playBeep = () => {
+    // Simple oscillator beep for zero dependencies
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioContext) {
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = 1000;
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.1);
+    }
+  };
+
+  const handleScanSuccess = (decodedText: string) => {
+    playBeep();
+    
+    // Stop scanner immediately to prevent duplicate reads
+    if (scannerRef.current) {
+        scannerRef.current.stop().then(() => {
+            scannerRef.current?.clear();
+            setIsScannerOpen(false);
+        }).catch(err => {
+            console.error("Stop failed", err);
+            setIsScannerOpen(false); // Force close UI anyway
+        });
+    } else {
+        setIsScannerOpen(false);
+    }
+
+    setSearchTerm(decodedText);
+
+    // Auto-Add Logic
+    const foundProduct = products.find(p => p.barcode === decodedText);
+    if (foundProduct) {
+        handleProductClick(foundProduct);
+        // Clear search after a short delay so user sees what happened
+        setTimeout(() => setSearchTerm(''), 500); 
+    } else {
+        // If not found, keep the text in search input so user can see what was scanned
+        // Maybe open a "Product Not Found" toast
+    }
+  };
 
   const handleProductClick = (product: Product) => {
     const isWeighted = product.type === 'SERVICE' || product.name.toLowerCase().includes('(peso)');
@@ -248,7 +341,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   };
 
   const openCameraScanner = () => {
-    alert("Iniciando escáner de cámara... (Funcionalidad nativa)");
+    setScannerError(null);
+    setIsScannerOpen(true);
   };
 
   return (
@@ -269,7 +363,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                 />
                 <button 
                   onClick={openCameraScanner}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 transition-all md:hidden active:scale-95 border border-gray-100"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 transition-all active:scale-95 border border-gray-100"
                   title="Escanear con Cámara"
                 >
                    <ScanBarcode size={18} />
@@ -577,6 +671,55 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div>
          </div>
       </div>
+
+      {/* --- SCANNER OVERLAY MODAL --- */}
+      {isScannerOpen && (
+        <div className="fixed inset-0 z-[9999] bg-black flex flex-col items-center justify-center">
+           {/* Top Bar */}
+           <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start z-20 bg-gradient-to-b from-black/80 to-transparent">
+              <h2 className="text-white text-lg font-bold flex items-center gap-2">
+                 <ScanBarcode className="text-blue-400" /> Escáner Activo
+              </h2>
+              <button 
+                 onClick={() => setIsScannerOpen(false)}
+                 className="p-3 bg-white/10 rounded-full text-white hover:bg-white/20 backdrop-blur-sm"
+              >
+                 <X size={24} />
+              </button>
+           </div>
+
+           {/* Scanner Container */}
+           <div className="w-full h-full relative flex items-center justify-center bg-black">
+              {scannerError ? (
+                 <div className="text-white text-center p-6">
+                    <AlertCircle size={48} className="mx-auto mb-4 text-red-500" />
+                    <p className="text-lg font-bold">{scannerError}</p>
+                    <button onClick={() => setIsScannerOpen(false)} className="mt-4 px-6 py-2 bg-white text-black rounded-lg font-bold">Cerrar</button>
+                 </div>
+              ) : (
+                 <div id="reader" className="w-full max-w-lg overflow-hidden rounded-lg"></div>
+              )}
+              
+              {/* Visual Guide (Overlay on top of camera) */}
+              {!scannerError && (
+                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                    <div className="w-64 h-64 border-2 border-blue-500/50 rounded-3xl relative shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
+                       <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-blue-500 rounded-tl-xl -mt-1 -ml-1"></div>
+                       <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-blue-500 rounded-tr-xl -mt-1 -mr-1"></div>
+                       <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-blue-500 rounded-bl-xl -mb-1 -ml-1"></div>
+                       <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-blue-500 rounded-br-xl -mb-1 -mr-1"></div>
+                       
+                       {/* Scan Line Animation */}
+                       <div className="w-full h-0.5 bg-red-500/80 absolute top-1/2 shadow-[0_0_10px_rgba(239,68,68,0.8)] animate-[scan_2s_ease-in-out_infinite]"></div>
+                    </div>
+                    <p className="absolute bottom-20 text-white/80 text-sm font-medium bg-black/40 px-4 py-1 rounded-full backdrop-blur-md">
+                       Apunta el código dentro del cuadro
+                    </p>
+                 </div>
+              )}
+           </div>
+        </div>
+      )}
 
       {/* --- MODALES --- */}
       {showPaymentModal && (
