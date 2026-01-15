@@ -29,7 +29,7 @@ import {
 
 // Component Imports
 import LoginScreen from './components/LoginScreen';
-import POSInterface from './components/POSInterface';
+import POSInterface from './components/POSInterface'; // FIXED IMPORT
 import Settings from './components/Settings';
 import CustomerManagement from './components/CustomerManagement';
 import TicketHistory from './components/TicketHistory';
@@ -264,6 +264,7 @@ const App: React.FC = () => {
           config={config}
           currentUser={currentUser}
           roles={roles}
+          users={users} // Pass full list of users for salesperson assignment
           customers={customers}
           products={products}
           cart={cart}

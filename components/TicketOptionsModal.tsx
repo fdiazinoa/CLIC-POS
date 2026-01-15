@@ -1,7 +1,8 @@
+
 import React from 'react';
 import { 
   UserPlus, Split, PieChart, Percent, Clock, X, Save, Trash2, 
-  Coins, Receipt, History, ArrowDownToLine, Printer, Wallet
+  Coins, Receipt, History, ArrowDownToLine, Printer, Wallet, UserCheck
 } from 'lucide-react';
 
 interface TicketOptionsModalProps {
@@ -42,6 +43,14 @@ const TicketOptionsModal: React.FC<TicketOptionsModalProps> = ({ onClose, onActi
       icon: Percent, 
       color: 'text-rose-600',
       bg: 'bg-rose-50'
+    },
+    // Vendedor Global
+    { 
+      id: 'ASSIGN_SELLER', 
+      label: 'Vendedor', 
+      icon: UserCheck, 
+      color: 'text-blue-600',
+      bg: 'bg-blue-50'
     },
     // Print Subtotal (Proforma)
     { 

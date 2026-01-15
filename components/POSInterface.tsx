@@ -10,10 +10,10 @@ import {
   ChevronDown, Check, AlertCircle, Layers,
   ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera
 } from 'lucide-react';
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
+import { Html5Qrcode } from "html5-qrcode";
 import { 
   BusinessConfig, User as UserType, RoleDefinition, 
-  Customer, Product, CartItem, Transaction, CurrencyConfig, Tariff, TaxDefinition, ParkedTicket
+  Customer, Product, CartItem, Transaction, ParkedTicket
 } from '../types';
 import UnifiedPaymentModal from './PaymentModal';
 import TicketOptionsModal from './TicketOptionsModal';
@@ -27,14 +27,15 @@ interface POSInterfaceProps {
   config: BusinessConfig;
   currentUser: UserType;
   roles: RoleDefinition[];
+  users: UserType[]; // Full list of users for assignment
   customers: Customer[];
   products: Product[];
   cart: CartItem[];
   onUpdateCart: React.Dispatch<React.SetStateAction<CartItem[]>>;
   selectedCustomer: Customer | null;
   onSelectCustomer: (customer: Customer | null) => void;
-  parkedTickets: ParkedTicket[]; // Lifted State
-  onUpdateParkedTickets: (tickets: ParkedTicket[]) => void; // Lifted State Setter
+  parkedTickets: ParkedTicket[]; 
+  onUpdateParkedTickets: (tickets: ParkedTicket[]) => void; 
   onLogout: () => void;
   onOpenSettings: () => void;
   onOpenCustomers: () => void;
@@ -49,6 +50,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   config,
   currentUser,
   products,
+  roles,
+  users,
   customers,
   cart,
   onUpdateCart,
@@ -79,7 +82,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
-  // Removed local parkedTickets state to use props instead
+  
   const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
   
   const [globalDiscount, setGlobalDiscount] = useState<{value: number, type: 'PERCENT' | 'FIXED'}>({value: 0, type: 'PERCENT'});
@@ -89,6 +92,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   const [showParkedList, setShowParkedList] = useState(false);
   const [showGlobalDiscount, setShowGlobalDiscount] = useState(false);
   const [showCurrencyModal, setShowCurrencyModal] = useState(false);
+  const [showSellerModal, setShowSellerModal] = useState(false);
   const [editingItem, setEditingItem] = useState<CartItem | null>(null);
   const [selectedProductForVariants, setSelectedProductForVariants] = useState<Product | null>(null);
   const [productForScale, setProductForScale] = useState<Product | null>(null);
@@ -98,12 +102,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   const [scannerError, setScannerError] = useState<string | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
 
-  const showImagesInTicket = activeTerminalConfig?.workflow?.inventory?.showProductImagesInReceipt ?? false;
-
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
+      // Basic visibility check if tariffs are active
       const tariffPrice = p.tariffs.find(t => t.tariffId === activeTariffId);
-      if (!tariffPrice) return false;
+      // Fallback: show product even if specific tariff not found (use base price)
+      
       const matchSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
       const matchCat = categoryFilter === 'ALL' || p.category === categoryFilter;
       return matchSearch && matchCat;
@@ -111,9 +115,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   }, [products, searchTerm, categoryFilter, activeTariffId]);
 
   const categories = useMemo(() => {
-    const visibleProducts = products.filter(p => p.tariffs.some(t => t.tariffId === activeTariffId));
-    return ['ALL', ...Array.from(new Set(visibleProducts.map(p => p.category)))];
-  }, [products, activeTariffId]);
+    return ['ALL', ...Array.from(new Set(products.map(p => p.category)))];
+  }, [products]);
 
   const getProductPrice = (p: Product) => {
     return p.tariffs.find(t => t.tariffId === activeTariffId)?.price || p.price;
@@ -167,7 +170,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   // --- SCANNER EFFECTS ---
   useEffect(() => {
     if (isScannerOpen) {
-      // Small delay to ensure DOM element exists
       const timer = setTimeout(() => {
         const html5QrCode = new Html5Qrcode("reader");
         scannerRef.current = html5QrCode;
@@ -185,7 +187,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             handleScanSuccess(decodedText);
           },
           (errorMessage) => {
-            // parse error, ignore or log
+            // ignore
           }
         ).catch(err => {
           console.error("Error starting scanner", err);
@@ -205,7 +207,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   }, [isScannerOpen]);
 
   const playBeep = () => {
-    // Simple oscillator beep for zero dependencies
     const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
     if (AudioContext) {
       const ctx = new AudioContext();
@@ -224,14 +225,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   const handleScanSuccess = (decodedText: string) => {
     playBeep();
     
-    // Stop scanner immediately to prevent duplicate reads
     if (scannerRef.current) {
         scannerRef.current.stop().then(() => {
             scannerRef.current?.clear();
             setIsScannerOpen(false);
         }).catch(err => {
             console.error("Stop failed", err);
-            setIsScannerOpen(false); // Force close UI anyway
+            setIsScannerOpen(false); 
         });
     } else {
         setIsScannerOpen(false);
@@ -239,15 +239,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
     setSearchTerm(decodedText);
 
-    // Auto-Add Logic
     const foundProduct = products.find(p => p.barcode === decodedText);
     if (foundProduct) {
         handleProductClick(foundProduct);
-        // Clear search after a short delay so user sees what happened
         setTimeout(() => setSearchTerm(''), 500); 
-    } else {
-        // If not found, keep the text in search input so user can see what was scanned
-        // Maybe open a "Product Not Found" toast
     }
   };
 
@@ -327,7 +322,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
     };
     onUpdateParkedTickets([...parkedTickets, newParked]);
     onUpdateCart([]);
-    onSelectCustomer(null); // Explicitly clear customer to start fresh context
+    onSelectCustomer(null); 
     setMobileView('PRODUCTS');
   };
 
@@ -484,10 +479,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <button onClick={() => setMobileView('PRODUCTS')} className="md:hidden p-2 -ml-2 text-gray-400 hover:text-blue-600"><ArrowLeft size={20} /></button>
                   <h2 className="font-black text-gray-800 flex items-center gap-2 uppercase text-xs tracking-widest">Ticket Actual</h2>
                </div>
-               {/* ÁREA DE BOTONES DE ACCIÓN RÁPIDA (MODIFICADA) */}
                <div className="flex gap-2">
-                  
-                  {/* Botón Ajustes */}
                   <button 
                      onClick={onOpenSettings} 
                      className="p-2 hover:bg-gray-200 rounded-lg text-gray-500" 
@@ -495,8 +487,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   >
                      <Settings size={18} />
                   </button>
-
-                  {/* Botón Recuperar Tickets */}
                   <button 
                      onClick={() => setShowParkedList(!showParkedList)} 
                      className={`p-2 rounded-lg relative transition-colors ${parkedTickets.length > 0 ? 'bg-orange-100 text-orange-600 hover:bg-orange-200' : 'hover:bg-gray-200 text-gray-500'}`}
@@ -507,8 +497,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[9px] flex items-center justify-center rounded-full border-2 border-white">{parkedTickets.length}</span>
                      )}
                   </button>
-
-                  {/* Botón Guardar Ticket */}
                   <button 
                      onClick={handleParkTicket}
                      className={`p-2 rounded-lg text-gray-500 transition-colors ${cart.length > 0 ? 'hover:bg-blue-50 hover:text-blue-600' : 'opacity-50 cursor-not-allowed'}`}
@@ -517,13 +505,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   >
                      <Save size={18} />
                   </button>
-
-                  {/* Opciones Adicionales */}
                   <button onClick={() => setShowTicketOptions(true)} className="p-2 hover:bg-gray-200 rounded-lg text-gray-500"><MoreVertical size={18} /></button>
                </div>
             </div>
 
-            {/* CUSTOMER SELECTOR */}
             <div className="relative">
                {selectedCustomer ? (
                   <div className="flex items-center justify-between bg-blue-50 p-3 rounded-xl border border-blue-100 group cursor-pointer" onClick={onOpenCustomers}>
@@ -555,7 +540,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div>
          </div>
 
-         {/* LISTA DE ITEMS */}
          <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
             {cart.length === 0 ? (
                <div className="h-full flex flex-col items-center justify-center text-gray-300 opacity-60">
@@ -563,7 +547,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <p className="text-sm font-medium">Ticket Vacío</p>
                </div>
             ) : (
-               cart.map((item, index) => {
+               cart.map((item) => {
                   const isImagesEnabled = activeTerminalConfig?.workflow?.inventory?.showProductImagesInReceipt ?? false;
                   return (
                   <div 
@@ -587,7 +571,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-bold">{item.quantity}</span> 
                               x {baseCurrency.symbol}{item.price.toFixed(2)}
                            </div>
-                           {/* Discount Badge if applied */}
                            {item.originalPrice && item.price < item.originalPrice && (
                               <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">
                                  -{Math.round(((item.originalPrice - item.price) / item.originalPrice) * 100)}%
@@ -609,9 +592,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             <div ref={cartEndRef} />
          </div>
 
-         {/* FOOTER TOTALS */}
          <div className="bg-white border-t border-gray-200 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] z-20">
-            {/* Descuento Global & Info */}
             <div className="px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center text-xs">
                <button 
                   onClick={() => setShowGlobalDiscount(true)}
@@ -646,7 +627,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <div>
                      <p className="text-xs text-gray-400 font-bold uppercase tracking-widest">Total a Pagar</p>
                      
-                     {/* Multi-currency display */}
                      <div className="flex gap-2 mt-1">
                         {altCurrencies.map(c => (
                            <span key={c.code} className="text-[10px] text-gray-400 bg-gray-100 px-1.5 rounded font-mono">
@@ -675,7 +655,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       {/* --- SCANNER OVERLAY MODAL --- */}
       {isScannerOpen && (
         <div className="fixed inset-0 z-[9999] bg-black flex flex-col items-center justify-center">
-           {/* Top Bar */}
            <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start z-20 bg-gradient-to-b from-black/80 to-transparent">
               <h2 className="text-white text-lg font-bold flex items-center gap-2">
                  <ScanBarcode className="text-blue-400" /> Escáner Activo
@@ -688,7 +667,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
               </button>
            </div>
 
-           {/* Scanner Container */}
            <div className="w-full h-full relative flex items-center justify-center bg-black">
               {scannerError ? (
                  <div className="text-white text-center p-6">
@@ -700,7 +678,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                  <div id="reader" className="w-full max-w-lg overflow-hidden rounded-lg"></div>
               )}
               
-              {/* Visual Guide (Overlay on top of camera) */}
               {!scannerError && (
                  <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
                     <div className="w-64 h-64 border-2 border-blue-500/50 rounded-3xl relative shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
@@ -708,8 +685,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                        <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-blue-500 rounded-tr-xl -mt-1 -mr-1"></div>
                        <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-blue-500 rounded-bl-xl -mb-1 -ml-1"></div>
                        <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-blue-500 rounded-br-xl -mb-1 -mr-1"></div>
-                       
-                       {/* Scan Line Animation */}
                        <div className="w-full h-0.5 bg-red-500/80 absolute top-1/2 shadow-[0_0_10px_rgba(239,68,68,0.8)] animate-[scan_2s_ease-in-out_infinite]"></div>
                     </div>
                     <p className="absolute bottom-20 text-white/80 text-sm font-medium bg-black/40 px-4 py-1 rounded-full backdrop-blur-md">
@@ -738,6 +713,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             onClose={() => setShowTicketOptions(false)}
             onAction={(action) => {
                if (action === 'PARK') handleParkTicket();
+               if (action === 'ASSIGN_SELLER') setShowSellerModal(true);
                setShowTicketOptions(false);
             }}
          />
@@ -747,11 +723,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          <CartItemOptionsModal 
             item={editingItem} 
             config={config}
-            users={[]} // TODO: Pass real users list here if needed for salesperson assignment
+            users={users} 
+            roles={roles}
             onClose={() => setEditingItem(null)}
             onUpdate={updateCartItem}
-            canApplyDiscount={true} // Check permissions
-            canVoidItem={true} // Check permissions
+            canApplyDiscount={true} 
+            canVoidItem={true} 
          />
       )}
 
@@ -773,7 +750,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             currencySymbol={baseCurrency.symbol}
             onClose={() => setProductForScale(null)}
             onConfirm={(weight) => {
-               addToCart(productForScale, weight); // Weight acts as quantity
+               addToCart(productForScale, weight); 
                setProductForScale(null);
             }}
          />
@@ -830,7 +807,54 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          />
       )}
 
-      {/* MOBILE FOOTER NAV (Visible only on mobile/tablet when in PRODUCTS view) */}
+      {showSellerModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
+            <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+                <div className="p-4 border-b border-gray-100 flex justify-between items-center">
+                    <h3 className="font-bold text-gray-800">Asignar Vendedor (Global)</h3>
+                    <button onClick={() => setShowSellerModal(false)}><X size={20} /></button>
+                </div>
+                <div className="max-h-[60vh] overflow-y-auto p-2">
+                    {(() => {
+                        const vendorRole = roles.find(r => ['vendedor', 'seller', 'sales', 'comercial'].includes(r.name.toLowerCase()));
+                        const salesUsers = vendorRole 
+                            ? (users.filter(u => u.role === vendorRole.id).length > 0 ? users.filter(u => u.role === vendorRole.id) : users)
+                            : users;
+                        
+                        return salesUsers.map(u => (
+                            <button
+                                key={u.id}
+                                onClick={() => {
+                                    onUpdateCart(prev => prev.map(item => ({ ...item, salespersonId: u.id })));
+                                    setShowSellerModal(false);
+                                }}
+                                className="w-full text-left p-3 hover:bg-blue-50 rounded-xl flex items-center gap-3 transition-colors"
+                            >
+                                <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 font-bold">
+                                    {u.name.charAt(0)}
+                                </div>
+                                <span className="font-medium text-gray-700">{u.name}</span>
+                            </button>
+                        ));
+                    })()}
+                    <button 
+                        onClick={() => {
+                            onUpdateCart(prev => prev.map(item => ({ ...item, salespersonId: undefined })));
+                            setShowSellerModal(false);
+                        }}
+                        className="w-full text-left p-3 hover:bg-red-50 text-red-600 rounded-xl flex items-center gap-3 transition-colors mt-2 border-t border-gray-100"
+                    >
+                        <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                            <X size={18} />
+                        </div>
+                        <span className="font-medium">Quitar Asignación</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* MOBILE FOOTER NAV */}
       <div className={`md:hidden fixed bottom-0 left-0 w-full bg-white border-t border-gray-200 p-2 flex justify-around items-center z-30 ${mobileView === 'TICKET' ? 'hidden' : 'flex'}`}>
          <button onClick={onOpenSettings} className="p-3 text-gray-400 hover:text-gray-600 flex flex-col items-center gap-1">
             <Settings size={20} />
@@ -840,8 +864,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             <History size={20} />
             <span className="text-[10px] font-bold">Historial</span>
          </button>
-         
-         {/* FLOATING ACTION BUTTON FOR CART */}
          <div className="relative -top-6">
             <button 
                onClick={() => setMobileView('TICKET')}
@@ -855,7 +877,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                )}
             </button>
          </div>
-
          <button onClick={onOpenFinance} className="p-3 text-gray-400 hover:text-gray-600 flex flex-col items-center gap-1">
             <Wallet size={20} />
             <span className="text-[10px] font-bold">Caja</span>

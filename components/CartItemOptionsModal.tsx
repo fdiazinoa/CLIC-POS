@@ -1,15 +1,16 @@
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   X, Trash2, Save, Minus, Plus, MessageSquare, Percent, 
   DollarSign, Tag, User, Package, AlertTriangle 
 } from 'lucide-react';
-import { CartItem, BusinessConfig, User as UserType } from '../types';
+import { CartItem, BusinessConfig, User as UserType, RoleDefinition } from '../types';
 
 interface CartItemOptionsModalProps {
   item: CartItem;
   config: BusinessConfig;
   users: UserType[]; // List of users for assignment
+  roles?: RoleDefinition[]; // To check for 'Vendedor' role
   onClose: () => void;
   onUpdate: (updatedItem: CartItem | null, cartIdToDelete?: string) => void;
   canApplyDiscount: boolean;
@@ -20,6 +21,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   item, 
   config, 
   users,
+  roles = [],
   onClose, 
   onUpdate,
   canApplyDiscount,
@@ -41,6 +43,22 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   const originalPrice = item.originalPrice || item.price;
 
   // --- LOGIC HANDLERS ---
+
+  // Filter users logic
+  const salesUsers = useMemo(() => {
+    // 1. Find if there's a role specifically named "Vendedor" or similar
+    const vendorRole = roles.find(r => ['vendedor', 'seller', 'sales', 'comercial'].includes(r.name.toLowerCase()));
+    
+    if (vendorRole) {
+      // 2. If exists, return only users with that role
+      const filtered = users.filter(u => u.role === vendorRole.id);
+      // Fallback: If no users have that role yet, show everyone to avoid empty list
+      return filtered.length > 0 ? filtered : users;
+    }
+    
+    // 3. Default: Show all users
+    return users;
+  }, [users, roles]);
 
   const handleQuantityChange = (delta: number) => {
     const newQty = Math.max(1, quantity + delta);
@@ -221,7 +239,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
                     className="w-full p-3 pl-10 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 appearance-none font-medium text-gray-700"
                  >
                     <option value="">-- Sin asignar --</option>
-                    {users.map(u => (
+                    {salesUsers.map(u => (
                        <option key={u.id} value={u.id}>{u.name}</option>
                     ))}
                  </select>
