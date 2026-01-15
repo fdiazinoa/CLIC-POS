@@ -23,6 +23,8 @@ import SyncStatusHub from './SyncStatusHub';
 import ActivityLog from './ActivityLog';
 import TeamHub from './TeamHub';
 import PaymentSettings from './PaymentSettings';
+import BehaviorSettings from './BehaviorSettings'; // Added missing import
+import DocumentSettings from './DocumentSettings'; // Added missing import
 
 interface SettingsProps {
   config: BusinessConfig;
@@ -42,7 +44,7 @@ interface SettingsProps {
   onClose: () => void;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'SYNC' | 'EMAIL' | 'TIPS';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'SYNC' | 'EMAIL' | 'TIPS' | 'BEHAVIOR' | 'DOCUMENTS';
 
 const Settings: React.FC<SettingsProps> = (props) => {
   const [currentView, setCurrentView] = useState<SettingsView>('HOME');
@@ -50,11 +52,11 @@ const Settings: React.FC<SettingsProps> = (props) => {
   const renderContent = () => {
     switch (currentView) {
       case 'WAREHOUSES':
-        return <WarehouseManager warehouses={props.warehouses} onUpdateWarehouses={props.onUpdateWarehouses} onClose={() => setCurrentView('HOME')} />;
+        return <WarehouseManager warehouses={props.warehouses} products={props.products} onUpdateWarehouses={props.onUpdateWarehouses} onClose={() => setCurrentView('HOME')} />;
       case 'CATALOG':
         return <CatalogManager products={props.products} warehouses={props.warehouses} config={props.config} transactions={props.transactions} onUpdateProducts={props.onUpdateProducts} onClose={() => setCurrentView('HOME')} />;
       case 'TERMINALS':
-        return <TerminalSettings config={props.config} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
+        return <TerminalSettings config={props.config} warehouses={props.warehouses} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
       case 'HARDWARE':
         return <HardwareSettings />; 
       case 'EXCHANGE':
@@ -93,6 +95,10 @@ const Settings: React.FC<SettingsProps> = (props) => {
         return <ActivityLog onClose={() => setCurrentView('HOME')} />;
       case 'TEAM':
         return <TeamHub users={props.users} roles={props.roles} onUpdateUsers={props.onUpdateUsers} onUpdateRoles={props.onUpdateRoles} onClose={() => setCurrentView('HOME')} />;
+      case 'BEHAVIOR':
+        return <BehaviorSettings onClose={() => setCurrentView('HOME')} />;
+      case 'DOCUMENTS':
+        return <DocumentSettings onClose={() => setCurrentView('HOME')} />;
       
       default:
         return (
@@ -119,7 +125,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                       onClick={() => setCurrentView('CATALOG')} 
                     />
                     <SettingsCard 
-                      icon={Building2} label="Almacenes" description="Ubicaciones, Stock, Tipos" color="bg-purple-600"
+                      icon={Building2} label="Almacenes" description="Ubicaciones, Traspasos, Stock" color="bg-purple-600"
                       onClick={() => setCurrentView('WAREHOUSES')} 
                     />
                     <SettingsCard 
@@ -145,6 +151,10 @@ const Settings: React.FC<SettingsProps> = (props) => {
                       icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" 
                       onClick={props.onOpenZReport} 
                     />
+                    <SettingsCard 
+                      icon={FileText} label="Documentos" description="Series, NCF, Prefijos" color="bg-blue-400" 
+                      onClick={() => setCurrentView('DOCUMENTS')} 
+                    />
                   </div>
                </section>
 
@@ -153,7 +163,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Configuración Local</h2>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                     <SettingsCard 
-                      icon={Monitor} label="Terminales POS" description="Perfiles de Caja, Folios y Reglas" color="bg-blue-500" 
+                      icon={Monitor} label="Terminales POS" description="Perfiles de Caja, Inventario" color="bg-blue-500" 
                       onClick={() => setCurrentView('TERMINALS')} 
                     />
                     <SettingsCard 
@@ -163,6 +173,10 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     <SettingsCard 
                       icon={Coins} label="Propinas" description="Cargos por Servicio y Tips" color="bg-yellow-500" 
                       onClick={() => setCurrentView('TIPS')} 
+                    />
+                    <SettingsCard 
+                      icon={Cpu} label="Comportamiento" description="Reglas de Negocio, Stock" color="bg-orange-500" 
+                      onClick={() => setCurrentView('BEHAVIOR')} 
                     />
                   </div>
                </section>

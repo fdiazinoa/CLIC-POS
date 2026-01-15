@@ -95,6 +95,11 @@ export interface TerminalConfig {
     showProductImages: boolean;
     quickKeysLayout: 'A' | 'B';
   };
+  // NEW: Inventory Scope Configuration
+  inventoryScope?: {
+    defaultSalesWarehouseId: string; // ID of the warehouse to deduct stock from by default
+    visibleWarehouseIds: string[]; // IDs of warehouses visible for stock queries
+  };
 }
 
 export interface CurrencyConfig {
@@ -449,6 +454,28 @@ export interface Warehouse {
   allowNegativeStock: boolean;
   isMain: boolean;
   storeId: string;
+}
+
+// NEW: Stock Transfer Types
+export type TransferStatus = 'PENDING' | 'IN_TRANSIT' | 'COMPLETED' | 'CANCELLED';
+
+export interface StockTransferItem {
+  productId: string;
+  productName: string;
+  quantity: number;
+}
+
+export interface StockTransfer {
+  id: string;
+  sourceWarehouseId: string;
+  destinationWarehouseId: string;
+  items: StockTransferItem[];
+  status: TransferStatus;
+  createdAt: string;
+  sentAt?: string;
+  receivedAt?: string;
+  notes?: string;
+  createdBy: string;
 }
 
 export type AttributeType = 'TEXT' | 'COLOR' | 'IMAGE' | 'SIZE';

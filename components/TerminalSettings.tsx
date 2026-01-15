@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo } from 'react';
 import { 
   Database, Clock, WifiOff, X, Save, Image as ImageIcon, 
@@ -6,20 +5,28 @@ import {
   ChevronRight, Settings as SettingsIcon, AlertCircle,
   LayoutGrid, ShieldCheck, Zap, Lock, ShieldAlert,
   ArrowRight, Users, FileText, Hash, Type, RotateCcw, Tag, 
-  DollarSign, Check, Percent, Calculator, Coins
+  DollarSign, Check, Percent, Calculator, Coins, Box, ArrowRightLeft
 } from 'lucide-react';
-import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition } from '../types';
+import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse } from '../types';
 import { DEFAULT_TERMINAL_CONFIG } from '../constants';
 
 interface TerminalSettingsProps {
   config: BusinessConfig;
   onUpdateConfig: (newConfig: BusinessConfig) => void;
   onClose: () => void;
+  warehouses?: Warehouse[];
 }
 
-type TerminalTab = 'OPERATIONAL' | 'SECURITY' | 'SESSION' | 'PRICING' | 'DOCUMENTS' | 'OFFLINE' | 'TAXES';
+type TerminalTab = 'OPERATIONAL' | 'SECURITY' | 'SESSION' | 'PRICING' | 'DOCUMENTS' | 'OFFLINE' | 'TAXES' | 'INVENTORY';
 
-const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose }) => {
+// Mock warehouses for display if not passed (To ensure it works immediately)
+const MOCK_WAREHOUSES_FOR_UI: Warehouse[] = [
+    { id: 'wh_1', code: 'CEN', name: 'Almacén Central', type: 'PHYSICAL', address: '', allowPosSale: true, allowNegativeStock: false, isMain: true, storeId: 'S1' },
+    { id: 'wh_2', code: 'NTE', name: 'Tienda Norte', type: 'PHYSICAL', address: '', allowPosSale: true, allowNegativeStock: false, isMain: false, storeId: 'S1' },
+    { id: 'wh_3', code: 'MER', name: 'Bodega Mermas', type: 'VIRTUAL', address: '', allowPosSale: false, allowNegativeStock: false, isMain: false, storeId: 'S1' },
+];
+
+const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = MOCK_WAREHOUSES_FOR_UI }) => {
   const [terminals, setTerminals] = useState(config.terminals || []);
   const [selectedTerminalId, setSelectedTerminalId] = useState<string>(terminals[0]?.id || '');
   const [activeTab, setActiveTab] = useState<TerminalTab>('OPERATIONAL');
@@ -259,6 +266,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
             <div className="px-8 bg-white border-b border-gray-100 flex gap-8 shrink-0 overflow-x-auto no-scrollbar">
                 {[
                   { id: 'OPERATIONAL', label: 'Operativa', icon: Database },
+                  { id: 'INVENTORY', label: 'Alcance de Inventario', icon: Box },
                   { id: 'TAXES', label: 'Impuestos', icon: Percent },
                   { id: 'PRICING', label: 'Tarifas y Precios', icon: Tag },
                   { id: 'SECURITY', label: 'Seguridad', icon: ShieldAlert },
@@ -329,6 +337,87 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                   </div>
                               </div>
                           </div>
+                        )}
+
+                        {/* NEW TAB: INVENTORY SCOPE */}
+                        {activeTab === 'INVENTORY' && (
+                           <div className="space-y-8 animate-in slide-in-from-right-4">
+                              <section className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm">
+                                 <div className="mb-6">
+                                    <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                                       <Box className="text-indigo-600" /> Alcance de Inventario Multi-Tienda
+                                    </h3>
+                                    <p className="text-sm text-gray-500 mt-1">
+                                       Define qué almacenes puede "ver" y "vender" esta terminal. 
+                                    </p>
+                                 </div>
+
+                                 <div className="space-y-4">
+                                    <div className="grid grid-cols-12 gap-4 border-b border-gray-100 pb-2 text-xs font-bold text-gray-400 uppercase tracking-widest px-4">
+                                       <div className="col-span-6">Almacén / Tienda</div>
+                                       <div className="col-span-3 text-center">Visibilidad (Consulta)</div>
+                                       <div className="col-span-3 text-center">Venta Predeterminada</div>
+                                    </div>
+
+                                    {warehouses.map(wh => {
+                                       const isVisible = activeTerminal.config.inventoryScope?.visibleWarehouseIds?.includes(wh.id) || false;
+                                       const isDefault = activeTerminal.config.inventoryScope?.defaultSalesWarehouseId === wh.id;
+
+                                       return (
+                                          <div key={wh.id} className={`grid grid-cols-12 gap-4 items-center p-4 rounded-xl border-2 transition-all ${isDefault ? 'bg-indigo-50 border-indigo-200' : isVisible ? 'bg-white border-gray-200' : 'bg-gray-50 border-transparent opacity-60'}`}>
+                                             <div className="col-span-6">
+                                                <h4 className="font-bold text-gray-800">{wh.name}</h4>
+                                                <p className="text-xs text-gray-400 font-mono">{wh.code} • {wh.type}</p>
+                                             </div>
+                                             
+                                             {/* Visibility Checkbox */}
+                                             <div className="col-span-3 flex justify-center">
+                                                <div 
+                                                   onClick={() => {
+                                                      const current = activeTerminal.config.inventoryScope?.visibleWarehouseIds || [];
+                                                      const newVisible = current.includes(wh.id) 
+                                                         ? current.filter(id => id !== wh.id)
+                                                         : [...current, wh.id];
+                                                      
+                                                      handleUpdateActiveConfig('inventoryScope', 'visibleWarehouseIds', newVisible);
+                                                      
+                                                      // If deselecting visibility, check if it was default
+                                                      if (current.includes(wh.id) && isDefault) {
+                                                         handleUpdateActiveConfig('inventoryScope', 'defaultSalesWarehouseId', '');
+                                                      }
+                                                   }}
+                                                   className={`w-12 h-6 rounded-full relative transition-colors cursor-pointer ${isVisible ? 'bg-indigo-600' : 'bg-gray-300'}`}
+                                                >
+                                                   <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm ${isVisible ? 'left-7' : 'left-1'}`} />
+                                                </div>
+                                             </div>
+
+                                             {/* Default Radio */}
+                                             <div className="col-span-3 flex justify-center">
+                                                <div 
+                                                   onClick={() => {
+                                                      if (!isVisible) return; // Must be visible first
+                                                      handleUpdateActiveConfig('inventoryScope', 'defaultSalesWarehouseId', wh.id);
+                                                   }}
+                                                   className={`w-6 h-6 rounded-full border-2 flex items-center justify-center cursor-pointer transition-all ${isDefault ? 'border-indigo-600 bg-indigo-50' : 'border-gray-300 bg-white hover:border-indigo-300'} ${!isVisible ? 'opacity-30 cursor-not-allowed' : ''}`}
+                                                >
+                                                   {isDefault && <div className="w-3 h-3 rounded-full bg-indigo-600" />}
+                                                </div>
+                                             </div>
+                                          </div>
+                                       );
+                                    })}
+                                 </div>
+                              </section>
+
+                              <div className="bg-orange-50 p-6 rounded-[2rem] border border-orange-100 flex items-start gap-4">
+                                 <AlertCircle className="text-orange-500 mt-1" size={24} />
+                                 <div className="text-sm text-orange-800">
+                                    <h4 className="font-bold mb-1">Aviso de Seguridad</h4>
+                                    <p>Si seleccionas un almacén externo como predeterminado, asegúrate de que el cajero tenga permisos para mover stock desde esa ubicación.</p>
+                                 </div>
+                              </div>
+                           </div>
                         )}
 
                         {/* TAB: TAXES (Module for Multi-Tax Management) */}
@@ -506,7 +595,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                           </div>
                                           <div className="flex-1">
                                               <h4 className="font-bold text-sm text-gray-700">Límite de Efectivo en Gaveta</h4>
-                                              <p className="text-[11px] text-gray-400 mt-1 leading-relaxed">Alerta al cajero para realizar retiro cuando se supere este monto.</p>
+                                              <p className="text-left text-[11px] text-gray-400 mt-1 leading-relaxed">Alerta al cajero para realizar retiro cuando se supere este monto.</p>
                                           </div>
                                       </div>
                                       <div className="relative">
@@ -531,12 +620,19 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               </div>
 
                               <div className="space-y-4">
-                                 {activeTerminal.config.documentSeries.map((series, index) => (
+                                 {activeTerminal.config.documentSeries.map((series, index) => {
+                                    // Dynamic Icon Resolver
+                                    let Icon = FileText;
+                                    if (series.icon === 'Receipt') Icon = Receipt;
+                                    if (series.icon === 'RotateCcw') Icon = RotateCcw;
+                                    if (series.icon === 'ArrowRightLeft') Icon = ArrowRightLeft;
+
+                                    return (
                                     <div key={series.id} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm transition-all hover:border-blue-300">
                                        <div className="flex flex-col md:flex-row items-start md:items-center gap-6 mb-6">
                                           <div className="flex items-center gap-4 flex-1">
                                              <div className="p-3 rounded-2xl bg-gray-100 text-gray-600">
-                                                <FileText size={24} />
+                                                <Icon size={24} />
                                              </div>
                                              <div>
                                                 <h3 className="text-lg font-bold text-gray-800">{series.name}</h3>
@@ -603,7 +699,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                           </div>
                                        </div>
                                     </div>
-                                 ))}
+                                 )})}
                               </div>
                            </div>
                         )}
