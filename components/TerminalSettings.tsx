@@ -1,11 +1,13 @@
-import React, { useState, useMemo } from 'react';
+
+import React, { useState, useMemo, useRef } from 'react';
 import { 
   Database, Clock, WifiOff, X, Save, Image as ImageIcon, 
   Receipt, Monitor, Plus, Trash2, Smartphone, CheckCircle2,
-  ChevronRight, Settings as SettingsIcon, AlertCircle,
+  ChevronRight, ChevronLeft, Settings as SettingsIcon, AlertCircle,
   LayoutGrid, ShieldCheck, Zap, Lock, ShieldAlert,
   ArrowRight, Users, FileText, Hash, Type, RotateCcw, Tag, 
-  DollarSign, Check, Percent, Calculator, Coins, Box, ArrowRightLeft
+  DollarSign, Check, Percent, Calculator, Coins, Box, ArrowRightLeft,
+  Link2Off, MonitorOff, Cloud, RefreshCw, Activity, Wifi, Server, AlertTriangle
 } from 'lucide-react';
 import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse } from '../types';
 import { DEFAULT_TERMINAL_CONFIG } from '../constants';
@@ -19,7 +21,6 @@ interface TerminalSettingsProps {
 
 type TerminalTab = 'OPERATIONAL' | 'SECURITY' | 'SESSION' | 'PRICING' | 'DOCUMENTS' | 'OFFLINE' | 'TAXES' | 'INVENTORY';
 
-// Mock warehouses for display if not passed (To ensure it works immediately)
 const MOCK_WAREHOUSES_FOR_UI: Warehouse[] = [
     { id: 'wh_1', code: 'CEN', name: 'Almacén Central', type: 'PHYSICAL', address: '', allowPosSale: true, allowNegativeStock: false, isMain: true, storeId: 'S1' },
     { id: 'wh_2', code: 'NTE', name: 'Tienda Norte', type: 'PHYSICAL', address: '', allowPosSale: true, allowNegativeStock: false, isMain: false, storeId: 'S1' },
@@ -30,10 +31,19 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
   const [terminals, setTerminals] = useState(config.terminals || []);
   const [selectedTerminalId, setSelectedTerminalId] = useState<string>(terminals[0]?.id || '');
   const [activeTab, setActiveTab] = useState<TerminalTab>('OPERATIONAL');
+  const [unlinkConfirmId, setUnlinkConfirmId] = useState<string | null>(null);
 
-  // Multi-Tax State
   const [taxes, setTaxes] = useState<TaxDefinition[]>(config.taxes || []);
   const [editingTaxId, setEditingTaxId] = useState<string | null>(null);
+
+  // Sync Status State (moved from SyncStatusHub)
+  const [syncStatus, setSyncStatus] = useState<'SYNCED' | 'SYNCING' | 'OFFLINE'>('SYNCED');
+  const [lastSync, setLastSync] = useState<Date>(new Date());
+  const [pendingItems, setPendingItems] = useState(0);
+  const [syncProgress, setSyncProgress] = useState(0);
+  const [latency, setLatency] = useState(24);
+
+  const tabsRef = useRef<HTMLDivElement>(null);
 
   const activeTerminal = useMemo(() => 
     terminals.find(t => t.id === selectedTerminalId), 
@@ -69,31 +79,19 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
   const handleAddTerminal = () => {
     const nextNum = terminals.length + 1;
     let newId = `t${nextNum}`;
-    
-    // Garantizar ID único
     let counter = nextNum;
     while(terminals.some(t => t.id === newId)) {
         counter++;
         newId = `t${counter}`;
     }
-
-    // Clonar configuración base
     const newConfig = JSON.parse(JSON.stringify(DEFAULT_TERMINAL_CONFIG));
-
-    // ACTUALIZAR PREFIJOS PARA EVITAR TRASLAPE
-    // Si es la terminal 2, TCK pasa a TCK2, B01 pasa a B01-2, etc.
     newConfig.documentSeries = newConfig.documentSeries.map((series: DocumentSeries) => ({
         ...series,
         prefix: series.prefix.includes('B01') 
             ? `${series.prefix}-${counter}` 
             : `${series.prefix}${counter}`
     }));
-
-    const newTerminal = {
-      id: newId,
-      config: newConfig
-    };
-    
+    const newTerminal = { id: newId, config: newConfig };
     const updatedTerminals = [...terminals, newTerminal];
     setTerminals(updatedTerminals);
     setSelectedTerminalId(newId);
@@ -104,16 +102,30 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
         alert("Debe existir al menos una terminal configurada.");
         return;
     }
-    
     if (confirm(`¿Estás seguro de eliminar la terminal ${id}? Esta acción no se puede deshacer.`)) {
       const newTerminals = terminals.filter(t => t.id !== id);
       setTerminals(newTerminals);
-      
-      // Si eliminamos la terminal seleccionada, cambiamos a la primera disponible
       if (selectedTerminalId === id) {
         setSelectedTerminalId(newTerminals[0].id);
       }
     }
+  };
+
+  const handleUnlinkTerminal = (id: string) => {
+    setTerminals(prev => prev.map(t => {
+      if (t.id === id) {
+        return { 
+          ...t, 
+          config: { 
+            ...t.config, 
+            currentDeviceId: undefined, 
+            lastPairingDate: undefined 
+          } 
+        };
+      }
+      return t;
+    }));
+    setUnlinkConfirmId(null);
   };
 
   const handleUpdatePrimaryTaxName = (newName: string) => {
@@ -169,6 +181,73 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
     onClose();
   };
 
+  const scrollTabs = (direction: 'left' | 'right') => {
+    if (tabsRef.current) {
+      const scrollAmount = 300;
+      tabsRef.current.scrollBy({
+        left: direction === 'left' ? -scrollAmount : scrollAmount,
+        behavior: 'smooth'
+      });
+    }
+  };
+
+  // Sync Handlers
+  const handleForceSync = () => {
+    if (syncStatus === 'OFFLINE') {
+      alert("No hay conexión a internet. Verifique su red.");
+      return;
+    }
+    setSyncStatus('SYNCING');
+    setSyncProgress(0);
+    const interval = setInterval(() => {
+      setSyncProgress(prev => {
+        if (prev >= 100) {
+          clearInterval(interval);
+          setSyncStatus('SYNCED');
+          setLastSync(new Date());
+          setPendingItems(0);
+          return 100;
+        }
+        return prev + 5;
+      });
+    }, 100);
+  };
+
+  const toggleSimulationMode = () => {
+    if (syncStatus === 'OFFLINE') {
+      setSyncStatus('SYNCED');
+      setPendingItems(0);
+    } else {
+      setSyncStatus('OFFLINE');
+      setPendingItems(12);
+    }
+  };
+
+  // Helpers for Sync UI
+  const getStatusColor = () => {
+    switch (syncStatus) {
+      case 'SYNCED': return 'bg-emerald-500 shadow-emerald-200';
+      case 'SYNCING': return 'bg-blue-500 shadow-blue-200';
+      case 'OFFLINE': return 'bg-red-500 shadow-red-200';
+    }
+  };
+
+  const getStatusIcon = () => {
+    switch (syncStatus) {
+      case 'SYNCED': return <CheckCircle2 size={64} className="text-white drop-shadow-md" />;
+      case 'SYNCING': return <RefreshCw size={64} className="text-white animate-spin drop-shadow-md" />;
+      case 'OFFLINE': return <WifiOff size={64} className="text-white drop-shadow-md" />;
+    }
+  };
+
+  const getStatusText = () => {
+    switch (syncStatus) {
+      case 'SYNCED': return 'Todo Sincronizado';
+      case 'SYNCING': return 'Sincronizando...';
+      case 'OFFLINE': return 'Modo Offline';
+    }
+  };
+
   const Toggle = ({ label, description, checked, onChange, danger = false, icon: Icon }: any) => (
     <div 
         onClick={() => onChange(!checked)}
@@ -188,7 +267,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
   );
 
   return (
-    <div className="flex h-full bg-gray-50 animate-in fade-in overflow-hidden">
+    <div className="flex h-full bg-gray-50 animate-in fade-in overflow-hidden relative">
         
         {/* SIDEBAR */}
         <aside className="w-80 bg-white border-r border-gray-200 flex flex-col shrink-0 z-20 shadow-sm">
@@ -203,44 +282,61 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-2">
-               {terminals.map((t) => (
-                  <div 
-                     key={t.id}
-                     onClick={() => setSelectedTerminalId(t.id)}
-                     className={`group p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between ${
-                        selectedTerminalId === t.id ? 'bg-blue-50 border-blue-500 shadow-md ring-4 ring-blue-50' : 'bg-white border-transparent hover:border-gray-200 hover:bg-gray-50/50'
-                     }`}
-                  >
-                     <div className="flex items-center gap-3">
-                        <div className={`p-2.5 rounded-xl ${selectedTerminalId === t.id ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100 text-gray-400 group-hover:text-gray-600'}`}>
-                           <Monitor size={20} />
-                        </div>
-                        <div>
-                           <h3 className={`font-bold text-sm ${selectedTerminalId === t.id ? 'text-blue-900' : 'text-gray-700'}`}>{t.id}</h3>
-                           <p className="text-[10px] font-medium text-gray-400 uppercase tracking-tighter">POS Terminal</p>
-                        </div>
-                     </div>
-                     <div className="flex items-center gap-1">
-                        {terminals.length > 1 && (
-                           <button 
-                              onClick={(e) => { 
-                                 e.stopPropagation(); 
-                                 handleDeleteTerminal(t.id); 
-                              }} 
-                              className={`p-2 rounded-lg transition-all ${
-                                 selectedTerminalId === t.id 
-                                    ? 'text-blue-300 hover:text-red-500 hover:bg-white' 
-                                    : 'text-gray-300 hover:text-red-500 hover:bg-red-50'
-                              }`}
-                              title="Eliminar Terminal"
-                           >
-                              <Trash2 size={18} />
-                           </button>
-                        )}
-                        {selectedTerminalId === t.id && <ChevronRight size={16} className="text-blue-500" />}
-                     </div>
-                  </div>
-               ))}
+               {terminals.map((t) => {
+                  const isLinked = !!t.config.currentDeviceId;
+                  return (
+                    <div 
+                      key={t.id}
+                      onClick={() => setSelectedTerminalId(t.id)}
+                      className={`group p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between ${
+                          selectedTerminalId === t.id ? 'bg-blue-50 border-blue-500 shadow-md ring-4 ring-blue-50' : 'bg-white border-transparent hover:border-gray-200 hover:bg-gray-50/50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                          <div className={`p-2.5 rounded-xl ${selectedTerminalId === t.id ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100 text-gray-400 group-hover:text-gray-600'}`}>
+                            <Monitor size={20} />
+                          </div>
+                          <div>
+                            <h3 className={`font-bold text-sm ${selectedTerminalId === t.id ? 'text-blue-900' : 'text-gray-700'}`}>{t.id}</h3>
+                            <div className="flex items-center gap-1.5">
+                                <div className={`w-2 h-2 rounded-full ${isLinked ? 'bg-emerald-500 animate-pulse' : 'bg-gray-300'}`} />
+                                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-tighter">
+                                    {isLinked ? 'En línea / Vinculado' : 'Sin dispositivo'}
+                                </p>
+                            </div>
+                          </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                          {isLinked && (
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); setUnlinkConfirmId(t.id); }}
+                                className="p-2 text-orange-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-all"
+                                title="Liberar Terminal"
+                            >
+                                <Link2Off size={18} />
+                            </button>
+                          )}
+                          {terminals.length > 1 && (
+                            <button 
+                                onClick={(e) => { 
+                                  e.stopPropagation(); 
+                                  handleDeleteTerminal(t.id); 
+                                }} 
+                                className={`p-2 rounded-lg transition-all ${
+                                  selectedTerminalId === t.id 
+                                      ? 'text-blue-300 hover:text-red-500 hover:bg-white' 
+                                      : 'text-gray-300 hover:text-red-500 hover:bg-red-50'
+                                }`}
+                                title="Eliminar Terminal"
+                            >
+                                <Trash2 size={18} />
+                            </button>
+                          )}
+                          {selectedTerminalId === t.id && <ChevronRight size={16} className="text-blue-500" />}
+                      </div>
+                    </div>
+                  );
+               })}
             </div>
         </aside>
 
@@ -263,7 +359,18 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                 </div>
             </header>
 
-            <div className="px-8 bg-white border-b border-gray-100 flex gap-8 shrink-0 overflow-x-auto no-scrollbar">
+            <div className="relative bg-white border-b border-gray-100 shrink-0">
+                <button 
+                    onClick={() => scrollTabs('left')}
+                    className="absolute left-0 top-0 bottom-0 z-10 w-12 bg-gradient-to-r from-white via-white/80 to-transparent flex items-center justify-center text-gray-400 hover:text-blue-600 transition-colors"
+                >
+                    <ChevronLeft size={24} />
+                </button>
+
+                <div 
+                    ref={tabsRef}
+                    className="flex gap-8 px-12 overflow-x-auto no-scrollbar scroll-smooth"
+                >
                 {[
                   { id: 'OPERATIONAL', label: 'Operativa', icon: Database },
                   { id: 'INVENTORY', label: 'Alcance de Inventario', icon: Box },
@@ -272,22 +379,29 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                   { id: 'SECURITY', label: 'Seguridad', icon: ShieldAlert },
                   { id: 'SESSION', label: 'Sesión y Z', icon: Clock },
                   { id: 'DOCUMENTS', label: 'Documentos', icon: FileText },
+                  { id: 'OFFLINE', label: 'Estado de Conexión', icon: Cloud },
                 ].map(tab => (
                   <button 
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id as TerminalTab)}
-                    className={`pb-4 pt-2 text-sm font-bold flex items-center gap-2 border-b-4 transition-all whitespace-nowrap ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                    className={`pb-4 pt-4 text-sm font-bold flex items-center gap-2 border-b-4 transition-all whitespace-nowrap ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                   >
                     <tab.icon size={18} /> {tab.label}
                   </button>
                 ))}
+                </div>
+
+                <button 
+                    onClick={() => scrollTabs('right')}
+                    className="absolute right-0 top-0 bottom-0 z-10 w-12 bg-gradient-to-l from-white via-white/80 to-transparent flex items-center justify-center text-gray-400 hover:text-blue-600 transition-colors"
+                >
+                    <ChevronRight size={24} />
+                </button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-slate-50/50">
                 {activeTerminal ? (
                     <div className="max-w-5xl mx-auto pb-20">
-                        
-                        {/* TAB: OPERATIONAL */}
                         {activeTab === 'OPERATIONAL' && (
                           <div className="space-y-6 animate-in slide-in-from-right-4">
                               <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -310,8 +424,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                      checked={activeTerminal.config.workflow.inventory.showStockOnTiles} 
                                      onChange={(v: boolean) => handleUpdateActiveConfig('workflow.inventory', 'showStockOnTiles', v)} 
                                   />
-                                  
-                                  {/* TIPO DE IMPUESTO OPTION */}
                                   <div className="p-5 rounded-2xl border-2 border-transparent bg-white shadow-sm flex flex-col gap-4">
                                       <div className="flex items-start gap-4">
                                           <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600 shrink-0">
@@ -338,8 +450,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               </div>
                           </div>
                         )}
-
-                        {/* NEW TAB: INVENTORY SCOPE */}
                         {activeTab === 'INVENTORY' && (
                            <div className="space-y-8 animate-in slide-in-from-right-4">
                               <section className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm">
@@ -351,26 +461,21 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        Define qué almacenes puede "ver" y "vender" esta terminal. 
                                     </p>
                                  </div>
-
                                  <div className="space-y-4">
                                     <div className="grid grid-cols-12 gap-4 border-b border-gray-100 pb-2 text-xs font-bold text-gray-400 uppercase tracking-widest px-4">
                                        <div className="col-span-6">Almacén / Tienda</div>
                                        <div className="col-span-3 text-center">Visibilidad (Consulta)</div>
                                        <div className="col-span-3 text-center">Venta Predeterminada</div>
                                     </div>
-
                                     {warehouses.map(wh => {
                                        const isVisible = activeTerminal.config.inventoryScope?.visibleWarehouseIds?.includes(wh.id) || false;
                                        const isDefault = activeTerminal.config.inventoryScope?.defaultSalesWarehouseId === wh.id;
-
                                        return (
                                           <div key={wh.id} className={`grid grid-cols-12 gap-4 items-center p-4 rounded-xl border-2 transition-all ${isDefault ? 'bg-indigo-50 border-indigo-200' : isVisible ? 'bg-white border-gray-200' : 'bg-gray-50 border-transparent opacity-60'}`}>
                                              <div className="col-span-6">
                                                 <h4 className="font-bold text-gray-800">{wh.name}</h4>
                                                 <p className="text-xs text-gray-400 font-mono">{wh.code} • {wh.type}</p>
                                              </div>
-                                             
-                                             {/* Visibility Checkbox */}
                                              <div className="col-span-3 flex justify-center">
                                                 <div 
                                                    onClick={() => {
@@ -378,10 +483,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                       const newVisible = current.includes(wh.id) 
                                                          ? current.filter(id => id !== wh.id)
                                                          : [...current, wh.id];
-                                                      
                                                       handleUpdateActiveConfig('inventoryScope', 'visibleWarehouseIds', newVisible);
-                                                      
-                                                      // If deselecting visibility, check if it was default
                                                       if (current.includes(wh.id) && isDefault) {
                                                          handleUpdateActiveConfig('inventoryScope', 'defaultSalesWarehouseId', '');
                                                       }
@@ -391,12 +493,10 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm ${isVisible ? 'left-7' : 'left-1'}`} />
                                                 </div>
                                              </div>
-
-                                             {/* Default Radio */}
                                              <div className="col-span-3 flex justify-center">
                                                 <div 
                                                    onClick={() => {
-                                                      if (!isVisible) return; // Must be visible first
+                                                      if (!isVisible) return;
                                                       handleUpdateActiveConfig('inventoryScope', 'defaultSalesWarehouseId', wh.id);
                                                    }}
                                                    className={`w-6 h-6 rounded-full border-2 flex items-center justify-center cursor-pointer transition-all ${isDefault ? 'border-indigo-600 bg-indigo-50' : 'border-gray-300 bg-white hover:border-indigo-300'} ${!isVisible ? 'opacity-30 cursor-not-allowed' : ''}`}
@@ -409,7 +509,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     })}
                                  </div>
                               </section>
-
                               <div className="bg-orange-50 p-6 rounded-[2rem] border border-orange-100 flex items-start gap-4">
                                  <AlertCircle className="text-orange-500 mt-1" size={24} />
                                  <div className="text-sm text-orange-800">
@@ -419,8 +518,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               </div>
                            </div>
                         )}
-
-                        {/* TAB: TAXES (Module for Multi-Tax Management) */}
                         {activeTab === 'TAXES' && (
                            <div className="space-y-8 animate-in slide-in-from-right-4">
                               <div className="flex justify-between items-center bg-white p-6 rounded-3xl border border-gray-200 shadow-sm">
@@ -436,7 +533,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     </button>
                                  </div>
                               </div>
-
                               <div className="grid grid-cols-1 gap-4">
                                  {taxes.map((tax) => (
                                     <div 
@@ -490,7 +586,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     </div>
                                  ))}
                               </div>
-
                               <div className="bg-blue-50 p-6 rounded-[2rem] border border-blue-100 flex items-start gap-4">
                                  <AlertCircle className="text-blue-500 mt-1" size={24} />
                                  <div className="text-sm text-blue-800">
@@ -500,7 +595,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               </div>
                            </div>
                         )}
-
                         {activeTab === 'PRICING' && (
                            <div className="space-y-10 animate-in slide-in-from-right-4">
                               <section>
@@ -510,8 +604,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {config.tariffs.map(tariff => {
                                        const isAllowed = activeTerminal.config.pricing?.allowedTariffIds.includes(tariff.id);
-                                       const isDefault = activeTerminal.config.pricing?.defaultTariffId === tariff.id;
-                                       
                                        return (
                                           <div 
                                              key={tariff.id}
@@ -547,7 +639,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               </section>
                            </div>
                         )}
-
                         {activeTab === 'SECURITY' && (
                           <div className="space-y-6 animate-in slide-in-from-right-4">
                               <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -569,8 +660,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               </div>
                           </div>
                         )}
-
-                        {/* TAB: SESSION & Z */}
                         {activeTab === 'SESSION' && (
                           <div className="space-y-6 animate-in slide-in-from-right-4">
                               <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -610,23 +699,18 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               </div>
                           </div>
                         )}
-
-                        {/* TAB: DOCUMENTS */}
                         {activeTab === 'DOCUMENTS' && (
                            <div className="space-y-6 animate-in slide-in-from-right-4">
                               <div className="flex items-center gap-4 mb-4 bg-blue-50 p-4 rounded-2xl border border-blue-100">
                                  <AlertCircle className="text-blue-500" />
                                  <p className="text-sm text-blue-800 font-medium">Configura los prefijos y numeración fiscal para cada tipo de documento en esta terminal.</p>
                               </div>
-
                               <div className="space-y-4">
                                  {activeTerminal.config.documentSeries.map((series, index) => {
-                                    // Dynamic Icon Resolver
                                     let Icon = FileText;
                                     if (series.icon === 'Receipt') Icon = Receipt;
                                     if (series.icon === 'RotateCcw') Icon = RotateCcw;
                                     if (series.icon === 'ArrowRightLeft') Icon = ArrowRightLeft;
-
                                     return (
                                     <div key={series.id} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm transition-all hover:border-blue-300">
                                        <div className="flex flex-col md:flex-row items-start md:items-center gap-6 mb-6">
@@ -639,8 +723,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                 <p className="text-xs text-gray-500 uppercase font-bold tracking-widest">{series.id}</p>
                                              </div>
                                           </div>
-                                          
-                                          {/* Preview Badge */}
                                           <div className="bg-slate-900 px-6 py-2.5 rounded-2xl text-white shadow-xl flex flex-col items-center">
                                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Próximo Folio</span>
                                              <span className="font-mono text-lg font-black tracking-widest text-blue-400">
@@ -648,7 +730,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                              </span>
                                           </div>
                                        </div>
-
                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                           <div>
                                              <label className="block text-[10px] font-bold text-gray-400 uppercase mb-2 ml-1">Prefijo de Serie</label>
@@ -703,10 +784,122 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               </div>
                            </div>
                         )}
+                        {/* OFFLINE / SYNC TAB */}
+                        {activeTab === 'OFFLINE' && (
+                           <div className="space-y-8 animate-in slide-in-from-right-4 max-w-4xl mx-auto">
+                              
+                              {/* Central Indicator Card */}
+                              <div className="bg-white rounded-[2.5rem] shadow-xl border border-gray-100 p-10 flex flex-col items-center justify-center relative overflow-hidden">
+                                 <div className={`absolute top-0 left-0 w-full h-2 bg-gradient-to-r ${syncStatus === 'SYNCED' ? 'from-emerald-400 to-green-500' : syncStatus === 'OFFLINE' ? 'from-red-500 to-orange-500' : 'from-blue-400 to-indigo-500'}`}></div>
+                                 
+                                 <div className={`w-40 h-40 rounded-full flex items-center justify-center mb-6 shadow-2xl transition-all duration-500 ${getStatusColor()} ${syncStatus === 'SYNCED' ? 'scale-100' : 'scale-105'}`}>
+                                    {getStatusIcon()}
+                                 </div>
+
+                                 <h2 className={`text-3xl font-black mb-2 transition-colors ${syncStatus === 'OFFLINE' ? 'text-red-600' : 'text-gray-800'}`}>
+                                    {getStatusText()}
+                                 </h2>
+                                 
+                                 <p className="text-gray-500 font-medium text-lg text-center max-w-md">
+                                    {syncStatus === 'SYNCED' ? 'Los datos de esta terminal están seguros en la nube.' : syncStatus === 'SYNCING' ? 'Subiendo cambios recientes...' : 'Datos guardados localmente. Se subirán al reconectar.'}
+                                 </p>
+
+                                 {/* Progress Bar (Syncing) */}
+                                 {syncStatus === 'SYNCING' && (
+                                    <div className="w-full max-w-xs mt-6 bg-gray-100 h-2 rounded-full overflow-hidden">
+                                       <div className="bg-blue-500 h-full transition-all duration-300" style={{ width: `${syncProgress}%` }}></div>
+                                    </div>
+                                 )}
+
+                                 {/* Last Sync Info */}
+                                 {syncStatus !== 'SYNCING' && (
+                                    <div className="mt-8 flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-full border border-gray-200 text-sm text-gray-500">
+                                       <Activity size={16} />
+                                       <span>Último respaldo: <strong>{lastSync.toLocaleTimeString()}</strong></span>
+                                    </div>
+                                 )}
+                              </div>
+
+                              {/* Details Grid */}
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                 {/* Queue Info */}
+                                 <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-200">
+                                    <div className="flex items-center gap-3 mb-4 text-orange-600">
+                                       <div className="p-2 bg-orange-100 rounded-lg"><Server size={20} /></div>
+                                       <h3 className="font-bold text-lg">Cola de Subida</h3>
+                                    </div>
+                                    <div className="flex-1 bg-orange-50/50 rounded-xl p-4 border border-orange-100 mb-4">
+                                       <div className="flex justify-between items-center mb-2">
+                                          <span className="text-sm font-medium text-gray-700 flex items-center gap-2"><FileText size={14}/> Tickets de Venta</span>
+                                          <span className="font-bold text-orange-600">{pendingItems} pendientes</span>
+                                       </div>
+                                    </div>
+                                    <p className="text-xs text-gray-400 mt-auto">* Los datos se almacenan de forma segura en el dispositivo hasta recuperar la conexión.</p>
+                                 </div>
+
+                                 {/* Actions */}
+                                 <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-200 flex flex-col justify-between">
+                                    <div>
+                                       <h3 className="font-bold text-lg text-gray-800 mb-2">Acciones Manuales</h3>
+                                       <p className="text-sm text-gray-500 mb-6">Opciones de diagnóstico y sincronización.</p>
+                                    </div>
+                                    <div className="space-y-3">
+                                       <button onClick={handleForceSync} disabled={syncStatus === 'SYNCING'} className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold flex items-center justify-center gap-3 hover:bg-slate-800 disabled:opacity-50 shadow-lg active:scale-95 transition-all">
+                                          <RefreshCw size={20} className={syncStatus === 'SYNCING' ? 'animate-spin' : ''} />
+                                          {syncStatus === 'SYNCING' ? 'Sincronizando...' : 'Forzar Sincronización'}
+                                       </button>
+                                       
+                                       <div className="flex justify-center pt-2">
+                                          <button onClick={toggleSimulationMode} className="text-xs text-gray-400 underline">
+                                             Simular {syncStatus === 'OFFLINE' ? 'Conexión' : 'Desconexión'}
+                                          </button>
+                                       </div>
+                                       
+                                       {syncStatus === 'OFFLINE' && (
+                                          <div className="flex items-center gap-2 p-3 bg-red-50 text-red-700 rounded-xl text-xs font-bold justify-center">
+                                             <AlertTriangle size={14} /> Verifique conexión WiFi
+                                          </div>
+                                       )}
+                                    </div>
+                                 </div>
+                              </div>
+                           </div>
+                        )}
                     </div>
                 ) : <div className="h-full flex flex-col items-center justify-center text-gray-400 italic"><p>Selecciona una terminal</p></div>}
             </div>
         </div>
+
+        {/* --- UNLINK CONFIRMATION MODAL --- */}
+        {unlinkConfirmId && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
+            <div className="bg-white rounded-[2rem] w-full max-w-sm p-8 shadow-2xl animate-in zoom-in-95 text-center">
+              <div className="w-16 h-16 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                <Link2Off size={32} />
+              </div>
+              <h3 className="text-xl font-black text-slate-800 mb-2">¿Liberar esta terminal?</h3>
+              <p className="text-slate-500 text-sm mb-8 leading-relaxed">
+                Esto desconectará el dispositivo actual de la terminal <strong>{unlinkConfirmId}</strong>. 
+                La próxima computadora que ingrese podrá tomar el control de esta caja. <br/><br/>
+                ¿Está seguro?
+              </p>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setUnlinkConfirmId(null)}
+                  className="flex-1 py-3.5 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={() => handleUnlinkTerminal(unlinkConfirmId)}
+                  className="flex-1 py-3.5 bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-200 hover:bg-orange-600 active:scale-95 transition-all"
+                >
+                  Sí, Liberar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
     </div>
   );
 };

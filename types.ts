@@ -46,9 +46,14 @@ export interface DocumentSeries {
 }
 
 export interface TerminalConfig {
-  defaultWarehouseId?: string;
+  // BINDING & SECURITY
+  currentDeviceId?: string; // UUID of the authorized browser/device
+  lastPairingDate?: string;
+  isBlocked?: boolean;
+  deviceBindingToken: string; // The secret key for handshake
+  
   security: {
-    deviceBindingToken: string;
+    deviceBindingToken: string; // Deprecated or kept for secondary auth
     requirePinForVoid: boolean;
     requirePinForDiscount: boolean;
     autoLogoutMinutes: number;
@@ -95,10 +100,9 @@ export interface TerminalConfig {
     showProductImages: boolean;
     quickKeysLayout: 'A' | 'B';
   };
-  // NEW: Inventory Scope Configuration
   inventoryScope?: {
-    defaultSalesWarehouseId: string; // ID of the warehouse to deduct stock from by default
-    visibleWarehouseIds: string[]; // IDs of warehouses visible for stock queries
+    defaultSalesWarehouseId: string;
+    visibleWarehouseIds: string[];
   };
 }
 
@@ -346,7 +350,7 @@ export interface PurchaseOrder {
   totalCost: number;
 }
 
-export type ViewState = 'SETUP' | 'WIZARD' | 'LOGIN' | 'POS' | 'SETTINGS' | 'CUSTOMERS' | 'HISTORY' | 'FINANCE' | 'Z_REPORT' | 'SUPPLY_CHAIN' | 'FRANCHISE_DASHBOARD';
+export type ViewState = 'SETUP' | 'WIZARD' | 'LOGIN' | 'POS' | 'SETTINGS' | 'CUSTOMERS' | 'HISTORY' | 'FINANCE' | 'Z_REPORT' | 'SUPPLY_CHAIN' | 'FRANCHISE_DASHBOARD' | 'DEVICE_UNAUTHORIZED';
 
 export type PricingStrategyType = 'MANUAL' | 'COST_PLUS' | 'DERIVED';
 export type RoundingRule = 'NONE' | 'ENDING_99' | 'CEILING';
@@ -412,7 +416,7 @@ export interface Shift {
 
 export interface TimeRecord {
   id: string;
-  userId: string;
+  userId: string | null;
   type: 'IN' | 'OUT';
   timestamp: string;
   method: 'PIN' | 'FACE_ID';
@@ -509,4 +513,12 @@ export interface BehaviorConfig {
   autoLogoutMinutes: number;
   requireManagerForRefunds: boolean;
   autoPrintZReport: boolean;
+}
+
+export interface ParkedTicket {
+  id: string;
+  items: CartItem[];
+  customer: Customer | null;
+  total: number;
+  date: string;
 }

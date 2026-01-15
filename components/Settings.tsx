@@ -19,7 +19,6 @@ import ReceiptDesigner from './ReceiptDesigner';
 import EmailSettings from './EmailSettings';
 import TipsSettings from './TipsSettings';
 import DataSecurityHub from './DataSecurityHub';
-import SyncStatusHub from './SyncStatusHub';
 import ActivityLog from './ActivityLog';
 import TeamHub from './TeamHub';
 import PaymentSettings from './PaymentSettings';
@@ -44,7 +43,7 @@ interface SettingsProps {
   onClose: () => void;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'SYNC' | 'EMAIL' | 'TIPS' | 'BEHAVIOR' | 'DOCUMENTS';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'BEHAVIOR' | 'DOCUMENTS';
 
 const Settings: React.FC<SettingsProps> = (props) => {
   const [currentView, setCurrentView] = useState<SettingsView>('HOME');
@@ -89,8 +88,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
              <DataSecurityHub onClose={() => setCurrentView('HOME')} />
           </div>
         );
-      case 'SYNC':
-        return <SyncStatusHub onClose={() => setCurrentView('HOME')} />;
       case 'LOGS':
         return <ActivityLog onClose={() => setCurrentView('HOME')} />;
       case 'TEAM':
@@ -211,10 +208,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     <SettingsCard 
                       icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" 
                       onClick={() => setCurrentView('LOGS')} 
-                    />
-                    <SettingsCard 
-                      icon={Cloud} label="Sincronización" description="Estado de Nube y Red" color="bg-indigo-400" 
-                      onClick={() => setCurrentView('SYNC')} 
                     />
                   </div>
                </section>

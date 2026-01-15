@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   User, 
   RoleDefinition, 
@@ -14,7 +14,8 @@ import {
   CartItem,
   ViewState,
   Tariff,
-  Warehouse
+  Warehouse,
+  ParkedTicket
 } from './types';
 import { 
   MOCK_USERS, 
@@ -38,6 +39,7 @@ import SupplyChainManager from './components/SupplyChainManager';
 import VerticalSelector from './components/VerticalSelector';
 import SetupWizard from './components/SetupWizard';
 import FranchiseDashboard from './components/FranchiseDashboard';
+import TerminalBindingScreen from './components/TerminalBindingScreen';
 
 const INITIAL_WAREHOUSES: Warehouse[] = [
   { id: 'wh_1', code: 'CEN', name: 'Almacén Central', type: 'PHYSICAL', address: 'Calle Industria 45', allowPosSale: true, allowNegativeStock: false, isMain: true, storeId: 'S1' },
@@ -51,6 +53,10 @@ const App: React.FC = () => {
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any)); 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   
+  // --- SECURITY & DEVICE HANDSHAKE ---
+  const [deviceId, setDeviceId] = useState<string>('');
+  const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
+
   // --- DATA STORES ---
   const [users, setUsers] = useState<User[]>(MOCK_USERS);
   const [roles, setRoles] = useState<RoleDefinition[]>(DEFAULT_ROLES);
@@ -63,6 +69,7 @@ const App: React.FC = () => {
   // POS Persistent State
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [parkedTickets, setParkedTickets] = useState<ParkedTicket[]>([]); // Lifted state to persist across views
 
   // Supply Chain Data
   const [suppliers, setSuppliers] = useState<Supplier[]>([
@@ -70,6 +77,30 @@ const App: React.FC = () => {
     { id: 'sup2', name: 'Importadora Global', contactName: 'Ana', phone: '555-0202', email: 'ventas@global.com' }
   ]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+
+  // --- DEVICE AUTH EFFECT ---
+  useEffect(() => {
+    // 1. Get or Create Device ID
+    let dId = localStorage.getItem('clic_pos_device_id');
+    if (!dId) {
+      dId = `DEV-${Math.random().toString(36).substring(2, 15)}-${Date.now()}`;
+      localStorage.setItem('clic_pos_device_id', dId);
+    }
+    setDeviceId(dId);
+
+    // 2. Initial Setup Bypass Check
+    // If setup is not done, we don't block by device yet
+    if (currentView === 'SETUP' || currentView === 'WIZARD') return;
+
+    // 3. Check if device is bound to any terminal
+    const boundTerminal = config.terminals.find(t => t.config.currentDeviceId === dId);
+    if (boundTerminal) {
+       setIsAuthorized(true);
+    } else {
+       setIsAuthorized(false);
+       setCurrentView('DEVICE_UNAUTHORIZED');
+    }
+  }, [config.terminals, currentView]);
 
   // --- EFFECTS ---
   useEffect(() => {
@@ -88,6 +119,31 @@ const App: React.FC = () => {
 
   const handleLogout = () => {
     setCurrentUser(null);
+    setCurrentView('LOGIN');
+  };
+
+  const handleDevicePairing = (terminalId: string) => {
+    const updatedTerminals = config.terminals.map(t => {
+      // Unlink any other terminal using this deviceId
+      if (t.config.currentDeviceId === deviceId) {
+        return { ...t, config: { ...t.config, currentDeviceId: undefined } };
+      }
+      // Link the target terminal
+      if (t.id === terminalId) {
+        return { 
+          ...t, 
+          config: { 
+            ...t.config, 
+            currentDeviceId: deviceId,
+            lastPairingDate: new Date().toISOString() 
+          } 
+        };
+      }
+      return t;
+    });
+
+    handleUpdateConfig({ ...config, terminals: updatedTerminals });
+    setIsAuthorized(true);
     setCurrentView('LOGIN');
   };
 
@@ -188,6 +244,16 @@ const App: React.FC = () => {
     case 'WIZARD':
       return <SetupWizard initialConfig={config} onComplete={(finalConfig) => { setConfig(finalConfig); setCurrentView('LOGIN'); }} />;
       
+    case 'DEVICE_UNAUTHORIZED':
+      return (
+        <TerminalBindingScreen 
+          config={config} 
+          deviceId={deviceId} 
+          adminUsers={users} 
+          onPair={handleDevicePairing} 
+        />
+      );
+
     case 'LOGIN':
       return <LoginScreen onLogin={handleLogin} availableUsers={users} subVertical={config.subVertical} />;
 
@@ -204,6 +270,8 @@ const App: React.FC = () => {
           onUpdateCart={setCart}
           selectedCustomer={selectedCustomer}
           onSelectCustomer={setSelectedCustomer}
+          parkedTickets={parkedTickets}
+          onUpdateParkedTickets={setParkedTickets}
           onLogout={handleLogout}
           onOpenSettings={() => setCurrentView('SETTINGS')}
           onOpenCustomers={() => setCurrentView('CUSTOMERS')}

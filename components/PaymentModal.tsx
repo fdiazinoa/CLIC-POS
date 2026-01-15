@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { 
   X, CreditCard, Banknote, QrCode, CheckCircle2, 
@@ -109,7 +110,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, currencySymbo
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-white w-full max-w-6xl h-full md:h-[85vh] md:rounded-[2.5rem] shadow-2xl flex flex-col md:flex-row overflow-hidden">
+      <div className="bg-white w-full max-w-6xl h-[100dvh] md:h-[85vh] md:rounded-[2.5rem] shadow-2xl flex flex-col md:flex-row overflow-hidden">
         
         {/* SUMMARY SECTION (Collapsible/Header on mobile, Sidebar on desktop) */}
         <div className="flex md:w-[35%] w-full bg-gray-50 border-b md:border-b-0 md:border-r border-gray-200 flex-col p-4 md:p-8 shrink-0">
@@ -200,7 +201,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, currencySymbo
                  { id: 'CARD', label: 'Tarjeta', icon: CreditCard }, 
                  { id: 'QR', label: 'Digital', icon: QrCode } 
               ].map(m => (
-                 <button key={m.id} onClick={() => setActiveMethod(m.id as PaymentMethod)} className={`flex-1 min-w-[100px] py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center gap-1 md:gap-2 transition-all ${activeMethod === m.id ? `border-current ${themeTextClass} bg-gray-50 shadow-sm` : 'border-transparent text-gray-400 hover:bg-gray-50'}`}>
+                 <button key={m.id} onClick={() => setActiveMethod(m.id as PaymentMethod)} className={`flex-1 min-w-[80px] md:min-w-[100px] py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center gap-1 md:gap-2 transition-all ${activeMethod === m.id ? `border-current ${themeTextClass} bg-gray-50 shadow-sm` : 'border-transparent text-gray-400 hover:bg-gray-50'}`}>
                     <m.icon size={24} className="md:w-8 md:h-8" /><span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{m.label}</span>
                  </button>
               ))}
@@ -234,8 +235,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, currencySymbo
               )}
            </div>
 
-           {/* Numpad */}
-           <div className="flex-1 p-4 md:p-8 grid grid-cols-4 gap-2 md:gap-3 min-h-[350px]">
+           {/* Numpad - Responsive grid */}
+           <div className="flex-1 p-4 md:p-8 grid grid-cols-4 gap-2 md:gap-3 content-stretch min-h-[35vh]">
               {[1,2,3].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}
               
               <button 

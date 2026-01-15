@@ -8,11 +8,11 @@ import {
   Scale as ScaleIcon, PauseCircle, LogOut,
   ArrowRightLeft, Globe, DollarSign,
   ChevronDown, Check, AlertCircle, Layers,
-  ShoppingBag
+  ShoppingBag, ScanBarcode, ArrowRight, Clock
 } from 'lucide-react';
 import { 
   BusinessConfig, User as UserType, RoleDefinition, 
-  Customer, Product, CartItem, Transaction, CurrencyConfig, Tariff, TaxDefinition
+  Customer, Product, CartItem, Transaction, CurrencyConfig, Tariff, TaxDefinition, ParkedTicket
 } from '../types';
 import UnifiedPaymentModal from './PaymentModal';
 import TicketOptionsModal from './TicketOptionsModal';
@@ -32,6 +32,8 @@ interface POSInterfaceProps {
   onUpdateCart: React.Dispatch<React.SetStateAction<CartItem[]>>;
   selectedCustomer: Customer | null;
   onSelectCustomer: (customer: Customer | null) => void;
+  parkedTickets: ParkedTicket[]; // Lifted State
+  onUpdateParkedTickets: (tickets: ParkedTicket[]) => void; // Lifted State Setter
   onLogout: () => void;
   onOpenSettings: () => void;
   onOpenCustomers: () => void;
@@ -51,6 +53,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   onUpdateCart,
   selectedCustomer,
   onSelectCustomer,
+  parkedTickets,
+  onUpdateParkedTickets,
   onLogout,
   onOpenSettings,
   onOpenCustomers,
@@ -74,7 +78,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
-  const [parkedTickets, setParkedTickets] = useState<{id: string, items: CartItem[], customer: Customer | null, total: number, date: string}[]>([]);
+  // Removed local parkedTickets state to use props instead
   const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
   
   const [globalDiscount, setGlobalDiscount] = useState<{value: number, type: 'PERCENT' | 'FIXED'}>({value: 0, type: 'PERCENT'});
@@ -221,26 +225,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
   const handleParkTicket = () => {
     if (cart.length === 0) return;
-    const newParked = {
+    const newParked: ParkedTicket = {
       id: `P-${Date.now()}`,
       items: [...cart],
       customer: selectedCustomer,
       total: cartTotal,
       date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
-    setParkedTickets([...parkedTickets, newParked]);
+    onUpdateParkedTickets([...parkedTickets, newParked]);
     onUpdateCart([]);
-    onSelectCustomer(null);
+    onSelectCustomer(null); // Explicitly clear customer to start fresh context
     setMobileView('PRODUCTS');
   };
 
-  const handleResumeTicket = (parked: any) => {
+  const handleResumeTicket = (parked: ParkedTicket) => {
     if (cart.length > 0 && !confirm("¿Reemplazar el ticket actual?")) return;
     onUpdateCart(parked.items);
     onSelectCustomer(parked.customer);
-    setParkedTickets(parkedTickets.filter(p => p.id !== parked.id));
+    onUpdateParkedTickets(parkedTickets.filter(p => p.id !== parked.id));
     setShowParkedList(false);
     setMobileView('TICKET');
+  };
+
+  const openCameraScanner = () => {
+    alert("Iniciando escáner de cámara... (Funcionalidad nativa)");
   };
 
   return (
@@ -257,8 +265,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   placeholder="Buscar producto..." 
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3 bg-gray-100 rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all text-sm font-medium"
+                  className="w-full pl-12 pr-12 md:pr-4 py-3 bg-gray-100 rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all text-sm font-medium"
                 />
+                <button 
+                  onClick={openCameraScanner}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 transition-all md:hidden active:scale-95 border border-gray-100"
+                  title="Escanear con Cámara"
+                >
+                   <ScanBarcode size={18} />
+                </button>
              </div>
 
              <div className="relative shrink-0">
@@ -375,199 +390,339 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <button onClick={() => setMobileView('PRODUCTS')} className="md:hidden p-2 -ml-2 text-gray-400 hover:text-blue-600"><ArrowLeft size={20} /></button>
                   <h2 className="font-black text-gray-800 flex items-center gap-2 uppercase text-xs tracking-widest">Ticket Actual</h2>
                </div>
-               {/* ÁREA DE BOTONES DE ACCIÓN RESTAURADA - Se quitaron % y Salir de aquí */}
-               <div className="flex items-center gap-1">
-                  <button onClick={handleParkTicket} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg" title="Suspender Venta"><Save size={18} /></button>
-                  <button onClick={() => setShowParkedList(true)} className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg relative" title="Ventas Suspendidas">
-                     <PauseCircle size={18} />
-                     {parkedTickets.length > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border border-white"></span>}
+               {/* ÁREA DE BOTONES DE ACCIÓN RÁPIDA (MODIFICADA) */}
+               <div className="flex gap-2">
+                  
+                  {/* Botón Ajustes */}
+                  <button 
+                     onClick={onOpenSettings} 
+                     className="p-2 hover:bg-gray-200 rounded-lg text-gray-500" 
+                     title="Ajustes"
+                  >
+                     <Settings size={18} />
                   </button>
-                  <button onClick={onOpenHistory} className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg" title="Historial"><History size={18} /></button>
-                  <button onClick={() => setShowCurrencyModal(true)} className="p-2 text-amber-500 hover:bg-amber-100 rounded-lg" title="Divisas"><ArrowRightLeft size={18} strokeWidth={2.5} /></button>
-                  <button onClick={onOpenSettings} className="p-2 text-gray-400 hover:text-slate-900 hover:bg-slate-100 rounded-lg" title="Ajustes"><Settings size={18} /></button>
-                  <button onClick={() => setShowTicketOptions(true)} className="p-2 text-gray-400 hover:text-blue-600 rounded-lg" title="Opciones"><MoreVertical size={20} /></button>
+
+                  {/* Botón Recuperar Tickets */}
+                  <button 
+                     onClick={() => setShowParkedList(!showParkedList)} 
+                     className={`p-2 rounded-lg relative transition-colors ${parkedTickets.length > 0 ? 'bg-orange-100 text-orange-600 hover:bg-orange-200' : 'hover:bg-gray-200 text-gray-500'}`}
+                     title="Recuperar Tickets"
+                  >
+                     <Clock size={18} />
+                     {parkedTickets.length > 0 && (
+                        <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[9px] flex items-center justify-center rounded-full border-2 border-white">{parkedTickets.length}</span>
+                     )}
+                  </button>
+
+                  {/* Botón Guardar Ticket */}
+                  <button 
+                     onClick={handleParkTicket}
+                     className={`p-2 rounded-lg text-gray-500 transition-colors ${cart.length > 0 ? 'hover:bg-blue-50 hover:text-blue-600' : 'opacity-50 cursor-not-allowed'}`}
+                     title="Guardar Ticket"
+                     disabled={cart.length === 0}
+                  >
+                     <Save size={18} />
+                  </button>
+
+                  {/* Opciones Adicionales */}
+                  <button onClick={() => setShowTicketOptions(true)} className="p-2 hover:bg-gray-200 rounded-lg text-gray-500"><MoreVertical size={18} /></button>
                </div>
             </div>
-            
-            <button 
-              onClick={onOpenCustomers}
-              className={`flex items-center gap-3 p-3 rounded-2xl border transition-all ${selectedCustomer ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200 hover:border-blue-300'}`}
-            >
-               <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${selectedCustomer ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100 text-gray-400'}`}><UserPlus size={20} /></div>
-               <div className="text-left flex-1 truncate">
-                  <p className="font-bold text-sm text-gray-800 truncate">{selectedCustomer?.name || 'Cliente General'}</p>
-               </div>
-               {selectedCustomer && <X size={16} className="text-gray-400 hover:text-red-500" onClick={(e) => { e.stopPropagation(); onSelectCustomer(null); }} />}
-            </button>
+
+            {/* CUSTOMER SELECTOR */}
+            <div className="relative">
+               {selectedCustomer ? (
+                  <div className="flex items-center justify-between bg-blue-50 p-3 rounded-xl border border-blue-100 group cursor-pointer" onClick={onOpenCustomers}>
+                     <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-blue-200 text-blue-700 rounded-full flex items-center justify-center font-bold text-xs">
+                           {selectedCustomer.name.charAt(0)}
+                        </div>
+                        <div>
+                           <p className="text-xs font-bold text-blue-900">{selectedCustomer.name}</p>
+                           <p className="text-[10px] text-blue-600 font-medium">
+                              {selectedCustomer.loyaltyPoints > 0 && `Points: ${selectedCustomer.loyaltyPoints}`}
+                           </p>
+                        </div>
+                     </div>
+                     <button onClick={(e) => { e.stopPropagation(); onSelectCustomer(null); }} className="p-1 hover:bg-blue-200 rounded-full text-blue-400 hover:text-blue-700"><X size={14}/></button>
+                  </div>
+               ) : (
+                  <button 
+                     onClick={onOpenCustomers}
+                     className="w-full flex items-center justify-between p-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 transition-all group"
+                  >
+                     <div className="flex items-center gap-2">
+                        <UserPlus size={18} />
+                        <span className="text-xs font-bold uppercase tracking-wide">Asignar Cliente</span>
+                     </div>
+                     <ChevronRight size={16} className="group-hover:translate-x-1 transition-transform" />
+                  </button>
+               )}
+            </div>
          </div>
 
-         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3 no-scrollbar">
+         {/* LISTA DE ITEMS */}
+         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
             {cart.length === 0 ? (
-               <div className="h-full flex flex-col items-center justify-center opacity-30 gap-4"><ShoppingCart size={64} strokeWidth={1.5} className="text-gray-400" /><p className="font-bold text-gray-500 text-sm uppercase tracking-widest">Vacio</p></div>
+               <div className="h-full flex flex-col items-center justify-center text-gray-300 opacity-60">
+                  <ShoppingCart size={48} className="mb-2" />
+                  <p className="text-sm font-medium">Ticket Vacío</p>
+               </div>
             ) : (
-               cart.map((item) => (
-                  <div key={item.cartId} onClick={() => setEditingItem(item)} className="flex gap-4 p-3 bg-white rounded-2xl border border-gray-100 hover:border-blue-300 cursor-pointer relative animate-in fade-in slide-in-from-right-2">
-                      {showImagesInTicket && (
-                        <div className="w-10 h-10 bg-gray-50 rounded-lg flex items-center justify-center shrink-0 border border-gray-100">
-                          {item.image ? <img src={item.image} className="w-full h-full object-cover rounded-lg" /> : <Grid size={16} className="text-gray-300" />}
-                        </div>
-                      )}
-                      <div className="flex-1 min-w-0">
+               cart.map((item, index) => {
+                  const isImagesEnabled = activeTerminalConfig?.workflow?.inventory?.showProductImagesInReceipt ?? false;
+                  return (
+                  <div 
+                     key={item.cartId} 
+                     onClick={() => setEditingItem(item)}
+                     className="flex gap-3 p-3 hover:bg-gray-50 rounded-xl cursor-pointer group transition-colors border border-transparent hover:border-gray-100 relative overflow-hidden"
+                  >
+                     {isImagesEnabled && item.image && (
+                       <div className="w-10 h-10 bg-gray-100 rounded-lg overflow-hidden shrink-0">
+                          <img src={item.image} className="w-full h-full object-cover" alt="mini" />
+                       </div>
+                     )}
+                     
+                     <div className="flex-1 min-w-0">
                         <div className="flex justify-between items-start">
-                            <h4 className="font-bold text-gray-800 text-xs leading-tight truncate pr-2">{item.name}</h4>
-                            <span className="font-black text-sm text-gray-900 shrink-0">{baseCurrency.symbol}{(item.price * item.quantity).toFixed(2)}</span>
+                           <span className="font-bold text-gray-700 text-sm leading-tight line-clamp-2">{item.name}</span>
+                           <span className="font-bold text-gray-900 text-sm">{baseCurrency.symbol}{(item.price * item.quantity).toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between items-end mt-1">
+                           <div className="text-xs text-gray-400 font-medium flex items-center gap-1">
+                              <span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-bold">{item.quantity}</span> 
+                              x {baseCurrency.symbol}{item.price.toFixed(2)}
+                           </div>
+                           {/* Discount Badge if applied */}
+                           {item.originalPrice && item.price < item.originalPrice && (
+                              <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">
+                                 -{Math.round(((item.originalPrice - item.price) / item.originalPrice) * 100)}%
+                              </span>
+                           )}
                         </div>
                         {item.modifiers && item.modifiers.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-1">
-                                {item.modifiers.map((mod, i) => (
-                                    <span key={i} className="text-[9px] font-bold text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded border border-gray-200">
-                                        {mod}
-                                    </span>
-                                ))}
-                            </div>
+                           <div className="mt-1 flex flex-wrap gap-1">
+                              {item.modifiers.map((mod, idx) => (
+                                 <span key={idx} className="text-[9px] text-gray-500 bg-gray-100 px-1.5 rounded border border-gray-200">{mod}</span>
+                              ))}
+                           </div>
                         )}
-                        <div className="flex items-center gap-2 mt-1">
-                            <div className={`px-1.5 py-0.5 rounded text-[10px] font-black border bg-blue-50 text-blue-700 border-blue-50`}>
-                                {item.type === 'SERVICE' && item.name.toLowerCase().includes('peso') ? `${item.quantity.toFixed(3)} kg` : `x${item.quantity}`}
-                            </div>
-                            <span className="text-[10px] text-gray-400 font-bold">@ {baseCurrency.symbol}{item.price.toFixed(2)}</span>
-                        </div>
-                      </div>
+                        {item.note && <p className="text-[10px] text-orange-500 italic mt-1 truncate">"{item.note}"</p>}
+                     </div>
                   </div>
-               ))
+               )})
             )}
             <div ref={cartEndRef} />
          </div>
 
-         <div className="p-6 bg-white border-t border-gray-100 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] shrink-0">
-            <div className="space-y-1 mb-4">
-               <div className="flex justify-between text-xs text-gray-500 font-medium"><span>Subtotal</span><span>{baseCurrency.symbol}{cartSubtotal.toFixed(2)}</span></div>
-               
-               {discountAmount > 0 && (
-                  <div className="flex justify-between text-xs text-rose-500 font-bold animate-in slide-in-from-right-2">
-                     <span className="flex items-center gap-1">
-                        <Percent size={10} strokeWidth={3} />
-                        Descuento {globalDiscount.type === 'PERCENT' ? `(${globalDiscount.value}%)` : ''}
-                     </span>
-                     <span>-{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>
-                  </div>
-               )}
+         {/* FOOTER TOTALS */}
+         <div className="bg-white border-t border-gray-200 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] z-20">
+            {/* Descuento Global & Info */}
+            <div className="px-5 py-3 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center text-xs">
+               <button 
+                  onClick={() => setShowGlobalDiscount(true)}
+                  className={`flex items-center gap-1 font-bold transition-colors ${globalDiscount.value > 0 ? 'text-red-500' : 'text-gray-400 hover:text-blue-600'}`}
+               >
+                  <Tag size={14} /> {globalDiscount.value > 0 ? `Desc. ${globalDiscount.value}${globalDiscount.type === 'PERCENT' ? '%' : ''}` : 'Agregar Descuento'}
+               </button>
+               {activeTariff && <span className="text-purple-500 font-bold px-2 py-0.5 bg-purple-50 rounded uppercase text-[9px]">{activeTariff.name}</span>}
+            </div>
 
-               {taxBreakdown.map((t, i) => (
-                  <div key={i} className="flex justify-between text-xs text-gray-400 italic">
-                     <span>{t.name}</span>
-                     <span>{baseCurrency.symbol}{t.amount.toFixed(2)}</span>
+            <div className="p-5 space-y-3">
+               <div className="space-y-1">
+                  <div className="flex justify-between text-gray-500 text-xs font-medium">
+                     <span>Subtotal</span>
+                     <span>{baseCurrency.symbol}{netSubtotal.toFixed(2)}</span>
                   </div>
-               ))}
+                  {taxBreakdown.map((tax, idx) => (
+                     <div key={idx} className="flex justify-between text-gray-400 text-[10px]">
+                        <span>{tax.name}</span>
+                        <span>{baseCurrency.symbol}{tax.amount.toFixed(2)}</span>
+                     </div>
+                  ))}
+                  {discountAmount > 0 && (
+                     <div className="flex justify-between text-red-500 text-xs font-bold">
+                        <span>Descuento</span>
+                        <span>-{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>
+                     </div>
+                  )}
+               </div>
 
-               <div className="flex justify-between items-start pt-2 mt-2 border-t border-gray-100">
-                  <span className="font-bold text-gray-800 uppercase tracking-widest text-xs">Total</span>
-                  <div className="text-right">
-                    <span className="font-black text-3xl text-gray-900 tracking-tighter block">{baseCurrency.symbol}{cartTotal.toFixed(2)}</span>
+               <div className="flex justify-between items-end pt-2 border-t border-dashed border-gray-200">
+                  <div>
+                     <p className="text-xs text-gray-400 font-bold uppercase tracking-widest">Total a Pagar</p>
+                     
+                     {/* Multi-currency display */}
+                     <div className="flex gap-2 mt-1">
+                        {altCurrencies.map(c => (
+                           <span key={c.code} className="text-[10px] text-gray-400 bg-gray-100 px-1.5 rounded font-mono">
+                              {c.symbol}{(cartTotal / c.rate).toFixed(2)}
+                           </span>
+                        ))}
+                     </div>
+                  </div>
+                  <div className="text-3xl font-black text-gray-800 leading-none">
+                     {baseCurrency.symbol}{cartTotal.toFixed(2)}
                   </div>
                </div>
-            </div>
 
-            {/* BOTONES ADICIONALES: % Y SALIR */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
                <button 
-                 onClick={() => setShowGlobalDiscount(true)} 
-                 className="flex items-center justify-center gap-2 py-3 bg-rose-50 text-rose-600 rounded-2xl font-bold hover:bg-rose-100 transition-all border border-rose-100"
+                  onClick={() => { if(cart.length > 0) setShowPaymentModal(true); }}
+                  disabled={cart.length === 0}
+                  className="w-full py-4 bg-gray-900 text-white rounded-2xl font-black text-lg shadow-xl shadow-gray-200 hover:bg-black active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-between px-6 items-center group"
                >
-                 <Percent size={18} strokeWidth={2.5} />
-                 <span>Descuento</span>
-               </button>
-               <button 
-                 onClick={onLogout} 
-                 className="flex items-center justify-center gap-2 py-3 bg-gray-100 text-gray-600 rounded-2xl font-bold hover:bg-gray-200 transition-all border border-gray-200"
-               >
-                 <LogOut size={18} strokeWidth={2.5} />
-                 <span>Salir</span>
+                  <span>Cobrar</span>
+                  <ArrowRight size={24} className="group-hover:translate-x-1 transition-transform" />
                </button>
             </div>
-
-            <button onClick={() => setShowPaymentModal(true)} disabled={cart.length === 0} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black text-lg shadow-xl shadow-blue-500/30 hover:bg-blue-700 active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center gap-3"><CreditCard size={24} />PAGAR</button>
          </div>
       </div>
 
-      {/* MOBILE BOTTOM CART BAR (Visible only on mobile when items exist) */}
-      {mobileView === 'PRODUCTS' && cart.length > 0 && (
-        <div className="md:hidden fixed bottom-4 left-4 right-4 z-50 animate-in slide-in-from-bottom-6 fade-in duration-300">
-           <button 
-             onClick={() => setMobileView('TICKET')}
-             className="w-full bg-slate-900/95 backdrop-blur-md text-white p-3 rounded-2xl shadow-2xl flex justify-between items-center border border-white/10 active:scale-95 transition-all"
-           >
-              <div className="flex items-center gap-3">
-                 <div className="relative">
-                    <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center font-black text-lg shadow-lg shadow-blue-500/30">
-                        <ShoppingBag size={20} className="text-white" />
-                    </div>
-                    <div className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-slate-900">
-                        {cart.reduce((acc, i) => acc + i.quantity, 0)}
-                    </div>
-                 </div>
-                 <div className="text-left">
-                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Total</p>
-                    <p className="font-black text-xl leading-none">{baseCurrency.symbol}{cartTotal.toFixed(2)}</p>
-                 </div>
-              </div>
-              <div className="flex items-center gap-2 pr-1">
-                 <span className="font-bold text-sm text-blue-200">Ver Ticket</span>
-                 <div className="bg-white/10 p-2 rounded-lg">
-                    <ChevronRight size={18} className="text-white" />
-                 </div>
-              </div>
-           </button>
-        </div>
+      {/* --- MODALES --- */}
+      {showPaymentModal && (
+        <UnifiedPaymentModal 
+          total={cartTotal} 
+          currencySymbol={baseCurrency.symbol}
+          config={config} 
+          onClose={() => setShowPaymentModal(false)}
+          onConfirm={handlePaymentConfirm}
+          themeColor={config.themeColor}
+        />
       )}
 
-      {/* --- MODALES --- */}
-      {showPaymentModal && <UnifiedPaymentModal total={cartTotal} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} />}
-      
-      {showParkedList && (
-         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
-               <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                  <h3 className="font-bold text-xl text-gray-800 flex items-center gap-2"><PauseCircle className="text-orange-500" /> Ventas Suspendidas</h3>
-                  <button onClick={() => setShowParkedList(false)} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X size={24} /></button>
+      {showTicketOptions && (
+         <TicketOptionsModal 
+            onClose={() => setShowTicketOptions(false)}
+            onAction={(action) => {
+               if (action === 'PARK') handleParkTicket();
+               setShowTicketOptions(false);
+            }}
+         />
+      )}
+
+      {editingItem && (
+         <CartItemOptionsModal 
+            item={editingItem} 
+            config={config}
+            users={[]} // TODO: Pass real users list here if needed for salesperson assignment
+            onClose={() => setEditingItem(null)}
+            onUpdate={updateCartItem}
+            canApplyDiscount={true} // Check permissions
+            canVoidItem={true} // Check permissions
+         />
+      )}
+
+      {selectedProductForVariants && (
+         <ProductVariantSelector 
+            product={selectedProductForVariants}
+            currencySymbol={baseCurrency.symbol}
+            onClose={() => setSelectedProductForVariants(null)}
+            onConfirm={(prod, mods, price) => {
+               addToCart(prod, 1, price, mods);
+               setSelectedProductForVariants(null);
+            }}
+         />
+      )}
+
+      {productForScale && (
+         <ScaleModal 
+            product={productForScale}
+            currencySymbol={baseCurrency.symbol}
+            onClose={() => setProductForScale(null)}
+            onConfirm={(weight) => {
+               addToCart(productForScale, weight); // Weight acts as quantity
+               setProductForScale(null);
+            }}
+         />
+      )}
+
+      {showGlobalDiscount && (
+         <GlobalDiscountModal 
+            currentSubtotal={cartSubtotal}
+            currencySymbol={baseCurrency.symbol}
+            initialValue={globalDiscount.value.toString()}
+            initialType={globalDiscount.type}
+            themeColor={config.themeColor}
+            onClose={() => setShowGlobalDiscount(false)}
+            onConfirm={(val, type) => {
+               setGlobalDiscount({ value: parseFloat(val) || 0, type });
+               setShowGlobalDiscount(false);
+            }}
+         />
+      )}
+
+      {showParkedList && parkedTickets.length > 0 && (
+         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+            <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl">
+               <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-lg">Tickets en Espera</h3>
+                  <button onClick={() => setShowParkedList(false)}><X size={20} className="text-gray-400" /></button>
                </div>
-               <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50/50">
-                  {parkedTickets.length === 0 ? <div className="h-40 flex items-center justify-center text-gray-400 italic">No hay tickets suspendidos.</div> : 
-                     parkedTickets.map(pt => (
-                        <div key={pt.id} className="bg-white p-5 rounded-2xl border border-gray-200 flex justify-between items-center group hover:border-orange-300 transition-all">
-                           <div className="flex-1">
-                              <h4 className="font-bold text-gray-800">#{pt.id.split('-')[1]} • {pt.date}</h4>
-                              <p className="text-sm text-gray-500">{pt.customer?.name || 'Cliente General'} • {pt.items.length} items</p>
-                              <p className="text-lg font-black text-orange-600 mt-1">{baseCurrency.symbol}{pt.total.toFixed(2)}</p>
+               <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+                  {parkedTickets.map(pt => (
+                     <div key={pt.id} onClick={() => handleResumeTicket(pt)} className="p-4 rounded-2xl bg-gray-50 border border-gray-100 hover:bg-blue-50 hover:border-blue-200 cursor-pointer transition-all flex justify-between items-center group">
+                        <div>
+                           <div className="font-bold text-gray-800 flex items-center gap-2">
+                              {pt.customer ? pt.customer.name : 'Cliente General'}
+                              <span className="text-[10px] bg-white border px-1.5 rounded text-gray-400 font-mono">{pt.date}</span>
                            </div>
-                           <button onClick={() => handleResumeTicket(pt)} className="px-5 py-3 bg-orange-500 text-white rounded-xl font-bold text-sm shadow-md hover:bg-orange-600">Recuperar</button>
+                           <p className="text-xs text-gray-500">{pt.items.length} items</p>
                         </div>
-                     ))
-                  }
+                        <div className="text-right">
+                           <p className="font-black text-lg text-gray-800">{baseCurrency.symbol}{pt.total.toFixed(2)}</p>
+                           <span className="text-xs text-blue-600 font-bold opacity-0 group-hover:opacity-100 transition-opacity">Retomar</span>
+                        </div>
+                     </div>
+                  ))}
                </div>
             </div>
          </div>
       )}
 
       {showCurrencyModal && (
-         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in">
-           <div className="w-full max-w-4xl h-[80vh] bg-white rounded-[2.5rem] overflow-hidden shadow-2xl flex flex-col">
-              <CurrencySettings config={config} onUpdateConfig={onUpdateConfig} onClose={() => setShowCurrencyModal(false)} />
-           </div>
-         </div>
+         <CurrencySettings 
+            config={config} 
+            onUpdateConfig={onUpdateConfig} 
+            onClose={() => setShowCurrencyModal(false)} 
+         />
       )}
 
-      {showTicketOptions && <TicketOptionsModal onClose={() => setShowTicketOptions(false)} onAction={(id) => { 
-         setShowTicketOptions(false); 
-         if (id === 'CLEAR_CART') onUpdateCart([]); 
-         if (id === 'DISCOUNT') setShowGlobalDiscount(true);
-         if (id === 'FINANCE') onOpenFinance();
-      }} />}
-      
-      {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={[]} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
-      {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, mods, price) => { addToCart(p, 1, price, mods); setSelectedProductForVariants(null); }} />}
-      {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(weight) => { addToCart(productForScale, weight); setProductForScale(null); }} />}
-      {showGlobalDiscount && <GlobalDiscountModal currentSubtotal={cartSubtotal} currencySymbol={baseCurrency.symbol} initialValue={globalDiscount.value.toString()} initialType={globalDiscount.type} themeColor={config.themeColor} onClose={() => setShowGlobalDiscount(false)} onConfirm={(val, type) => { setGlobalDiscount({ value: parseFloat(val) || 0, type }); setShowGlobalDiscount(false); }} />}
+      {/* MOBILE FOOTER NAV (Visible only on mobile/tablet when in PRODUCTS view) */}
+      <div className={`md:hidden fixed bottom-0 left-0 w-full bg-white border-t border-gray-200 p-2 flex justify-around items-center z-30 ${mobileView === 'TICKET' ? 'hidden' : 'flex'}`}>
+         <button onClick={onOpenSettings} className="p-3 text-gray-400 hover:text-gray-600 flex flex-col items-center gap-1">
+            <Settings size={20} />
+            <span className="text-[10px] font-bold">Menú</span>
+         </button>
+         <button onClick={onOpenHistory} className="p-3 text-gray-400 hover:text-gray-600 flex flex-col items-center gap-1">
+            <History size={20} />
+            <span className="text-[10px] font-bold">Historial</span>
+         </button>
+         
+         {/* FLOATING ACTION BUTTON FOR CART */}
+         <div className="relative -top-6">
+            <button 
+               onClick={() => setMobileView('TICKET')}
+               className="w-16 h-16 rounded-full bg-blue-600 text-white shadow-lg shadow-blue-500/40 flex items-center justify-center relative active:scale-90 transition-transform"
+            >
+               <ShoppingCart size={24} />
+               {cart.length > 0 && (
+                  <span className="absolute top-0 right-0 bg-red-500 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center border-2 border-white">
+                     {cart.reduce((acc, i) => acc + i.quantity, 0)}
+                  </span>
+               )}
+            </button>
+         </div>
+
+         <button onClick={onOpenFinance} className="p-3 text-gray-400 hover:text-gray-600 flex flex-col items-center gap-1">
+            <Wallet size={20} />
+            <span className="text-[10px] font-bold">Caja</span>
+         </button>
+         <button onClick={onLogout} className="p-3 text-gray-400 hover:text-red-500 flex flex-col items-center gap-1">
+            <LogOut size={20} />
+            <span className="text-[10px] font-bold">Salir</span>
+         </button>
+      </div>
+
     </div>
   );
 };
