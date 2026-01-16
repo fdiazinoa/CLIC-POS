@@ -267,6 +267,7 @@ const App: React.FC = () => {
           users={users} // Pass full list of users for salesperson assignment
           customers={customers}
           products={products}
+          warehouses={warehouses} // Passed warehouses
           cart={cart}
           onUpdateCart={setCart}
           selectedCustomer={selectedCustomer}

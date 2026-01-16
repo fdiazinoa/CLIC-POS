@@ -7,7 +7,8 @@ import {
   LayoutGrid, ShieldCheck, Zap, Lock, ShieldAlert,
   ArrowRight, Users, FileText, Hash, Type, RotateCcw, Tag, 
   DollarSign, Check, Percent, Calculator, Coins, Box, ArrowRightLeft,
-  Link2Off, MonitorOff, Cloud, RefreshCw, Activity, Wifi, Server, AlertTriangle
+  Link2Off, MonitorOff, Cloud, RefreshCw, Activity, Wifi, Server, AlertTriangle,
+  Circle, CheckCircle
 } from 'lucide-react';
 import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse } from '../types';
 import { DEFAULT_TERMINAL_CONFIG } from '../constants';
@@ -595,31 +596,27 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               </div>
                            </div>
                         )}
+                        
+                        {/* --- PRICING TAB (MODIFIED WATERFALL LOGIC) --- */}
                         {activeTab === 'PRICING' && (
                            <div className="space-y-10 animate-in slide-in-from-right-4">
                               <section>
                                  <h3 className="text-sm font-black text-gray-400 uppercase tracking-widest mb-6 flex items-center gap-2">
-                                    <Tag size={18} className="text-purple-500" /> Tarifas Permitidas en este POS
+                                    <Tag size={18} className="text-purple-500" /> Tarifas Disponibles (Catálogo Maestro)
                                  </h3>
                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {config.tariffs.map(tariff => {
                                        const isAllowed = activeTerminal.config.pricing?.allowedTariffIds.includes(tariff.id);
+                                       const isDefault = activeTerminal.config.pricing?.defaultTariffId === tariff.id;
+                                       
                                        return (
                                           <div 
                                              key={tariff.id}
-                                             onClick={() => {
-                                                const currentAllowed = activeTerminal.config.pricing?.allowedTariffIds || [];
-                                                const isAllowed = currentAllowed.includes(tariff.id);
-                                                let newAllowed;
-                                                if (isAllowed) {
-                                                   if (currentAllowed.length === 1) return alert("Debe haber al menos una tarifa.");
-                                                   newAllowed = currentAllowed.filter(id => id !== tariff.id);
-                                                } else {
-                                                   newAllowed = [...currentAllowed, tariff.id];
-                                                }
-                                                handleUpdateActiveConfig('pricing', 'allowedTariffIds', newAllowed);
-                                             }}
-                                             className={`p-5 rounded-3xl border-2 transition-all cursor-pointer flex flex-col gap-4 relative overflow-hidden ${isAllowed ? 'bg-white border-purple-500 shadow-lg' : 'bg-gray-50 border-gray-100 opacity-60'}`}
+                                             className={`p-5 rounded-3xl border-2 transition-all flex flex-col gap-4 relative overflow-hidden ${
+                                                isAllowed 
+                                                   ? 'bg-white border-purple-500 shadow-lg' 
+                                                   : 'bg-gray-50 border-gray-100 opacity-70'
+                                             }`}
                                           >
                                              <div className="flex justify-between items-start">
                                                 <div className="flex items-center gap-3">
@@ -628,9 +625,50 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                    </div>
                                                    <div>
                                                       <h4 className="font-bold text-gray-800">{tariff.name}</h4>
+                                                      <p className="text-xs text-gray-400">{tariff.currency} • {tariff.strategy.type}</p>
                                                    </div>
                                                 </div>
-                                                {isAllowed && <div className="bg-purple-500 text-white p-1 rounded-full"><Check size={14} strokeWidth={4} /></div>}
+                                                
+                                                {/* Enable Toggle */}
+                                                <div 
+                                                   onClick={() => {
+                                                      const currentAllowed = activeTerminal.config.pricing?.allowedTariffIds || [];
+                                                      let newAllowed;
+                                                      if (isAllowed) {
+                                                         // Integrity: Cannot disable default
+                                                         if (isDefault) return alert("No puedes deshabilitar la tarifa predeterminada. Cambia la predeterminada primero.");
+                                                         // Integrity: Must have at least one
+                                                         if (currentAllowed.length === 1) return alert("Debe haber al menos una tarifa activa.");
+                                                         
+                                                         newAllowed = currentAllowed.filter(id => id !== tariff.id);
+                                                      } else {
+                                                         newAllowed = [...currentAllowed, tariff.id];
+                                                      }
+                                                      handleUpdateActiveConfig('pricing', 'allowedTariffIds', newAllowed);
+                                                   }}
+                                                   className={`w-12 h-6 rounded-full relative transition-colors cursor-pointer ${isAllowed ? 'bg-purple-600' : 'bg-gray-300'}`}
+                                                >
+                                                   <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm ${isAllowed ? 'left-7' : 'left-1'}`} />
+                                                </div>
+                                             </div>
+
+                                             {/* Default Selector */}
+                                             <div className={`flex items-center gap-2 pt-3 border-t ${isAllowed ? 'border-purple-50' : 'border-gray-200'}`}>
+                                                <button 
+                                                   onClick={() => {
+                                                      if (!isAllowed) return; // Cannot set default if not allowed
+                                                      handleUpdateActiveConfig('pricing', 'defaultTariffId', tariff.id);
+                                                   }}
+                                                   disabled={!isAllowed}
+                                                   className="flex items-center gap-2 text-sm font-medium disabled:opacity-50 cursor-pointer"
+                                                >
+                                                   <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${isDefault ? 'border-purple-600 bg-purple-50' : 'border-gray-300'}`}>
+                                                      {isDefault && <div className="w-2.5 h-2.5 rounded-full bg-purple-600" />}
+                                                   </div>
+                                                   <span className={isDefault ? 'text-purple-700 font-bold' : 'text-gray-500'}>
+                                                      {isDefault ? 'Tarifa Predeterminada' : 'Usar como predeterminada'}
+                                                   </span>
+                                                </button>
                                              </div>
                                           </div>
                                        );
@@ -639,6 +677,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               </section>
                            </div>
                         )}
+
                         {activeTab === 'SECURITY' && (
                           <div className="space-y-6 animate-in slide-in-from-right-4">
                               <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">

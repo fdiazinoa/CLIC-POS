@@ -2,14 +2,16 @@
 import React, { useState, useMemo } from 'react';
 import { 
   Package, Search, Plus, Edit2, Trash2, ArrowLeft, 
-  Filter, Tag, Image as ImageIcon, Barcode, DollarSign,
+  Filter, Tag, Image as ImageIcon, DollarSign,
   Calendar, CheckCircle2, XCircle, Layers, ClipboardList,
-  ChevronDown, ChevronRight, Box, AlertCircle, MapPin
+  ChevronDown, ChevronRight, Box, AlertCircle, MapPin, Grid, Sun
 } from 'lucide-react';
-import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse } from '../types';
+import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season } from '../types';
 import ProductForm from './ProductForm';
 import TariffForm from './TariffForm';
 import VariantManager from './VariantManager';
+import GroupForm from './GroupForm';
+import SeasonForm from './SeasonForm';
 
 interface CatalogManagerProps {
   products: Product[];
@@ -17,41 +19,19 @@ interface CatalogManagerProps {
   warehouses: Warehouse[];
   transactions: Transaction[];
   onUpdateProducts: (products: Product[]) => void;
+  onUpdateConfig: (config: BusinessConfig) => void;
   onClose: () => void;
 }
 
-// Mock Tariffs if not provided
-const MOCK_TARIFFS: Tariff[] = [
-  { 
-    id: 't1', name: 'General (PVP)', active: true, currency: 'DOP', taxIncluded: true, 
-    strategy: { type: 'MANUAL', rounding: 'NONE' }, 
-    scope: { storeIds: ['ALL'], priority: 0 }, 
-    schedule: { daysOfWeek: [0,1,2,3,4,5,6], timeStart: '00:00', timeEnd: '23:59' }, items: {} 
-  },
-  { 
-    id: 't2', name: 'Happy Hour Viernes', active: false, currency: 'DOP', taxIncluded: true, 
-    strategy: { type: 'DERIVED', factor: -15, rounding: 'ENDING_99' }, 
-    scope: { storeIds: ['ALL'], priority: 10 }, 
-    schedule: { daysOfWeek: [5], timeStart: '17:00', timeEnd: '21:00' }, items: {} 
-  },
-  { 
-    id: 't3', name: 'Distribuidor Mayorista', active: true, currency: 'DOP', taxIncluded: false, 
-    strategy: { type: 'COST_PLUS', factor: 15, rounding: 'NONE' }, 
-    scope: { storeIds: ['ALL'], priority: 5 }, 
-    schedule: { daysOfWeek: [0,1,2,3,4,5,6], timeStart: '00:00', timeEnd: '23:59' }, items: {} 
-  }
-];
+type ViewMode = 'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS' | 'GROUPS' | 'SEASONS';
 
 // --- SUB-COMPONENT: STOCK ROW (Handles Expansion) ---
 const StockRow: React.FC<{ product: Product }> = ({ product }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const hasVariants = product.variants && product.variants.length > 0;
 
-  // Si tiene variantes, sumamos el stock de todas para el padre
-  // Si no, usamos el stock directo del producto
-  // Nota: Usamos Math.random() para simular stock variante ya que RETAIL_PRODUCTS mock no tiene stock definido en variantes
   const totalStock = hasVariants 
-    ? product.variants.reduce((acc, v) => acc + (v.initialStock || Math.floor(Math.random() * 20)), 0)
+    ? product.variants.reduce((acc, v) => acc + (v.initialStock || 0), 0)
     : product.stock || 0;
 
   const getStatusBadge = (qty: number) => {
@@ -73,7 +53,6 @@ const StockRow: React.FC<{ product: Product }> = ({ product }) => {
       >
         <td className="p-4">
           <div className="flex items-center gap-3">
-            {/* Expansion Indicator */}
             <div className={`w-6 flex justify-center text-gray-400 transition-transform duration-200 ${isExpanded ? 'rotate-90 text-blue-500' : ''}`}>
                {hasVariants && <ChevronRight size={18} />}
             </div>
@@ -111,14 +90,12 @@ const StockRow: React.FC<{ product: Product }> = ({ product }) => {
 
       {/* CHILD ROWS (VARIANTS) */}
       {hasVariants && isExpanded && product.variants.map((variant, idx) => {
-         // Simulating stock for display
-         const variantStock = variant.initialStock || Math.floor(Math.random() * 20); 
+         const variantStock = variant.initialStock || 0;
          
          return (
             <tr key={`${product.id}-var-${idx}`} className="bg-slate-50/80 border-b border-gray-100 animate-in slide-in-from-top-1">
                <td className="p-3 pl-16"> {/* Indented */}
                   <div className="flex items-center gap-2 relative">
-                     {/* L-shaped connector line visual (optional, kept simple for now) */}
                      <div className="absolute -left-6 top-1/2 w-4 h-px bg-gray-300"></div>
                      <div className="absolute -left-6 -top-1/2 bottom-1/2 w-px bg-gray-300"></div>
 
@@ -140,7 +117,6 @@ const StockRow: React.FC<{ product: Product }> = ({ product }) => {
                   {variantStock}
                </td>
                <td className="p-3 text-right">
-                  {/* Smaller badge for children */}
                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${variantStock > 0 ? 'text-emerald-600 bg-emerald-100/50' : 'text-red-600 bg-red-100/50'}`}>
                      {variantStock > 0 ? 'En Stock' : 'Sin Stock'}
                   </span>
@@ -156,15 +132,12 @@ const StockRow: React.FC<{ product: Product }> = ({ product }) => {
 const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Product[] }> = ({ warehouse, filteredProducts }) => {
   const [isCardExpanded, setIsCardExpanded] = useState(false);
 
-  // Logic to simulate distinct inventory per warehouse
-  // In a real app, this would use product.stockBalances[warehouse.id]
   const warehouseProducts = filteredProducts.filter((_, idx) => {
      if (warehouse.id === 'wh_1') return true; 
      if (warehouse.id === 'wh_2') return idx % 2 === 0;
      return false; 
   });
 
-  // Mock Total Value/Item Count for display
   const totalValue = 154200; 
   const itemCount = warehouseProducts.length;
 
@@ -245,18 +218,26 @@ const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Pro
 
 // --- MAIN CATALOG COMPONENT ---
 const CatalogManager: React.FC<CatalogManagerProps> = ({ 
-  products, config, warehouses, transactions, onUpdateProducts, onClose 
+  products, config, warehouses, transactions, onUpdateProducts, onUpdateConfig, onClose 
 }) => {
-  const [viewMode, setViewMode] = useState<'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS'>('PRODUCTS');
+  const [viewMode, setViewMode] = useState<ViewMode>('PRODUCTS');
   
   // Product State
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [editingProduct, setEditingProduct] = useState<Product | null | 'NEW'>(null);
 
-  // Tariff State
-  const [tariffs, setTariffs] = useState<Tariff[]>(MOCK_TARIFFS);
+  // Tariff State - NOW READING FROM GLOBAL CONFIG
+  const tariffs = config.tariffs || [];
   const [editingTariff, setEditingTariff] = useState<Tariff | null | 'NEW'>(null);
+
+  // Product Groups State
+  const productGroups = config.productGroups || [];
+  const [editingGroup, setEditingGroup] = useState<ProductGroup | null | 'NEW'>(null);
+
+  // Seasons State
+  const seasons = config.seasons || [];
+  const [editingSeason, setEditingSeason] = useState<Season | null | 'NEW'>(null);
 
   // Derived Products
   const categories = useMemo(() => ['ALL', ...Array.from(new Set(products.map(p => p.category)))], [products]);
@@ -279,8 +260,41 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
   const handleSaveTariff = (savedTariff: Tariff) => {
     const exists = tariffs.some(t => t.id === savedTariff.id);
     const newTariffs = exists ? tariffs.map(t => t.id === savedTariff.id ? savedTariff : t) : [...tariffs, savedTariff];
-    setTariffs(newTariffs);
+    // GLOBAL UPDATE
+    onUpdateConfig({ ...config, tariffs: newTariffs });
     setEditingTariff(null);
+  };
+
+  const handleSaveGroup = (savedGroup: ProductGroup) => {
+    const currentGroups = config.productGroups || [];
+    const exists = currentGroups.some(g => g.id === savedGroup.id);
+    const newGroups = exists ? currentGroups.map(g => g.id === savedGroup.id ? savedGroup : g) : [...currentGroups, savedGroup];
+    onUpdateConfig({ ...config, productGroups: newGroups });
+    setEditingGroup(null);
+  };
+
+  const handleDeleteGroup = (id: string) => {
+    if (confirm("¿Estás seguro de eliminar este grupo?")) {
+      const currentGroups = config.productGroups || [];
+      const newGroups = currentGroups.filter(g => g.id !== id);
+      onUpdateConfig({ ...config, productGroups: newGroups });
+    }
+  };
+
+  const handleSaveSeason = (savedSeason: Season) => {
+    const currentSeasons = config.seasons || [];
+    const exists = currentSeasons.some(s => s.id === savedSeason.id);
+    const newSeasons = exists ? currentSeasons.map(s => s.id === savedSeason.id ? savedSeason : s) : [...currentSeasons, savedSeason];
+    onUpdateConfig({ ...config, seasons: newSeasons });
+    setEditingSeason(null);
+  };
+
+  const handleDeleteSeason = (id: string) => {
+    if (confirm("¿Estás seguro de eliminar esta temporada?")) {
+      const currentSeasons = config.seasons || [];
+      const newSeasons = currentSeasons.filter(s => s.id !== id);
+      onUpdateConfig({ ...config, seasons: newSeasons });
+    }
   };
 
   // Integrity Check: See if product has transactions
@@ -322,6 +336,28 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
     );
   }
 
+  if (editingGroup) {
+    return (
+      <GroupForm 
+        initialData={editingGroup === 'NEW' ? null : editingGroup}
+        products={products}
+        onSave={handleSaveGroup}
+        onClose={() => setEditingGroup(null)}
+      />
+    );
+  }
+
+  if (editingSeason) {
+    return (
+      <SeasonForm 
+        initialData={editingSeason === 'NEW' ? null : editingSeason}
+        products={products}
+        onSave={handleSaveSeason}
+        onClose={() => setEditingSeason(null)}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">
       
@@ -340,10 +376,15 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                  </div>
               </div>
               <button 
-                 onClick={() => viewMode === 'PRODUCTS' ? setEditingProduct('NEW') : setEditingTariff('NEW')}
+                 onClick={() => {
+                    if (viewMode === 'PRODUCTS') setEditingProduct('NEW');
+                    else if (viewMode === 'TARIFFS') setEditingTariff('NEW');
+                    else if (viewMode === 'GROUPS') setEditingGroup('NEW');
+                    else if (viewMode === 'SEASONS') setEditingSeason('NEW');
+                 }}
                  className={`px-6 py-3 text-white rounded-xl font-bold shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 ${viewMode === 'STOCKS' ? 'opacity-0 pointer-events-none' : 'bg-blue-600'}`}
               >
-                 <Plus size={20} /> {viewMode === 'PRODUCTS' ? 'Nuevo Artículo' : 'Nueva Tarifa'}
+                 <Plus size={20} /> {viewMode === 'GROUPS' ? 'Nuevo Grupo' : viewMode === 'TARIFFS' ? 'Nueva Tarifa' : viewMode === 'SEASONS' ? 'Nueva Temporada' : 'Nuevo Artículo'}
               </button>
            </div>
 
@@ -357,9 +398,21 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
               </button>
               <button 
                  onClick={() => setViewMode('VARIANTS')}
-                 className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'VARIANTS' ? 'border-pink-600 text-pink-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                 className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap border-transparent text-gray-400 hover:text-gray-600`}
               >
                  <Layers size={18} /> Variantes y Atributos
+              </button>
+              <button 
+                 onClick={() => setViewMode('GROUPS')}
+                 className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'GROUPS' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+              >
+                 <Grid size={18} /> Grupos y Agrupaciones
+              </button>
+              <button 
+                 onClick={() => setViewMode('SEASONS')}
+                 className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'SEASONS' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+              >
+                 <Sun size={18} /> Temporadas
               </button>
               <button 
                  onClick={() => setViewMode('STOCKS')}
@@ -497,6 +550,104 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                >
                   <div className="p-4 bg-white rounded-full shadow-sm"><Plus size={32} /></div>
                   <span className="font-bold">Crear Nueva Lista</span>
+               </button>
+            </div>
+         )}
+
+         {viewMode === 'GROUPS' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in">
+               {productGroups.map(group => (
+                  <div key={group.id} className="bg-white rounded-3xl p-6 shadow-sm border border-gray-200 hover:shadow-md transition-all relative overflow-hidden group">
+                     <div className={`absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl ${group.color || 'from-gray-100'} to-transparent rounded-bl-full opacity-20`}></div>
+                     
+                     <div className="relative z-10">
+                        <div className="flex justify-between items-start mb-4">
+                           <div className={`p-3 rounded-2xl bg-white border-2 border-gray-100 text-gray-600`} style={{ borderColor: group.color?.replace('bg-', 'border-') || '' }}>
+                              <Grid size={24} style={{ color: group.color?.replace('bg-', 'text-') || '' }} />
+                           </div>
+                           <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={() => setEditingGroup(group)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-blue-600"><Edit2 size={16} /></button>
+                              <button onClick={() => handleDeleteGroup(group.id)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-red-600"><Trash2 size={16} /></button>
+                           </div>
+                        </div>
+                        
+                        <h3 className="text-xl font-bold text-gray-800 mb-1">{group.name}</h3>
+                        <p className="text-xs text-gray-400 font-mono mb-6">{group.code}</p>
+
+                        <div className="space-y-3">
+                           <div className="flex items-center gap-3 text-sm text-gray-600">
+                              <Box size={16} className="text-gray-400" />
+                              <span className="font-bold">{group.productIds.length} Artículos vinculados</span>
+                           </div>
+                           {group.description && (
+                              <p className="text-xs text-gray-400 italic line-clamp-2">{group.description}</p>
+                           )}
+                        </div>
+                     </div>
+                  </div>
+               ))}
+               
+               {/* Add New Group Card */}
+               <button 
+                  onClick={() => setEditingGroup('NEW')}
+                  className="bg-gray-50 rounded-3xl p-6 border-2 border-dashed border-gray-200 hover:border-orange-300 hover:bg-orange-50 transition-all flex flex-col items-center justify-center text-gray-400 hover:text-orange-600 gap-4"
+               >
+                  <div className="p-4 bg-white rounded-full shadow-sm"><Plus size={32} /></div>
+                  <span className="font-bold">Crear Nuevo Grupo</span>
+               </button>
+            </div>
+         )}
+
+         {viewMode === 'SEASONS' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in">
+               {seasons.map(season => (
+                  <div key={season.id} className="bg-white rounded-3xl p-6 shadow-sm border border-gray-200 hover:shadow-md transition-all relative overflow-hidden group">
+                     <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-yellow-50 to-transparent rounded-bl-full"></div>
+                     
+                     <div className="relative z-10">
+                        <div className="flex justify-between items-start mb-4">
+                           <div className="p-3 rounded-2xl bg-yellow-100 text-yellow-600">
+                              <Sun size={24} />
+                           </div>
+                           <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={() => setEditingSeason(season)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-blue-600"><Edit2 size={16} /></button>
+                              <button onClick={() => handleDeleteSeason(season.id)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-red-600"><Trash2 size={16} /></button>
+                           </div>
+                        </div>
+                        
+                        <div className="flex justify-between items-start mb-6">
+                           <div>
+                              <h3 className="text-xl font-bold text-gray-800 mb-1">{season.name}</h3>
+                              <p className="text-xs text-gray-400 font-mono">{season.code}</p>
+                           </div>
+                           <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase ${season.isActive ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                              {season.isActive ? 'Activa' : 'Inactiva'}
+                           </span>
+                        </div>
+
+                        <div className="space-y-3">
+                           <div className="flex items-center gap-3 text-sm text-gray-600">
+                              <Calendar size={16} className="text-gray-400" />
+                              <span className="text-xs">
+                                 {new Date(season.startDate).toLocaleDateString()} - {new Date(season.endDate).toLocaleDateString()}
+                              </span>
+                           </div>
+                           <div className="flex items-center gap-3 text-sm text-gray-600">
+                              <Box size={16} className="text-gray-400" />
+                              <span className="font-bold">{season.productIds.length} Artículos</span>
+                           </div>
+                        </div>
+                     </div>
+                  </div>
+               ))}
+               
+               {/* Add New Season Card */}
+               <button 
+                  onClick={() => setEditingSeason('NEW')}
+                  className="bg-gray-50 rounded-3xl p-6 border-2 border-dashed border-gray-200 hover:border-yellow-300 hover:bg-yellow-50 transition-all flex flex-col items-center justify-center text-gray-400 hover:text-yellow-600 gap-4"
+               >
+                  <div className="p-4 bg-white rounded-full shadow-sm"><Plus size={32} /></div>
+                  <span className="font-bold">Nueva Temporada</span>
                </button>
             </div>
          )}

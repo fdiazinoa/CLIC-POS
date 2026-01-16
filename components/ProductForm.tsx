@@ -5,7 +5,8 @@ import {
   Info, Layers, RefreshCw, CheckCircle2, Tag, 
   Package, LayoutGrid, FileText, Settings2, Upload,
   Image as ImageIcon, Percent, ShoppingCart, Calculator, Download,
-  ShieldAlert, AlertCircle, Check, LayoutTemplate, ClipboardList
+  ShieldAlert, AlertCircle, Check, LayoutTemplate, ClipboardList, ListTree,
+  Truck, ArrowDownToLine, Building2, Search, Filter, AlertTriangle
 } from 'lucide-react';
 import { 
   Product, ProductAttribute, ProductVariant, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse
@@ -21,7 +22,7 @@ interface ProductFormProps {
   onClose: () => void;
 }
 
-type ProductTab = 'GENERAL' | 'PRICING' | 'VARIANTS' | 'TAXES' | 'STOCKS';
+type ProductTab = 'GENERAL' | 'PRICING' | 'VARIANTS' | 'TAXES' | 'STOCKS' | 'CLASSIFICATION' | 'LOGISTICS';
 
 // Mock templates simulating data from VariantManager
 const PREDEFINED_TEMPLATES = [
@@ -32,10 +33,73 @@ const PREDEFINED_TEMPLATES = [
   { id: 'tpl_5', name: 'Materiales', attrName: 'Material', options: ['Algodón', 'Poliéster', 'Lana', 'Seda', 'Lino'] },
 ];
 
+// --- INITIAL MOCK MASTER DATA ---
+const INITIAL_DEPARTMENTS = [
+  { id: 'DEP_01', name: 'Alimentos' },
+  { id: 'DEP_02', name: 'Hogar' },
+  { id: 'DEP_03', name: 'Electrónica' },
+  { id: 'DEP_04', name: 'Cuidado Personal' },
+];
+
+const INITIAL_SECTIONS = [
+  { id: 'SEC_01', depId: 'DEP_01', name: 'Frescos' },
+  { id: 'SEC_02', depId: 'DEP_01', name: 'Abarrotes' },
+  { id: 'SEC_03', depId: 'DEP_01', name: 'Congelados' },
+  { id: 'SEC_04', depId: 'DEP_02', name: 'Cocina' },
+  { id: 'SEC_05', depId: 'DEP_02', name: 'Decoración' },
+  { id: 'SEC_06', depId: 'DEP_03', name: 'Audio' },
+  { id: 'SEC_07', depId: 'DEP_03', name: 'Computación' },
+];
+
+const INITIAL_FAMILIES = [
+  { id: 'FAM_01', name: 'Lácteos' },
+  { id: 'FAM_02', name: 'Bebidas' },
+  { id: 'FAM_03', name: 'Limpieza' },
+  { id: 'FAM_04', name: 'Snacks' },
+];
+
+const INITIAL_SUBFAMILIES = [
+  { id: 'SUB_01', famId: 'FAM_01', name: 'Leches' },
+  { id: 'SUB_02', famId: 'FAM_01', name: 'Quesos' },
+  { id: 'SUB_03', famId: 'FAM_01', name: 'Yogurts' },
+  { id: 'SUB_04', famId: 'FAM_02', name: 'Gaseosas' },
+  { id: 'SUB_05', famId: 'FAM_02', name: 'Jugos' },
+  { id: 'SUB_06', famId: 'FAM_02', name: 'Aguas' },
+];
+
+const INITIAL_BRANDS = [
+  { id: 'BR_01', name: 'Nestlé' },
+  { id: 'BR_02', name: 'Coca-Cola' },
+  { id: 'BR_03', name: 'Samsung' },
+  { id: 'BR_04', name: 'Sony' },
+  { id: 'BR_05', name: 'Marca Blanca' },
+  { id: 'BR_06', name: 'Procter & Gamble' },
+];
+
 const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], hasHistory = false, onSave, onClose }) => {
   const [activeTab, setActiveTab] = useState<ProductTab>('GENERAL');
   const fileInputRef = useRef<HTMLInputElement>(null);
   
+  // --- LOCAL STATE FOR MASTER DATA (To allow "Quick Add") ---
+  const [departments, setDepartments] = useState(INITIAL_DEPARTMENTS);
+  const [sections, setSections] = useState(INITIAL_SECTIONS);
+  const [families, setFamilies] = useState(INITIAL_FAMILIES);
+  const [subfamilies, setSubfamilies] = useState(INITIAL_SUBFAMILIES);
+  const [brands, setBrands] = useState(INITIAL_BRANDS);
+
+  // --- QUICK ADD MODAL STATE ---
+  const [quickAddState, setQuickAddState] = useState<{
+    type: 'DEP' | 'SEC' | 'FAM' | 'SUB' | 'BRAND';
+    label: string;
+  } | null>(null);
+  const [quickAddValue, setQuickAddValue] = useState('');
+
+  // --- LOGISTICS TAB STATE ---
+  const [logisticsSearch, setLogisticsSearch] = useState('');
+  const [logisticsFilterStock, setLogisticsFilterStock] = useState(false);
+  // Local state for Logistics settings (Min/Max) as they are not in the core Product type yet
+  const [warehouseSettings, setWarehouseSettings] = useState<Record<string, {min: number, max: number}>>({});
+
   const [formData, setFormData] = useState<Product>(initialData || {
     id: `PRD_${Date.now()}`,
     name: '',
@@ -54,13 +118,110 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     salesTax: 0,
     appliedTaxIds: config.taxes?.[0] ? [config.taxes[0].id] : [],
     cost: 0,
-    description: ''
+    description: '',
+    departmentId: '',
+    sectionId: '',
+    familyId: '',
+    subfamilyId: '',
+    brandId: ''
   });
 
   const [optionInputs, setOptionInputs] = useState<Record<string, string>>({});
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   
-  const isVariantCreationBlocked = hasHistory && (!formData.attributes || formData.attributes.length === 0);
+  // --- LOGIC: CLASSIFICATION HANDLERS ---
+  const handleDepartmentChange = (newDepId: string) => {
+    setFormData(prev => ({
+      ...prev,
+      departmentId: newDepId,
+      sectionId: '' // Cascading Reset
+    }));
+  };
+
+  const handleFamilyChange = (newFamId: string) => {
+    setFormData(prev => ({
+      ...prev,
+      familyId: newFamId,
+      subfamilyId: '' // Cascading Reset
+    }));
+  };
+
+  // --- LOGIC: QUICK ADD ---
+  const openQuickAdd = (type: 'DEP' | 'SEC' | 'FAM' | 'SUB' | 'BRAND') => {
+    // Validation for dependents
+    if (type === 'SEC' && !formData.departmentId) return alert("Selecciona un Departamento primero.");
+    if (type === 'SUB' && !formData.familyId) return alert("Selecciona una Familia primero.");
+
+    const label = type === 'DEP' ? 'Departamento' : type === 'SEC' ? 'Sección' : type === 'FAM' ? 'Familia' : type === 'SUB' ? 'Subfamilia' : 'Marca';
+    
+    setQuickAddValue('');
+    setQuickAddState({ type, label });
+  };
+
+  const confirmQuickAdd = () => {
+    if (!quickAddValue.trim() || !quickAddState) return;
+    
+    const { type } = quickAddState;
+    const name = quickAddValue.trim();
+    const id = `${type}_${Date.now()}`;
+
+    switch(type) {
+        case 'DEP':
+            setDepartments(prev => [...prev, { id, name }]);
+            handleDepartmentChange(id); // Automatically select new dept
+            break;
+        case 'SEC':
+            setSections(prev => [...prev, { id, name, depId: formData.departmentId! }]);
+            setFormData(prev => ({ ...prev, sectionId: id }));
+            break;
+        case 'FAM':
+            setFamilies(prev => [...prev, { id, name }]);
+            handleFamilyChange(id); // Automatically select new family
+            break;
+        case 'SUB':
+            setSubfamilies(prev => [...prev, { id, name, famId: formData.familyId! }]);
+            setFormData(prev => ({ ...prev, subfamilyId: id }));
+            break;
+        case 'BRAND':
+            setBrands(prev => [...prev, { id, name }]);
+            setFormData(prev => ({ ...prev, brandId: id }));
+            break;
+    }
+    
+    setQuickAddState(null);
+  };
+
+  const availableSections = useMemo(() => 
+    sections.filter(s => s.depId === formData.departmentId), 
+  [formData.departmentId, sections]);
+
+  const availableSubfamilies = useMemo(() => 
+    subfamilies.filter(s => s.famId === formData.familyId), 
+  [formData.familyId, subfamilies]);
+
+  // --- LOGIC: LOGISTICS ---
+  const toggleWarehouseActive = (whId: string) => {
+    setFormData(prev => {
+        const currentActive = prev.activeInWarehouses || [];
+        const isActive = currentActive.includes(whId);
+        return {
+            ...prev,
+            activeInWarehouses: isActive 
+                ? currentActive.filter(id => id !== whId)
+                : [...currentActive, whId]
+        };
+    });
+  };
+
+  const updateWarehouseSettings = (whId: string, field: 'min' | 'max', value: number) => {
+      setWarehouseSettings(prev => ({
+          ...prev,
+          [whId]: {
+              ...(prev[whId] || { min: 0, max: 0 }),
+              [field]: value
+          }
+      }));
+  };
 
   // --- LOGIC: TAXES ---
   const toggleTax = (taxId: string) => {
@@ -95,74 +256,6 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     }
   };
 
-  const removeGalleryImage = (img: string) => {
-    setFormData(prev => ({
-      ...prev,
-      images: prev.images.filter(i => i !== img),
-      image: prev.image === img ? prev.images[1] || undefined : prev.image
-    }));
-  };
-
-  // --- LOGIC: TARIFFS ---
-  const handleToggleTariff = (tariff: Tariff) => {
-    const isPresent = formData.tariffs.some(t => t.tariffId === tariff.id);
-    if (isPresent) {
-      setFormData(prev => ({
-        ...prev,
-        tariffs: prev.tariffs.filter(t => t.tariffId !== tariff.id)
-      }));
-    } else {
-      const baseCost = formData.cost || 0;
-      const taxPct = combinedTaxRate * 100;
-      const marginPct = 30;
-      const newTariffPrice: TariffPrice = {
-        tariffId: tariff.id,
-        name: tariff.name,
-        costBase: baseCost,
-        margin: marginPct,
-        tax: taxPct,
-        price: baseCost * (1 + marginPct / 100) * (1 + combinedTaxRate)
-      };
-      setFormData(prev => ({
-        ...prev,
-        tariffs: [...prev.tariffs, newTariffPrice]
-      }));
-    }
-  };
-
-  const updateTariffDetail = (tariffId: string, field: keyof TariffPrice, value: number) => {
-    setFormData(prev => {
-      const newTariffs = prev.tariffs.map(t => {
-        if (t.tariffId === tariffId) {
-          const updated = { ...t, [field]: value };
-          if (field !== 'price') {
-             updated.price = (updated.costBase || 0) * (1 + (updated.margin || 0) / 100) * (1 + (updated.tax || 0) / 100);
-          } else {
-             if (updated.costBase && updated.costBase > 0) {
-                const netPrice = value / (1 + (updated.tax || 0) / 100);
-                updated.margin = ((netPrice - updated.costBase) / updated.costBase) * 100;
-             }
-          }
-          return updated;
-        }
-        return t;
-      });
-      return { ...prev, tariffs: newTariffs };
-    });
-  };
-
-  // --- LOGIC: STOCK WAREHOUSES ---
-  const toggleWarehouseActive = (whId: string) => {
-    setFormData(prev => {
-      const current = prev.activeInWarehouses || [];
-      const isActive = current.includes(whId);
-      return {
-        ...prev,
-        activeInWarehouses: isActive ? current.filter(id => id !== whId) : [...current, whId]
-      };
-    });
-  };
-
   // --- LOGIC: ATTRIBUTES & VARIANTS ---
   const addAttribute = () => {
     const newId = Math.random().toString(36).substr(2, 9);
@@ -188,13 +281,6 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     setIsTemplateModalOpen(false);
   };
 
-  const updateAttributeName = (id: string, name: string) => {
-    setFormData(prev => ({
-      ...prev,
-      attributes: prev.attributes.map(a => a.id === id ? { ...a, name } : a)
-    }));
-  };
-
   const addOption = (attrId: string) => {
     const value = optionInputs[attrId]?.trim();
     if (!value) return;
@@ -215,22 +301,6 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       })
     }));
     setOptionInputs(prev => ({ ...prev, [attrId]: '' }));
-  };
-
-  const removeOption = (attrId: string, optionValue: string) => {
-    setFormData(prev => ({
-      ...prev,
-      attributes: prev.attributes.map(a => {
-        if (a.id === attrId) {
-          const idx = a.options.indexOf(optionValue);
-          if (idx === -1) return a;
-          const newOptions = a.options.filter((_, i) => i !== idx);
-          const newCodes = (a.optionCodes || []).filter((_, i) => i !== idx);
-          return { ...a, options: newOptions, optionCodes: newCodes };
-        }
-        return a;
-      })
-    }));
   };
 
   const removeAttribute = (id: string) => {
@@ -274,30 +344,65 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     setFormData(prev => ({ ...prev, variants: newVariants }));
   };
 
-  const updateVariant = (index: number, field: 'sku' | 'barcode' | 'price', value: string) => {
+  // --- LOGIC: TARIFFS ---
+  const handleToggleTariff = (tariff: Tariff) => {
+    const isPresent = formData.tariffs.some(t => t.tariffId === tariff.id);
+    if (isPresent) {
+      setFormData(prev => ({
+        ...prev,
+        tariffs: prev.tariffs.filter(t => t.tariffId !== tariff.id)
+      }));
+    } else {
+      const baseCost = formData.cost || 0;
+      const marginPct = 30;
+      const newTariffPrice: TariffPrice = {
+        tariffId: tariff.id,
+        name: tariff.name,
+        costBase: baseCost,
+        margin: marginPct,
+        tax: combinedTaxRate * 100,
+        price: baseCost * (1 + marginPct / 100) * (1 + combinedTaxRate)
+      };
+      setFormData(prev => ({
+        ...prev,
+        tariffs: [...prev.tariffs, newTariffPrice]
+      }));
+    }
+  };
+
+  const updateTariffDetail = (tariffId: string, field: keyof TariffPrice, value: number) => {
     setFormData(prev => {
-      const newVariants = [...prev.variants];
-      if (field === 'barcode') {
-        newVariants[index] = { ...newVariants[index], barcode: [value] };
-      } else if (field === 'sku') {
-        newVariants[index] = { ...newVariants[index], sku: value };
-      } else if (field === 'price') {
-        newVariants[index] = { ...newVariants[index], price: parseFloat(value) || 0 };
-      }
-      return { ...prev, variants: newVariants };
+      const newTariffs = prev.tariffs.map(t => {
+        if (t.tariffId === tariffId) {
+          const updated = { ...t, [field]: value };
+          if (field !== 'price') {
+             updated.price = (updated.costBase || 0) * (1 + (updated.margin || 0) / 100) * (1 + (updated.tax || 0) / 100);
+          } else {
+             if (updated.costBase && updated.costBase > 0) {
+                const netPrice = value / (1 + (updated.tax || 0) / 100);
+                updated.margin = ((netPrice - updated.costBase) / updated.costBase) * 100;
+             }
+          }
+          return updated;
+        }
+        return t;
+      });
+      return { ...prev, tariffs: newTariffs };
     });
   };
 
-  const removeVariant = (index: number) => {
-     setFormData(prev => ({
-        ...prev,
-        variants: prev.variants.filter((_, i) => i !== index)
-     }));
+  // --- SAVE ---
+  const handleFinalSave = () => {
+    if (formData.tariffs.length === 0) {
+      alert("Error de integridad: El artículo debe tener al menos una TARIFA activa para poder venderse.");
+      return;
+    }
+    onSave(formData);
   };
 
   return (
     <div className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-white rounded-[2.5rem] w-full max-w-5xl h-[90vh] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+      <div className="bg-white rounded-[2.5rem] w-full max-w-5xl h-[90vh] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 relative">
         
         {/* HEADER */}
         <div className="p-6 border-b flex justify-between items-center bg-gray-50/50 shrink-0">
@@ -319,10 +424,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         <div className="flex px-6 border-b bg-white shrink-0 overflow-x-auto no-scrollbar gap-2">
           {[
             { id: 'GENERAL', label: 'Datos Generales', icon: Info },
+            { id: 'CLASSIFICATION', label: 'Clasificación', icon: ListTree },
             { id: 'TAXES', label: 'Impuestos', icon: Percent },
             { id: 'PRICING', label: 'Tarifas', icon: DollarSign },
             { id: 'VARIANTS', label: 'Variantes', icon: Layers },
-            { id: 'STOCKS', label: 'Stock', icon: ClipboardList },
+            { id: 'LOGISTICS', label: 'Stock y Logística', icon: Building2 },
+            { id: 'STOCKS', label: 'Inv. Inicial', icon: ClipboardList },
           ].map(tab => (
             <button
               key={tab.id}
@@ -387,7 +494,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                         </select>
                       </div>
                       <div>
-                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-2 ml-1">Categoría</label>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-2 ml-1">Categoría (Simple)</label>
                         <input 
                           type="text" 
                           value={formData.category} 
@@ -398,23 +505,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-[10px] font-black text-gray-500 uppercase mb-2 ml-1">Costo ($)</label>
+                        <div className="col-span-2">
+                            <label className="block text-[10px] font-black text-gray-500 uppercase mb-2 ml-1">Costo de Referencia ($)</label>
                             <input 
                                 type="number" 
                                 value={formData.cost || 0} 
                                 onChange={e => setFormData({ ...formData, cost: parseFloat(e.target.value) })} 
                                 className="w-full p-4 bg-white border-2 border-gray-100 rounded-2xl font-bold text-gray-700 outline-none focus:border-blue-200" 
                             />
-                        </div>
-                        <div>
-                            <label className="block text-[10px] font-black text-gray-500 uppercase mb-2 ml-1">Precio Base ($)</label>
-                            <input 
-                                type="number" 
-                                value={formData.price} 
-                                onChange={e => setFormData({ ...formData, price: parseFloat(e.target.value) })} 
-                                className="w-full p-4 bg-white border-2 border-gray-100 rounded-2xl font-bold text-gray-700 outline-none focus:border-blue-200" 
-                            />
+                            <p className="text-[10px] text-gray-400 mt-1 ml-1">
+                                El precio de venta se define exclusivamente en la pestaña <strong>Tarifas</strong>.
+                            </p>
                         </div>
                     </div>
                     
@@ -436,6 +537,167 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             </div>
           )}
 
+          {/* TAB: CLASSIFICATION (UPDATED WITH QUICK ADD MODAL) */}
+          {activeTab === 'CLASSIFICATION' && (
+             <div className="max-w-4xl mx-auto space-y-6 animate-in slide-in-from-right-4">
+                <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
+                   
+                   <div className="mb-8">
+                      <h3 className="text-xl font-bold text-gray-800">Jerarquía Comercial</h3>
+                      <p className="text-sm text-gray-400">Asigna la estructura organizativa y agrupaciones del producto.</p>
+                   </div>
+
+                   <div className="space-y-8">
+                      
+                      {/* GROUP 1: ORGANIZATION */}
+                      <div>
+                         <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest mb-4 flex items-center gap-2">
+                            <Box size={14} /> Estructura Organizativa
+                         </h4>
+                         <div className="grid grid-cols-2 gap-4">
+                            {/* Department */}
+                            <div>
+                               <div className="flex justify-between items-center mb-1 ml-1">
+                                  <label className="block text-[10px] font-bold text-gray-700 uppercase">Departamento</label>
+                                  <button 
+                                    type="button"
+                                    onClick={() => openQuickAdd('DEP')} 
+                                    className="text-[10px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 bg-blue-50 px-2 py-0.5 rounded cursor-pointer"
+                                  >
+                                     <Plus size={10} /> Crear Nuevo
+                                  </button>
+                               </div>
+                               <select
+                                  value={formData.departmentId || ''}
+                                  onChange={(e) => handleDepartmentChange(e.target.value)}
+                                  className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-medium text-gray-700"
+                               >
+                                  <option value="">-- Seleccionar --</option>
+                                  {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                               </select>
+                            </div>
+
+                            {/* Section */}
+                            <div>
+                               <div className="flex justify-between items-center mb-1 ml-1">
+                                  <label className="block text-[10px] font-bold text-gray-700 uppercase">Sección</label>
+                                  {formData.departmentId && (
+                                     <button 
+                                        type="button"
+                                        onClick={() => openQuickAdd('SEC')} 
+                                        className="text-[10px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 bg-blue-50 px-2 py-0.5 rounded cursor-pointer"
+                                     >
+                                        <Plus size={10} /> Crear Nuevo
+                                     </button>
+                                  )}
+                               </div>
+                               <select
+                                  value={formData.sectionId || ''}
+                                  onChange={(e) => setFormData({...formData, sectionId: e.target.value})}
+                                  className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-medium text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                  disabled={!formData.departmentId}
+                               >
+                                  <option value="">{formData.departmentId ? '-- Seleccionar --' : '-- Primero seleccione Dpto --'}</option>
+                                  {availableSections.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                               </select>
+                            </div>
+                         </div>
+                      </div>
+
+                      <div className="h-px bg-gray-100 w-full" />
+
+                      {/* GROUP 2: PRODUCT GROUPING */}
+                      <div>
+                         <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest mb-4 flex items-center gap-2">
+                            <Layers size={14} /> Agrupación de Producto
+                         </h4>
+                         <div className="grid grid-cols-2 gap-4">
+                            {/* Family */}
+                            <div>
+                               <div className="flex justify-between items-center mb-1 ml-1">
+                                  <label className="block text-[10px] font-bold text-gray-700 uppercase">Familia</label>
+                                  <button 
+                                    type="button"
+                                    onClick={() => openQuickAdd('FAM')} 
+                                    className="text-[10px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 bg-blue-50 px-2 py-0.5 rounded cursor-pointer"
+                                  >
+                                     <Plus size={10} /> Crear Nueva
+                                  </button>
+                               </div>
+                               <select
+                                  value={formData.familyId || ''}
+                                  onChange={(e) => handleFamilyChange(e.target.value)}
+                                  className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-medium text-gray-700"
+                               >
+                                  <option value="">-- Seleccionar --</option>
+                                  {families.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                               </select>
+                            </div>
+
+                            {/* Subfamily */}
+                            <div>
+                               <div className="flex justify-between items-center mb-1 ml-1">
+                                  <label className="block text-[10px] font-bold text-gray-700 uppercase">Subfamilia</label>
+                                  {formData.familyId && (
+                                     <button 
+                                        type="button"
+                                        onClick={() => openQuickAdd('SUB')} 
+                                        className="text-[10px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 bg-blue-50 px-2 py-0.5 rounded cursor-pointer"
+                                     >
+                                        <Plus size={10} /> Crear Nueva
+                                     </button>
+                                  )}
+                               </div>
+                               <select
+                                  value={formData.subfamilyId || ''}
+                                  onChange={(e) => setFormData({...formData, subfamilyId: e.target.value})}
+                                  className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-medium text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                  disabled={!formData.familyId}
+                               >
+                                  <option value="">{formData.familyId ? '-- Seleccionar --' : '-- Primero seleccione Familia --'}</option>
+                                  {availableSubfamilies.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                               </select>
+                            </div>
+                         </div>
+                      </div>
+
+                      <div className="h-px bg-gray-100 w-full" />
+
+                      {/* GROUP 3: COMMERCIAL IDENTITY */}
+                      <div>
+                         <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest mb-4 flex items-center gap-2">
+                            <Tag size={14} /> Identidad Comercial
+                         </h4>
+                         <div className="grid grid-cols-2 gap-4">
+                            {/* Brand */}
+                            <div>
+                               <div className="flex justify-between items-center mb-1 ml-1">
+                                  <label className="block text-[10px] font-bold text-gray-700 uppercase">Marca</label>
+                                  <button 
+                                    type="button"
+                                    onClick={() => openQuickAdd('BRAND')} 
+                                    className="text-[10px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 bg-blue-50 px-2 py-0.5 rounded cursor-pointer"
+                                  >
+                                     <Plus size={10} /> Crear Nueva
+                                  </button>
+                               </div>
+                               <select
+                                  value={formData.brandId || ''}
+                                  onChange={(e) => setFormData({...formData, brandId: e.target.value})}
+                                  className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-medium text-gray-700"
+                               >
+                                  <option value="">-- Seleccionar --</option>
+                                  {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                               </select>
+                            </div>
+                         </div>
+                      </div>
+
+                   </div>
+                </div>
+             </div>
+          )}
+
           {/* TAB: TAXES */}
           {activeTab === 'TAXES' && (
              <div className="max-w-4xl mx-auto space-y-6 animate-in slide-in-from-right-4">
@@ -446,370 +708,544 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                          <p className="text-sm text-gray-400">Selecciona uno o varios impuestos para este producto.</p>
                       </div>
                       <div className="bg-blue-50 px-4 py-2 rounded-xl text-blue-600 font-black text-lg">
-                         Tasa Total: {(combinedTaxRate * 100).toFixed(1)}%
+                         Tasa Total: {(combinedTaxRate * 100).toFixed(2)}%
                       </div>
                    </div>
-
-                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                   
+                   <div className="space-y-3">
                       {config.taxes.map(tax => {
                          const isSelected = formData.appliedTaxIds?.includes(tax.id);
                          return (
                             <div 
                                key={tax.id}
                                onClick={() => toggleTax(tax.id)}
-                               className={`p-5 rounded-2xl border-2 cursor-pointer transition-all flex items-center justify-between ${
-                                  isSelected ? 'bg-blue-50 border-blue-600 shadow-sm' : 'bg-gray-50 border-transparent hover:border-gray-200'
+                               className={`flex items-center justify-between p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                                  isSelected ? 'bg-blue-50 border-blue-500' : 'bg-gray-50 border-gray-100 hover:bg-gray-100'
                                }`}
                             >
-                               <div className="flex items-center gap-4">
-                                  <div className={`w-6 h-6 rounded flex items-center justify-center border-2 transition-colors ${isSelected ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300'}`}>
-                                     {isSelected && <Check size={14} strokeWidth={4} />}
+                               <div className="flex items-center gap-3">
+                                  <div className={`w-6 h-6 rounded border-2 flex items-center justify-center ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-300'}`}>
+                                     {isSelected && <Check size={14} className="text-white" />}
                                   </div>
                                   <div>
-                                     <p className={`font-bold ${isSelected ? 'text-blue-900' : 'text-gray-700'}`}>{tax.name}</p>
-                                     <p className="text-[10px] text-gray-400 uppercase font-bold tracking-tighter">{tax.type}</p>
+                                     <p className="font-bold text-gray-800">{tax.name}</p>
+                                     <p className="text-xs text-gray-500 font-mono">{tax.type}</p>
                                   </div>
-                                </div>
-                               <span className={`text-lg font-black ${isSelected ? 'text-blue-600' : 'text-gray-400'}`}>
-                                  {(tax.rate * 100).toFixed(0)}%
-                               </span>
+                               </div>
+                               <span className="font-black text-lg text-gray-700">{(tax.rate * 100).toFixed(2)}%</span>
+                            </div>
+                         )
+                      })}
+                   </div>
+                </div>
+             </div>
+          )}
+
+          {/* TAB: PRICING (Tariff Management) */}
+          {activeTab === 'PRICING' && (
+             <div className="max-w-4xl mx-auto space-y-6 animate-in slide-in-from-right-4">
+                <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
+                   <div className="mb-6">
+                      <h3 className="text-xl font-bold text-gray-800">Precios y Tarifas</h3>
+                      <p className="text-sm text-gray-400">Administra el precio en cada lista disponible.</p>
+                   </div>
+
+                   <div className="space-y-4">
+                      {availableTariffs.map(tariff => {
+                         const tariffPrice = formData.tariffs.find(t => t.tariffId === tariff.id);
+                         const isEnabled = !!tariffPrice;
+
+                         return (
+                            <div key={tariff.id} className={`p-6 rounded-2xl border-2 transition-all ${isEnabled ? 'bg-white border-purple-200 shadow-sm' : 'bg-gray-50 border-gray-200 opacity-70'}`}>
+                               <div className="flex justify-between items-start mb-4">
+                                  <div className="flex items-center gap-3">
+                                     <button 
+                                        onClick={() => handleToggleTariff(tariff)}
+                                        className={`w-12 h-6 rounded-full relative transition-colors ${isEnabled ? 'bg-purple-600' : 'bg-gray-300'}`}
+                                     >
+                                        <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${isEnabled ? 'left-7' : 'left-1'}`} />
+                                     </button>
+                                     <div>
+                                        <h4 className="font-bold text-gray-800">{tariff.name}</h4>
+                                        <p className="text-xs text-gray-500">{tariff.currency} • {tariff.strategy.type}</p>
+                                     </div>
+                                  </div>
+                                  {isEnabled && (
+                                     <div className="text-right">
+                                        <p className="text-[10px] text-gray-400 font-bold uppercase mb-1">Precio Final</p>
+                                        <p className="text-2xl font-black text-purple-700">{config.currencySymbol}{tariffPrice.price.toFixed(2)}</p>
+                                     </div>
+                                  )}
+                               </div>
+
+                               {isEnabled && (
+                                  <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-gray-100">
+                                     <div>
+                                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Precio Neto (Sin Imp.)</label>
+                                        <div className="relative">
+                                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs font-bold">$</span>
+                                           <input 
+                                              type="number" 
+                                              value={(tariffPrice.price / (1 + (tariffPrice.tax || 0) / 100)).toFixed(2)}
+                                              onChange={(e) => {
+                                                 const net = parseFloat(e.target.value);
+                                                 if (!isNaN(net)) {
+                                                    const final = net * (1 + (tariffPrice.tax || 0) / 100);
+                                                    updateTariffDetail(tariff.id, 'price', final);
+                                                 }
+                                              }}
+                                              className="w-full p-2 pl-6 bg-gray-50 border border-gray-100 rounded-lg text-sm font-bold outline-none"
+                                           />
+                                        </div>
+                                     </div>
+                                     <div>
+                                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Margen %</label>
+                                        <div className="relative">
+                                           <input 
+                                              type="number" 
+                                              value={tariffPrice.margin?.toFixed(2) || 0}
+                                              onChange={(e) => updateTariffDetail(tariff.id, 'margin', parseFloat(e.target.value))}
+                                              className="w-full p-2 pr-6 bg-gray-50 border border-gray-100 rounded-lg text-sm font-bold outline-none"
+                                           />
+                                           <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs font-bold">%</span>
+                                        </div>
+                                     </div>
+                                  </div>
+                               )}
                             </div>
                          );
                       })}
                    </div>
                 </div>
-
-                <div className="bg-amber-50 p-6 rounded-[2rem] border border-amber-100 flex items-start gap-4">
-                   <AlertCircle className="text-amber-500 mt-1" size={24} />
-                   <p className="text-sm text-amber-800">
-                      <strong>Importante:</strong> Los productos de restaurantes usualmente requieren tanto el 18% (ITBIS) como el 10% (Propina Legal). Asegúrate de marcar ambos si aplica.
-                   </p>
-                </div>
              </div>
           )}
 
-          {/* TAB: TARIFAS Y PRECIOS */}
-          {activeTab === 'PRICING' && (
-            <div className="max-w-4xl mx-auto space-y-6 animate-in slide-in-from-right-4">
-               {/* Base Cost Reference */}
-               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                     <div className="p-2 bg-slate-200 rounded-lg text-slate-600"><DollarSign size={20} /></div>
-                     <div>
-                        <p className="text-xs font-bold text-slate-500 uppercase">Costo Base</p>
-                        <p className="text-lg font-black text-slate-800">{config.currencySymbol}{formData.cost?.toFixed(2) || '0.00'}</p>
-                     </div>
-                  </div>
-                  <div className="text-right">
-                     <p className="text-xs text-slate-400">Impuestos Globales</p>
-                     <p className="font-bold text-slate-600">{(combinedTaxRate * 100).toFixed(1)}%</p>
-                  </div>
-               </div>
-
-               <div className="grid grid-cols-1 gap-4">
-                  {availableTariffs.map(tariff => {
-                     const tariffDetail = formData.tariffs.find(t => t.tariffId === tariff.id);
-                     const isActive = !!tariffDetail;
-
-                     return (
-                        <div key={tariff.id} className={`bg-white p-6 rounded-2xl border-2 transition-all ${isActive ? 'border-purple-500 shadow-md' : 'border-gray-100 opacity-75'}`}>
-                           <div className="flex justify-between items-center mb-6">
-                              <div className="flex items-center gap-3">
-                                 <div className={`p-2 rounded-lg ${isActive ? 'bg-purple-100 text-purple-600' : 'bg-gray-100 text-gray-400'}`}>
-                                    <Tag size={20} />
-                                 </div>
-                                 <div>
-                                    <h4 className="font-bold text-gray-800">{tariff.name}</h4>
-                                    <p className="text-xs text-gray-500">{tariff.strategy.type === 'MANUAL' ? 'Precio Manual' : 'Calculado'}</p>
-                                 </div>
-                              </div>
-                              <label className="relative inline-flex items-center cursor-pointer">
-                                 <input type="checkbox" className="sr-only peer" checked={isActive} onChange={() => handleToggleTariff(tariff)} />
-                                 <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
-                              </label>
-                           </div>
-
-                           {isActive && tariffDetail && (
-                              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 border-t border-gray-100">
-                                 <div>
-                                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Precio Final (Inc. Imp)</label>
-                                    <div className="relative">
-                                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span>
-                                       <input 
-                                          type="number" 
-                                          value={tariffDetail.price} 
-                                          onChange={(e) => updateTariffDetail(tariff.id, 'price', parseFloat(e.target.value))}
-                                          className="w-full p-3 pl-8 bg-purple-50 border border-purple-100 rounded-xl font-black text-purple-900 outline-none focus:ring-2 focus:ring-purple-300 text-lg"
-                                       />
-                                    </div>
-                                 </div>
-                                 <div>
-                                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Margen (%)</label>
-                                    <div className="relative">
-                                       <input 
-                                          type="number" 
-                                          value={tariffDetail.margin?.toFixed(2)} 
-                                          onChange={(e) => updateTariffDetail(tariff.id, 'margin', parseFloat(e.target.value))}
-                                          className="w-full p-3 bg-white border border-gray-200 rounded-xl font-bold text-gray-700 outline-none focus:border-purple-300"
-                                       />
-                                       <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">%</span>
-                                    </div>
-                                 </div>
-                                 <div>
-                                    <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Utilidad Unit.</label>
-                                    <div className="p-3 bg-gray-50 rounded-xl font-bold text-green-600 border border-gray-200">
-                                       {config.currencySymbol}{((tariffDetail.price / (1 + combinedTaxRate)) - (formData.cost || 0)).toFixed(2)}
-                                    </div>
-                                 </div>
-                              </div>
-                           )}
-                        </div>
-                     );
-                  })}
-               </div>
-            </div>
-          )}
-
-          {/* TAB: VARIANTES */}
+          {/* TAB: VARIANTS (ATTRIBUTES) */}
           {activeTab === 'VARIANTS' && (
-             <div className="max-w-5xl mx-auto space-y-8 animate-in slide-in-from-right-4">
+             <div className="max-w-4xl mx-auto space-y-6 animate-in slide-in-from-right-4">
                 
-                {/* Attribute Definition */}
-                <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-200">
+                <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
                    <div className="flex justify-between items-center mb-6">
-                      <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2">
-                         <Layers size={20} className="text-blue-500" /> Definición de Atributos
-                      </h3>
+                      <h3 className="text-xl font-bold text-gray-800">Atributos del Producto</h3>
                       <div className="flex gap-2">
-                          <button 
-                              onClick={() => setIsTemplateModalOpen(true)} 
-                              className="px-4 py-2 bg-purple-50 text-purple-600 rounded-xl text-sm font-bold hover:bg-purple-100 transition-colors flex items-center gap-2"
-                          >
-                              <LayoutTemplate size={16} /> Cargar Plantilla
-                          </button>
-                          <button onClick={addAttribute} className="px-4 py-2 bg-blue-50 text-blue-600 rounded-xl text-sm font-bold hover:bg-blue-100 transition-colors">
-                             + Agregar Atributo
-                          </button>
+                         <button onClick={() => setIsTemplateModalOpen(true)} className="px-4 py-2 bg-pink-50 text-pink-600 rounded-xl text-sm font-bold hover:bg-pink-100 transition-colors">
+                            Usar Plantilla
+                         </button>
+                         <button onClick={addAttribute} className="px-4 py-2 bg-gray-900 text-white rounded-xl text-sm font-bold hover:bg-gray-800 transition-colors flex items-center gap-2">
+                            <Plus size={16} /> Nuevo Atributo
+                         </button>
                       </div>
                    </div>
 
                    <div className="space-y-6">
-                      {formData.attributes.map((attr) => (
-                         <div key={attr.id} className="p-4 bg-gray-50 rounded-2xl border border-gray-200 relative group">
-                            <button onClick={() => removeAttribute(attr.id)} className="absolute top-2 right-2 p-2 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all">
-                               <Trash2 size={16} />
-                            </button>
-                            
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                               <div>
+                      {formData.attributes?.map((attr, idx) => (
+                         <div key={attr.id} className="p-6 rounded-2xl border-2 border-gray-100 bg-gray-50">
+                            <div className="flex justify-between items-start mb-4">
+                               <div className="flex-1 mr-4">
                                   <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Nombre (Ej. Talla)</label>
                                   <input 
                                      type="text" 
                                      value={attr.name}
-                                     onChange={(e) => updateAttributeName(attr.id, e.target.value)}
-                                     placeholder="Color, Talla, Sabor..."
-                                     className="w-full p-3 bg-white border border-gray-200 rounded-xl font-bold text-gray-800 outline-none focus:border-blue-400"
+                                     onChange={(e) => setFormData(prev => ({
+                                        ...prev,
+                                        attributes: prev.attributes.map(a => a.id === attr.id ? { ...a, name: e.target.value } : a)
+                                     }))}
+                                     className="w-full p-2 bg-white border border-gray-200 rounded-lg font-bold text-gray-800 outline-none focus:border-pink-300"
                                   />
-                                </div>
-                               <div className="md:col-span-2">
-                                  <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Opciones (Enter para agregar)</label>
-                                  <div className="flex flex-wrap gap-2 p-2 bg-white border border-gray-200 rounded-xl min-h-[50px] items-center">
-                                     {attr.options.map((opt) => (
-                                        <span key={opt} className="bg-blue-100 text-blue-700 px-3 py-1 rounded-lg text-sm font-bold flex items-center gap-1">
-                                           {opt}
-                                           <X size={12} className="cursor-pointer hover:text-blue-900" onClick={() => removeOption(attr.id, opt)} />
-                                        </span>
-                                     ))}
-                                     <input 
-                                        type="text" 
-                                        value={optionInputs[attr.id] || ''}
-                                        onChange={(e) => setOptionInputs({...optionInputs, [attr.id]: e.target.value})}
-                                        onKeyDown={(e) => { if(e.key === 'Enter') addOption(attr.id); }}
-                                        placeholder="Escribe y presiona Enter..."
-                                        className="flex-1 min-w-[120px] bg-transparent outline-none text-sm font-medium p-1"
-                                     />
-                                  </div>
+                               </div>
+                               <button onClick={() => removeAttribute(attr.id)} className="p-2 text-gray-400 hover:text-red-500 rounded-lg hover:bg-red-50 transition-colors">
+                                  <Trash2 size={18} />
+                               </button>
+                            </div>
+
+                            <div className="mb-4">
+                               <label className="block text-[10px] font-bold text-gray-400 uppercase mb-2">Opciones</label>
+                               <div className="flex flex-wrap gap-2 mb-3">
+                                  {attr.options.map((opt, i) => (
+                                     <div key={i} className="flex items-center gap-1 bg-white border border-gray-200 px-3 py-1 rounded-lg shadow-sm">
+                                        <span className="text-sm font-medium text-gray-700">{opt}</span>
+                                        <span className="text-[10px] text-gray-400 font-mono border-l pl-2 ml-1">{attr.optionCodes?.[i] || opt.substring(0,3)}</span>
+                                        <button 
+                                           onClick={() => {
+                                              const newOpts = attr.options.filter((_, idx) => idx !== i);
+                                              const newCodes = attr.optionCodes?.filter((_, idx) => idx !== i);
+                                              setFormData(prev => ({
+                                                 ...prev,
+                                                 attributes: prev.attributes.map(a => a.id === attr.id ? { ...a, options: newOpts, optionCodes: newCodes } : a)
+                                              }));
+                                           }}
+                                           className="ml-1 text-gray-300 hover:text-red-500"
+                                        >
+                                           <X size={12} />
+                                        </button>
+                                     </div>
+                                  ))}
+                               </div>
+                               <div className="flex gap-2">
+                                  <input 
+                                     type="text" 
+                                     placeholder="Nueva opción..." 
+                                     value={optionInputs[attr.id] || ''}
+                                     onChange={(e) => setOptionInputs(prev => ({ ...prev, [attr.id]: e.target.value }))}
+                                     onKeyDown={(e) => { if(e.key === 'Enter') addOption(attr.id); }}
+                                     className="flex-1 p-2 bg-white border border-gray-200 rounded-lg text-sm outline-none"
+                                  />
+                                  <button onClick={() => addOption(attr.id)} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700">
+                                     Agregar
+                                  </button>
                                </div>
                             </div>
                          </div>
                       ))}
+                      
                       {(!formData.attributes || formData.attributes.length === 0) && (
-                         <div className="text-center py-8 text-gray-400 border-2 border-dashed border-gray-200 rounded-2xl">
-                            No hay atributos definidos. Agrega uno para crear variantes.
-                         </div>
+                         <div className="text-center py-10 text-gray-400 italic">No hay atributos definidos.</div>
                       )}
                    </div>
-                </div>
 
-                {/* Variants Generation */}
-                {formData.attributes && formData.attributes.length > 0 && (
-                   <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-200">
-                      <div className="flex justify-between items-center mb-6">
-                         <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2">
-                            <Barcode size={20} className="text-green-500" /> Lista de Variantes
-                         </h3>
+                   {formData.attributes.length > 0 && (
+                      <div className="mt-8 pt-6 border-t border-gray-200">
                          <button 
                             onClick={generateVariants}
-                            className="px-6 py-2.5 bg-gray-900 text-white rounded-xl text-sm font-bold hover:bg-gray-800 shadow-lg flex items-center gap-2"
+                            className="w-full py-4 bg-pink-600 text-white rounded-2xl font-bold shadow-lg hover:bg-pink-700 transition-all flex items-center justify-center gap-2"
                          >
-                            <RefreshCw size={16} /> Generar Combinaciones
+                            <Layers size={20} /> Generar Combinaciones (Variantes)
                          </button>
                       </div>
+                   )}
+                </div>
 
-                      <div className="overflow-x-auto">
-                         <table className="w-full text-left text-sm">
-                            <thead className="bg-gray-50 text-gray-500 uppercase font-bold text-xs">
-                               <tr>
-                                  <th className="p-3 rounded-l-xl">SKU</th>
-                                  <th className="p-3">Código de Barras</th>
-                                  <th className="p-3">Combinación</th>
-                                  <th className="p-3">Precio</th>
-                                  <th className="p-3 text-center rounded-r-xl">Acciones</th>
-                               </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                               {formData.variants.map((variant, idx) => (
-                                  <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                                     <td className="p-3">
-                                        <input 
-                                           type="text"
-                                           value={variant.sku}
-                                           onChange={(e) => updateVariant(idx, 'sku', e.target.value)}
-                                           className="w-full bg-transparent border-b border-transparent hover:border-gray-300 focus:border-blue-500 outline-none font-mono text-gray-700 font-bold transition-all"
-                                        />
-                                     </td>
-                                     <td className="p-3">
-                                        <div className="relative group">
-                                           <input 
-                                              type="text"
-                                              value={variant.barcode?.[0] || ''}
-                                              onChange={(e) => updateVariant(idx, 'barcode', e.target.value)}
-                                              placeholder="Escanear..."
-                                              className="w-full bg-transparent border-b border-transparent hover:border-gray-300 focus:border-blue-500 outline-none pl-6 text-gray-600 transition-all"
-                                           />
-                                           <Barcode className="absolute left-0 top-1/2 -translate-y-1/2 text-gray-300 group-hover:text-gray-400" size={14} />
-                                        </div>
-                                     </td>
-                                     <td className="p-3">
-                                        <div className="flex gap-2">
-                                           {Object.entries(variant.attributeValues).map(([key, val]) => (
-                                              <span key={key} className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded text-xs border border-gray-200">
-                                                 {val}
-                                              </span>
-                                           ))}
-                                        </div>
-                                     </td>
-                                     <td className="p-3 font-bold text-gray-900">
-                                        <div className="relative">
-                                           <span className="absolute left-0 top-1/2 -translate-y-1/2 text-gray-400 text-xs">$</span>
-                                           <input 
-                                              type="number"
-                                              value={variant.price}
-                                              onChange={(e) => updateVariant(idx, 'price', e.target.value)}
-                                              className="w-24 pl-3 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-blue-500 outline-none"
-                                           />
-                                        </div>
-                                     </td>
-                                     <td className="p-3 text-center">
-                                        <button onClick={() => removeVariant(idx)} className="text-red-400 hover:text-red-600 transition-colors">
-                                           <Trash2 size={16} />
-                                        </button>
-                                     </td>
-                                  </tr>
-                               ))}
-                               {(!formData.variants || formData.variants.length === 0) && (
-                                  <tr>
-                                     <td colSpan={5} className="p-8 text-center text-gray-400">
-                                        Genera las variantes para ver la lista.
-                                     </td>
-                                  </tr>
-                               )}
-                            </tbody>
-                         </table>
+                {/* Variants Preview */}
+                {formData.variants && formData.variants.length > 0 && (
+                   <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
+                      <h3 className="text-xl font-bold text-gray-800 mb-6">Variantes Generadas ({formData.variants.length})</h3>
+                      <div className="space-y-2">
+                         {formData.variants.map((v, idx) => (
+                            <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                               <div className="flex items-center gap-3">
+                                  <span className="font-mono text-xs font-bold bg-white px-2 py-1 rounded border border-gray-200">{v.sku}</span>
+                                  <div className="flex gap-2">
+                                     {Object.entries(v.attributeValues).map(([key, val]) => (
+                                        <span key={key} className="text-xs text-gray-600"><span className="text-gray-400">{key}:</span> {val}</span>
+                                     ))}
+                                  </div>
+                               </div>
+                               <input 
+                                  type="number" 
+                                  value={v.price} 
+                                  onChange={(e) => {
+                                     const newVars = [...formData.variants];
+                                     newVars[idx].price = parseFloat(e.target.value);
+                                     setFormData(prev => ({ ...prev, variants: newVars }));
+                                  }}
+                                  className="w-24 p-1 bg-white border rounded text-right text-sm"
+                                  placeholder="Precio Override"
+                               />
+                            </div>
+                         ))}
                       </div>
                    </div>
                 )}
              </div>
           )}
 
-          {/* TAB: STOCKS */}
-          {activeTab === 'STOCKS' && (
-            <div className="max-w-4xl mx-auto space-y-6 animate-in slide-in-from-right-4">
-                <div className="bg-white p-6 rounded-[2rem] border border-gray-200 shadow-sm">
-                    <h3 className="font-bold text-gray-800 mb-4 text-lg">Disponibilidad por Almacén</h3>
-                    <div className="divide-y divide-gray-100">
-                        {warehouses.map(wh => {
-                            const isEnabled = formData.activeInWarehouses?.includes(wh.id) ?? false;
-                            // Stock logic: Use stockBalances if exists for precise location, otherwise fallback to main stock if it's the main warehouse.
-                            const displayStock = formData.stockBalances?.[wh.id] !== undefined 
-                                ? formData.stockBalances[wh.id] 
-                                : (wh.isMain ? (formData.stock || 0) : 0); 
+          {/* TAB: STOCK MATRIX (NEW LOGISTICS TAB) */}
+          {activeTab === 'LOGISTICS' && (
+             <div className="w-full h-full flex flex-col animate-in slide-in-from-right-4">
+                
+                {/* Header & Filters */}
+                <div className="mb-6 flex justify-between items-center bg-white p-4 rounded-2xl border border-gray-200 shadow-sm shrink-0">
+                   <div className="flex items-center gap-4 flex-1">
+                      <div className="relative w-full max-w-md">
+                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                         <input 
+                            type="text" 
+                            placeholder="Buscar almacén..." 
+                            value={logisticsSearch}
+                            onChange={(e) => setLogisticsSearch(e.target.value)}
+                            className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-100 text-sm font-medium"
+                         />
+                      </div>
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                         <input 
+                            type="checkbox" 
+                            checked={logisticsFilterStock}
+                            onChange={(e) => setLogisticsFilterStock(e.target.checked)}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" 
+                         />
+                         <span className="text-sm font-bold text-gray-600">Con stock físico</span>
+                      </label>
+                   </div>
+                   <div className="text-right">
+                      <p className="text-[10px] text-gray-400 font-bold uppercase">Total Global</p>
+                      <p className="text-xl font-black text-gray-800">
+                         {Object.values(formData.stockBalances || {} as Record<string, number>).reduce((a, b) => a + b, 0)} u.
+                      </p>
+                   </div>
+                </div>
+
+                {/* Full Width Table */}
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex-1">
+                   <table className="w-full text-left">
+                      <thead className="bg-gray-50 border-b border-gray-200">
+                         <tr>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider w-24">Activo</th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Almacén</th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Existencia</th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Logística</th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Reaprovisionamiento</th>
+                         </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                         {warehouses.filter(wh => {
+                            if (logisticsSearch && !wh.name.toLowerCase().includes(logisticsSearch.toLowerCase())) return false;
+                            if (logisticsFilterStock && (formData.stockBalances?.[wh.id] || 0) <= 0) return false;
+                            return true;
+                         }).map(wh => {
+                            const isActive = formData.activeInWarehouses?.includes(wh.id);
+                            const physical = formData.stockBalances?.[wh.id] || 0;
+                            const reserved = 0; // Mock
+                            const available = physical - reserved;
+                            const min = warehouseSettings[wh.id]?.min || 0;
+                            const max = warehouseSettings[wh.id]?.max || 0;
+                            const isLowStock = physical < min;
 
                             return (
-                                <div key={wh.id} className="flex items-center justify-between py-4 first:pt-0 last:pb-0">
-                                    <div>
-                                        <p className="font-bold text-gray-800 text-sm">{wh.name}</p>
-                                        <p className={`text-xs font-bold mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full ${displayStock > 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-500'}`}>
-                                            {displayStock > 0 ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
-                                            {displayStock > 0 ? 'Disponible' : 'Agotado'}
-                                        </p>
-                                    </div>
-                                    <div className="flex items-center gap-8">
-                                        <div className="text-right">
-                                            <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider">Stock Físico</p>
-                                            <p className="text-lg font-black text-gray-700">{displayStock} u.</p>
+                               <tr key={wh.id} className={`transition-all hover:bg-gray-50 ${!isActive ? 'bg-gray-50/50' : ''}`}>
+                                  {/* A. Activación */}
+                                  <td className="px-6 py-4">
+                                     <div 
+                                        onClick={() => toggleWarehouseActive(wh.id)}
+                                        className={`w-12 h-6 rounded-full relative transition-colors cursor-pointer ${isActive ? 'bg-green-500' : 'bg-gray-300'}`}
+                                     >
+                                        <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${isActive ? 'left-7' : 'left-1'}`} />
+                                     </div>
+                                  </td>
+
+                                  {/* B. Almacén */}
+                                  <td className={`px-6 py-4 ${!isActive ? 'opacity-50' : ''}`}>
+                                     <div className="flex flex-col">
+                                        <span className="font-bold text-gray-800 text-sm">{wh.name}</span>
+                                        <span className="text-[10px] text-gray-400 font-mono">{wh.code}</span>
+                                     </div>
+                                  </td>
+
+                                  {/* C. Métricas Existencia */}
+                                  <td className={`px-6 py-4 ${!isActive ? 'opacity-50' : ''}`}>
+                                     <div className="flex justify-center gap-6 text-sm">
+                                        <div className="text-center">
+                                           <span className="block text-[10px] text-gray-400 font-bold uppercase">Físico</span>
+                                           <span className={`font-bold ${isLowStock && isActive ? 'text-red-600 flex items-center gap-1' : 'text-gray-800'}`}>
+                                              {isLowStock && isActive && <AlertTriangle size={12} />}
+                                              {physical}
+                                           </span>
                                         </div>
-                                        <div 
-                                            onClick={() => toggleWarehouseActive(wh.id)}
-                                            className={`w-12 h-6 rounded-full relative transition-colors cursor-pointer ${isEnabled ? 'bg-blue-600' : 'bg-gray-300'}`}
-                                        >
-                                            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm ${isEnabled ? 'left-7' : 'left-1'}`} />
+                                        <div className="text-center">
+                                           <span className="block text-[10px] text-gray-400 font-bold uppercase">Reservado</span>
+                                           <span className="font-medium text-gray-600">{reserved}</span>
                                         </div>
-                                    </div>
-                                </div>
-                            )
-                        })}
-                        {warehouses.length === 0 && (
-                           <div className="text-center py-4 text-gray-400 italic">No hay almacenes configurados.</div>
-                        )}
-                    </div>
+                                        <div className="text-center">
+                                           <span className="block text-[10px] text-gray-400 font-bold uppercase">Disp.</span>
+                                           <span className="font-black text-emerald-600 text-lg">{available}</span>
+                                        </div>
+                                     </div>
+                                  </td>
+
+                                  {/* D. Métricas Flujo */}
+                                  <td className={`px-6 py-4 ${!isActive ? 'opacity-50' : ''}`}>
+                                     <div className="flex justify-center gap-4 text-xs">
+                                        <div className="flex items-center gap-2 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 text-blue-700 font-medium">
+                                           <Truck size={14} />
+                                           <span>0 En tránsito</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 bg-orange-50 px-3 py-1.5 rounded-lg border border-orange-100 text-orange-700 font-medium">
+                                           <ArrowDownToLine size={14} />
+                                           <span>0 Por recibir</span>
+                                        </div>
+                                     </div>
+                                  </td>
+
+                                  {/* E. Reaprovisionamiento */}
+                                  <td className="px-6 py-4">
+                                     <div className={`flex items-center justify-center gap-2 ${!isActive ? 'opacity-40 pointer-events-none' : ''}`}>
+                                        <div className="flex flex-col items-center gap-1">
+                                           <span className="text-[9px] text-gray-400 font-bold uppercase">Min</span>
+                                           <input 
+                                              type="number" 
+                                              value={min || ''}
+                                              onChange={(e) => updateWarehouseSettings(wh.id, 'min', parseInt(e.target.value))}
+                                              placeholder="0"
+                                              className="w-16 p-1.5 bg-gray-50 border border-gray-200 rounded text-center text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500"
+                                           />
+                                        </div>
+                                        <div className="w-4 h-px bg-gray-300 mt-4"></div>
+                                        <div className="flex flex-col items-center gap-1">
+                                           <span className="text-[9px] text-gray-400 font-bold uppercase">Max</span>
+                                           <input 
+                                              type="number" 
+                                              value={max || ''}
+                                              onChange={(e) => updateWarehouseSettings(wh.id, 'max', parseInt(e.target.value))}
+                                              placeholder="0"
+                                              className="w-16 p-1.5 bg-gray-50 border border-gray-200 rounded text-center text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500"
+                                           />
+                                        </div>
+                                     </div>
+                                  </td>
+                               </tr>
+                            );
+                         })}
+                      </tbody>
+                   </table>
+                   {warehouses.length === 0 && (
+                      <div className="p-10 text-center text-gray-400">No hay almacenes configurados.</div>
+                   )}
                 </div>
-            </div>
+             </div>
+          )}
+
+          {/* TAB: STOCKS (LEGACY/SIMPLE INIT) */}
+          {activeTab === 'STOCKS' && (
+             <div className="max-w-4xl mx-auto space-y-6 animate-in slide-in-from-right-4">
+                <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
+                   <h3 className="text-xl font-bold text-gray-800 mb-6">Inventario Inicial (Carga Rápida)</h3>
+                   
+                   {formData.variants && formData.variants.length > 0 ? (
+                      <div className="space-y-3">
+                         {formData.variants.map((v, idx) => (
+                            <div key={idx} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl">
+                               <div>
+                                  <p className="font-bold text-gray-800 text-sm">{Object.values(v.attributeValues).join(' / ')}</p>
+                                  <p className="text-xs text-gray-400 font-mono">{v.sku}</p>
+                               </div>
+                               <div className="flex items-center gap-2 bg-white rounded-xl border border-gray-200 p-1">
+                                  <button onClick={() => {
+                                     const newVars = [...formData.variants];
+                                     newVars[idx].initialStock = Math.max(0, (newVars[idx].initialStock || 0) - 1);
+                                     setFormData(prev => ({ ...prev, variants: newVars }));
+                                  }} className="w-8 h-8 flex items-center justify-center hover:bg-gray-100 rounded-lg">-</button>
+                                  <input 
+                                     type="number" 
+                                     value={v.initialStock || 0}
+                                     onChange={(e) => {
+                                        const newVars = [...formData.variants];
+                                        newVars[idx].initialStock = parseInt(e.target.value);
+                                        setFormData(prev => ({ ...prev, variants: newVars }));
+                                     }}
+                                     className="w-16 text-center font-bold outline-none"
+                                  />
+                                  <button onClick={() => {
+                                     const newVars = [...formData.variants];
+                                     newVars[idx].initialStock = (newVars[idx].initialStock || 0) + 1;
+                                     setFormData(prev => ({ ...prev, variants: newVars }));
+                                  }} className="w-8 h-8 flex items-center justify-center hover:bg-gray-100 rounded-lg">+</button>
+                               </div>
+                            </div>
+                         ))}
+                      </div>
+                   ) : (
+                      <div className="flex items-center justify-between p-6 bg-blue-50 rounded-2xl border border-blue-100">
+                         <div>
+                            <h4 className="font-bold text-blue-900">Stock General</h4>
+                            <p className="text-sm text-blue-600">Para productos sin variantes.</p>
+                         </div>
+                         <div className="flex items-center gap-2 bg-white rounded-xl border border-blue-200 p-2 shadow-sm">
+                            <button onClick={() => setFormData(prev => ({ ...prev, stock: Math.max(0, (prev.stock || 0) - 1) }))} className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 rounded-lg font-bold text-lg">-</button>
+                            <input 
+                               type="number" 
+                               value={formData.stock || 0}
+                               onChange={(e) => setFormData(prev => ({ ...prev, stock: parseInt(e.target.value) }))}
+                               className="w-24 text-center font-black text-2xl outline-none text-gray-800"
+                            />
+                            <button onClick={() => setFormData(prev => ({ ...prev, stock: (prev.stock || 0) + 1 }))} className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 rounded-lg font-bold text-lg">+</button>
+                         </div>
+                      </div>
+                   )}
+                </div>
+             </div>
           )}
 
         </div>
 
-        <div className="p-6 bg-white border-t border-gray-100 flex justify-end gap-3 shrink-0 z-10">
-           <button onClick={onClose} className="px-8 py-4 text-gray-500 font-bold hover:bg-gray-50 rounded-2xl transition-colors">Cancelar</button>
-           <button onClick={() => onSave(formData)} className="px-10 py-4 bg-blue-600 text-white font-bold rounded-2xl shadow-xl shadow-blue-200 hover:bg-blue-700 active:scale-95 transition-all flex items-center gap-2">
-              <Save size={20} /> Guardar Producto
-           </button>
+        {/* FOOTER ACTIONS */}
+        <div className="p-6 border-t bg-white flex justify-between items-center z-10 shrink-0">
+           {hasHistory ? (
+              <div className="flex items-center gap-2 text-xs text-orange-600 bg-orange-50 px-3 py-2 rounded-xl font-bold">
+                 <ShieldAlert size={16} /> 
+                 Producto con historial (Edición limitada)
+              </div>
+           ) : <div></div>}
+           
+           <div className="flex gap-3">
+              <button onClick={onClose} className="px-6 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors">
+                 Cancelar
+              </button>
+              <button 
+                 onClick={handleFinalSave}
+                 className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 active:scale-95 transition-all flex items-center gap-2"
+              >
+                 <Save size={20} /> Guardar Producto
+              </button>
+           </div>
         </div>
 
-        {/* --- TEMPLATE SELECTION MODAL --- */}
+        {/* QUICK ADD MODAL */}
+        {quickAddState && (
+           <div className="absolute inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+              <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95">
+                 <h3 className="text-xl font-black text-gray-800 mb-2">Nuevo {quickAddState.label}</h3>
+                 <p className="text-sm text-gray-500 mb-6">Ingresa el nombre para crear el registro.</p>
+                 
+                 <input 
+                    type="text" 
+                    autoFocus
+                    placeholder={`Nombre de ${quickAddState.label}`}
+                    value={quickAddValue}
+                    onChange={(e) => setQuickAddValue(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') confirmQuickAdd(); }}
+                    className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl font-bold text-gray-800 outline-none focus:border-blue-500 mb-6"
+                 />
+                 
+                 <div className="flex gap-3">
+                    <button 
+                       onClick={() => setQuickAddState(null)} 
+                       className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200 transition-colors"
+                    >
+                       Cancelar
+                    </button>
+                    <button 
+                       onClick={confirmQuickAdd}
+                       disabled={!quickAddValue.trim()}
+                       className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                       Crear
+                    </button>
+                 </div>
+              </div>
+           </div>
+        )}
+
+        {/* TEMPLATE MODAL */}
         {isTemplateModalOpen && (
-            <div className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-                <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
-                    <div className="p-5 border-b border-gray-100 flex justify-between items-center">
-                        <h3 className="font-bold text-lg text-gray-800">Cargar Variantes Predefinidas</h3>
-                        <button onClick={() => setIsTemplateModalOpen(false)} className="p-2 hover:bg-gray-100 rounded-full text-gray-500"><X size={20}/></button>
-                    </div>
-                    <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                        {PREDEFINED_TEMPLATES.map(tpl => (
-                            <button 
-                                key={tpl.id}
-                                onClick={() => applyTemplate(tpl)}
-                                className="w-full text-left p-4 rounded-xl border border-gray-200 hover:border-blue-400 hover:bg-blue-50 transition-all group"
-                            >
-                                <h4 className="font-bold text-gray-800 group-hover:text-blue-700">{tpl.name}</h4>
-                                <p className="text-xs text-gray-500 mt-1">
-                                    {tpl.options.slice(0, 5).join(', ')}{tpl.options.length > 5 ? '...' : ''}
-                                </p>
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            </div>
+           <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+              <div className="bg-white rounded-3xl w-full max-w-lg p-6 shadow-2xl">
+                 <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-xl font-black text-gray-800">Elegir Plantilla</h3>
+                    <button onClick={() => setIsTemplateModalOpen(false)} className="p-2 hover:bg-gray-100 rounded-full"><X size={20}/></button>
+                 </div>
+                 <div className="space-y-3">
+                    {PREDEFINED_TEMPLATES.map(tpl => (
+                       <button 
+                          key={tpl.id}
+                          onClick={() => applyTemplate(tpl)}
+                          className="w-full text-left p-4 rounded-xl border-2 border-gray-100 hover:border-pink-300 hover:bg-pink-50 transition-all group"
+                       >
+                          <h4 className="font-bold text-gray-800 group-hover:text-pink-700">{tpl.name}</h4>
+                          <p className="text-xs text-gray-500 mt-1">{tpl.options.join(', ')}</p>
+                       </button>
+                    ))}
+                 </div>
+              </div>
+           </div>
         )}
 
       </div>

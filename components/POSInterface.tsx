@@ -8,12 +8,12 @@ import {
   Scale as ScaleIcon, PauseCircle, LogOut,
   ArrowRightLeft, Globe, DollarSign,
   ChevronDown, Check, AlertCircle, Layers,
-  ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera
+  ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle
 } from 'lucide-react';
 import { Html5Qrcode } from "html5-qrcode";
 import { 
   BusinessConfig, User as UserType, RoleDefinition, 
-  Customer, Product, CartItem, Transaction, ParkedTicket
+  Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse
 } from '../types';
 import UnifiedPaymentModal from './PaymentModal';
 import TicketOptionsModal from './TicketOptionsModal';
@@ -30,6 +30,7 @@ interface POSInterfaceProps {
   users: UserType[]; // Full list of users for assignment
   customers: Customer[];
   products: Product[];
+  warehouses: Warehouse[]; // Added for warehouse validation
   cart: CartItem[];
   onUpdateCart: React.Dispatch<React.SetStateAction<CartItem[]>>;
   selectedCustomer: Customer | null;
@@ -53,6 +54,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   roles,
   users,
   customers,
+  warehouses,
   cart,
   onUpdateCart,
   selectedCustomer,
@@ -70,13 +72,33 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   const cartEndRef = useRef<HTMLDivElement>(null);
 
   const activeTerminalConfig = useMemo(() => config.terminals?.[0]?.config || config.terminals?.[0]?.config, [config]);
-  const [activeTariffId, setActiveTariffId] = useState<string>(activeTerminalConfig?.pricing?.defaultTariffId || config.tariffs?.[0]?.id || '');
+  
+  // --- BUSINESS CONSTRAINT #1: TERMINAL BLOCKING ---
+  const defaultSalesWarehouseId = activeTerminalConfig?.inventoryScope?.defaultSalesWarehouseId;
+
+  // --- WATERFALL LOGIC: TARIFFS ---
+  // 1. Get Allowed IDs from Terminal Config
+  // 2. Filter Master List
+  // 3. Set Default from Terminal Config
+  const allowedTariffs = useMemo(() => {
+    const allowedIds = activeTerminalConfig?.pricing?.allowedTariffIds || [];
+    // If no allowed IDs are set (edge case), potentially fallback to all or empty. 
+    // Here we strict filter.
+    return config.tariffs.filter(t => allowedIds.includes(t.id));
+  }, [config.tariffs, activeTerminalConfig]);
+
+  const [activeTariffId, setActiveTariffId] = useState<string>(() => {
+     // Waterfall Initialization:
+     // 1. Terminal Default
+     // 2. First Allowed Tariff
+     // 3. Master Default (fallback)
+     return activeTerminalConfig?.pricing?.defaultTariffId || allowedTariffs[0]?.id || config.tariffs[0]?.id || '';
+  });
+
   const [showTariffSelector, setShowTariffSelector] = useState(false);
 
-  const allowedTariffs = useMemo(() => {
-    const ids = activeTerminalConfig?.pricing?.allowedTariffIds || [];
-    return config.tariffs.filter(t => ids.includes(t.id));
-  }, [config.tariffs, activeTerminalConfig]);
+  // --- NOTIFICATION TOAST STATE ---
+  const [errorToast, setErrorToast] = useState<string | null>(null);
 
   const activeTariff = useMemo(() => config.tariffs.find(t => t.id === activeTariffId), [config.tariffs, activeTariffId]);
 
@@ -102,17 +124,37 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   const [scannerError, setScannerError] = useState<string | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
 
+  // --- BUSINESS CONSTRAINT CHECKER (CRITICAL) ---
+  const canAddItemToCart = (product: Product): boolean => {
+    if (!defaultSalesWarehouseId) return true; // Fallback if no restriction
+
+    const isEnabled = product.activeInWarehouses?.includes(defaultSalesWarehouseId);
+    
+    if (!isEnabled) {
+      const whName = warehouses.find(w => w.id === defaultSalesWarehouseId)?.name || 'Almacén Actual';
+      setErrorToast(`Artículo no habilitado para la venta en: ${whName}`);
+      setTimeout(() => setErrorToast(null), 3500);
+      return false;
+    }
+    return true;
+  };
+
+  // --- BUSINESS CONSTRAINT #2: ITEM BLOCKING (FILTERING) ---
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
-      // Basic visibility check if tariffs are active
+      // 1. Availability Check: Product MUST be active in the current warehouse (Visual Filtering)
+      // Note: We filter visually, but 'canAddItemToCart' provides the strict check for scans/interactions.
+      const isAvailableInWarehouse = defaultSalesWarehouseId 
+        ? p.activeInWarehouses?.includes(defaultSalesWarehouseId) ?? true 
+        : true;
+
       const tariffPrice = p.tariffs.find(t => t.tariffId === activeTariffId);
-      // Fallback: show product even if specific tariff not found (use base price)
-      
       const matchSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
       const matchCat = categoryFilter === 'ALL' || p.category === categoryFilter;
-      return matchSearch && matchCat;
+      
+      return matchSearch && matchCat && isAvailableInWarehouse;
     });
-  }, [products, searchTerm, categoryFilter, activeTariffId]);
+  }, [products, searchTerm, categoryFilter, activeTariffId, defaultSalesWarehouseId]);
 
   const categories = useMemo(() => {
     return ['ALL', ...Array.from(new Set(products.map(p => p.category)))];
@@ -239,14 +281,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
     setSearchTerm(decodedText);
 
+    // Find product in GLOBAL list first
     const foundProduct = products.find(p => p.barcode === decodedText);
+    
     if (foundProduct) {
+        // --- VALIDATION HAPPENS IN handleProductClick ---
         handleProductClick(foundProduct);
         setTimeout(() => setSearchTerm(''), 500); 
     }
   };
 
   const handleProductClick = (product: Product) => {
+    // --- STRICT VALIDATION POINT ---
+    if (!canAddItemToCart(product)) {
+      return; 
+    }
+
     const isWeighted = product.type === 'SERVICE' || product.name.toLowerCase().includes('(peso)');
     const hasVariants = product.attributes && product.attributes.length > 0;
 
@@ -260,6 +310,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   };
 
   const addToCart = (product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[]) => {
+    // --- SAFETY GUARD ---
+    if (!canAddItemToCart(product)) return;
+
     const finalPrice = priceOverride || getProductPrice(product);
     onUpdateCart(prev => {
       const modifiersString = modifiers ? modifiers.sort().join('|') : '';
@@ -340,9 +393,47 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
     setIsScannerOpen(true);
   };
 
+  // --- RENDER GUARD: TERMINAL BLOCKING ---
+  if (!defaultSalesWarehouseId) {
+    return (
+      <div className="flex h-screen bg-gray-900 items-center justify-center p-6 animate-in fade-in duration-500">
+        <div className="bg-white rounded-3xl p-12 max-w-lg text-center shadow-2xl border-4 border-red-500">
+          <div className="w-24 h-24 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
+            <AlertTriangle size={48} strokeWidth={2} />
+          </div>
+          <h1 className="text-3xl font-black text-gray-900 mb-4 tracking-tight">Terminal Bloqueada</h1>
+          <p className="text-gray-600 text-lg mb-8 leading-relaxed">
+            Error de Configuración: Esta terminal no tiene un <strong>almacén de venta</strong> asignado.
+            <br/><br/>
+            No es posible procesar ventas sin un origen de inventario definido.
+          </p>
+          <div className="p-4 bg-gray-100 rounded-xl border border-gray-200 text-sm text-gray-500 font-mono">
+            inventoryScope.defaultSalesWarehouseId = null
+          </div>
+          <button 
+            onClick={onOpenSettings}
+            className="mt-8 px-8 py-4 bg-gray-900 text-white rounded-2xl font-bold hover:bg-black transition-all flex items-center justify-center gap-2 mx-auto"
+          >
+            <Settings size={20} /> Contactar Administrador (Ajustes)
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen bg-gray-100 overflow-hidden font-sans text-gray-900 relative">
       
+      {/* ERROR TOAST (SNACKBAR) */}
+      {errorToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
+          <div className="bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border-2 border-red-400">
+            <AlertTriangle size={24} className="animate-pulse" />
+            <span>{errorToast}</span>
+          </div>
+        </div>
+      )}
+
       {/* AREA CENTRAL: CATÁLOGO */}
       <div className={`flex-1 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'}`}>
         <header className="bg-white px-8 py-4 border-b border-gray-200 flex items-center gap-6 shadow-sm z-10">
@@ -391,6 +482,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                {activeTariffId === t.id && <Check size={16} strokeWidth={4} />}
                             </button>
                          ))}
+                         {allowedTariffs.length === 0 && (
+                            <div className="p-3 text-center text-xs text-gray-400">Sin tarifas asignadas.</div>
+                         )}
                       </div>
                    </div>
                 )}
@@ -417,6 +511,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
               <div className="h-full flex flex-col items-center justify-center text-gray-300">
                  <AlertCircle size={64} strokeWidth={1} className="mb-4" />
                  <p className="text-lg font-bold">Sin resultados</p>
+                 <p className="text-xs mt-2">Verifica los filtros o la disponibilidad en el almacén activo.</p>
               </div>
            ) : (
               <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6 pb-32">
@@ -585,6 +680,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </div>
                         )}
                         {item.note && <p className="text-[10px] text-orange-500 italic mt-1 truncate">"{item.note}"</p>}
+                        {item.salespersonId && (
+                           <p className="text-[10px] text-blue-500 font-medium mt-0.5 flex items-center gap-1">
+                              <User size={10} /> {users.find(u => u.id === item.salespersonId)?.name || 'Vendedor'}
+                           </p>
+                        )}
                      </div>
                   </div>
                )})

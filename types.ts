@@ -150,6 +150,25 @@ export interface EmailConfig {
   showSocialLinks: boolean;
 }
 
+export interface ProductGroup {
+  id: string;
+  name: string;
+  code: string;
+  color: string; // Hex code or Tailwind class identifier
+  description?: string;
+  productIds: string[]; // List of product IDs belonging to this group
+}
+
+export interface Season {
+  id: string;
+  name: string;
+  code: string;
+  startDate: string;
+  endDate: string;
+  productIds: string[];
+  isActive: boolean;
+}
+
 export interface BusinessConfig {
   vertical: VerticalType;
   subVertical: SubVertical;
@@ -165,6 +184,8 @@ export interface BusinessConfig {
   paymentMethods: PaymentMethodDefinition[];
   terminals: { id: string; config: TerminalConfig }[];
   tariffs: Tariff[];
+  productGroups?: ProductGroup[]; // New field for cross-cutting groups
+  seasons?: Season[]; // New field for seasonal grouping
   receiptConfig?: ReceiptConfig;
   tipsConfig?: TipConfiguration;
   emailConfig?: EmailConfig;
@@ -261,7 +282,14 @@ export interface Product {
   id: string;
   name: string;
   price: number;
-  category: string;
+  category: string; // TEXT field, kept for compatibility
+  // --- NEW CLASSIFICATION FIELDS ---
+  departmentId?: string;
+  sectionId?: string;
+  familyId?: string;
+  subfamilyId?: string;
+  brandId?: string;
+  // ---------------------------------
   stock?: number;
   image?: string;
   barcode?: string;
