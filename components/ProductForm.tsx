@@ -8,12 +8,13 @@ import {
   ShieldAlert, AlertCircle, Check, LayoutTemplate, ClipboardList, ListTree,
   Truck, ArrowDownToLine, Building2, Search, Filter, AlertTriangle,
   Scale, Ban, ShieldCheck, Zap, History, MapPin, ChevronRight, Settings,
-  Keyboard
+  Keyboard, BookOpen, ArrowUpRight, ArrowDownLeft, Calendar
 } from 'lucide-react';
 import { 
-  Product, ProductAttribute, ProductVariant, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse, ProductOperationalFlags
+  Product, ProductAttribute, ProductVariant, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse, ProductOperationalFlags, InventoryLedgerEntry
 } from '../types';
 import ProfitCalculator from './ProfitCalculator';
+import { db } from '../utils/db';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -25,7 +26,7 @@ interface ProductFormProps {
   onClose: () => void;
 }
 
-type ProductTab = 'GENERAL' | 'CLASSIFICATION' | 'OPERATIVE' | 'TAXES' | 'PRICING' | 'VARIANTS' | 'LOGISTICS' | 'STOCKS';
+type ProductTab = 'GENERAL' | 'CLASSIFICATION' | 'OPERATIVE' | 'TAXES' | 'PRICING' | 'VARIANTS' | 'LOGISTICS' | 'STOCKS' | 'KARDEX';
 
 const DEFAULT_OPERATIONAL_FLAGS: ProductOperationalFlags = {
   isWeighted: false,
@@ -38,7 +39,6 @@ const DEFAULT_OPERATIONAL_FLAGS: ProductOperationalFlags = {
   excludeFromPromotions: false
 };
 
-// Mock de plantillas para carga rápida
 const VARIANT_TEMPLATES = [
   { name: 'Tallas Ropa', attr: 'Talla', opts: ['S', 'M', 'L', 'XL'] },
   { name: 'Colores Básicos', attr: 'Color', opts: ['Blanco', 'Negro', 'Rojo', 'Azul'] },
@@ -54,6 +54,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [showProfitCalc, setShowProfitCalc] = useState<string | null>(null);
   const [showTemplateMenu, setShowTemplateMenu] = useState(false);
   const [pendingOption, setPendingOption] = useState<Record<string, string>>({});
+  
+  // Kardex Filter State
+  const [kardexWarehouse, setKardexWarehouse] = useState<string>('ALL');
 
   const [formData, setFormData] = useState<Product>(() => {
     const base = initialData || {
@@ -83,6 +86,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   });
 
   const [warehouseSettings, setWarehouseSettings] = useState<Record<string, {min: number, max: number}>>(initialData?.warehouseSettings || {});
+
+  // Kardex Ledger Data (Fetched from DB)
+  const productLedger = useMemo(() => {
+    const allEntries = db.get('inventoryLedger') as InventoryLedgerEntry[];
+    return allEntries.filter(e => e.productId === formData.id)
+      .filter(e => kardexWarehouse === 'ALL' || e.warehouseId === kardexWarehouse)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [formData.id, kardexWarehouse]);
 
   // --- LOGIC: Variants & Attributes ---
   const addAttribute = () => {
@@ -147,57 +158,30 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
   const generateAllVariants = () => {
     if (formData.attributes.length === 0) return alert("Debe definir al menos un atributo con opciones.");
-    
-    // Función para producto cartesiano
-    const cartesian = (arrays: any[][]) => {
-      return arrays.reduce((a, b) => a.flatMap(d => b.map(e => [d, e].flat())));
-    };
-
+    const cartesian = (arrays: any[][]) => arrays.reduce((a, b) => a.flatMap(d => b.map(e => [d, e].flat())));
     const attributeArrays = formData.attributes.map(a => a.options.map(o => ({ attr: a.name, val: o })));
     if (attributeArrays.some(arr => arr.length === 0)) return alert("Todos los atributos deben tener al menos una opción.");
-
-    const combinations = formData.attributes.length === 1 
-      ? attributeArrays[0].map(item => [item])
-      : cartesian(attributeArrays);
-
+    const combinations = formData.attributes.length === 1 ? attributeArrays[0].map(item => [item]) : cartesian(attributeArrays);
     const newVariants: ProductVariant[] = combinations.map((combo: any[]) => {
       const attrValues: Record<string, string> = {};
       let skuSuffix = "";
-      
       combo.forEach((c: any) => {
         attrValues[c.attr] = c.val;
         skuSuffix += `-${c.val.substring(0, 3).toUpperCase()}`;
       });
-
       const baseBarcode = formData.barcode || formData.id.substring(0, 8);
       const variantSku = `${baseBarcode}${skuSuffix}`;
-
-      return {
-        sku: variantSku,
-        barcode: [variantSku],
-        attributeValues: attrValues,
-        price: formData.price,
-        initialStock: 0
-      };
+      return { sku: variantSku, barcode: [variantSku], attributeValues: attrValues, price: formData.price, initialStock: 0 };
     });
-
     setFormData({ ...formData, variants: newVariants });
-    alert(`Se han generado ${newVariants.length} variantes correctamente.`);
   };
 
   const removeAttribute = (id: string) => {
     setFormData({ ...formData, attributes: formData.attributes.filter(a => a.id !== id) });
   };
 
-  // --- LOGIC: Stocks ---
   const updateStockBalance = (whId: string, value: number) => {
-    setFormData({
-      ...formData,
-      stockBalances: {
-        ...(formData.stockBalances || {}),
-        [whId]: value
-      }
-    });
+    setFormData({ ...formData, stockBalances: { ...(formData.stockBalances || {}), [whId]: value } });
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -275,11 +259,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             { id: 'GENERAL', label: 'General', icon: Info },
             { id: 'CLASSIFICATION', label: 'Clasificación', icon: ListTree },
             { id: 'OPERATIVE', label: 'Operativa', icon: Settings2 },
-            { id: 'TAXES', label: 'Impuestos', icon: Percent },
             { id: 'PRICING', label: 'Tarifas', icon: Tag },
             { id: 'VARIANTS', label: 'Variantes', icon: Layers },
-            { id: 'LOGISTICS', label: 'Logística', icon: Truck },
             { id: 'STOCKS', label: 'Existencias', icon: ClipboardList },
+            { id: 'KARDEX', label: 'Kardex', icon: BookOpen },
+            { id: 'LOGISTICS', label: 'Logística', icon: Truck },
+            { id: 'TAXES', label: 'Impuestos', icon: Percent },
           ].map(tab => (
             <button
               key={tab.id}
@@ -294,7 +279,109 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         {/* Content Area */}
         <div className="flex-1 overflow-y-auto p-8 bg-gray-50/30 no-scrollbar">
           
-          {/* TAB: GENERAL */}
+          {/* TAB: KARDEX (IMPLEMENTATION) */}
+          {activeTab === 'KARDEX' && (
+            <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
+              <div className="flex justify-between items-center bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm">
+                <div>
+                  <h3 className="text-xl font-bold text-gray-800">Libro Mayor de Inventario</h3>
+                  <p className="text-sm text-gray-500">Historial transaccional y valoración CPP.</p>
+                </div>
+                <div className="flex gap-4">
+                  <div className="relative">
+                    <label className="block text-[10px] font-black text-gray-400 uppercase mb-1 ml-1">Filtrar Almacén</label>
+                    <select 
+                      value={kardexWarehouse}
+                      onChange={(e) => setKardexWarehouse(e.target.value)}
+                      className="p-2.5 bg-gray-100 border-none rounded-xl text-xs font-bold text-gray-700 outline-none focus:ring-2 focus:ring-blue-200"
+                    >
+                      <option value="ALL">Todos los almacenes</option>
+                      {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-[2rem] border border-gray-100 overflow-hidden shadow-sm">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-gray-50 text-gray-400 font-bold uppercase text-[10px] tracking-widest">
+                    <tr>
+                      <th className="p-4">Fecha / Hora</th>
+                      <th className="p-4">Concepto / Ref</th>
+                      <th className="p-4 text-center">Entrada</th>
+                      <th className="p-4 text-center">Salida</th>
+                      <th className="p-4 text-center">Saldo</th>
+                      <th className="p-4 text-right">Costo Unit.</th>
+                      <th className="p-4 text-right">Valorizado</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {productLedger.map((entry) => (
+                      <tr key={entry.id} className="hover:bg-gray-50/50 transition-colors">
+                        <td className="p-4">
+                          <div className="flex flex-col">
+                            <span className="font-bold text-gray-800">{new Date(entry.createdAt).toLocaleDateString()}</span>
+                            <span className="text-[10px] text-gray-400">{new Date(entry.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                          </div>
+                        </td>
+                        <td className="p-4">
+                          <div className="flex flex-col">
+                            <span className={`font-black text-[10px] uppercase ${entry.qtyIn > 0 ? 'text-emerald-600' : 'text-orange-600'}`}>{entry.concept}</span>
+                            <span className="text-[11px] font-mono text-gray-500">{entry.documentRef}</span>
+                          </div>
+                        </td>
+                        <td className="p-4 text-center font-bold text-emerald-600">
+                          {entry.qtyIn > 0 ? `+${entry.qtyIn}` : '-'}
+                        </td>
+                        <td className="p-4 text-center font-bold text-orange-600">
+                          {entry.qtyOut > 0 ? `-${entry.qtyOut}` : '-'}
+                        </td>
+                        <td className="p-4 text-center">
+                          <span className="px-2 py-1 bg-gray-100 rounded-lg font-black text-gray-700">{entry.balanceQty}</span>
+                        </td>
+                        <td className="p-4 text-right font-mono text-gray-600">
+                          {config.currencySymbol}{entry.unitCost.toFixed(2)}
+                        </td>
+                        <td className="p-4 text-right">
+                          <div className="flex flex-col items-end">
+                            <span className="font-black text-gray-800">{config.currencySymbol}{(entry.balanceQty * entry.balanceAvgCost).toFixed(2)}</span>
+                            <span className="text-[9px] text-gray-400 uppercase">CPP: {entry.balanceAvgCost.toFixed(2)}</span>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {productLedger.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="p-12 text-center">
+                          <div className="flex flex-col items-center opacity-30">
+                            <History size={48} className="mb-2" />
+                            <p className="font-bold">No hay movimientos registrados para este criterio.</p>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col items-center">
+                  <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Costo Promedio (CPP)</p>
+                  <p className="text-3xl font-black text-blue-600">{config.currencySymbol}{formData.cost?.toFixed(2)}</p>
+                </div>
+                <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col items-center text-center">
+                   <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Inversión Total</p>
+                   <p className="text-3xl font-black text-gray-800">{config.currencySymbol}{((formData.stock || 0) * (formData.cost || 0)).toFixed(2)}</p>
+                </div>
+                <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col items-center">
+                  <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Unidades en Red</p>
+                  <p className="text-3xl font-black text-emerald-600">{formData.stock || 0}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Resto de las pestañas permanecen iguales */}
           {activeTab === 'GENERAL' && (
             <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -317,8 +404,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                             <input type="text" value={formData.barcode || ''} onChange={e => setFormData({ ...formData, barcode: e.target.value })} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm" />
                         </div>
                         <div>
-                            <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Costo Unitario</label>
-                            <input type="number" value={formData.cost || 0} onChange={e => setFormData({ ...formData, cost: parseFloat(e.target.value) })} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-bold text-gray-700" />
+                            <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Costo Unitario (CPP)</label>
+                            <input disabled type="number" value={formData.cost || 0} className="w-full p-3 bg-gray-100 border-2 border-transparent rounded-xl font-bold text-gray-500 cursor-not-allowed" />
                         </div>
                     </div>
                   </div>
@@ -327,7 +414,6 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             </div>
           )}
 
-          {/* TAB: VARIANTS */}
           {activeTab === 'VARIANTS' && (
             <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in">
               <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm space-y-8">
@@ -489,7 +575,6 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             </div>
           )}
 
-          {/* TAB: STOCKS */}
           {activeTab === 'STOCKS' && (
             <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in">
               <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm space-y-6">
@@ -557,7 +642,6 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             </div>
           )}
 
-          {/* TAB: PRICING */}
           {activeTab === 'PRICING' && (
             <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
                <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
@@ -567,7 +651,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                         <p className="text-sm text-gray-500">Configura precios específicos para cada lista de precios.</p>
                      </div>
                      <div className="text-right">
-                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Costo Actual</p>
+                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Costo Actual (CPP)</p>
                         <p className="text-2xl font-black text-blue-600">{config.currencySymbol}{formData.cost?.toFixed(2)}</p>
                      </div>
                   </div>

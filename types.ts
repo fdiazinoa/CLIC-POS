@@ -11,39 +11,25 @@ export enum SubVertical {
   BAR = 'Discoteca/Bar'
 }
 
-export type ScaleTech = 'DIRECT' | 'LABEL';
+// --- KARDEX TYPES ---
+export type LedgerConcept = 'COMPRA' | 'VENTA' | 'AJUSTE_ENTRADA' | 'AJUSTE_SALIDA' | 'TRASPASO_ENTRADA' | 'TRASPASO_SALIDA' | 'INICIAL';
 
-export interface ScaleDevice {
+export interface InventoryLedgerEntry {
   id: string;
-  name: string;
-  isEnabled: boolean;
-  technology: ScaleTech;
-  directConfig?: {
-    port: string;
-    baudRate: number;
-    dataBits: number;
-    protocol: string;
-  };
-  labelConfig?: {
-    mode: 'WEIGHT' | 'PRICE';
-    prefixes: string[];
-    decimals: number;
-    itemDigits: number;
-    valueDigits: number;
-  };
+  createdAt: string;
+  warehouseId: string;
+  productId: string;
+  concept: LedgerConcept;
+  documentRef: string; // Factura, Orden de Compra, etc.
+  qtyIn: number;
+  qtyOut: number;
+  unitCost: number; // Costo del movimiento
+  balanceQty: number; // Snapshot de cantidad total en el almacén después del movimiento
+  balanceAvgCost: number; // Snapshot del Costo Promedio Ponderado resultante
 }
 
-export interface CustomerDisplayConfig {
-  isEnabled: boolean;
-  welcomeMessage: string;
-  showItemImages: boolean;
-  showQrPayment: boolean;
-  layout: 'SPLIT' | 'FULL_TOTAL' | 'MARKETING_ONLY';
-  connectionType: 'NETWORK' | 'USB' | 'VIRTUAL' | 'HDMI';
-  ipAddress?: string;
-  ads: { id: string; url: string; active: boolean }[];
-}
-
+export type ScaleTech = 'DIRECT' | 'LABEL';
+// ... rest of the existing interfaces ...
 export interface TaxDefinition {
   id: string;
   name: string;
@@ -344,7 +330,7 @@ export interface Product {
   stock?: number;
   image?: string;
   barcode?: string;
-  cost?: number;
+  cost?: number; // Este campo representará el Costo Promedio Ponderado actual
   type?: 'PRODUCT' | 'SERVICE' | 'KIT';
   images: string[];
   attributes: ProductAttribute[];
@@ -585,4 +571,35 @@ export interface VariantTemplate {
   name: string;
   attributeId: string;
   valueIds: string[];
+}
+
+export interface CustomerDisplayConfig {
+  isEnabled: boolean;
+  welcomeMessage: string;
+  showItemImages: boolean;
+  showQrPayment: boolean;
+  layout: 'SPLIT' | 'FULL_TOTAL' | 'MARKETING_ONLY';
+  connectionType: 'NETWORK' | 'USB' | 'VIRTUAL' | 'HDMI';
+  ipAddress?: string;
+  ads: { id: string; url: string; active: boolean }[];
+}
+
+export interface ScaleDevice {
+  id: string;
+  name: string;
+  isEnabled: boolean;
+  technology: ScaleTech;
+  directConfig?: {
+    port: string;
+    baudRate: number;
+    dataBits: number;
+    protocol: string;
+  };
+  labelConfig?: {
+    mode: 'WEIGHT' | 'PRICE';
+    prefixes: string[];
+    decimals: number;
+    itemDigits: number;
+    valueDigits: number;
+  };
 }

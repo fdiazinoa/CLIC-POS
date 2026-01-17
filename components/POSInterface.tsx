@@ -8,7 +8,8 @@ import {
   Scale as ScaleIcon, PauseCircle, LogOut,
   ArrowRightLeft, Globe, DollarSign,
   ChevronDown, Check, AlertCircle, Layers,
-  ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle
+  ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle,
+  MessageSquare, PlayCircle, Download, Lock, ArrowUpRight
 } from 'lucide-react';
 import { Html5Qrcode } from "html5-qrcode";
 import { 
@@ -138,26 +139,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
     return p.tariffs.find(t => t.tariffId === activeTariffId)?.price || p.price;
   };
 
-  // --- SCALE BARCODE PARSER ---
-  const parseScaleBarcode = (barcode: string) => {
-    const scaleConfig = config.scaleLabelConfig;
-    if (!scaleConfig || !scaleConfig.isEnabled || barcode.length !== 13) return null;
-
-    const prefix = barcode.substring(0, 2);
-    if (!scaleConfig.prefixes.includes(prefix)) return null;
-
-    const plu = barcode.substring(2, 2 + scaleConfig.itemDigits);
-    const valueStr = barcode.substring(2 + scaleConfig.itemDigits, 2 + scaleConfig.itemDigits + scaleConfig.valueDigits);
-    const divisor = Math.pow(10, scaleConfig.decimals);
-    const value = parseFloat(valueStr) / divisor;
-
-    return { plu, value, mode: scaleConfig.mode };
-  };
-
   const handleScanSuccess = (decodedText: string) => {
-    playBeep();
-    
-    // Close scanner UI
     if (scannerRef.current) {
         scannerRef.current.stop().then(() => {
             scannerRef.current?.clear();
@@ -166,28 +148,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
     } else {
         setIsScannerOpen(false);
     }
-
-    // Check if it is a scale barcode first
-    const scaleData = parseScaleBarcode(decodedText);
-    if (scaleData) {
-      const product = products.find(p => p.barcode === scaleData.plu || p.id === scaleData.plu);
-      if (product) {
-        if (!canAddItemToCart(product)) return;
-        
-        let quantity = scaleData.value;
-        if (scaleData.mode === 'PRICE') {
-           const unitPrice = getProductPrice(product);
-           quantity = unitPrice > 0 ? scaleData.value / unitPrice : 0;
-        }
-        
-        addToCart(product, quantity);
-        setErrorToast(`Balanza: ${product.name} x ${scaleData.value} ${scaleData.mode === 'WEIGHT' ? 'kg' : '$'}`);
-        setTimeout(() => setErrorToast(null), 2500);
-        return;
-      }
-    }
-
-    // Normal barcode logic
     const foundProduct = products.find(p => p.barcode === decodedText);
     if (foundProduct) {
         handleProductClick(foundProduct);
@@ -229,48 +189,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   const cartTotal = netSubtotal + cartTax;
 
   const baseCurrency = useMemo(() => config.currencies.find(c => c.isBase) || config.currencies[0], [config.currencies]);
-  const altCurrencies = useMemo(() => config.currencies.filter(c => !c.isBase && c.isEnabled), [config.currencies]);
 
   useEffect(() => {
     if (cart.length === 0) {
       setMobileView('PRODUCTS');
-      setGlobalDiscount({value: 0, type: 'PERCENT'});
     } else {
       cartEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [cart.length]);
-
-  useEffect(() => {
-    if (isScannerOpen) {
-      const timer = setTimeout(() => {
-        const html5QrCode = new Html5Qrcode("reader");
-        scannerRef.current = html5QrCode;
-        html5QrCode.start(
-          { facingMode: "environment" }, 
-          { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 },
-          (decodedText) => handleScanSuccess(decodedText),
-          () => {}
-        ).catch(() => setScannerError("No se pudo acceder a la cámara. Verifique permisos."));
-      }, 100);
-      return () => {
-        clearTimeout(timer);
-        if (scannerRef.current?.isScanning) scannerRef.current.stop();
-      };
-    }
-  }, [isScannerOpen]);
-
-  const playBeep = () => {
-    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-    if (AudioContext) {
-      const ctx = new AudioContext();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.frequency.value = 1000; osc.type = 'sine';
-      gain.gain.setValueAtTime(0.1, ctx.currentTime);
-      osc.start(); osc.stop(ctx.currentTime + 0.1);
-    }
-  };
 
   const handleProductClick = (product: Product) => {
     if (!canAddItemToCart(product)) return;
@@ -291,7 +217,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         return i.id === product.id && iMods === modifiersString && i.price === finalPrice;
       });
       if (existing) return prev.map(i => i.cartId === existing.cartId ? { ...i, quantity: i.quantity + quantity } : i);
-      return [...prev, { ...product, cartId: Math.random().toString(36).substr(2, 9), quantity, price: finalPrice, modifiers }];
+      return [...prev, { ...product, cartId: Math.random().toString(36).substr(2, 9), quantity, price: finalPrice, modifiers, originalPrice: getProductPrice(product) }];
     });
   };
 
@@ -311,31 +237,63 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
     setMobileView('PRODUCTS'); setGlobalDiscount({value: 0, type: 'PERCENT'});
   };
 
-  if (!defaultSalesWarehouseId) {
-    return (
-      <div className="flex h-screen bg-gray-900 items-center justify-center p-6 animate-in fade-in duration-500">
-        <div className="bg-white rounded-3xl p-12 max-w-lg text-center shadow-2xl border-4 border-red-500">
-          <div className="w-24 h-24 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
-            <AlertTriangle size={48} strokeWidth={2} />
-          </div>
-          <h1 className="text-3xl font-black text-gray-900 mb-4 tracking-tight">Terminal Bloqueada</h1>
-          <p className="text-gray-600 text-lg mb-8 leading-relaxed">
-            Error de Configuración: Esta terminal no tiene un <strong>almacén de venta</strong> asignado.
-          </p>
-          <button onClick={onOpenSettings} className="mt-8 px-8 py-4 bg-gray-900 text-white rounded-2xl font-bold hover:bg-black flex items-center justify-center gap-2 mx-auto"><Settings size={20} /> Ajustes</button>
-        </div>
-      </div>
-    );
-  }
+  const handleParkCurrentTicket = () => {
+     if (cart.length === 0) return;
+     const newParked: ParkedTicket = {
+        id: `P-${Date.now()}`,
+        name: selectedCustomer ? selectedCustomer.name : `Ticket #${parkedTickets.length + 1}`,
+        items: [...cart],
+        customerId: selectedCustomer?.id,
+        customerName: selectedCustomer?.name,
+        timestamp: new Date().toISOString()
+     };
+     onUpdateParkedTickets([...parkedTickets, newParked]);
+     onUpdateCart([]);
+     onSelectCustomer(null);
+     setErrorToast("Ticket Guardado");
+     setTimeout(() => setErrorToast(null), 2000);
+  };
+
+  const handleRestoreTicket = (parked: ParkedTicket) => {
+     onUpdateCart([...parked.items]);
+     if (parked.customerId) {
+        const found = customers.find(c => c.id === parked.customerId);
+        if (found) onSelectCustomer(found);
+     }
+     onUpdateParkedTickets(parkedTickets.filter(p => p.id !== parked.id));
+     setShowParkedList(false);
+  };
 
   return (
     <div className="flex h-screen bg-gray-100 overflow-hidden font-sans text-gray-900 relative">
       {errorToast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
           <div className="bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border-2 border-red-400">
             <AlertTriangle size={24} className="animate-pulse" />
             <span>{errorToast}</span>
           </div>
+        </div>
+      )}
+
+      {/* MOBILE FLOATING CART ACCESS BAR */}
+      {mobileView === 'PRODUCTS' && cart.length > 0 && (
+        <div className="md:hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-[90%] animate-in slide-in-from-bottom-10 fade-in duration-500">
+           <button 
+             onClick={() => setMobileView('TICKET')}
+             className="w-full flex items-center justify-between px-6 py-4 bg-blue-600 text-white rounded-[2rem] font-black shadow-[0_20px_50px_rgba(37,99,235,0.4)] active:scale-95 transition-all border-b-4 border-blue-800"
+           >
+              <div className="flex items-center gap-4">
+                 <div className="relative">
+                    <ShoppingCart size={28} />
+                    <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] w-6 h-6 flex items-center justify-center rounded-full border-2 border-blue-600">{cart.length}</span>
+                 </div>
+                 <div className="text-left leading-none">
+                    <p className="text-xs text-blue-200 uppercase tracking-widest font-bold mb-1">Ver Pedido</p>
+                    <p className="text-xl">{baseCurrency.symbol}{cartTotal.toFixed(2)}</p>
+                 </div>
+              </div>
+              <ChevronRight size={24} className="animate-bounce-x" />
+           </button>
         </div>
       )}
 
@@ -401,8 +359,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <button onClick={() => setMobileView('PRODUCTS')} className="md:hidden p-2 -ml-2 text-gray-400"><ArrowLeft size={20} /></button>
                   <h2 className="font-black text-gray-800 uppercase text-xs tracking-widest">Ticket Actual</h2>
                </div>
-               <div className="flex gap-2">
-                  <button onClick={onOpenSettings} className="p-2 hover:bg-gray-200 rounded-lg text-gray-500"><Settings size={18} /></button>
+               <div className="flex gap-1">
+                  <button onClick={handleParkCurrentTicket} disabled={cart.length === 0} className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 disabled:opacity-20"><PauseCircle size={18} /></button>
+                  <button onClick={() => setShowParkedList(true)} className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 relative">
+                     <Download size={18} />
+                     {parkedTickets.length > 0 && (
+                        <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white text-[9px] font-black rounded-full flex items-center justify-center border-2 border-white animate-in zoom-in">
+                           {parkedTickets.length}
+                        </span>
+                     )}
+                  </button>
+                  <button onClick={onOpenHistory} className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600"><History size={18} /></button>
+                  <button onClick={onOpenFinance} className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600"><Lock size={18} /></button>
+                  <button onClick={onOpenSettings} className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600"><Settings size={18} /></button>
                   <button onClick={() => setShowTicketOptions(true)} className="p-2 hover:bg-gray-200 rounded-lg text-gray-500"><MoreVertical size={18} /></button>
                </div>
             </div>
@@ -420,17 +389,54 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          </div>
 
          <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-            {cart.map((item) => (
-               <div key={item.cartId} onClick={() => setEditingItem(item)} className="flex gap-3 p-3 hover:bg-gray-50 rounded-xl cursor-pointer group border border-transparent hover:border-gray-100">
-                  <div className="flex-1 min-w-0">
-                     <div className="flex justify-between items-start">
-                        <span className="font-bold text-gray-700 text-sm leading-tight line-clamp-2">{item.name}</span>
-                        <span className="font-bold text-gray-900 text-sm">{baseCurrency.symbol}{(item.price * item.quantity).toFixed(2)}</span>
+            {cart.map((item) => {
+               const salesperson = item.salespersonId ? users.find(u => u.id === item.salespersonId) : null;
+               const hasDiscount = item.originalPrice && item.originalPrice > item.price;
+               const savingsPerUnit = hasDiscount ? (item.originalPrice! - item.price) : 0;
+               const totalSavingsForItem = savingsPerUnit * item.quantity;
+               
+               // DETECCION DE ARTICULO SIMPLE PARA AHORRAR ESPACIO
+               const isSimpleItem = !salesperson && !hasDiscount && (!item.modifiers || item.modifiers.length === 0) && !item.note;
+
+               return (
+                  <div 
+                    key={item.cartId} 
+                    onClick={() => setEditingItem(item)} 
+                    className={`flex gap-3 px-3 transition-all hover:bg-gray-50 rounded-xl cursor-pointer group border border-transparent hover:border-gray-100 animate-in slide-in-from-right-2 ${isSimpleItem ? 'py-1.5' : 'py-3'}`}
+                  >
+                     <div className="flex-1 min-w-0">
+                        <div className="flex justify-between items-start">
+                           <span className={`font-bold text-gray-700 leading-tight line-clamp-2 ${isSimpleItem ? 'text-xs' : 'text-sm'}`}>{item.name}</span>
+                           <span className={`font-bold text-gray-900 ${isSimpleItem ? 'text-xs' : 'text-sm'}`}>{baseCurrency.symbol}{(item.price * item.quantity).toFixed(2)}</span>
+                        </div>
+
+                        <div className={`flex justify-between items-center ${isSimpleItem ? 'mt-0.5' : 'mt-1'}`}>
+                           <div className={`${isSimpleItem ? 'text-[10px]' : 'text-xs'} text-gray-400 font-medium`}>
+                              <span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-bold">{item.quantity.toFixed(3)}</span> x {baseCurrency.symbol}{item.price.toFixed(2)}
+                           </div>
+                           
+                           {hasDiscount && (
+                              <span className="text-[10px] font-black text-red-500 animate-in slide-in-from-right-1 duration-200">
+                                -{baseCurrency.symbol}{totalSavingsForItem.toFixed(2)}
+                              </span>
+                           )}
+                        </div>
+
+                        {!isSimpleItem && (
+                          <div className="flex flex-col gap-1 mt-2 border-t border-gray-50 pt-1.5">
+                             {item.modifiers && item.modifiers.length > 0 && (
+                               <div className="flex flex-wrap gap-1">
+                                 {item.modifiers.map((m, i) => <span key={i} className="bg-blue-50 text-blue-600 text-[9px] font-black uppercase px-1.5 py-0.5 rounded border border-blue-100/50">{m}</span>)}
+                               </div>
+                             )}
+                             {salesperson && <div className="flex items-center gap-1 text-[10px] text-emerald-600 font-bold"><User size={10}/> {salesperson.name}</div>}
+                             {item.note && <div className="flex items-start gap-1 text-[10px] text-amber-600 italic bg-amber-50/30 p-1.5 rounded-lg border border-amber-100/30"><MessageSquare size={10} className="shrink-0 mt-0.5"/> <span>{item.note}</span></div>}
+                          </div>
+                        )}
                      </div>
-                     <div className="text-xs text-gray-400 font-medium mt-1"><span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-bold">{item.quantity.toFixed(3)}</span> x {baseCurrency.symbol}{item.price.toFixed(2)}</div>
                   </div>
-               </div>
-            ))}
+               );
+            })}
          </div>
 
          <div className="bg-white border-t border-gray-200 p-5 space-y-3 shadow-inner">
@@ -442,7 +448,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                <div><p className="text-xs text-gray-400 font-bold uppercase tracking-widest">Total a Pagar</p></div>
                <div className="text-3xl font-black text-gray-800 leading-none">{baseCurrency.symbol}{cartTotal.toFixed(2)}</div>
             </div>
-            <button onClick={() => { if(cart.length > 0) setShowPaymentModal(true); }} disabled={cart.length === 0} className="w-full py-4 bg-gray-900 text-white rounded-2xl font-black text-lg shadow-xl hover:bg-black active:scale-[0.98] transition-all disabled:opacity-50 flex justify-between px-6 items-center"><span>Cobrar</span><ArrowRight size={24} /></button>
+
+            <div className="grid grid-cols-2 gap-3 mt-2">
+               <button onClick={() => setShowGlobalDiscount(true)} className="flex items-center justify-center gap-2 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold text-xs hover:bg-gray-200 transition-all"><Percent size={14} /> Descuento Gral.</button>
+               <button onClick={onOpenFinance} className="flex items-center justify-center gap-2 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold text-xs hover:bg-gray-200 transition-all"><ArrowUpRight size={14} /> Salida Caja</button>
+            </div>
+
+            <button onClick={() => { if(cart.length > 0) setShowPaymentModal(true); }} disabled={cart.length === 0} className="w-full py-4 bg-gray-900 text-white rounded-2xl font-black text-lg shadow-xl hover:bg-black active:scale-[0.98] transition-all disabled:opacity-50 flex justify-between px-6 items-center mt-2"><span>Cobrar</span><ArrowRight size={24} /></button>
          </div>
       </div>
 
@@ -456,11 +468,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         </div>
       )}
 
+      {showParkedList && (
+         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
+               <div className="p-6 border-b flex justify-between items-center bg-gray-50">
+                  <h3 className="text-xl font-black text-gray-800">Recuperar Ticket</h3>
+                  <button onClick={() => setShowParkedList(false)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20}/></button>
+               </div>
+               <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                  {parkedTickets.length === 0 ? (
+                     <div className="text-center py-20 text-gray-400 italic">No hay tickets guardados.</div>
+                  ) : (
+                     parkedTickets.map(p => (
+                        <div key={p.id} onClick={() => handleRestoreTicket(p)} className="p-4 bg-white border border-gray-200 rounded-2xl flex justify-between items-center cursor-pointer hover:border-blue-500 hover:shadow-md transition-all">
+                           <div><p className="font-bold text-gray-800">{p.name}</p><p className="text-xs text-gray-400 font-mono">ID: {p.id} · {p.items.length} items</p></div>
+                           <ChevronRight size={20} className="text-gray-300" />
+                        </div>
+                     ))
+                  )}
+               </div>
+            </div>
+         </div>
+      )}
+
       {showPaymentModal && <UnifiedPaymentModal total={cartTotal} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} />}
-      {showTicketOptions && <TicketOptionsModal onClose={() => setShowTicketOptions(false)} onAction={(a) => { if(a==='ASSIGN_SELLER') setShowSellerModal(true); setShowTicketOptions(false); }} />}
+      {showTicketOptions && <TicketOptionsModal onClose={() => setShowTicketOptions(false)} onAction={(a) => { if(a==='ASSIGN_SELLER') setShowSellerModal(true); if(a==='DISCOUNT') setShowGlobalDiscount(true); if(a==='FINANCE') onOpenFinance(); setShowTicketOptions(false); }} />}
       {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
       {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr) => { addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
       {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
+      {showGlobalDiscount && <GlobalDiscountModal currentSubtotal={cartSubtotal} currencySymbol={baseCurrency.symbol} initialValue={globalDiscount.value.toString()} initialType={globalDiscount.type} themeColor={config.themeColor} onClose={() => setShowGlobalDiscount(false)} onConfirm={(val, type) => { setGlobalDiscount({value: parseFloat(val) || 0, type}); setShowGlobalDiscount(false); }} />}
     </div>
   );
 };
