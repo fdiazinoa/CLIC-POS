@@ -56,355 +56,237 @@ const App: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  // Completed missing state definitions
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [parkedTickets, setParkedTickets] = useState<ParkedTicket[]>([]);
   const [transfers, setTransfers] = useState<StockTransfer[]>([]);
-  
-  // POS Persistent State
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const [parkedTickets, setParkedTickets] = useState<ParkedTicket[]>([]); 
 
-  // Supply Chain Data
-  const [suppliers, setSuppliers] = useState<Supplier[]>([
-    { id: 'sup1', name: 'Distribuidora Central', contactName: 'Carlos', phone: '555-0101', email: 'pedidos@central.com' },
-    { id: 'sup2', name: 'Importadora Global', contactName: 'Ana', phone: '555-0202', email: 'ventas@global.com' }
-  ]);
-  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
-
-  // --- 1. DATA PERSISTENCE LOADER ---
+  // --- INITIAL DATA LOAD ---
   useEffect(() => {
-    // Initialize DB (Seed if empty)
-    const initialData = db.init();
-
-    // Load State from DB
-    setConfig(initialData.config);
-    setUsers(initialData.users);
-    setCustomers(initialData.customers);
-    setProducts(initialData.products);
-    setWarehouses(initialData.warehouses);
-    setTransactions(initialData.transactions);
-    setCashMovements(initialData.cashMovements);
-    setTransfers(initialData.transfers || []);
-
-    // Initialize Device ID
-    let dId = localStorage.getItem('clic_pos_device_id');
-    if (!dId) {
-      dId = `DEV-${Math.random().toString(36).substring(2, 15)}-${Date.now()}`;
-      localStorage.setItem('clic_pos_device_id', dId);
+    const data = db.init();
+    if (data) {
+      setConfig(data.config);
+      setUsers(data.users || []);
+      setCustomers(data.customers || []);
+      setTransactions(data.transactions || []);
+      setProducts(data.products || []);
+      setWarehouses(data.warehouses || []);
+      setCashMovements(data.cashMovements || []);
+      setPurchaseOrders(data.purchaseOrders || []);
+      setSuppliers(data.suppliers || []);
+      setParkedTickets(data.parkedTickets || []);
+      setTransfers(data.transfers || []);
+      setIsDataLoaded(true);
     }
-    setDeviceId(dId);
-
-    setIsDataLoaded(true); // Signal that DB is fully loaded
-    console.log("✅ Datos cargados desde almacenamiento local (Persistente).");
+    
+    // Simulate getting a unique device identifier
+    setDeviceId('DEVICE-' + Math.random().toString(36).substring(2, 10).toUpperCase());
   }, []);
 
-  // --- 2. PERSISTENCE SAVERS (Auto-save on change) ---
-  useEffect(() => { if (products.length) db.save('products', products); }, [products]);
-  useEffect(() => { if (users.length) db.save('users', users); }, [users]);
-  useEffect(() => { if (warehouses.length) db.save('warehouses', warehouses); }, [warehouses]);
-  useEffect(() => { if (transactions.length) db.save('transactions', transactions); }, [transactions]);
-  useEffect(() => { if (transfers.length) db.save('transfers', transfers); }, [transfers]);
-  useEffect(() => { if (isDataLoaded && config) db.save('config', config); }, [config, isDataLoaded]);
-
-  // --- 3. DERIVED AUTHORIZATION STATE (Hard Gate) ---
-  const isAuthorized = useMemo(() => {
-    if (!isDataLoaded) return false;
-    // Check if this specific device ID is assigned to any terminal in the config
-    return config.terminals?.some(t => t.config.currentDeviceId === deviceId);
-  }, [config.terminals, deviceId, isDataLoaded]);
-
-  // --- HANDLERS ---
-  const handleLogin = (user: User) => {
-    setCurrentUser(user);
-    setCurrentView('POS');
-  };
-
-  const handleLogout = () => {
-    setCurrentUser(null);
-    setCurrentView('LOGIN');
-  };
-
-  const handleDevicePairing = (terminalId: string) => {
-    const updatedTerminals = config.terminals.map(t => {
-      // Unpair this device from any other terminal it might be on (integrity)
-      if (t.config.currentDeviceId === deviceId) {
-        return { ...t, config: { ...t.config, currentDeviceId: null } }; // Use null
-      }
-      // Pair with new terminal
-      if (t.id === terminalId) {
-        return { 
-          ...t, 
-          config: { 
-            ...t.config, 
-            currentDeviceId: deviceId,
-            lastPairingDate: new Date().toISOString() 
-          } 
-        };
-      }
-      return t;
-    });
-
-    // Update state immediately
-    const newConfig = { ...config, terminals: updatedTerminals };
-    setConfig(newConfig);
-    db.save('config', newConfig); 
-    
-    // Authorization will recalculate automatically via useMemo
-    setCurrentView('LOGIN');
-  };
-
+  // --- CORE EVENT HANDLERS ---
   const handleTransactionComplete = (txn: Transaction) => {
-    setTransactions(prev => [...prev, txn]);
-    setCart([]); 
-    setSelectedCustomer(null); 
-    
-    // Optimistic Update & Stock Deduction
-    if (config.features.stockTracking) {
-      const activeTerminal = config.terminals.find(t => t.config.currentDeviceId === deviceId);
-      const warehouseId = activeTerminal?.config.inventoryScope?.defaultSalesWarehouseId;
+    const newTransactions = [...transactions, txn];
+    setTransactions(newTransactions);
+    db.save('transactions', newTransactions);
 
-      if (warehouseId) {
-        setProducts(prevProducts => prevProducts.map(p => {
-          const itemInCart = txn.items.find(i => i.id === p.id);
-          if (itemInCart) {
-             const currentStock = p.stockBalances?.[warehouseId] || 0;
-             const newStock = Math.max(0, currentStock - itemInCart.quantity);
-             return { 
-               ...p, 
-               stockBalances: { ...p.stockBalances, [warehouseId]: newStock },
-               // Update legacy total stock for backward compatibility
-               stock: (p.stock || 0) - itemInCart.quantity
-             };
-          }
-          return p;
-        }));
-      }
-    }
-  };
-
-  const handleRefundTransaction = (originalTx: Transaction, itemsToRefund: CartItem[], reason: string) => {
-    const refundTotal = itemsToRefund.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-    const taxRefund = refundTotal * config.taxRate;
-    const totalRefund = refundTotal + taxRefund;
-
-    const refundTx: Transaction = {
-      id: `REF-${Math.random().toString(36).substr(2, 6)}`,
-      date: new Date().toISOString(),
-      items: itemsToRefund,
-      total: -totalRefund, 
-      payments: [{ id: 'ref_pay', method: 'CASH', amount: -totalRefund, timestamp: new Date() }],
-      userId: currentUser?.id || 'sys',
-      userName: currentUser?.name || 'System',
-      status: 'REFUNDED',
-      refundReason: reason,
-      customerId: originalTx.customerId,
-      customerName: originalTx.customerName
-    };
-
-    setTransactions(prev => prev.map(t => t.id === originalTx.id ? { ...t, status: 'PARTIAL_REFUND' as const } : t).concat(refundTx));
-    alert("Devolución procesada correctamente.");
-  };
-
-  const handleRegisterCashMovement = (type: 'IN' | 'OUT', amount: number, reason: string) => {
-    const movement: CashMovement = {
-      id: Math.random().toString(36).substr(2, 9),
-      type,
-      amount,
-      reason,
-      timestamp: new Date().toISOString(),
-      userId: currentUser?.id || '',
-      userName: currentUser?.name || ''
-    };
-    setCashMovements(prev => {
-        const newVal = [...prev, movement];
-        db.save('cashMovements', newVal);
-        return newVal;
+    // Update inventory balances and record movements in Kardex ledger
+    txn.items.forEach(item => {
+      const whId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
+      db.recordInventoryMovement(whId, item.id, 'VENTA', txn.id, -item.quantity);
     });
+
+    // Re-initialize state from DB to get recalculated costs and stocks
+    const freshData = db.init();
+    setProducts(freshData.products);
   };
 
-  const handleZReportClose = (counted: number, notes: string) => {
-    alert("Cierre Z realizado correctamente. Ventas del día archivadas.");
+  const handleUpdateConfig = (newConfig: BusinessConfig) => {
+    setConfig(newConfig);
+    db.save('config', newConfig);
+  };
+
+  const handleRegisterMovement = (type: 'IN' | 'OUT', amount: number, reason: string) => {
+    const move: CashMovement = {
+      id: `CM-${Date.now()}`,
+      type, amount, reason,
+      timestamp: new Date().toISOString(),
+      userId: currentUser?.id || 'sys',
+      userName: currentUser?.name || 'System'
+    };
+    const updated = [...cashMovements, move];
+    setCashMovements(updated);
+    db.save('cashMovements', updated);
+  };
+
+  const handleZReport = (cashCounted: number, notes: string) => {
+    // Reset daily transaction and movement data upon closing
+    setTransactions([]);
+    setCashMovements([]);
+    db.save('transactions', []);
+    db.save('cashMovements', []);
     setCurrentView('POS');
   };
 
-  const handleReceiveStock = (items: PurchaseOrderItem[]) => {
-     setProducts(prev => prev.map(prod => {
-        const receivedItem = items.find(i => i.productId === prod.id);
-        if (receivedItem && receivedItem.quantityReceived > 0) {
-           return { ...prod, stock: (prod.stock || 0) + receivedItem.quantityReceived };
-        }
-        return prod;
-     }));
-  };
-
-  const handleUpdateConfig = (newConfig: BusinessConfig, shouldRestart = false) => {
-    setConfig(newConfig);
-    if (shouldRestart) {
-      setCurrentView('LOGIN'); 
-    }
-  };
-
-  // --- RENDER ROUTER (HARD GATED) ---
-
-  // 1. Loading State
+  // --- VIEW RENDERING LOGIC ---
   if (!isDataLoaded) {
-     return (
-        <div className="h-screen w-full flex items-center justify-center bg-gray-50">
-           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-        </div>
-     );
-  }
-
-  // 2. Setup Exceptions (First time run)
-  if (currentView === 'SETUP') {
-    return <VerticalSelector onSelect={(initialCfg) => { setConfig(initialCfg); setCurrentView('WIZARD'); }} />;
-  }
-  if (currentView === 'WIZARD') {
-    return <SetupWizard initialConfig={config} onComplete={(finalConfig) => { setConfig(finalConfig); setCurrentView('LOGIN'); }} />;
-  }
-
-  // 3. HARD SECURITY GATE
-  // If we are not in Setup/Wizard, and the device is not authorized, FORCE Binding Screen.
-  // This overrides any other view state (like LOGIN).
-  if (!isAuthorized) {
     return (
-      <TerminalBindingScreen 
-        config={config} 
-        deviceId={deviceId} 
-        adminUsers={users} 
-        onPair={handleDevicePairing} 
-      />
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-white">
+        <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+        <p className="font-bold tracking-widest uppercase text-xs">Cargando CLIC POS OS...</p>
+      </div>
     );
   }
 
-  // 4. Authorized Routes
-  switch (currentView) {
-    // Removed redundant DEVICE_UNAUTHORIZED case as it's handled by Hard Gate
+  const renderView = () => {
+    switch (currentView) {
+      case 'LOGIN':
+        return <LoginScreen availableUsers={users} subVertical={config.subVertical} onLogin={(u) => { setCurrentUser(u); setCurrentView('POS'); }} />;
+      
+      case 'POS':
+        if (!currentUser) { setCurrentView('LOGIN'); return null; }
+        return (
+          <POSInterface 
+            config={config}
+            currentUser={currentUser}
+            roles={roles}
+            users={users}
+            customers={customers}
+            products={products}
+            warehouses={warehouses}
+            cart={cart}
+            onUpdateCart={setCart}
+            selectedCustomer={selectedCustomer}
+            onSelectCustomer={setSelectedCustomer}
+            parkedTickets={parkedTickets}
+            onUpdateParkedTickets={(pt) => { setParkedTickets(pt); db.save('parkedTickets', pt); }}
+            onLogout={() => { setCurrentUser(null); setCurrentView('LOGIN'); }}
+            onOpenSettings={() => setCurrentView('SETTINGS')}
+            onOpenCustomers={() => setCurrentView('CUSTOMERS')}
+            onOpenHistory={() => setCurrentView('HISTORY')}
+            onOpenFinance={() => setCurrentView('FINANCE')}
+            onTransactionComplete={handleTransactionComplete}
+            onAddCustomer={(c) => { const updated = [...customers, c]; setCustomers(updated); db.save('customers', updated); }}
+            onUpdateConfig={handleUpdateConfig}
+          />
+        );
 
-    case 'LOGIN':
-      return <LoginScreen onLogin={handleLogin} availableUsers={users} subVertical={config.subVertical} />;
+      case 'SETTINGS':
+        return (
+          <Settings 
+            config={config}
+            users={users}
+            roles={roles}
+            transactions={transactions}
+            products={products}
+            warehouses={warehouses}
+            transfers={transfers}
+            onUpdateTransfers={(t) => { setTransfers(t); db.save('transfers', t); }}
+            onUpdateConfig={handleUpdateConfig}
+            onUpdateUsers={(u) => { setUsers(u); db.save('users', u); }}
+            onUpdateRoles={(r) => { setRoles(r); db.save('roles', r); }}
+            onUpdateProducts={(p) => { setProducts(p); db.save('products', p); }}
+            onUpdateWarehouses={(w) => { setWarehouses(w); db.save('warehouses', w); }}
+            onOpenZReport={() => setCurrentView('Z_REPORT')}
+            onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
+            onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
+            onClose={() => setCurrentView('POS')}
+          />
+        );
 
-    case 'POS':
-      if (!currentUser) return <LoginScreen onLogin={handleLogin} availableUsers={users} subVertical={config.subVertical} />;
-      return (
-        <POSInterface 
-          config={config}
-          currentUser={currentUser}
-          roles={roles}
-          users={users} 
-          customers={customers}
-          products={products}
-          warehouses={warehouses} 
-          cart={cart}
-          onUpdateCart={setCart}
-          selectedCustomer={selectedCustomer}
-          onSelectCustomer={setSelectedCustomer}
-          parkedTickets={parkedTickets}
-          onUpdateParkedTickets={setParkedTickets}
-          onLogout={handleLogout}
-          onOpenSettings={() => setCurrentView('SETTINGS')}
-          onOpenCustomers={() => setCurrentView('CUSTOMERS')}
-          onOpenHistory={() => setCurrentView('HISTORY')}
-          onOpenFinance={() => setCurrentView('FINANCE')}
-          onTransactionComplete={handleTransactionComplete}
-          onAddCustomer={(c) => setCustomers([...customers, c])}
-          onUpdateConfig={handleUpdateConfig}
-        />
-      );
+      case 'CUSTOMERS':
+        return (
+          <CustomerManagement 
+            customers={customers}
+            config={config}
+            onAddCustomer={(c) => { const updated = [...customers, c]; setCustomers(updated); db.save('customers', updated); }}
+            onUpdateCustomer={(c) => { const updated = customers.map(cust => cust.id === c.id ? c : cust); setCustomers(updated); db.save('customers', updated); }}
+            onDeleteCustomer={(id) => { const updated = customers.filter(cust => cust.id !== id); setCustomers(updated); db.save('customers', updated); }}
+            onSelect={(c) => { setSelectedCustomer(c); setCurrentView('POS'); }}
+            onClose={() => setCurrentView('POS')}
+          />
+        );
 
-    case 'SETTINGS':
-      if (!currentUser) return <LoginScreen onLogin={handleLogin} availableUsers={users} subVertical={config.subVertical} />;
-      return (
-        <Settings 
-          config={config}
-          users={users}
-          roles={roles}
-          transactions={transactions}
-          products={products}
-          warehouses={warehouses}
-          onUpdateConfig={handleUpdateConfig}
-          onUpdateUsers={setUsers}
-          onUpdateRoles={setRoles}
-          onUpdateProducts={setProducts}
-          onUpdateWarehouses={setWarehouses}
-          onOpenZReport={() => setCurrentView('Z_REPORT')}
-          onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
-          onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
-          onClose={() => setCurrentView('POS')}
-          // New Props for Transfer Logic
-          transfers={transfers}
-          onUpdateTransfers={setTransfers}
-        />
-      );
+      case 'HISTORY':
+        return (
+          <TicketHistory 
+            transactions={transactions}
+            config={config}
+            onClose={() => setCurrentView('POS')}
+            onRefundTransaction={(tx, items, reason) => {
+              const updatedTxns = transactions.map(t => t.id === tx.id ? { ...t, status: 'REFUNDED' as const, refundReason: reason } : t);
+              setTransactions(updatedTxns);
+              db.save('transactions', updatedTxns);
+              setCurrentView('POS');
+            }}
+          />
+        );
 
-    case 'CUSTOMERS':
-      return (
-        <CustomerManagement 
-          customers={customers}
-          config={config}
-          onAddCustomer={(c) => setCustomers([...customers, c])}
-          onUpdateCustomer={(c) => setCustomers(prev => prev.map(cust => cust.id === c.id ? c : cust))}
-          onDeleteCustomer={(id) => setCustomers(prev => prev.filter(c => c.id !== id))}
-          onSelect={(c) => { setSelectedCustomer(c); setCurrentView('POS'); }}
-          onClose={() => setCurrentView('POS')}
-        />
-      );
+      case 'FINANCE':
+        return (
+          <FinanceDashboard 
+            transactions={transactions}
+            cashMovements={cashMovements}
+            config={config}
+            onRegisterMovement={handleRegisterMovement}
+            onOpenZReport={() => setCurrentView('Z_REPORT')}
+            onClose={() => setCurrentView('POS')}
+          />
+        );
 
-    case 'HISTORY':
-      return (
-        <TicketHistory 
-          transactions={transactions}
-          config={config}
-          onClose={() => setCurrentView('POS')}
-          onRefundTransaction={handleRefundTransaction}
-        />
-      );
+      case 'Z_REPORT':
+        return (
+          <ZReportDashboard 
+            transactions={transactions}
+            cashMovements={cashMovements}
+            config={config}
+            userName={currentUser?.name || ''}
+            onConfirmClose={handleZReport}
+            onClose={() => setCurrentView('POS')}
+          />
+        );
 
-    case 'FINANCE':
-      return (
-        <FinanceDashboard 
-          transactions={transactions}
-          cashMovements={cashMovements}
-          config={config}
-          onClose={() => setCurrentView('POS')}
-          onRegisterMovement={handleRegisterCashMovement}
-          onOpenZReport={() => setCurrentView('Z_REPORT')}
-        />
-      );
+      case 'SUPPLY_CHAIN':
+        return (
+          <SupplyChainManager 
+            products={products}
+            suppliers={suppliers}
+            purchaseOrders={purchaseOrders}
+            config={config}
+            onClose={() => setCurrentView('POS')}
+            onCreateOrder={(o) => { const updated = [...purchaseOrders, o]; setPurchaseOrders(updated); db.save('purchaseOrders', updated); }}
+            onUpdateOrder={(o) => { const updated = purchaseOrders.map(p => p.id === o.id ? o : p); setPurchaseOrders(updated); db.save('purchaseOrders', updated); }}
+            onReceiveStock={(items) => {
+              const whId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
+              items.forEach(item => {
+                if (item.quantityReceived > 0) {
+                  db.recordInventoryMovement(whId, item.productId, 'COMPRA', 'OC-REC', item.quantityReceived, item.cost);
+                }
+              });
+              const freshData = db.init();
+              setProducts(freshData.products);
+            }}
+          />
+        );
 
-    case 'Z_REPORT':
-      return (
-        <ZReportDashboard 
-          transactions={transactions}
-          cashMovements={cashMovements}
-          config={config}
-          userName={currentUser?.name || ''}
-          onClose={() => setCurrentView('POS')}
-          onConfirmClose={handleZReportClose}
-        />
-      );
+      case 'FRANCHISE_DASHBOARD':
+        return <FranchiseDashboard onBack={() => setCurrentView('POS')} />;
 
-    case 'SUPPLY_CHAIN':
-      return (
-        <SupplyChainManager 
-          products={products}
-          suppliers={suppliers}
-          purchaseOrders={purchaseOrders}
-          config={config}
-          onClose={() => setCurrentView('SETTINGS')} 
-          onCreateOrder={(po) => setPurchaseOrders(prev => [...prev, po])}
-          onUpdateOrder={(po) => setPurchaseOrders(prev => prev.map(o => o.id === po.id ? po : o))}
-          onReceiveStock={handleReceiveStock}
-        />
-      );
+      default:
+        return <div className="h-screen flex items-center justify-center">Vista no implementada.</div>;
+    }
+  };
 
-    case 'FRANCHISE_DASHBOARD':
-      return <FranchiseDashboard onBack={() => setCurrentView('POS')} />;
-
-    default:
-      return <div>Error: Vista desconocida</div>;
-  }
+  return (
+    <div className="h-screen w-screen overflow-hidden">
+      {renderView()}
+    </div>
+  );
 };
 
+// Added missing default export
 export default App;

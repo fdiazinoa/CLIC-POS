@@ -299,6 +299,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       <div className={`flex-1 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'}`}>
         <header className="bg-white px-8 py-4 border-b border-gray-200 flex items-center gap-6 shadow-sm z-10">
+          {/* USER IDENTITY SECTION */}
+          <div className="flex items-center gap-3 pr-4 border-r border-gray-100">
+             <div className="w-10 h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
+                {currentUser.photo ? (
+                   <img src={currentUser.photo} className="w-full h-full object-cover" alt={currentUser.name} />
+                ) : (
+                   <div className="w-full h-full flex items-center justify-center bg-blue-50 text-blue-600 font-bold">
+                      {currentUser.name.charAt(0)}
+                   </div>
+                )}
+             </div>
+             <div className="hidden lg:block leading-tight">
+                <p className="text-sm font-black text-gray-800 truncate max-w-[120px]">{currentUser.name}</p>
+                <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">Cajero</p>
+             </div>
+          </div>
+
           <div className="flex-1 flex items-center gap-4">
              <div className="relative flex-1 group">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
@@ -471,7 +488,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       {showParkedList && (
          <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
-               <div className="p-6 border-b flex justify-between items-center bg-gray-50">
+               <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                   <h3 className="text-xl font-black text-gray-800">Recuperar Ticket</h3>
                   <button onClick={() => setShowParkedList(false)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20}/></button>
                </div>
