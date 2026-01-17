@@ -97,8 +97,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   // --- LOGISTICS TAB STATE ---
   const [logisticsSearch, setLogisticsSearch] = useState('');
   const [logisticsFilterStock, setLogisticsFilterStock] = useState(false);
-  // Local state for Logistics settings (Min/Max) as they are not in the core Product type yet
-  const [warehouseSettings, setWarehouseSettings] = useState<Record<string, {min: number, max: number}>>({});
+  // Initialized from initialData to allow persistence
+  const [warehouseSettings, setWarehouseSettings] = useState<Record<string, {min: number, max: number}>>(initialData?.warehouseSettings || {});
 
   const [formData, setFormData] = useState<Product>(initialData || {
     id: `PRD_${Date.now()}`,
@@ -397,8 +397,23 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       alert("Error de integridad: El artículo debe tener al menos una TARIFA activa para poder venderse.");
       return;
     }
-    onSave(formData);
+    // Merge the logistics settings into the product object so they are persisted
+    const finalProduct = {
+      ...formData,
+      warehouseSettings: warehouseSettings
+    };
+    onSave(finalProduct);
   };
+
+  // --- PREPARE LOGISTICS DATA ---
+  const filteredWarehouses = useMemo(() => {
+    const all = warehouses || [];
+    return all.filter(wh => {
+      if (logisticsSearch && !wh.name.toLowerCase().includes(logisticsSearch.toLowerCase())) return false;
+      if (logisticsFilterStock && (formData.stockBalances?.[wh.id] || 0) <= 0) return false;
+      return true;
+    });
+  }, [warehouses, logisticsSearch, logisticsFilterStock, formData.stockBalances]);
 
   return (
     <div className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
@@ -457,14 +472,26 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     className="aspect-square bg-white rounded-[2rem] border-4 border-dashed border-gray-200 flex flex-col items-center justify-center relative overflow-hidden group cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition-all"
                   >
                     {formData.image ? (
-                      <img src={formData.image} alt="Preview" className="w-full h-full object-cover" />
+                      <>
+                        <img src={formData.image} alt="Preview" className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                           <ImageIcon className="text-white mb-2" size={32} />
+                           <span className="text-xs font-bold text-white uppercase tracking-wider">Cambiar Imagen</span>
+                        </div>
+                      </>
                     ) : (
                       <>
                         <ImageIcon size={48} className="text-gray-300 mb-2 group-hover:text-blue-400 transition-colors" />
                         <span className="text-xs font-bold text-gray-400 group-hover:text-blue-600">Subir Imagen</span>
                       </>
                     )}
-                    <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
+                    <input 
+                        ref={fileInputRef}
+                        type="file" 
+                        className="hidden" 
+                        accept="image/*" 
+                        onChange={handleImageUpload} 
+                    />
                   </div>
                 </div>
 
@@ -951,12 +978,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
           {/* TAB: STOCK MATRIX (NEW LOGISTICS TAB) */}
           {activeTab === 'LOGISTICS' && (
-             <div className="w-full h-full flex flex-col animate-in slide-in-from-right-4">
+             <div className="flex flex-col gap-6 animate-in slide-in-from-right-4 h-full"> 
                 
                 {/* Header & Filters */}
-                <div className="mb-6 flex justify-between items-center bg-white p-4 rounded-2xl border border-gray-200 shadow-sm shrink-0">
-                   <div className="flex items-center gap-4 flex-1">
-                      <div className="relative w-full max-w-md">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-2xl border border-gray-200 shadow-sm shrink-0 sticky top-0 z-20"> 
+                   <div className="flex flex-col sm:flex-row items-center gap-4 flex-1 w-full">
+                      <div className="relative w-full sm:max-w-md">
                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                          <input 
                             type="text" 
@@ -966,7 +993,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                             className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-100 text-sm font-medium"
                          />
                       </div>
-                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap">
                          <input 
                             type="checkbox" 
                             checked={logisticsFilterStock}
@@ -976,128 +1003,131 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                          <span className="text-sm font-bold text-gray-600">Con stock físico</span>
                       </label>
                    </div>
-                   <div className="text-right">
+                   <div className="text-right w-full sm:w-auto">
                       <p className="text-[10px] text-gray-400 font-bold uppercase">Total Global</p>
                       <p className="text-xl font-black text-gray-800">
-                         {Object.values(formData.stockBalances || {} as Record<string, number>).reduce((a, b) => a + b, 0)} u.
+                         {Object.values(formData.stockBalances || {}).reduce((a: number, b: number) => a + b, 0)} u.
                       </p>
                    </div>
                 </div>
 
-                {/* Full Width Table */}
-                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex-1">
-                   <table className="w-full text-left">
-                      <thead className="bg-gray-50 border-b border-gray-200">
-                         <tr>
-                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider w-24">Activo</th>
-                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Almacén</th>
-                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Existencia</th>
-                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Logística</th>
-                            <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Reaprovisionamiento</th>
-                         </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                         {warehouses.filter(wh => {
-                            if (logisticsSearch && !wh.name.toLowerCase().includes(logisticsSearch.toLowerCase())) return false;
-                            if (logisticsFilterStock && (formData.stockBalances?.[wh.id] || 0) <= 0) return false;
-                            return true;
-                         }).map(wh => {
-                            const isActive = formData.activeInWarehouses?.includes(wh.id);
-                            const physical = formData.stockBalances?.[wh.id] || 0;
-                            const reserved = 0; // Mock
-                            const available = physical - reserved;
-                            const min = warehouseSettings[wh.id]?.min || 0;
-                            const max = warehouseSettings[wh.id]?.max || 0;
-                            const isLowStock = physical < min;
+                {/* Table Container */}
+                {/* Added overflow-x-auto for mobile responsiveness */}
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex-1 flex flex-col">
+                   <div className="overflow-x-auto"> 
+                      <table className="w-full text-left min-w-[800px] md:min-w-0"> {/* Min width to force scroll on small screens */}
+                         <thead className="bg-gray-50 border-b border-gray-200">
+                            <tr>
+                               <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider w-24">Activo</th>
+                               <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Almacén</th>
+                               <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Existencia</th>
+                               <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center hidden lg:table-cell">Logística</th>
+                               <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Reaprovisionamiento</th>
+                            </tr>
+                         </thead>
+                         <tbody className="divide-y divide-gray-100">
+                            {(warehouses || []).filter(wh => {
+                               if (logisticsSearch && !wh.name.toLowerCase().includes(logisticsSearch.toLowerCase())) return false;
+                               if (logisticsFilterStock && (formData.stockBalances?.[wh.id] || 0) <= 0) return false;
+                               return true;
+                            }).map(wh => {
+                               const isActive = formData.activeInWarehouses?.includes(wh.id);
+                               const physical = formData.stockBalances?.[wh.id] || 0;
+                               const reserved = 0; // Mock
+                               const available = physical - reserved;
+                               const min = warehouseSettings[wh.id]?.min || 0;
+                               const max = warehouseSettings[wh.id]?.max || 0;
+                               const isLowStock = physical < min;
 
-                            return (
-                               <tr key={wh.id} className={`transition-all hover:bg-gray-50 ${!isActive ? 'bg-gray-50/50' : ''}`}>
-                                  {/* A. Activación */}
-                                  <td className="px-6 py-4">
-                                     <div 
-                                        onClick={() => toggleWarehouseActive(wh.id)}
-                                        className={`w-12 h-6 rounded-full relative transition-colors cursor-pointer ${isActive ? 'bg-green-500' : 'bg-gray-300'}`}
-                                     >
-                                        <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${isActive ? 'left-7' : 'left-1'}`} />
-                                     </div>
-                                  </td>
+                               return (
+                                  <tr key={wh.id} className={`transition-all hover:bg-gray-50 ${!isActive ? 'bg-gray-50/50' : ''}`}>
+                                     {/* A. Activación */}
+                                     <td className="px-6 py-4">
+                                        <div 
+                                           onClick={() => toggleWarehouseActive(wh.id)}
+                                           className={`w-12 h-6 rounded-full relative transition-colors cursor-pointer ${isActive ? 'bg-green-500' : 'bg-gray-300'}`}
+                                        >
+                                           <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${isActive ? 'left-7' : 'left-1'}`} />
+                                        </div>
+                                     </td>
 
-                                  {/* B. Almacén */}
-                                  <td className={`px-6 py-4 ${!isActive ? 'opacity-50' : ''}`}>
-                                     <div className="flex flex-col">
-                                        <span className="font-bold text-gray-800 text-sm">{wh.name}</span>
-                                        <span className="text-[10px] text-gray-400 font-mono">{wh.code}</span>
-                                     </div>
-                                  </td>
+                                     {/* B. Almacén */}
+                                     <td className={`px-6 py-4 ${!isActive ? 'opacity-50' : ''}`}>
+                                        <div className="flex flex-col">
+                                           <span className="font-bold text-gray-800 text-sm">{wh.name}</span>
+                                           <span className="text-[10px] text-gray-400 font-mono">{wh.code}</span>
+                                        </div>
+                                     </td>
 
-                                  {/* C. Métricas Existencia */}
-                                  <td className={`px-6 py-4 ${!isActive ? 'opacity-50' : ''}`}>
-                                     <div className="flex justify-center gap-6 text-sm">
-                                        <div className="text-center">
-                                           <span className="block text-[10px] text-gray-400 font-bold uppercase">Físico</span>
-                                           <span className={`font-bold ${isLowStock && isActive ? 'text-red-600 flex items-center gap-1' : 'text-gray-800'}`}>
-                                              {isLowStock && isActive && <AlertTriangle size={12} />}
-                                              {physical}
-                                           </span>
+                                     {/* C. Métricas Existencia */}
+                                     <td className={`px-6 py-4 ${!isActive ? 'opacity-50' : ''}`}>
+                                        <div className="flex justify-center gap-6 text-sm">
+                                           <div className="text-center">
+                                              <span className="block text-[10px] text-gray-400 font-bold uppercase">Físico</span>
+                                              <span className={`font-bold ${isLowStock && isActive ? 'text-red-600 flex items-center gap-1' : 'text-gray-800'}`}>
+                                                 {isLowStock && isActive && <AlertTriangle size={12} />}
+                                                 {physical}
+                                              </span>
+                                           </div>
+                                           <div className="text-center">
+                                              <span className="block text-[10px] text-gray-400 font-bold uppercase">Reservado</span>
+                                              <span className="font-medium text-gray-600">{reserved}</span>
+                                           </div>
+                                           <div className="text-center">
+                                              <span className="block text-[10px] text-gray-400 font-bold uppercase">Disp.</span>
+                                              <span className="font-black text-emerald-600 text-lg">{available}</span>
+                                           </div>
                                         </div>
-                                        <div className="text-center">
-                                           <span className="block text-[10px] text-gray-400 font-bold uppercase">Reservado</span>
-                                           <span className="font-medium text-gray-600">{reserved}</span>
-                                        </div>
-                                        <div className="text-center">
-                                           <span className="block text-[10px] text-gray-400 font-bold uppercase">Disp.</span>
-                                           <span className="font-black text-emerald-600 text-lg">{available}</span>
-                                        </div>
-                                     </div>
-                                  </td>
+                                     </td>
 
-                                  {/* D. Métricas Flujo */}
-                                  <td className={`px-6 py-4 ${!isActive ? 'opacity-50' : ''}`}>
-                                     <div className="flex justify-center gap-4 text-xs">
-                                        <div className="flex items-center gap-2 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 text-blue-700 font-medium">
-                                           <Truck size={14} />
-                                           <span>0 En tránsito</span>
+                                     {/* D. Métricas Flujo */}
+                                     <td className={`px-6 py-4 hidden lg:table-cell ${!isActive ? 'opacity-50' : ''}`}>
+                                        <div className="flex justify-center gap-4 text-xs">
+                                           <div className="flex items-center gap-2 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 text-blue-700 font-medium">
+                                              <Truck size={14} />
+                                              <span>0 En tránsito</span>
+                                           </div>
+                                           <div className="flex items-center gap-2 bg-orange-50 px-3 py-1.5 rounded-lg border border-orange-100 text-orange-700 font-medium">
+                                              <ArrowDownToLine size={14} />
+                                              <span>0 Por recibir</span>
+                                           </div>
                                         </div>
-                                        <div className="flex items-center gap-2 bg-orange-50 px-3 py-1.5 rounded-lg border border-orange-100 text-orange-700 font-medium">
-                                           <ArrowDownToLine size={14} />
-                                           <span>0 Por recibir</span>
-                                        </div>
-                                     </div>
-                                  </td>
+                                     </td>
 
-                                  {/* E. Reaprovisionamiento */}
-                                  <td className="px-6 py-4">
-                                     <div className={`flex items-center justify-center gap-2 ${!isActive ? 'opacity-40 pointer-events-none' : ''}`}>
-                                        <div className="flex flex-col items-center gap-1">
-                                           <span className="text-[9px] text-gray-400 font-bold uppercase">Min</span>
-                                           <input 
-                                              type="number" 
-                                              value={min || ''}
-                                              onChange={(e) => updateWarehouseSettings(wh.id, 'min', parseInt(e.target.value))}
-                                              placeholder="0"
-                                              className="w-16 p-1.5 bg-gray-50 border border-gray-200 rounded text-center text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500"
-                                           />
+                                     {/* E. Reaprovisionamiento */}
+                                     <td className="px-6 py-4">
+                                        <div className={`flex items-center justify-center gap-2 ${!isActive ? 'opacity-40 pointer-events-none' : ''}`}>
+                                           <div className="flex flex-col items-center gap-1">
+                                              <span className="text-[9px] text-gray-400 font-bold uppercase">Min</span>
+                                              <input 
+                                                 type="number" 
+                                                 value={min || ''}
+                                                 onChange={(e) => updateWarehouseSettings(wh.id, 'min', parseInt(e.target.value))}
+                                                 placeholder="0"
+                                                 className="w-16 p-1.5 bg-gray-50 border border-gray-200 rounded text-center text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500"
+                                              />
+                                           </div>
+                                           <div className="w-4 h-px bg-gray-300 mt-4"></div>
+                                           <div className="flex flex-col items-center gap-1">
+                                              <span className="text-[9px] text-gray-400 font-bold uppercase">Max</span>
+                                              <input 
+                                                 type="number" 
+                                                 value={max || ''}
+                                                 onChange={(e) => updateWarehouseSettings(wh.id, 'max', parseInt(e.target.value))}
+                                                 placeholder="0"
+                                                 className="w-16 p-1.5 bg-gray-50 border border-gray-200 rounded text-center text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500"
+                                              />
+                                           </div>
                                         </div>
-                                        <div className="w-4 h-px bg-gray-300 mt-4"></div>
-                                        <div className="flex flex-col items-center gap-1">
-                                           <span className="text-[9px] text-gray-400 font-bold uppercase">Max</span>
-                                           <input 
-                                              type="number" 
-                                              value={max || ''}
-                                              onChange={(e) => updateWarehouseSettings(wh.id, 'max', parseInt(e.target.value))}
-                                              placeholder="0"
-                                              className="w-16 p-1.5 bg-gray-50 border border-gray-200 rounded text-center text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500"
-                                           />
-                                        </div>
-                                     </div>
-                                  </td>
-                               </tr>
-                            );
-                         })}
-                      </tbody>
-                   </table>
-                   {warehouses.length === 0 && (
-                      <div className="p-10 text-center text-gray-400">No hay almacenes configurados.</div>
+                                     </td>
+                                  </tr>
+                               );
+                            })}
+                         </tbody>
+                      </table>
+                   </div>
+                   {(warehouses || []).length === 0 && (
+                      <div className="p-10 text-center text-gray-400">No hay almacenes configurados o disponibles.</div>
                    )}
                 </div>
              </div>

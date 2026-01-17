@@ -97,13 +97,7 @@ const BehaviorSettings: React.FC<BehaviorSettingsProps> = ({ onClose }) => {
                  <ShoppingCart size={16} /> Reglas de Venta
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                 <ToggleSwitch 
-                    label="Stock Negativo"
-                    description="Permitir vender productos sin inventario."
-                    checked={config.allowNegativeStock}
-                    onChange={(v) => setConfig({...config, allowNegativeStock: v})}
-                    icon={AlertTriangle}
-                 />
+                 {/* Stock Negativo removed - Managed in Terminal Settings */}
                  <ToggleSwitch 
                     label="Solicitar Comensales"
                     description="Pedir # personas al abrir mesa (Restaurante)."
@@ -141,7 +135,7 @@ const BehaviorSettings: React.FC<BehaviorSettingsProps> = ({ onClose }) => {
                        max="60" 
                        step="5"
                        value={config.autoLogoutMinutes}
-                       onChange={(e) => setConfig({...config, autoLogoutMinutes: parseInt(e.target.value)})}
+                       onChange={(e) => setConfig({...config,autoLogoutMinutes: parseInt(e.target.value)})}
                        className="w-full h-3 bg-gray-100 rounded-lg appearance-none cursor-pointer accent-orange-500"
                     />
                     <div className="flex justify-between mt-2 text-xs font-bold text-gray-300 uppercase">

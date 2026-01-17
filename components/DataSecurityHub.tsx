@@ -3,8 +3,9 @@ import React, { useState } from 'react';
 import { 
   Download, FileSpreadsheet, FileText, Calendar, 
   Lock, ShieldAlert, CheckCircle2, ChevronRight, 
-  Database, FileJson, HardDrive, LogOut, KeyRound, Delete 
+  Database, FileJson, HardDrive, LogOut, KeyRound, Delete, RefreshCw
 } from 'lucide-react';
+import { db } from '../utils/db'; // Import DB to call reset
 
 interface DataSecurityHubProps {
   onClose: () => void;
@@ -33,6 +34,12 @@ const DataSecurityHub: React.FC<DataSecurityHubProps> = ({ onClose }) => {
   const handleLock = () => {
     if (confirm("¿Activar Modo Kiosco? El terminal quedará bloqueado.")) {
       setIsLocked(true);
+    }
+  };
+
+  const handleFactoryReset = () => {
+    if (confirm("⚠️ PELIGRO: ¿Estás seguro de REINICIAR toda la base de datos?\n\nSe borrarán todas las ventas, clientes y configuraciones. Se restaurarán los datos de prueba iniciales.")) {
+       db.reset(); // Calls our new DB utility
     }
   };
 
@@ -195,46 +202,47 @@ const DataSecurityHub: React.FC<DataSecurityHubProps> = ({ onClose }) => {
             <p className="text-gray-500 mt-1">Gestión de acceso y bloqueo para entorno público.</p>
          </div>
 
-         <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-3xl p-8 text-white shadow-xl flex flex-col md:flex-row items-center justify-between gap-8 relative overflow-hidden">
-            {/* Deco Bg */}
-            <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
+         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-3xl p-8 text-white shadow-xl flex flex-col justify-between relative overflow-hidden">
+               {/* Deco Bg */}
+               <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
 
-            <div className="flex-1 relative z-10">
-               <div className="flex items-center gap-3 mb-3">
-                  <div className="p-2 bg-red-500/20 rounded-lg text-red-400 border border-red-500/30">
-                     <Lock size={24} />
+               <div className="relative z-10 mb-6">
+                  <div className="flex items-center gap-3 mb-3">
+                     <div className="p-2 bg-red-500/20 rounded-lg text-red-400 border border-red-500/30">
+                        <Lock size={24} />
+                     </div>
+                     <h3 className="text-xl font-bold">Modo Kiosco</h3>
                   </div>
-                  <h3 className="text-xl font-bold">Modo Kiosco (App Pinning)</h3>
+                  <p className="text-gray-400 text-sm leading-relaxed">
+                     Bloquea la interfaz para impedir salir de la aplicación. Se requiere PIN Maestro para desbloquear.
+                  </p>
                </div>
-               <p className="text-gray-400 text-sm leading-relaxed max-w-lg">
-                  Esta acción bloquea la interfaz para impedir que los usuarios salgan de la aplicación o accedan a la configuración. 
-                  Se requerirá un <strong>PIN Maestro de 6 dígitos</strong> para desbloquear.
-               </p>
+
+               <button 
+                  onClick={handleLock}
+                  className="relative z-10 w-full py-4 bg-red-600 hover:bg-red-50 text-white rounded-2xl font-bold text-lg shadow-lg shadow-red-900/50 flex items-center justify-center gap-3 transition-transform active:scale-95 group"
+               >
+                  <KeyRound size={24} className="group-hover:rotate-12 transition-transform" />
+                  Bloquear Terminal
+               </button>
             </div>
 
-            <button 
-               onClick={handleLock}
-               className="relative z-10 px-8 py-4 bg-red-600 hover:bg-red-50 text-white rounded-2xl font-bold text-lg shadow-lg shadow-red-900/50 flex items-center gap-3 transition-transform active:scale-95 group"
-            >
-               <KeyRound size={24} className="group-hover:rotate-12 transition-transform" />
-               Bloquear Terminal
-            </button>
-         </div>
-         
-         <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-4 bg-white border border-gray-200 rounded-2xl flex items-center gap-4">
-               <div className="p-2 bg-green-100 text-green-600 rounded-xl"><CheckCircle2 /></div>
-               <div>
-                  <h4 className="font-bold text-gray-700">Cifrado Local</h4>
-                  <p className="text-xs text-gray-400">Base de datos encriptada AES-256.</p>
-               </div>
-            </div>
-            <div className="p-4 bg-white border border-gray-200 rounded-2xl flex items-center gap-4">
-               <div className="p-2 bg-orange-100 text-orange-600 rounded-xl"><LogOut /></div>
-               <div>
-                  <h4 className="font-bold text-gray-700">Auto-Logout</h4>
-                  <p className="text-xs text-gray-400">Cierre de sesión tras 15 min inactividad.</p>
-               </div>
+            <div className="bg-white rounded-3xl p-8 border border-gray-200 flex flex-col justify-between">
+                <div>
+                   <h3 className="text-xl font-bold text-gray-800 mb-2 flex items-center gap-2">
+                      <RefreshCw className="text-orange-500" /> Reinicio de Fábrica
+                   </h3>
+                   <p className="text-gray-500 text-sm mb-6">
+                      Borra todos los datos locales y restaura el escenario de prueba inicial. Útil si la base de datos se corrompe.
+                   </p>
+                </div>
+                <button 
+                   onClick={handleFactoryReset}
+                   className="w-full py-4 bg-white border-2 border-orange-200 text-orange-600 hover:bg-orange-50 hover:border-orange-300 rounded-2xl font-bold text-lg transition-all flex items-center justify-center gap-3"
+                >
+                   <Delete size={20} /> Resetear Datos (Semilla)
+                </button>
             </div>
          </div>
       </section>

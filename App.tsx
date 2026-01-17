@@ -11,25 +11,23 @@ import {
   PurchaseOrder, 
   Supplier, 
   PurchaseOrderItem, 
-  CartItem,
+  CartItem, 
   ViewState,
   Tariff,
   Warehouse,
   ParkedTicket
 } from './types';
 import { 
-  MOCK_USERS, 
   DEFAULT_ROLES, 
-  MOCK_CUSTOMERS, 
-  RETAIL_PRODUCTS, 
   FOOD_PRODUCTS, 
-  getInitialConfig,
-  INITIAL_TARIFFS
+  RETAIL_PRODUCTS,
+  getInitialConfig
 } from './constants';
+import { db } from './utils/db'; // Import Local DB
 
 // Component Imports
 import LoginScreen from './components/LoginScreen';
-import POSInterface from './components/POSInterface'; // FIXED IMPORT
+import POSInterface from './components/POSInterface'; 
 import Settings from './components/Settings';
 import CustomerManagement from './components/CustomerManagement';
 import TicketHistory from './components/TicketHistory';
@@ -41,35 +39,29 @@ import SetupWizard from './components/SetupWizard';
 import FranchiseDashboard from './components/FranchiseDashboard';
 import TerminalBindingScreen from './components/TerminalBindingScreen';
 
-const INITIAL_WAREHOUSES: Warehouse[] = [
-  { id: 'wh_1', code: 'CEN', name: 'Almacén Central', type: 'PHYSICAL', address: 'Calle Industria 45', allowPosSale: true, allowNegativeStock: false, isMain: true, storeId: 'S1' },
-  { id: 'wh_2', code: 'NTE', name: 'Tienda Norte', type: 'PHYSICAL', address: 'Av. Principal 12', allowPosSale: true, allowNegativeStock: false, isMain: false, storeId: 'S1' },
-  { id: 'wh_3', code: 'MER', name: 'Bodega Mermas', type: 'VIRTUAL', address: 'Virtual', allowPosSale: false, allowNegativeStock: false, isMain: false, storeId: 'S1' },
-];
-
 const App: React.FC = () => {
   // --- GLOBAL STATE ---
-  const [currentView, setCurrentView] = useState<ViewState>('SETUP'); 
+  const [currentView, setCurrentView] = useState<ViewState>('LOGIN'); // Default to LOGIN as DB initializes
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any)); 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   
   // --- SECURITY & DEVICE HANDSHAKE ---
   const [deviceId, setDeviceId] = useState<string>('');
-  const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
+  const [isDataLoaded, setIsDataLoaded] = useState<boolean>(false); 
 
-  // --- DATA STORES ---
-  const [users, setUsers] = useState<User[]>(MOCK_USERS);
+  // --- DATA STORES (Initialized Empty, populated by Effect) ---
+  const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<RoleDefinition[]>(DEFAULT_ROLES);
-  const [customers, setCustomers] = useState<Customer[]>(MOCK_CUSTOMERS);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [products, setProducts] = useState<Product[]>(RETAIL_PRODUCTS);
-  const [warehouses, setWarehouses] = useState<Warehouse[]>(INITIAL_WAREHOUSES);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   
   // POS Persistent State
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const [parkedTickets, setParkedTickets] = useState<ParkedTicket[]>([]); // Lifted state to persist across views
+  const [parkedTickets, setParkedTickets] = useState<ParkedTicket[]>([]); 
 
   // Supply Chain Data
   const [suppliers, setSuppliers] = useState<Supplier[]>([
@@ -78,9 +70,21 @@ const App: React.FC = () => {
   ]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
 
-  // --- DEVICE AUTH EFFECT ---
+  // --- 1. DATA PERSISTENCE LOADER ---
   useEffect(() => {
-    // 1. Get or Create Device ID
+    // Initialize DB (Seed if empty)
+    const initialData = db.init();
+
+    // Load State from DB
+    setConfig(initialData.config);
+    setUsers(initialData.users);
+    setCustomers(initialData.customers);
+    setProducts(initialData.products);
+    setWarehouses(initialData.warehouses);
+    setTransactions(initialData.transactions);
+    setCashMovements(initialData.cashMovements);
+
+    // Initialize Device ID
     let dId = localStorage.getItem('clic_pos_device_id');
     if (!dId) {
       dId = `DEV-${Math.random().toString(36).substring(2, 15)}-${Date.now()}`;
@@ -88,28 +92,23 @@ const App: React.FC = () => {
     }
     setDeviceId(dId);
 
-    // 2. Initial Setup Bypass Check
-    // If setup is not done, we don't block by device yet
-    if (currentView === 'SETUP' || currentView === 'WIZARD') return;
+    setIsDataLoaded(true); // Signal that DB is fully loaded
+    console.log("✅ Datos cargados desde almacenamiento local (Persistente).");
+  }, []);
 
-    // 3. Check if device is bound to any terminal
-    const boundTerminal = config.terminals.find(t => t.config.currentDeviceId === dId);
-    if (boundTerminal) {
-       setIsAuthorized(true);
-    } else {
-       setIsAuthorized(false);
-       setCurrentView('DEVICE_UNAUTHORIZED');
-    }
-  }, [config.terminals, currentView]);
+  // --- 2. PERSISTENCE SAVERS (Auto-save on change) ---
+  useEffect(() => { if (products.length) db.save('products', products); }, [products]);
+  useEffect(() => { if (users.length) db.save('users', users); }, [users]);
+  useEffect(() => { if (warehouses.length) db.save('warehouses', warehouses); }, [warehouses]);
+  useEffect(() => { if (transactions.length) db.save('transactions', transactions); }, [transactions]);
+  useEffect(() => { if (isDataLoaded && config) db.save('config', config); }, [config, isDataLoaded]);
 
-  // --- EFFECTS ---
-  useEffect(() => {
-    if (config.vertical === 'RESTAURANT') {
-      setProducts(prev => prev[0]?.category === 'Lácteos' ? FOOD_PRODUCTS : prev);
-    } else {
-      setProducts(prev => prev[0]?.category === 'Platos' ? RETAIL_PRODUCTS : prev);
-    }
-  }, [config.vertical]);
+  // --- 3. DERIVED AUTHORIZATION STATE (Hard Gate) ---
+  const isAuthorized = useMemo(() => {
+    if (!isDataLoaded) return false;
+    // Check if this specific device ID is assigned to any terminal in the config
+    return config.terminals?.some(t => t.config.currentDeviceId === deviceId);
+  }, [config.terminals, deviceId, isDataLoaded]);
 
   // --- HANDLERS ---
   const handleLogin = (user: User) => {
@@ -124,11 +123,11 @@ const App: React.FC = () => {
 
   const handleDevicePairing = (terminalId: string) => {
     const updatedTerminals = config.terminals.map(t => {
-      // Unlink any other terminal using this deviceId
+      // Unpair this device from any other terminal it might be on (integrity)
       if (t.config.currentDeviceId === deviceId) {
-        return { ...t, config: { ...t.config, currentDeviceId: undefined } };
+        return { ...t, config: { ...t.config, currentDeviceId: null } }; // Use null
       }
-      // Link the target terminal
+      // Pair with new terminal
       if (t.id === terminalId) {
         return { 
           ...t, 
@@ -142,8 +141,12 @@ const App: React.FC = () => {
       return t;
     });
 
-    handleUpdateConfig({ ...config, terminals: updatedTerminals });
-    setIsAuthorized(true);
+    // Update state immediately
+    const newConfig = { ...config, terminals: updatedTerminals };
+    setConfig(newConfig);
+    db.save('config', newConfig); 
+    
+    // Authorization will recalculate automatically via useMemo
     setCurrentView('LOGIN');
   };
 
@@ -152,18 +155,27 @@ const App: React.FC = () => {
     setCart([]); 
     setSelectedCustomer(null); 
     
+    // Optimistic Update & Stock Deduction
     if (config.features.stockTracking) {
-      const itemsMap = new Map<string, number>();
-      txn.items.forEach(item => {
-        itemsMap.set(item.id, (itemsMap.get(item.id) || 0) + item.quantity);
-      });
+      const activeTerminal = config.terminals.find(t => t.config.currentDeviceId === deviceId);
+      const warehouseId = activeTerminal?.config.inventoryScope?.defaultSalesWarehouseId;
 
-      setProducts(prevProducts => prevProducts.map(p => {
-        if (itemsMap.has(p.id)) {
-          return { ...p, stock: Math.max(0, (p.stock || 0) - (itemsMap.get(p.id) || 0)) };
-        }
-        return p;
-      }));
+      if (warehouseId) {
+        setProducts(prevProducts => prevProducts.map(p => {
+          const itemInCart = txn.items.find(i => i.id === p.id);
+          if (itemInCart) {
+             const currentStock = p.stockBalances?.[warehouseId] || 0;
+             const newStock = Math.max(0, currentStock - itemInCart.quantity);
+             return { 
+               ...p, 
+               stockBalances: { ...p.stockBalances, [warehouseId]: newStock },
+               // Update legacy total stock for backward compatibility
+               stock: (p.stock || 0) - itemInCart.quantity
+             };
+          }
+          return p;
+        }));
+      }
     }
   };
 
@@ -187,22 +199,11 @@ const App: React.FC = () => {
     };
 
     setTransactions(prev => prev.map(t => t.id === originalTx.id ? { ...t, status: 'PARTIAL_REFUND' as const } : t).concat(refundTx));
-
-    if (reason !== 'DAMAGED' && config.features.stockTracking) {
-       setProducts(prev => prev.map(p => {
-          const item = itemsToRefund.find(i => i.id === p.id);
-          if (item) {
-             return { ...p, stock: (p.stock || 0) + item.quantity };
-          }
-          return p;
-       }));
-    }
-    
     alert("Devolución procesada correctamente.");
   };
 
   const handleRegisterCashMovement = (type: 'IN' | 'OUT', amount: number, reason: string) => {
-    setCashMovements(prev => [...prev, {
+    const movement: CashMovement = {
       id: Math.random().toString(36).substr(2, 9),
       type,
       amount,
@@ -210,11 +211,16 @@ const App: React.FC = () => {
       timestamp: new Date().toISOString(),
       userId: currentUser?.id || '',
       userName: currentUser?.name || ''
-    }]);
+    };
+    setCashMovements(prev => {
+        const newVal = [...prev, movement];
+        db.save('cashMovements', newVal);
+        return newVal;
+    });
   };
 
   const handleZReportClose = (counted: number, notes: string) => {
-    alert("Cierre Z realizado correctamente.");
+    alert("Cierre Z realizado correctamente. Ventas del día archivadas.");
     setCurrentView('POS');
   };
 
@@ -235,24 +241,42 @@ const App: React.FC = () => {
     }
   };
 
-  // --- RENDER ROUTER ---
+  // --- RENDER ROUTER (HARD GATED) ---
 
+  // 1. Loading State
+  if (!isDataLoaded) {
+     return (
+        <div className="h-screen w-full flex items-center justify-center bg-gray-50">
+           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        </div>
+     );
+  }
+
+  // 2. Setup Exceptions (First time run)
+  if (currentView === 'SETUP') {
+    return <VerticalSelector onSelect={(initialCfg) => { setConfig(initialCfg); setCurrentView('WIZARD'); }} />;
+  }
+  if (currentView === 'WIZARD') {
+    return <SetupWizard initialConfig={config} onComplete={(finalConfig) => { setConfig(finalConfig); setCurrentView('LOGIN'); }} />;
+  }
+
+  // 3. HARD SECURITY GATE
+  // If we are not in Setup/Wizard, and the device is not authorized, FORCE Binding Screen.
+  // This overrides any other view state (like LOGIN).
+  if (!isAuthorized) {
+    return (
+      <TerminalBindingScreen 
+        config={config} 
+        deviceId={deviceId} 
+        adminUsers={users} 
+        onPair={handleDevicePairing} 
+      />
+    );
+  }
+
+  // 4. Authorized Routes
   switch (currentView) {
-    case 'SETUP':
-      return <VerticalSelector onSelect={(initialCfg) => { setConfig(initialCfg); setCurrentView('WIZARD'); }} />;
-
-    case 'WIZARD':
-      return <SetupWizard initialConfig={config} onComplete={(finalConfig) => { setConfig(finalConfig); setCurrentView('LOGIN'); }} />;
-      
-    case 'DEVICE_UNAUTHORIZED':
-      return (
-        <TerminalBindingScreen 
-          config={config} 
-          deviceId={deviceId} 
-          adminUsers={users} 
-          onPair={handleDevicePairing} 
-        />
-      );
+    // Removed redundant DEVICE_UNAUTHORIZED case as it's handled by Hard Gate
 
     case 'LOGIN':
       return <LoginScreen onLogin={handleLogin} availableUsers={users} subVertical={config.subVertical} />;
@@ -264,10 +288,10 @@ const App: React.FC = () => {
           config={config}
           currentUser={currentUser}
           roles={roles}
-          users={users} // Pass full list of users for salesperson assignment
+          users={users} 
           customers={customers}
           products={products}
-          warehouses={warehouses} // Passed warehouses
+          warehouses={warehouses} 
           cart={cart}
           onUpdateCart={setCart}
           selectedCustomer={selectedCustomer}

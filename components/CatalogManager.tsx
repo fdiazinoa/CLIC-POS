@@ -26,13 +26,12 @@ interface CatalogManagerProps {
 type ViewMode = 'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS' | 'GROUPS' | 'SEASONS';
 
 // --- SUB-COMPONENT: STOCK ROW (Handles Expansion) ---
-const StockRow: React.FC<{ product: Product }> = ({ product }) => {
+const StockRow: React.FC<{ product: Product; warehouseId: string }> = ({ product, warehouseId }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const hasVariants = product.variants && product.variants.length > 0;
 
-  const totalStock = hasVariants 
-    ? product.variants.reduce((acc, v) => acc + (v.initialStock || 0), 0)
-    : product.stock || 0;
+  // Get specific stock for this warehouse
+  const warehouseStock = product.stockBalances?.[warehouseId] || 0;
 
   const getStatusBadge = (qty: number) => {
     if (qty > 10) return <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full"><CheckCircle2 size={12} /> Disponible</span>;
@@ -81,16 +80,18 @@ const StockRow: React.FC<{ product: Product }> = ({ product }) => {
            )}
         </td>
         <td className="p-4 text-center font-mono font-bold text-gray-700 text-sm">
-           {totalStock}
+           {warehouseStock}
         </td>
         <td className="p-4 text-right">
-           {getStatusBadge(totalStock)}
+           {getStatusBadge(warehouseStock)}
         </td>
       </tr>
 
       {/* CHILD ROWS (VARIANTS) */}
       {hasVariants && isExpanded && product.variants.map((variant, idx) => {
-         const variantStock = variant.initialStock || 0;
+         // Note: Assuming simple distribution for variants if detailed per-warehouse variant stock isn't in model yet
+         // We display global initial stock or a placeholder if logic differs
+         const variantStock = variant.initialStock || 0; 
          
          return (
             <tr key={`${product.id}-var-${idx}`} className="bg-slate-50/80 border-b border-gray-100 animate-in slide-in-from-top-1">
@@ -114,11 +115,11 @@ const StockRow: React.FC<{ product: Product }> = ({ product }) => {
                   </div>
                </td>
                <td className="p-3 text-center text-sm font-medium text-gray-600">
-                  {variantStock}
+                  - {/* Variant split logic per warehouse would go here */}
                </td>
                <td className="p-3 text-right">
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${variantStock > 0 ? 'text-emerald-600 bg-emerald-100/50' : 'text-red-600 bg-red-100/50'}`}>
-                     {variantStock > 0 ? 'En Stock' : 'Sin Stock'}
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full text-gray-500 bg-gray-200`}>
+                     Ver Global
                   </span>
                </td>
             </tr>
@@ -132,13 +133,20 @@ const StockRow: React.FC<{ product: Product }> = ({ product }) => {
 const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Product[] }> = ({ warehouse, filteredProducts }) => {
   const [isCardExpanded, setIsCardExpanded] = useState(false);
 
-  const warehouseProducts = filteredProducts.filter((_, idx) => {
-     if (warehouse.id === 'wh_1') return true; 
-     if (warehouse.id === 'wh_2') return idx % 2 === 0;
-     return false; 
+  // REAL FILTERING LOGIC
+  const warehouseProducts = filteredProducts.filter(p => {
+     // Strict Integrity Check: Product MUST be explicitly marked as active in this warehouse to appear in the report.
+     // This prevents "ghost" items (with residual stock but disabled) from polluting the active inventory view.
+     return p.activeInWarehouses?.includes(warehouse.id);
   });
 
-  const totalValue = 154200; 
+  // Calculate Real Value based on Cost * Stock in THIS warehouse
+  const totalValue = warehouseProducts.reduce((acc, p) => {
+     const stock = p.stockBalances?.[warehouse.id] || 0;
+     const cost = p.cost || 0;
+     return acc + (stock * cost);
+  }, 0);
+
   const itemCount = warehouseProducts.length;
 
   return (
@@ -164,7 +172,7 @@ const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Pro
           <div className="flex items-center gap-8 w-full md:w-auto justify-between md:justify-end">
              <div className="text-right">
                 <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Valorizado</p>
-                <p className="text-lg font-black text-gray-800">${totalValue.toLocaleString()}</p>
+                <p className="text-lg font-black text-gray-800">${totalValue.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
              </div>
              <div className="text-right">
                 <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Artículos</p>
@@ -202,12 +210,12 @@ const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Pro
                    </thead>
                    <tbody className="divide-y divide-gray-100">
                       {warehouseProducts.map(product => (
-                         <StockRow key={product.id} product={product} />
+                         <StockRow key={product.id} product={product} warehouseId={warehouse.id} />
                       ))}
                    </tbody>
                 </table>
                 {warehouseProducts.length === 0 && (
-                   <div className="p-8 text-center text-gray-400 italic">No hay productos en este almacén.</div>
+                   <div className="p-8 text-center text-gray-400 italic">No hay productos activos en este almacén.</div>
                 )}
              </div>
           </div>

@@ -1,4 +1,5 @@
 
+
 export type VerticalType = 'RETAIL' | 'RESTAURANT';
 
 export enum SubVertical {
@@ -45,6 +46,14 @@ export interface DocumentSeries {
   color: string; 
 }
 
+export interface BehaviorConfig {
+  allowNegativeStock: boolean;
+  askGuestsOnTicketOpen: boolean;
+  autoLogoutMinutes: number;
+  requireManagerForRefunds: boolean;
+  autoPrintZReport: boolean;
+}
+
 export interface TerminalConfig {
   // BINDING & SECURITY
   currentDeviceId?: string; // UUID of the authorized browser/device
@@ -56,7 +65,8 @@ export interface TerminalConfig {
     deviceBindingToken: string; // Deprecated or kept for secondary auth
     requirePinForVoid: boolean;
     requirePinForDiscount: boolean;
-    autoLogoutMinutes: number;
+    requireManagerForRefunds: boolean; // New field moved from Behavior
+    autoLogoutMinutes: number; // New field moved from Behavior
   };
   pricing: {
     allowedTariffIds: string[];
@@ -301,6 +311,8 @@ export interface Product {
   variants: ProductVariant[];
   tariffs: TariffPrice[];
   stockBalances?: Record<string, number>;
+  // Stores min/max settings per warehouse ID
+  warehouseSettings?: Record<string, { min: number; max: number }>;
   activeInWarehouses?: string[];
   trackStock?: boolean;
   purchaseTax?: number;
@@ -533,14 +545,6 @@ export interface VariantTemplate {
   name: string;
   attributeId: string;
   valueIds: string[];
-}
-
-export interface BehaviorConfig {
-  allowNegativeStock: boolean;
-  askGuestsOnTicketOpen: boolean;
-  autoLogoutMinutes: number;
-  requireManagerForRefunds: boolean;
-  autoPrintZReport: boolean;
 }
 
 export interface ParkedTicket {

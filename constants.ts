@@ -46,6 +46,7 @@ export const DEFAULT_TERMINAL_CONFIG = {
     deviceBindingToken: 'dev_token_init',
     requirePinForVoid: true,
     requirePinForDiscount: true,
+    requireManagerForRefunds: true,
     autoLogoutMinutes: 15
   },
   pricing: {

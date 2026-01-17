@@ -22,7 +22,6 @@ import DataSecurityHub from './DataSecurityHub';
 import ActivityLog from './ActivityLog';
 import TeamHub from './TeamHub';
 import PaymentSettings from './PaymentSettings';
-import BehaviorSettings from './BehaviorSettings';
 import DocumentSettings from './DocumentSettings';
 import PromotionBuilder from './PromotionBuilder';
 
@@ -44,7 +43,7 @@ interface SettingsProps {
   onClose: () => void;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'BEHAVIOR' | 'DOCUMENTS' | 'PROMOTIONS';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS';
 
 const Settings: React.FC<SettingsProps> = (props) => {
   const [currentView, setCurrentView] = useState<SettingsView>('HOME');
@@ -93,8 +92,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
         return <ActivityLog onClose={() => setCurrentView('HOME')} />;
       case 'TEAM':
         return <TeamHub users={props.users} roles={props.roles} onUpdateUsers={props.onUpdateUsers} onUpdateRoles={props.onUpdateRoles} onClose={() => setCurrentView('HOME')} />;
-      case 'BEHAVIOR':
-        return <BehaviorSettings onClose={() => setCurrentView('HOME')} />;
       case 'DOCUMENTS':
         return <DocumentSettings onClose={() => setCurrentView('HOME')} />;
       case 'PROMOTIONS':
@@ -173,10 +170,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
                     <SettingsCard 
                       icon={Coins} label="Propinas" description="Cargos por Servicio y Tips" color="bg-yellow-500" 
                       onClick={() => setCurrentView('TIPS')} 
-                    />
-                    <SettingsCard 
-                      icon={Cpu} label="Comportamiento" description="Reglas de Negocio, Stock" color="bg-orange-500" 
-                      onClick={() => setCurrentView('BEHAVIOR')} 
                     />
                   </div>
                </section>
