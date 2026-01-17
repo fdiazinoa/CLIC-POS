@@ -15,7 +15,8 @@ import {
   ViewState,
   Tariff,
   Warehouse,
-  ParkedTicket
+  ParkedTicket,
+  StockTransfer
 } from './types';
 import { 
   DEFAULT_ROLES, 
@@ -57,6 +58,7 @@ const App: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
+  const [transfers, setTransfers] = useState<StockTransfer[]>([]);
   
   // POS Persistent State
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -83,6 +85,7 @@ const App: React.FC = () => {
     setWarehouses(initialData.warehouses);
     setTransactions(initialData.transactions);
     setCashMovements(initialData.cashMovements);
+    setTransfers(initialData.transfers || []);
 
     // Initialize Device ID
     let dId = localStorage.getItem('clic_pos_device_id');
@@ -101,6 +104,7 @@ const App: React.FC = () => {
   useEffect(() => { if (users.length) db.save('users', users); }, [users]);
   useEffect(() => { if (warehouses.length) db.save('warehouses', warehouses); }, [warehouses]);
   useEffect(() => { if (transactions.length) db.save('transactions', transactions); }, [transactions]);
+  useEffect(() => { if (transfers.length) db.save('transfers', transfers); }, [transfers]);
   useEffect(() => { if (isDataLoaded && config) db.save('config', config); }, [config, isDataLoaded]);
 
   // --- 3. DERIVED AUTHORIZATION STATE (Hard Gate) ---
@@ -328,6 +332,9 @@ const App: React.FC = () => {
           onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
           onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
           onClose={() => setCurrentView('POS')}
+          // New Props for Transfer Logic
+          transfers={transfers}
+          onUpdateTransfers={setTransfers}
         />
       );
 

@@ -1,104 +1,108 @@
 
 import React, { useState, useMemo } from 'react';
 import { 
-  ArrowLeft, Plus, MapPin, Building2, Trash2, Save, Wifi, AlertTriangle, 
-  ArrowRightLeft, Truck, Package, Search, ChevronRight, Check, X,
-  Clock, CheckCircle2, User, RefreshCw, ArrowRight, Minus, Eye, Edit
+  Building2, Plus, ArrowRightLeft, MapPin, 
+  Check, X, Search, Package, AlertTriangle, 
+  Trash2, Save, ArrowRight, History, Calendar, Truck,
+  Eye, Filter, ChevronRight
 } from 'lucide-react';
-import { Warehouse, WarehouseType, Product, StockTransfer, StockTransferItem } from '../types';
+import { Warehouse, Product, StockTransfer, StockTransferItem } from '../types';
 
 interface WarehouseManagerProps {
   warehouses: Warehouse[];
-  products: Product[]; // Need products to select items for transfer
+  products: Product[];
+  transfers: StockTransfer[]; // History
   onUpdateWarehouses: (warehouses: Warehouse[]) => void;
+  onUpdateProducts: (products: Product[]) => void;
+  onUpdateTransfers: (transfers: StockTransfer[]) => void;
   onClose: () => void;
 }
 
-const WarehouseManager: React.FC<WarehouseManagerProps> = ({ warehouses, products, onUpdateWarehouses, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'LOCATIONS' | 'TRANSFERS'>('LOCATIONS');
-  
-  // Locations State
-  const [editingWh, setEditingWh] = useState<Warehouse | null>(null);
+type Tab = 'LOCATIONS' | 'TRANSFERS' | 'HISTORY';
+type HistoryFilter = 'ALL' | 'IN_TRANSIT' | 'COMPLETED';
 
-  // Transfers State
-  const [transfers, setTransfers] = useState<StockTransfer[]>([]); // In real app, this comes from props or API
-  const [showTransferWizard, setShowTransferWizard] = useState(false);
-  const [viewingTransfer, setViewingTransfer] = useState<StockTransfer | null>(null);
+const WarehouseManager: React.FC<WarehouseManagerProps> = ({ 
+  warehouses, 
+  products, 
+  transfers,
+  onUpdateWarehouses,
+  onUpdateProducts,
+  onUpdateTransfers,
+  onClose 
+}) => {
+  const [activeTab, setActiveTab] = useState<Tab>('LOCATIONS');
   
-  // Wizard State
-  const [transferStep, setTransferStep] = useState<1 | 2 | 3>(1);
-  const [newTransfer, setNewTransfer] = useState<Partial<StockTransfer>>({ items: [] });
+  // Warehouse Editing
+  const [editingWarehouse, setEditingWarehouse] = useState<Warehouse | null>(null);
+  
+  // Transfer State
+  const [isTransferMode, setIsTransferMode] = useState(false);
+  const [newTransfer, setNewTransfer] = useState<Partial<StockTransfer>>({
+    items: []
+  });
   const [itemSearch, setItemSearch] = useState('');
 
-  // --- WAREHOUSE HANDLERS ---
-  const handleSaveWarehouse = (wh: Warehouse) => {
-    const updatedList = (() => {
-      const exists = warehouses.find(i => i.id === wh.id);
-      if (exists) return warehouses.map(i => i.id === wh.id ? wh : i);
-      return [...warehouses, wh];
-    })();
-    onUpdateWarehouses(updatedList);
-    setEditingWh(null);
-  };
+  // History State
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('ALL');
+  const [viewingTransfer, setViewingTransfer] = useState<StockTransfer | null>(null);
 
-  const deleteWarehouse = (id: string) => {
-    if (confirm("¿Estás seguro? Se validará que no existan productos con stock físico.")) {
-      onUpdateWarehouses(warehouses.filter(w => w.id !== id));
-    }
-  };
-
-  // --- TRANSFER HANDLERS ---
+  // --- WAREHOUSE CRUD ---
   
-  const handleSaveTransfer = () => {
-    if (!newTransfer.sourceWarehouseId || !newTransfer.destinationWarehouseId || !newTransfer.items?.length) return;
-    
-    if (newTransfer.id) {
-      // Update Existing
-      setTransfers(prev => prev.map(t => t.id === newTransfer.id ? { ...t, ...newTransfer } as StockTransfer : t));
+  const handleSaveWarehouse = () => {
+    if (!editingWarehouse) return;
+    const exists = warehouses.some(w => w.id === editingWarehouse.id);
+    if (exists) {
+      onUpdateWarehouses(warehouses.map(w => w.id === editingWarehouse.id ? editingWarehouse : w));
     } else {
-      // Create New
-      const finalTransfer: StockTransfer = {
-        id: `TR-${Date.now().toString().slice(-6)}`,
-        sourceWarehouseId: newTransfer.sourceWarehouseId,
-        destinationWarehouseId: newTransfer.destinationWarehouseId,
-        items: newTransfer.items,
-        status: 'PENDING',
-        createdAt: new Date().toISOString(),
-        createdBy: 'Admin User', // Mock
-      };
-      setTransfers([finalTransfer, ...transfers]);
+      onUpdateWarehouses([...warehouses, editingWarehouse]);
     }
-
-    setShowTransferWizard(false);
-    setNewTransfer({ items: [] });
-    setTransferStep(1);
+    setEditingWarehouse(null);
   };
 
-  const handleEditTransfer = (e: React.MouseEvent, transfer: StockTransfer) => {
-    e.stopPropagation();
-    setNewTransfer({
-      id: transfer.id,
-      sourceWarehouseId: transfer.sourceWarehouseId,
-      destinationWarehouseId: transfer.destinationWarehouseId,
-      items: [...transfer.items]
+  const handleCreateWarehouse = () => {
+    setEditingWarehouse({
+      id: `wh_${Date.now()}`,
+      code: '',
+      name: '',
+      type: 'PHYSICAL',
+      address: '',
+      allowPosSale: true,
+      allowNegativeStock: false,
+      isMain: false,
+      storeId: 'S1'
     });
-    setTransferStep(2); // Jump directly to items
-    setShowTransferWizard(true);
   };
 
-  const handleSendTransfer = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    setTransfers(prev => prev.map(t => t.id === id ? { ...t, status: 'IN_TRANSIT', sentAt: new Date().toISOString() } : t));
-    // Here logic to deduct stock from Source would go
-  };
-
-  const handleReceiveTransfer = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    setTransfers(prev => prev.map(t => t.id === id ? { ...t, status: 'COMPLETED', receivedAt: new Date().toISOString() } : t));
-    // Here logic to add stock to Destination would go
-  };
+  // --- TRANSFER LOGIC ---
 
   const addItemToTransfer = (product: Product) => {
+    const sourceId = newTransfer.sourceWarehouseId;
+    const destId = newTransfer.destinationWarehouseId;
+
+    if (!sourceId || !destId) {
+      alert("Selecciona origen y destino primero.");
+      return;
+    }
+
+    if (sourceId === destId) {
+      alert("Origen y destino deben ser diferentes.");
+      return;
+    }
+
+    // Validation: Check if product is active in Source Warehouse
+    if (!product.activeInWarehouses?.includes(sourceId)) {
+        const whName = warehouses.find(w => w.id === sourceId)?.name || 'Origen';
+        alert(`Operación denegada:\n\nEl artículo "${product.name}" no está habilitado para operar en el almacén de origen (${whName}).\n\nPor favor, active el almacén en la ficha del producto.`);
+        return;
+    }
+
+    // Validation: Check if product is active in Destination Warehouse
+    if (!product.activeInWarehouses?.includes(destId)) {
+        const whName = warehouses.find(w => w.id === destId)?.name || 'Destino';
+        alert(`Operación denegada:\n\nEl artículo "${product.name}" no está habilitado en el almacén de destino (${whName}).\n\nNo se puede traspasar inventario a una ubicación donde el producto está desactivado.`);
+        return;
+    }
+
     setNewTransfer(prev => {
       const items = prev.items || [];
       const existing = items.find(i => i.productId === product.id);
@@ -119,506 +123,580 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({ warehouses, product
     setItemSearch('');
   };
 
-  const updateItemQuantity = (productId: string, delta: number) => {
-    setNewTransfer(prev => {
-        const items = prev.items || [];
-        return {
-            ...prev,
-            items: items.map(i => {
-                if (i.productId === productId) {
-                    return { ...i, quantity: Math.max(1, i.quantity + delta) };
+  const removeItemFromTransfer = (productId: string) => {
+    setNewTransfer(prev => ({
+      ...prev,
+      items: prev.items?.filter(i => i.productId !== productId)
+    }));
+  };
+
+  const updateItemQuantity = (productId: string, qty: number) => {
+    setNewTransfer(prev => ({
+      ...prev,
+      items: prev.items?.map(i => i.productId === productId ? { ...i, quantity: Math.max(1, qty) } : i)
+    }));
+  };
+
+  // STEP 1: SEND (Deduct from Source)
+  const handleConfirmTransfer = () => {
+    const sourceId = newTransfer.sourceWarehouseId;
+    const destId = newTransfer.destinationWarehouseId;
+    const items = newTransfer.items;
+
+    if (!sourceId || !destId || !items || items.length === 0) return;
+
+    // 1. Create Transfer Record (IN_TRANSIT)
+    const transferRecord: StockTransfer = {
+        id: `TR-${Date.now()}`,
+        sourceWarehouseId: sourceId,
+        destinationWarehouseId: destId,
+        items: items,
+        status: 'IN_TRANSIT',
+        createdAt: new Date().toISOString(),
+        sentAt: new Date().toISOString(),
+        createdBy: 'Usuario Actual' // In real app, use user ID
+    };
+
+    // 2. Update Product Stocks (Only Deduct Source)
+    const updatedProducts = products.map(p => {
+        const transferItem = items.find(i => i.productId === p.id);
+        if (transferItem) {
+            const currentSource = p.stockBalances?.[sourceId] || 0;
+            return {
+                ...p,
+                stockBalances: {
+                    ...p.stockBalances,
+                    [sourceId]: Math.max(0, currentSource - transferItem.quantity),
+                    // Destination is NOT updated yet. It's "In Transit".
                 }
-                return i;
-            })
-        };
+            };
+        }
+        return p;
     });
+
+    onUpdateProducts(updatedProducts);
+    onUpdateTransfers([transferRecord, ...transfers]);
+    
+    // Reset & Go to History
+    setIsTransferMode(false);
+    setNewTransfer({ items: [] });
+    setActiveTab('HISTORY');
+    setHistoryFilter('IN_TRANSIT'); // Auto switch filter
+    alert(`Traspaso #${transferRecord.id} enviado. Stock descontado del origen. Confirme recepción en Historial.`);
   };
 
-  const removeItem = (productId: string) => {
-     setNewTransfer(prev => ({
-         ...prev,
-         items: (prev.items || []).filter(i => i.productId !== productId)
-     }));
+  // STEP 2: RECEIVE (Add to Destination)
+  const handleReceiveTransfer = (transferId: string) => {
+    const transfer = transfers.find(t => t.id === transferId);
+    if (!transfer || transfer.status !== 'IN_TRANSIT') return;
+
+    // 1. Update Product Stocks (Add to Destination)
+    const updatedProducts = products.map(p => {
+        const transferItem = transfer.items.find(i => i.productId === p.id);
+        if (transferItem) {
+            const currentDest = p.stockBalances?.[transfer.destinationWarehouseId] || 0;
+            return {
+                ...p,
+                stockBalances: {
+                    ...p.stockBalances,
+                    [transfer.destinationWarehouseId]: currentDest + transferItem.quantity
+                }
+            };
+        }
+        return p;
+    });
+
+    // 2. Update Transfer Status
+    const updatedTransfers = transfers.map(t => 
+        t.id === transferId 
+            ? { ...t, status: 'COMPLETED' as const, receivedAt: new Date().toISOString() } 
+            : t
+    );
+
+    onUpdateProducts(updatedProducts);
+    onUpdateTransfers(updatedTransfers);
+    setViewingTransfer(null); // Close modal if open
+    alert(`Traspaso #${transferId} recibido. Stock añadido al destino.`);
   };
 
-  // --- FILTERED LISTS ---
   const filteredProducts = useMemo(() => {
     if (!itemSearch) return [];
-    return products.filter(p => p.name.toLowerCase().includes(itemSearch.toLowerCase()) || p.barcode?.includes(itemSearch));
+    return products.filter(p => 
+      p.name.toLowerCase().includes(itemSearch.toLowerCase()) || 
+      p.barcode?.includes(itemSearch)
+    );
   }, [products, itemSearch]);
 
-  const sourceWh = warehouses.find(w => w.id === newTransfer.sourceWarehouseId);
-  const destWh = warehouses.find(w => w.id === newTransfer.destinationWarehouseId);
+  const filteredTransfers = useMemo(() => {
+    if (historyFilter === 'ALL') return transfers;
+    return transfers.filter(t => t.status === historyFilter);
+  }, [transfers, historyFilter]);
+
+  const pendingCount = transfers.filter(t => t.status === 'IN_TRANSIT').length;
 
   return (
-    <div className="fixed inset-0 z-50 bg-gray-50 flex flex-col overflow-hidden animate-in fade-in">
-      <header className="bg-white border-b p-4 flex items-center justify-between shadow-sm shrink-0">
-        <div className="flex items-center gap-4">
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full"><ArrowLeft /></button>
-          <div>
-             <h1 className="text-xl font-bold text-gray-800">Logística y Almacenes</h1>
-             <p className="text-xs text-gray-400">Gestión de ubicaciones y movimientos</p>
-          </div>
-        </div>
-        
-        {/* TABS */}
-        <div className="flex bg-gray-100 p-1 rounded-xl">
-           <button 
-              onClick={() => setActiveTab('LOCATIONS')}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'LOCATIONS' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-           >
-              Ubicaciones
-           </button>
-           <button 
-              onClick={() => setActiveTab('TRANSFERS')}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'TRANSFERS' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-           >
-              Traspasos
-           </button>
-        </div>
-
+    <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">
+      
+      {/* Header */}
+      <div className="bg-white px-8 py-6 border-b border-gray-200 flex justify-between items-center shrink-0">
         <div>
-           {activeTab === 'LOCATIONS' ? (
-              <button 
-                onClick={() => setEditingWh({ id: Date.now().toString(), code: '', name: '', type: 'PHYSICAL', address: '', allowPosSale: true, allowNegativeStock: false, isMain: false, storeId: 'S1' })}
-                className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 hover:bg-blue-700 transition-colors"
-              >
-                <Plus size={20} /> Nuevo Almacén
-              </button>
-           ) : (
-              <button 
-                onClick={() => {
-                  setNewTransfer({ items: [] });
-                  setTransferStep(1);
-                  setShowTransferWizard(true);
-                }}
-                className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 hover:bg-blue-700 transition-colors"
-              >
-                <ArrowRightLeft size={20} /> Nuevo Traspaso
-              </button>
-           )}
+          <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2">
+             <Building2 className="text-purple-600" /> Gestión de Almacenes
+          </h1>
+          <p className="text-sm text-gray-500">Configuración de ubicaciones y transferencias de stock.</p>
         </div>
-      </header>
-
-      <div className="flex-1 p-6 overflow-y-auto max-w-6xl mx-auto w-full">
-        
-        {/* === LOCATIONS TAB === */}
-        {activeTab === 'LOCATIONS' && (
-           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 animate-in fade-in slide-in-from-right-4">
-             {warehouses.map(wh => (
-               <div key={wh.id} className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm flex flex-col justify-between group hover:border-blue-300 transition-all">
-                 <div className="flex gap-4 mb-4">
-                   <div className={`p-3 rounded-xl h-fit ${wh.type === 'DISTRIBUTION' ? 'bg-purple-100 text-purple-600' : 'bg-blue-100 text-blue-600'}`}>
-                     <Building2 size={24} />
-                   </div>
-                   <div>
-                     <h3 className="font-bold text-gray-900 text-lg">{wh.name}</h3>
-                     <p className="text-xs font-mono text-gray-400 bg-gray-100 px-2 py-0.5 rounded inline-block mt-1">{wh.code}</p>
-                     <p className="text-sm text-gray-500 flex items-center gap-1 mt-2"><MapPin size={12}/> {wh.address || 'Sin dirección'}</p>
-                   </div>
-                 </div>
-                 
-                 <div className="flex justify-between items-center border-t border-gray-100 pt-4">
-                    <div className="flex gap-2">
-                       {wh.allowPosSale && <span className="text-[10px] font-bold bg-green-100 text-green-700 px-2 py-1 rounded uppercase tracking-wider">Venta POS</span>}
-                       {wh.isMain && <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-1 rounded uppercase tracking-wider">Principal</span>}
-                    </div>
-                    <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                       <button onClick={() => setEditingWh(wh)} className="p-2 text-gray-400 hover:text-blue-600 bg-gray-50 rounded-lg"><Wifi size={16}/></button>
-                       <button onClick={() => deleteWarehouse(wh.id)} className="p-2 text-gray-400 hover:text-red-600 bg-gray-50 rounded-lg"><Trash2 size={16}/></button>
-                    </div>
-                 </div>
-               </div>
-             ))}
-           </div>
-        )}
-
-        {/* === TRANSFERS TAB (Hub de Movimientos) === */}
-        {activeTab === 'TRANSFERS' && (
-           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-              
-              {/* Stats / Filters */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                 <div className="bg-white p-4 rounded-2xl border border-gray-200 flex items-center gap-4">
-                    <div className="p-3 bg-orange-100 text-orange-600 rounded-xl"><Clock size={24}/></div>
-                    <div>
-                       <p className="text-xs text-gray-400 uppercase font-bold">Pendientes de Envío</p>
-                       <p className="text-2xl font-black text-gray-800">{transfers.filter(t => t.status === 'PENDING').length}</p>
-                    </div>
-                 </div>
-                 <div className="bg-white p-4 rounded-2xl border border-gray-200 flex items-center gap-4">
-                    <div className="p-3 bg-blue-100 text-blue-600 rounded-xl"><Truck size={24}/></div>
-                    <div>
-                       <p className="text-xs text-gray-400 uppercase font-bold">En Tránsito</p>
-                       <p className="text-2xl font-black text-gray-800">{transfers.filter(t => t.status === 'IN_TRANSIT').length}</p>
-                    </div>
-                 </div>
-                 <div className="bg-white p-4 rounded-2xl border border-gray-200 flex items-center gap-4">
-                    <div className="p-3 bg-green-100 text-green-600 rounded-xl"><CheckCircle2 size={24}/></div>
-                    <div>
-                       <p className="text-xs text-gray-400 uppercase font-bold">Recibidos (Hoy)</p>
-                       <p className="text-2xl font-black text-gray-800">{transfers.filter(t => t.status === 'COMPLETED').length}</p>
-                    </div>
-                 </div>
-              </div>
-
-              {/* Transfer List */}
-              <div className="bg-white rounded-3xl shadow-sm border border-gray-200 overflow-hidden">
-                 <div className="p-4 bg-gray-50 border-b border-gray-100 font-bold text-gray-500 text-sm">Movimientos Recientes</div>
-                 <div className="divide-y divide-gray-100">
-                    {transfers.length === 0 ? (
-                       <div className="p-10 text-center text-gray-400">No hay movimientos registrados.</div>
-                    ) : (
-                       transfers.map(t => {
-                          const src = warehouses.find(w => w.id === t.sourceWarehouseId)?.name;
-                          const dst = warehouses.find(w => w.id === t.destinationWarehouseId)?.name;
-                          
-                          return (
-                             <div 
-                                key={t.id} 
-                                onClick={() => setViewingTransfer(t)}
-                                className="p-6 flex items-center justify-between hover:bg-gray-50 transition-colors cursor-pointer group"
-                             >
-                                <div className="flex items-center gap-6">
-                                   <div className={`p-3 rounded-2xl ${
-                                      t.status === 'PENDING' ? 'bg-orange-50 text-orange-600' :
-                                      t.status === 'IN_TRANSIT' ? 'bg-blue-50 text-blue-600' :
-                                      'bg-green-50 text-green-600'
-                                   }`}>
-                                      <ArrowRightLeft size={24} />
-                                   </div>
-                                   <div>
-                                      <div className="flex items-center gap-2 mb-1">
-                                         <span className="font-bold text-gray-800 text-lg">{t.id}</span>
-                                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                                            t.status === 'PENDING' ? 'bg-orange-100 text-orange-700' :
-                                            t.status === 'IN_TRANSIT' ? 'bg-blue-100 text-blue-700' :
-                                            'bg-green-100 text-green-700'
-                                         }`}>{t.status.replace('_', ' ')}</span>
-                                      </div>
-                                      <div className="flex items-center gap-2 text-sm text-gray-500">
-                                         <span>{src}</span>
-                                         <ArrowRight size={14} className="text-gray-300" />
-                                         <span>{dst}</span>
-                                         <span className="text-gray-300 mx-1">|</span>
-                                         <span className="font-medium text-gray-700">{t.items.length} Artículos</span>
-                                      </div>
-                                   </div>
-                                </div>
-
-                                <div className="flex items-center gap-3">
-                                   {t.status === 'PENDING' && (
-                                      <>
-                                        <button 
-                                          onClick={(e) => handleEditTransfer(e, t)}
-                                          className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors border border-gray-200"
-                                          title="Modificar Envío"
-                                        >
-                                          <Edit size={18} />
-                                        </button>
-                                        <button 
-                                          onClick={(e) => handleSendTransfer(e, t.id)} 
-                                          className="px-4 py-2 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 shadow-md"
-                                        >
-                                           Confirmar Envío
-                                        </button>
-                                      </>
-                                   )}
-                                   {t.status === 'IN_TRANSIT' && (
-                                      <button onClick={(e) => handleReceiveTransfer(e, t.id)} className="px-4 py-2 bg-green-600 text-white rounded-xl font-bold text-sm hover:bg-green-700 shadow-md flex items-center gap-2">
-                                         <Package size={16} /> Recibir Mercancía
-                                      </button>
-                                   )}
-                                   {t.status === 'COMPLETED' && (
-                                      <span className="text-xs font-bold text-gray-400">Finalizado</span>
-                                   )}
-                                   <div className="p-2 text-gray-300 group-hover:text-blue-500 transition-colors">
-                                      <Eye size={20} />
-                                   </div>
-                                </div>
-                             </div>
-                          );
-                       })
-                    )}
-                 </div>
-              </div>
-           </div>
-        )}
-
+        <div className="flex gap-3">
+           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
+              <X size={24} />
+           </button>
+        </div>
       </div>
 
-      {/* --- WAREHOUSE CONFIG MODAL --- */}
-      {editingWh && (
-        <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-lg p-6 shadow-2xl animate-in zoom-in-95">
-            <h2 className="text-2xl font-black text-gray-800 mb-6">Configurar Almacén</h2>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <input type="text" placeholder="Código Corto" value={editingWh.code} onChange={e => setEditingWh({...editingWh, code: e.target.value})} className="p-3 border rounded-xl" />
-                <input type="text" placeholder="Nombre Almacén" value={editingWh.name} onChange={e => setEditingWh({...editingWh, name: e.target.value})} className="p-3 border rounded-xl" />
-              </div>
-              <select value={editingWh.type} onChange={e => setEditingWh({...editingWh, type: e.target.value as WarehouseType})} className="w-full p-3 border rounded-xl">
-                <option value="PHYSICAL">Físico / Venta POS</option>
-                <option value="DISTRIBUTION">Centro de Distribución</option>
-                <option value="VIRTUAL">Virtual / Mermas</option>
-                <option value="TRANSIT">En Tránsito</option>
-              </select>
-              <input type="text" placeholder="Dirección Física" value={editingWh.address} onChange={e => setEditingWh({...editingWh, address: e.target.value})} className="w-full p-3 border rounded-xl" />
-              
-              <div className="space-y-3 pt-2">
-                <label className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100 cursor-pointer">
-                  <span className="font-bold text-sm text-gray-700">¿Permitir Venta en POS?</span>
-                  <input type="checkbox" checked={editingWh.allowPosSale} onChange={e => setEditingWh({...editingWh, allowPosSale: e.target.checked})} className="w-5 h-5 rounded" />
-                </label>
-                <label className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100 cursor-pointer">
-                  <span className="font-bold text-sm text-gray-700">¿Permitir Stock Negativo?</span>
-                  <input type="checkbox" checked={editingWh.allowNegativeStock} onChange={e => setEditingWh({...editingWh, allowNegativeStock: e.target.checked})} className="w-5 h-5 rounded" />
-                </label>
-              </div>
-            </div>
-            <div className="flex gap-3 mt-8">
-              <button onClick={() => setEditingWh(null)} className="flex-1 py-4 text-gray-500 font-bold">Cancelar</button>
-              <button onClick={() => handleSaveWarehouse(editingWh)} className="flex-[2] py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg flex items-center justify-center gap-2">
-                <Save size={20} /> Guardar Almacén
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Tabs */}
+      <div className="bg-white px-8 border-b border-gray-200 flex gap-8">
+         <button 
+            onClick={() => setActiveTab('LOCATIONS')}
+            className={`py-4 text-sm font-bold border-b-4 transition-all ${activeTab === 'LOCATIONS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+         >
+            Ubicaciones
+         </button>
+         <button 
+            onClick={() => setActiveTab('TRANSFERS')}
+            className={`py-4 text-sm font-bold border-b-4 transition-all ${activeTab === 'TRANSFERS' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+         >
+            Nuevo Traspaso
+         </button>
+         <button 
+            onClick={() => setActiveTab('HISTORY')}
+            className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'HISTORY' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+         >
+            Historial y Recepción
+            {pendingCount > 0 && (
+               <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">{pendingCount}</span>
+            )}
+         </button>
+      </div>
 
-      {/* --- VIEW DETAIL MODAL --- */}
-      {viewingTransfer && (
-        <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-2xl p-6 shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[80vh]">
-             <div className="flex justify-between items-center mb-6 border-b border-gray-100 pb-4">
-                <div>
-                   <h3 className="text-xl font-black text-gray-800 flex items-center gap-2">
-                      <Truck size={24} className="text-blue-600" />
-                      Detalle de Traspaso
-                   </h3>
-                   <p className="text-sm text-gray-500 font-mono mt-1">{viewingTransfer.id}</p>
-                </div>
-                <button onClick={() => setViewingTransfer(null)} className="p-2 hover:bg-gray-100 rounded-full">
-                   <X size={24} className="text-gray-400" />
-                </button>
-             </div>
-
-             <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl mb-4 text-sm">
-                <div className="text-center">
-                   <p className="text-xs font-bold text-gray-400 uppercase">Origen</p>
-                   <p className="font-bold text-gray-800">{warehouses.find(w => w.id === viewingTransfer.sourceWarehouseId)?.name}</p>
-                </div>
-                <ArrowRight className="text-gray-300" />
-                <div className="text-center">
-                   <p className="text-xs font-bold text-gray-400 uppercase">Destino</p>
-                   <p className="font-bold text-gray-800">{warehouses.find(w => w.id === viewingTransfer.destinationWarehouseId)?.name}</p>
-                </div>
-             </div>
-
-             <div className="flex-1 overflow-y-auto space-y-2 pr-2">
-                {viewingTransfer.items.map((item, idx) => (
-                   <div key={idx} className="flex justify-between p-3 border-b border-gray-100 last:border-0">
-                      <span className="font-medium text-gray-700">{item.productName}</span>
-                      <span className="font-bold text-gray-900 bg-gray-100 px-2 py-0.5 rounded text-sm">x{item.quantity}</span>
-                   </div>
-                ))}
-             </div>
-
-             <div className="pt-6 mt-4 border-t border-gray-100 flex justify-end">
-                <button onClick={() => setViewingTransfer(null)} className="px-6 py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black">
-                   Cerrar
-                </button>
-             </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- TRANSFER WIZARD --- */}
-      {showTransferWizard && (
-         <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-md flex items-center justify-center p-4">
-            <div className="bg-white rounded-[2rem] w-full max-w-2xl h-[80vh] flex flex-col shadow-2xl animate-in zoom-in-95">
-               
-               {/* Wizard Header */}
-               <div className="p-6 border-b border-gray-100 bg-gray-50 rounded-t-[2rem]">
-                  <div className="flex justify-between items-center mb-6">
-                     <h2 className="text-2xl font-black text-gray-800">{newTransfer.id ? 'Modificar Traspaso' : 'Nuevo Traspaso'}</h2>
-                     <button onClick={() => setShowTransferWizard(false)} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X size={20}/></button>
-                  </div>
-                  
-                  {/* Progress Bar */}
-                  <div className="flex items-center justify-between relative px-4">
-                     <div className="absolute top-1/2 left-0 w-full h-1 bg-gray-200 -z-0"></div>
-                     <div className={`absolute top-1/2 left-0 h-1 bg-blue-600 -z-0 transition-all duration-300`} style={{ width: transferStep === 1 ? '0%' : transferStep === 2 ? '50%' : '100%' }}></div>
-                     
-                     {[1,2,3].map(step => (
-                        <div key={step} className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs relative z-10 transition-colors ${transferStep >= step ? 'bg-blue-600 text-white shadow-lg' : 'bg-white border-2 border-gray-200 text-gray-400'}`}>
-                           {step}
-                        </div>
-                     ))}
-                  </div>
-                  <div className="flex justify-between text-xs font-bold text-gray-400 mt-2 px-2">
-                     <span>Ruta</span>
-                     <span>Artículos</span>
-                     <span>Confirmar</span>
-                  </div>
+      <div className="flex-1 overflow-hidden p-8">
+         
+         {/* --- LOCATIONS TAB --- */}
+         {activeTab === 'LOCATIONS' && (
+            <div className="h-full flex flex-col">
+               <div className="flex justify-end mb-6">
+                  <button onClick={handleCreateWarehouse} className="px-4 py-2 bg-purple-600 text-white rounded-xl font-bold shadow-md hover:bg-purple-700 transition-all flex items-center gap-2">
+                     <Plus size={18} /> Nueva Ubicación
+                  </button>
                </div>
 
-               {/* Wizard Content */}
-               <div className="flex-1 overflow-y-auto p-8">
-                  
-                  {/* STEP 1: ROUTE */}
-                  {transferStep === 1 && (
-                     <div className="space-y-8 animate-in slide-in-from-right-4">
-                        <div className="grid grid-cols-2 gap-8">
-                           <div className="space-y-4">
-                              <label className="block text-sm font-bold text-gray-500 uppercase tracking-wide">Almacén Origen</label>
-                              <div className="space-y-2">
-                                 {warehouses.map(wh => (
-                                    <div 
-                                       key={wh.id} 
-                                       onClick={() => setNewTransfer({...newTransfer, sourceWarehouseId: wh.id})}
-                                       className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${newTransfer.sourceWarehouseId === wh.id ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-white border-gray-200 hover:border-gray-300'}`}
-                                    >
-                                       <span className="font-bold">{wh.name}</span>
-                                    </div>
-                                 ))}
-                              </div>
-                           </div>
-                           <div className="space-y-4">
-                              <label className="block text-sm font-bold text-gray-500 uppercase tracking-wide">Almacén Destino</label>
-                              <div className="space-y-2">
-                                 {warehouses.filter(w => w.id !== newTransfer.sourceWarehouseId).map(wh => (
-                                    <div 
-                                       key={wh.id} 
-                                       onClick={() => setNewTransfer({...newTransfer, destinationWarehouseId: wh.id})}
-                                       className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${newTransfer.destinationWarehouseId === wh.id ? 'bg-green-50 border-green-500 text-green-700' : 'bg-white border-gray-200 hover:border-gray-300'}`}
-                                    >
-                                       <span className="font-bold">{wh.name}</span>
-                                    </div>
-                                 ))}
-                              </div>
-                           </div>
+               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 overflow-y-auto pb-20">
+                  {warehouses.map(wh => (
+                     <div key={wh.id} className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-all group relative">
+                        <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                           <button onClick={() => setEditingWarehouse(wh)} className="p-2 bg-gray-100 hover:bg-purple-50 text-gray-500 hover:text-purple-600 rounded-lg">
+                              <Search size={16} /> {/* Edit icon placeholder */}
+                           </button>
                         </div>
-                     </div>
-                  )}
-
-                  {/* STEP 2: ITEMS */}
-                  {transferStep === 2 && (
-                     <div className="h-full flex flex-col animate-in slide-in-from-right-4">
-                        <div className="relative mb-6">
-                           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-                           <input 
-                              type="text" 
-                              placeholder="Buscar para agregar (Auto-add)..."
-                              value={itemSearch}
-                              onChange={e => setItemSearch(e.target.value)}
-                              className="w-full pl-12 pr-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl outline-none focus:border-blue-300 font-bold"
-                              autoFocus
-                           />
-                           {itemSearch && (
-                              <div className="absolute top-full left-0 w-full bg-white shadow-xl rounded-xl mt-2 border border-gray-100 max-h-60 overflow-y-auto z-20">
-                                 {filteredProducts.map(p => (
-                                    <div 
-                                       key={p.id} 
-                                       onClick={() => addItemToTransfer(p)}
-                                       className="p-3 hover:bg-blue-50 cursor-pointer flex justify-between items-center"
-                                    >
-                                       <span>{p.name}</span>
-                                       <span className="text-xs bg-gray-100 px-2 py-1 rounded">Stock: {p.stock}</span>
-                                    </div>
-                                 ))}
-                              </div>
-                           )}
-                        </div>
-
-                        <div className="flex-1 overflow-y-auto space-y-2">
-                           {newTransfer.items?.map((item, idx) => (
-                              <div key={idx} className="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm">
-                                 <span className="font-medium text-gray-700">{item.productName}</span>
-                                 <div className="flex items-center gap-2">
-                                    <button 
-                                      onClick={() => updateItemQuantity(item.productId, -1)}
-                                      className="p-1 hover:bg-gray-100 rounded text-gray-500"
-                                    >
-                                      <Minus size={16} />
-                                    </button>
-                                    <span className="font-bold bg-gray-50 px-3 py-1 rounded-lg text-sm w-12 text-center">{item.quantity}</span>
-                                    <button 
-                                      onClick={() => updateItemQuantity(item.productId, 1)}
-                                      className="p-1 hover:bg-gray-100 rounded text-gray-500"
-                                    >
-                                      <Plus size={16} />
-                                    </button>
-                                    <button 
-                                      onClick={() => removeItem(item.productId)}
-                                      className="p-2 ml-2 hover:bg-red-50 text-gray-300 hover:text-red-500 rounded-lg"
-                                    >
-                                      <Trash2 size={16} />
-                                    </button>
-                                 </div>
-                              </div>
-                           ))}
-                           {(!newTransfer.items || newTransfer.items.length === 0) && (
-                              <div className="text-center text-gray-400 py-10">Busca artículos para agregar a la lista.</div>
-                           )}
-                        </div>
-                     </div>
-                  )}
-
-                  {/* STEP 3: CONFIRM */}
-                  {transferStep === 3 && (
-                     <div className="space-y-6 animate-in slide-in-from-right-4 text-center">
-                        <div className="w-24 h-24 bg-blue-50 rounded-full flex items-center justify-center mx-auto text-blue-600 shadow-inner">
-                           <RefreshCw size={48} />
-                        </div>
-                        <h3 className="text-2xl font-black text-gray-800">Resumen del Traspaso</h3>
                         
-                        <div className="flex items-center justify-center gap-4 text-lg font-bold text-gray-600 bg-gray-50 p-4 rounded-xl">
-                           <span>{sourceWh?.name}</span>
-                           <ArrowRight className="text-blue-500" />
-                           <span>{destWh?.name}</span>
+                        <div className="flex items-center gap-4 mb-4">
+                           <div className={`p-3 rounded-xl ${wh.isMain ? 'bg-purple-100 text-purple-600' : 'bg-gray-100 text-gray-500'}`}>
+                              <Building2 size={24} />
+                           </div>
+                           <div>
+                              <h3 className="font-bold text-gray-800 text-lg">{wh.name}</h3>
+                              <p className="text-xs text-gray-400 font-mono">{wh.code}</p>
+                           </div>
                         </div>
+                        
+                        <div className="space-y-2 text-sm text-gray-600">
+                           <p className="flex items-center gap-2"><MapPin size={14} /> {wh.address || 'Sin dirección'}</p>
+                           <div className="flex gap-2 mt-3">
+                              {wh.allowPosSale ? (
+                                 <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-bold">Venta Activa</span>
+                              ) : (
+                                 <span className="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold">No Venta</span>
+                              )}
+                              {wh.type === 'VIRTUAL' && (
+                                 <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-bold">Virtual</span>
+                              )}
+                           </div>
+                        </div>
+                     </div>
+                  ))}
+               </div>
+            </div>
+         )}
 
-                        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden text-left">
-                           <div className="p-3 bg-gray-50 border-b border-gray-100 text-xs font-bold text-gray-500 uppercase">Items ({newTransfer.items?.length})</div>
-                           <div className="p-4 max-h-48 overflow-y-auto space-y-2">
-                              {newTransfer.items?.map((i, idx) => (
-                                 <div key={idx} className="flex justify-between text-sm">
-                                    <span>{i.productName}</span>
-                                    <span className="font-bold">x{i.quantity}</span>
+         {/* --- TRANSFERS TAB --- */}
+         {activeTab === 'TRANSFERS' && (
+            <div className="h-full flex flex-col">
+               {!isTransferMode ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
+                     <ArrowRightLeft size={64} className="mb-4 opacity-50" />
+                     <p className="text-lg font-bold mb-2">Nuevo Movimiento de Inventario</p>
+                     <p className="text-sm mb-6 max-w-md text-center">
+                        Crea una solicitud de traspaso. El stock se descontará del origen inmediatamente y quedará en "Tránsito" hasta ser recibido.
+                     </p>
+                     <button 
+                        onClick={() => setIsTransferMode(true)}
+                        className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 transition-all"
+                     >
+                        Iniciar Traspaso
+                     </button>
+                  </div>
+               ) : (
+                  <div className="flex flex-col h-full gap-6">
+                     {/* Transfer Header */}
+                     <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col md:flex-row gap-6 items-center">
+                        <div className="flex-1 w-full">
+                           <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Origen (Sale de aquí)</label>
+                           <select 
+                              value={newTransfer.sourceWarehouseId || ''}
+                              onChange={(e) => setNewTransfer({...newTransfer, sourceWarehouseId: e.target.value})}
+                              className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none focus:ring-2 focus:ring-blue-500"
+                           >
+                              <option value="">-- Seleccionar --</option>
+                              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                           </select>
+                        </div>
+                        <div className="text-gray-300">
+                           <ArrowRight size={24} />
+                        </div>
+                        <div className="flex-1 w-full">
+                           <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Destino (Entra aquí)</label>
+                           <select 
+                              value={newTransfer.destinationWarehouseId || ''}
+                              onChange={(e) => setNewTransfer({...newTransfer, destinationWarehouseId: e.target.value})}
+                              className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none focus:ring-2 focus:ring-blue-500"
+                           >
+                              <option value="">-- Seleccionar --</option>
+                              {warehouses.filter(w => w.id !== newTransfer.sourceWarehouseId).map(w => (
+                                 <option key={w.id} value={w.id}>{w.name}</option>
+                              ))}
+                           </select>
+                        </div>
+                     </div>
+
+                     {/* Item Selection */}
+                     <div className="flex-1 flex gap-6 overflow-hidden">
+                        <div className="flex-1 bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col">
+                           <div className="p-4 border-b border-gray-100">
+                              <div className="relative">
+                                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+                                 <input 
+                                    type="text" 
+                                    placeholder="Buscar productos..." 
+                                    value={itemSearch}
+                                    onChange={(e) => setItemSearch(e.target.value)}
+                                    className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                                 />
+                              </div>
+                           </div>
+                           <div className="flex-1 overflow-y-auto p-2">
+                              {filteredProducts.map(p => (
+                                 <div 
+                                    key={p.id} 
+                                    onClick={() => addItemToTransfer(p)}
+                                    className="p-3 hover:bg-gray-50 rounded-xl cursor-pointer flex justify-between items-center group transition-colors"
+                                 >
+                                    <div>
+                                       <p className="font-bold text-gray-800 text-sm">{p.name}</p>
+                                       <p className="text-xs text-gray-400 font-mono">{p.barcode}</p>
+                                    </div>
+                                    <button className="p-2 bg-gray-100 text-blue-600 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                                       <Plus size={16} />
+                                    </button>
                                  </div>
                               ))}
                            </div>
                         </div>
+
+                        {/* Transfer Cart */}
+                        <div className="w-1/3 bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col">
+                           <div className="p-4 border-b border-gray-100 bg-blue-50/50">
+                              <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                                 <Package size={18} className="text-blue-600" /> Items a Transferir
+                              </h3>
+                           </div>
+                           <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                              {newTransfer.items?.map(item => (
+                                 <div key={item.productId} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                    <div className="flex-1 min-w-0 pr-2">
+                                       <p className="font-bold text-sm text-gray-800 truncate">{item.productName}</p>
+                                       <div className="flex items-center gap-2 mt-1">
+                                          <input 
+                                             type="number" 
+                                             value={item.quantity}
+                                             onChange={(e) => updateItemQuantity(item.productId, parseInt(e.target.value))}
+                                             className="w-16 p-1 text-center bg-white border border-gray-200 rounded text-sm font-bold outline-none"
+                                          />
+                                          <span className="text-xs text-gray-500">unidades</span>
+                                       </div>
+                                    </div>
+                                    <button onClick={() => removeItemFromTransfer(item.productId)} className="text-gray-400 hover:text-red-500">
+                                       <Trash2 size={18} />
+                                    </button>
+                                 </div>
+                              ))}
+                              {(!newTransfer.items || newTransfer.items.length === 0) && (
+                                 <div className="text-center text-gray-400 py-10 text-sm">
+                                    Agrega productos desde la lista izquierda.
+                                 </div>
+                              )}
+                           </div>
+                           <div className="p-4 border-t border-gray-100 flex gap-2">
+                              <button 
+                                 onClick={() => setIsTransferMode(false)}
+                                 className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl"
+                              >
+                                 Cancelar
+                              </button>
+                              <button 
+                                 onClick={handleConfirmTransfer}
+                                 className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                 disabled={!newTransfer.items?.length || !newTransfer.sourceWarehouseId || !newTransfer.destinationWarehouseId}
+                              >
+                                 Confirmar Envío
+                              </button>
+                           </div>
+                        </div>
+                     </div>
+                  </div>
+               )}
+            </div>
+         )}
+
+         {/* --- HISTORY TAB --- */}
+         {activeTab === 'HISTORY' && (
+            <div className="h-full flex flex-col">
+               <div className="mb-6 flex justify-between items-center">
+                  <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                     <History size={20} className="text-orange-500" /> Historial de Movimientos
+                  </h2>
+                  <div className="flex gap-2">
+                     {[
+                        { id: 'ALL', label: 'Todos' },
+                        { id: 'IN_TRANSIT', label: 'En Tránsito' },
+                        { id: 'COMPLETED', label: 'Completados' }
+                     ].map(f => (
+                        <button
+                           key={f.id}
+                           onClick={() => setHistoryFilter(f.id as HistoryFilter)}
+                           className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                              historyFilter === f.id ? 'bg-orange-100 text-orange-700' : 'bg-white text-gray-500 hover:bg-gray-100'
+                           }`}
+                        >
+                           {f.label}
+                        </button>
+                     ))}
+                  </div>
+               </div>
+
+               <div className="flex-1 overflow-y-auto space-y-4 pb-20">
+                  {filteredTransfers.length === 0 && (
+                     <div className="text-center py-20 text-gray-400">
+                        <Truck size={48} className="mx-auto mb-2 opacity-50" />
+                        <p>No hay traspasos registrados con este filtro.</p>
                      </div>
                   )}
+                  {filteredTransfers.map(t => {
+                     const sourceName = warehouses.find(w => w.id === t.sourceWarehouseId)?.name || '???';
+                     const destName = warehouses.find(w => w.id === t.destinationWarehouseId)?.name || '???';
+                     const isPending = t.status === 'IN_TRANSIT';
 
+                     return (
+                        <div key={t.id} className={`bg-white p-5 rounded-2xl border-2 transition-all ${isPending ? 'border-orange-300 shadow-md' : 'border-gray-100'}`}>
+                           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                              <div>
+                                 <div className="flex items-center gap-2 mb-1">
+                                    <span className="font-bold text-gray-800 text-lg">#{t.id}</span>
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${isPending ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
+                                       {isPending ? 'En Tránsito (Pendiente)' : 'Completado'}
+                                    </span>
+                                 </div>
+                                 <div className="flex items-center gap-3 text-sm text-gray-500">
+                                    <div className="flex items-center gap-1">
+                                       <Calendar size={14} /> {new Date(t.createdAt).toLocaleDateString()}
+                                    </div>
+                                    <div className="flex items-center gap-1 font-medium">
+                                       {sourceName} <ArrowRight size={12} /> {destName}
+                                    </div>
+                                 </div>
+                              </div>
+
+                              <div className="flex items-center gap-4 w-full md:w-auto">
+                                 <div className="flex -space-x-2 overflow-hidden">
+                                    {t.items.slice(0, 3).map(i => (
+                                       <div key={i.productId} className="w-8 h-8 rounded-full bg-gray-100 border-2 border-white flex items-center justify-center text-[10px] font-bold text-gray-600" title={i.productName}>
+                                          {i.quantity}
+                                       </div>
+                                    ))}
+                                    {t.items.length > 3 && (
+                                       <div className="w-8 h-8 rounded-full bg-gray-200 border-2 border-white flex items-center justify-center text-[10px] font-bold text-gray-600">
+                                          +{t.items.length - 3}
+                                       </div>
+                                    )}
+                                 </div>
+                                 
+                                 <div className="flex gap-2">
+                                    <button 
+                                       onClick={() => setViewingTransfer(t)}
+                                       className="p-2 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200 transition-colors"
+                                       title="Ver Detalles"
+                                    >
+                                       <Eye size={20} />
+                                    </button>
+                                    
+                                    {isPending && (
+                                       <button 
+                                          onClick={() => handleReceiveTransfer(t.id)}
+                                          className="px-4 py-2 bg-green-600 text-white rounded-xl font-bold shadow-md hover:bg-green-700 active:scale-95 transition-all flex items-center gap-2 text-sm"
+                                       >
+                                          <Check size={16} /> Recibir
+                                       </button>
+                                    )}
+                                 </div>
+                              </div>
+                           </div>
+                        </div>
+                     );
+                  })}
+               </div>
+            </div>
+         )}
+
+      </div>
+
+      {/* Warehouse Editor Modal */}
+      {editingWarehouse && (
+         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden">
+               <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                  <h3 className="font-black text-xl text-gray-800">{editingWarehouse.id.includes('wh_') && editingWarehouse.name === '' ? 'Nueva Ubicación' : 'Editar Ubicación'}</h3>
+                  <button onClick={() => setEditingWarehouse(null)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20}/></button>
+               </div>
+               <div className="p-6 space-y-4">
+                  <div>
+                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre Almacén</label>
+                     <input 
+                        type="text" 
+                        value={editingWarehouse.name}
+                        onChange={(e) => setEditingWarehouse({...editingWarehouse, name: e.target.value})}
+                        className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-500"
+                     />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                     <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Código</label>
+                        <input 
+                           type="text" 
+                           value={editingWarehouse.code}
+                           onChange={(e) => setEditingWarehouse({...editingWarehouse, code: e.target.value.toUpperCase()})}
+                           className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-500 uppercase"
+                        />
+                     </div>
+                     <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tipo</label>
+                        <select 
+                           value={editingWarehouse.type}
+                           onChange={(e) => setEditingWarehouse({...editingWarehouse, type: e.target.value as any})}
+                           className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none"
+                        >
+                           <option value="PHYSICAL">Físico</option>
+                           <option value="VIRTUAL">Virtual (Mermas)</option>
+                           <option value="DISTRIBUTION">Centro Dist.</option>
+                        </select>
+                     </div>
+                  </div>
+                  <div>
+                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Dirección</label>
+                     <input 
+                        type="text" 
+                        value={editingWarehouse.address}
+                        onChange={(e) => setEditingWarehouse({...editingWarehouse, address: e.target.value})}
+                        className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-500"
+                     />
+                  </div>
+                  <div className="flex gap-4 pt-2">
+                     <label className="flex items-center gap-2 cursor-pointer bg-gray-50 px-4 py-2 rounded-lg border border-gray-200 flex-1">
+                        <input 
+                           type="checkbox" 
+                           checked={editingWarehouse.allowPosSale}
+                           onChange={(e) => setEditingWarehouse({...editingWarehouse, allowPosSale: e.target.checked})}
+                           className="w-4 h-4 text-purple-600 rounded"
+                        />
+                        <span className="text-sm font-bold text-gray-700">Permitir Venta POS</span>
+                     </label>
+                     <label className="flex items-center gap-2 cursor-pointer bg-gray-50 px-4 py-2 rounded-lg border border-gray-200 flex-1">
+                        <input 
+                           type="checkbox" 
+                           checked={editingWarehouse.allowNegativeStock}
+                           onChange={(e) => setEditingWarehouse({...editingWarehouse, allowNegativeStock: e.target.checked})}
+                           className="w-4 h-4 text-purple-600 rounded"
+                        />
+                        <span className="text-sm font-bold text-gray-700">Stock Negativo</span>
+                     </label>
+                  </div>
+               </div>
+               <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
+                  <button onClick={() => setEditingWarehouse(null)} className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-200 rounded-xl">Cancelar</button>
+                  <button onClick={handleSaveWarehouse} className="flex-1 py-3 bg-purple-600 text-white font-bold rounded-xl shadow-md hover:bg-purple-700">Guardar</button>
+               </div>
+            </div>
+         </div>
+      )}
+
+      {/* Transfer Detail Modal */}
+      {viewingTransfer && (
+         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+            <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+               <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                  <div>
+                     <h3 className="font-bold text-lg text-gray-800">Detalles de Traspaso</h3>
+                     <p className="text-xs text-gray-500 font-mono">#{viewingTransfer.id}</p>
+                  </div>
+                  <button onClick={() => setViewingTransfer(null)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20}/></button>
+               </div>
+               
+               <div className="p-5 border-b border-gray-100">
+                  <div className="flex items-center justify-between text-sm mb-2">
+                     <span className="text-gray-500">Estado</span>
+                     <span className={`font-bold px-2 py-0.5 rounded text-xs uppercase ${viewingTransfer.status === 'IN_TRANSIT' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
+                        {viewingTransfer.status === 'IN_TRANSIT' ? 'En Tránsito' : 'Completado'}
+                     </span>
+                  </div>
+                  <div className="flex justify-between items-center bg-blue-50 p-3 rounded-xl border border-blue-100">
+                     <div className="text-center flex-1">
+                        <span className="block text-[10px] font-bold text-blue-400 uppercase">Origen</span>
+                        <span className="font-bold text-blue-900 text-sm">{warehouses.find(w => w.id === viewingTransfer.sourceWarehouseId)?.name}</span>
+                     </div>
+                     <ArrowRight size={16} className="text-blue-300" />
+                     <div className="text-center flex-1">
+                        <span className="block text-[10px] font-bold text-blue-400 uppercase">Destino</span>
+                        <span className="font-bold text-blue-900 text-sm">{warehouses.find(w => w.id === viewingTransfer.destinationWarehouseId)?.name}</span>
+                     </div>
+                  </div>
                </div>
 
-               {/* Wizard Footer */}
-               <div className="p-6 border-t border-gray-100 bg-white flex justify-between">
-                  {transferStep > 1 ? (
-                     <button onClick={() => setTransferStep((s) => s - 1 as any)} className="px-6 py-3 text-gray-500 font-bold hover:bg-gray-50 rounded-xl">
-                        Atrás
+               <div className="flex-1 overflow-y-auto p-5 space-y-2">
+                  <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Items Incluidos</h4>
+                  {viewingTransfer.items.map((item, idx) => (
+                     <div key={idx} className="flex justify-between items-center p-3 border border-gray-100 rounded-xl hover:bg-gray-50">
+                        <span className="font-medium text-gray-700 text-sm">{item.productName}</span>
+                        <span className="font-bold text-gray-900 bg-gray-100 px-2 py-1 rounded-lg text-sm">{item.quantity}</span>
+                     </div>
+                  ))}
+               </div>
+
+               {viewingTransfer.status === 'IN_TRANSIT' && (
+                  <div className="p-5 border-t border-gray-100 bg-gray-50">
+                     <button 
+                        onClick={() => handleReceiveTransfer(viewingTransfer.id)}
+                        className="w-full py-3 bg-green-600 text-white rounded-xl font-bold shadow-lg hover:bg-green-700 active:scale-95 transition-all flex items-center justify-center gap-2"
+                     >
+                        <Check size={20} /> Confirmar Recepción
                      </button>
-                  ) : <div></div>}
-                  
-                  <button 
-                     onClick={() => {
-                        if (transferStep < 3) {
-                           if (transferStep === 1 && (!newTransfer.sourceWarehouseId || !newTransfer.destinationWarehouseId)) return alert("Selecciona origen y destino");
-                           setTransferStep((s) => s + 1 as any);
-                        } else {
-                           handleSaveTransfer();
-                        }
-                     }}
-                     className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 transition-all flex items-center gap-2"
-                  >
-                     {transferStep === 3 ? <CheckCircle2 size={20} /> : null}
-                     {transferStep === 3 ? (newTransfer.id ? 'Guardar Cambios' : 'Confirmar Envío') : 'Siguiente'}
-                  </button>
-               </div>
-
+                  </div>
+               )}
             </div>
          </div>
       )}
