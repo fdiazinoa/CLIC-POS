@@ -1,11 +1,14 @@
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   Printer, ScanBarcode, Bluetooth, RefreshCw, CheckCircle, 
-  X, Zap, Settings as SettingsIcon, FileText, Usb, Network, Plus, Server,
-  Monitor, Image as ImageIcon, MessageSquare, DollarSign, Lock, ShieldCheck, Scale,
-  Cable, Save
+  X, Zap, Settings as SettingsIcon, Usb, Network, Plus, 
+  Monitor, MessageSquare, DollarSign, Scale,
+  Save, Info, AlertTriangle, Check, Tv, MonitorPlay, QrCode, Trash2,
+  Cable, Radio, MousePointer2, Image as ImageIcon, ArrowLeft,
+  Smartphone, Wallet, ShieldCheck, Database, HardDrive
 } from 'lucide-react';
+import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech } from '../types';
 
 interface Device {
   id: string;
@@ -13,176 +16,529 @@ interface Device {
   type: 'PRINTER' | 'SCANNER' | 'SCALE';
   connection: 'BLUETOOTH' | 'NETWORK' | 'USB' | 'SERIAL';
   status: 'CONNECTED' | 'DISCONNECTED' | 'PAIRING';
-  config?: {
-    paperWidth?: '58mm' | '80mm';
-    density?: 'LOW' | 'MEDIUM' | 'HIGH';
-    ipAddress?: string; // For Network printers
-    port?: string;      // Standard 9100
-    protocol?: string;  // For Scales (e.g., CAS, Dibal)
-    baudRate?: number;  // For Serial Scales
-  };
 }
 
-const MOCK_DEVICES: Device[] = [
-  { id: 'dev1', name: 'Cocina Caliente', type: 'PRINTER', connection: 'NETWORK', status: 'CONNECTED', config: { paperWidth: '80mm', ipAddress: '192.168.1.200' } },
-  { id: 'dev2', name: 'Star Micronics POP', type: 'PRINTER', connection: 'BLUETOOTH', status: 'DISCONNECTED', config: { paperWidth: '58mm' } },
-  { id: 'dev3', name: 'Zebra DS2208', type: 'SCANNER', connection: 'BLUETOOTH', status: 'DISCONNECTED' },
-  { id: 'dev4', name: 'Balanza CAS PD-II', type: 'SCALE', connection: 'SERIAL', status: 'CONNECTED', config: { protocol: 'CAS', baudRate: 9600 } },
+const MOCK_PRINTERS: Device[] = [
+  { id: 'dev1', name: 'Cocina Caliente', type: 'PRINTER', connection: 'NETWORK', status: 'CONNECTED' },
 ];
+
+const DEFAULT_DISPLAY_CONFIG: CustomerDisplayConfig = {
+  isEnabled: true,
+  welcomeMessage: '¡Bienvenido a CLIC POS!',
+  showItemImages: true,
+  showQrPayment: true,
+  layout: 'SPLIT',
+  connectionType: 'VIRTUAL',
+  ads: [
+    { id: 'ad1', url: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=600&auto=format&fit=crop', active: true },
+    { id: 'ad2', url: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?q=80&w=600&auto=format&fit=crop', active: true }
+  ]
+};
+
+interface HardwareSettingsProps {
+  config: BusinessConfig;
+  products: Product[];
+  onUpdateConfig: (cfg: BusinessConfig) => void;
+  onClose: () => void;
+}
 
 type HardwareTab = 'PERIPHERALS' | 'SCALES' | 'DISPLAY' | 'CASHDRO';
 
-const HardwareSettings: React.FC = () => {
+const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfig, products, onUpdateConfig, onClose }) => {
   const [activeTab, setActiveTab] = useState<HardwareTab>('PERIPHERALS');
   
-  // -- Peripherals State --
-  const [isScanning, setIsScanning] = useState(false);
-  const [devices, setDevices] = useState<Device[]>(MOCK_DEVICES);
-  const [testPrintStatus, setTestPrintStatus] = useState<string | null>(null);
-  const [showIpModal, setShowIpModal] = useState(false);
-  const [ipForm, setIpForm] = useState({ name: '', ip: '192.168.1.', port: '9100' });
-
-  // -- Scale specific --
-  const [scaleReading, setScaleReading] = useState<number | null>(null);
+  // -- Scales State --
+  const [scales, setScales] = useState<ScaleDevice[]>(globalConfig.scales || []);
+  const [editingScale, setEditingScale] = useState<ScaleDevice | null>(null);
+  
+  // -- Label Tester State --
+  const [testBarcode, setTestBarcode] = useState('');
+  const [testResult, setTestResult] = useState<any>(null);
 
   // -- Customer Display State --
-  const [displayConfig, setDisplayConfig] = useState({
-    isEnabled: true,
-    welcomeMessage: '¡Bienvenido a nuestra tienda!',
-    idleImage: '', // Base64 or URL
-    showItemDetails: true
-  });
+  const [displayConfig, setDisplayConfig] = useState<CustomerDisplayConfig>(
+    globalConfig.terminals?.[0]?.config?.hardware?.customerDisplay || DEFAULT_DISPLAY_CONFIG
+  );
+  const [previewMode, setPreviewMode] = useState<'IDLE' | 'CHECKOUT'>('CHECKOUT');
 
-  // -- CashDro State --
-  const [cashDroConfig, setCashDroConfig] = useState({
-    isEnabled: false,
-    ipAddress: '192.168.1.50',
-    port: '8888',
-    user: 'admin',
-    password: ''
-  });
-  const [cashDroStatus, setCashDroStatus] = useState<'DISCONNECTED' | 'CONNECTING' | 'READY'>('DISCONNECTED');
+  // -- Cash Drawer State --
+  const [cashDroType, setCashDroType] = useState<'STANDARD' | 'INTELLIGENT'>('STANDARD');
+  const [isCashDroEnabled, setIsCashDroEnabled] = useState(true);
+  const [intelligentConfig, setIntelligentConfig] = useState({ ip: '192.168.1.100', model: 'CASHDRO_7' });
 
-  // --- PERIPHERAL ACTIONS ---
-  const startScan = () => {
-    setIsScanning(true);
-    setTimeout(() => {
-       const newBtDevice: Device = { 
-          id: `bt_${Math.random()}`, 
-          name: 'Epson TM-P80 (BT)', 
-          type: 'PRINTER', 
-          connection: 'BLUETOOTH', 
-          status: 'DISCONNECTED',
-          config: { paperWidth: '80mm' }
-       };
-       setDevices(prev => [...prev, newBtDevice]);
-       setIsScanning(false);
-    }, 2000);
+  const selectedTerminalId = useMemo(() => globalConfig.terminals?.[0]?.id || 'POS-01', [globalConfig.terminals]);
+
+  // --- ACTIONS ---
+  const handleSaveAllHardware = () => {
+    const newConfig = { ...globalConfig, scales };
+    if (newConfig.terminals?.[0]) {
+       newConfig.terminals[0].config.hardware.customerDisplay = displayConfig;
+    }
+    onUpdateConfig(newConfig);
+    alert("Configuración de hardware guardada correctamente.");
   };
 
-  const handleConnectUsb = () => {
-     const newUsbDevice: Device = {
-        id: `usb_${Math.random()}`,
-        name: 'USB Thermal Printer',
-        type: 'PRINTER',
-        connection: 'USB',
-        status: 'CONNECTED',
-        config: { paperWidth: '80mm' }
-     };
-     setDevices(prev => [...prev, newUsbDevice]);
+  const handleSaveScale = () => {
+    if (!editingScale) return;
+    const newScales = scales.some(s => s.id === editingScale.id)
+      ? scales.map(s => s.id === editingScale.id ? editingScale : s)
+      : [...scales, editingScale];
+    
+    setScales(newScales);
+    setEditingScale(null);
   };
 
-  const handleAddIpPrinter = () => {
-     if (!ipForm.name || !ipForm.ip) return;
-     const newNetDevice: Device = {
-        id: `net_${Math.random()}`,
-        name: ipForm.name,
-        type: 'PRINTER',
-        connection: 'NETWORK',
-        status: 'CONNECTED',
-        config: { 
-           paperWidth: '80mm',
-           ipAddress: ipForm.ip,
-           port: ipForm.port
-        }
-     };
-     setDevices(prev => [...prev, newNetDevice]);
-     setShowIpModal(false);
-     setIpForm({ name: '', ip: '192.168.1.', port: '9100' });
+  const createNewScale = () => {
+    setEditingScale({
+      id: `scale_${Date.now()}`,
+      name: '',
+      isEnabled: true,
+      technology: 'DIRECT',
+      directConfig: { port: 'COM1', baudRate: 9600, dataBits: 8, protocol: 'CAS' },
+      labelConfig: { mode: 'WEIGHT', prefixes: ['20'], decimals: 3, itemDigits: 5, valueDigits: 5 }
+    });
   };
 
-  const handleAddScale = () => {
-     const newScale: Device = {
-        id: `scale_${Math.random()}`,
-        name: 'Nueva Balanza',
-        type: 'SCALE',
-        connection: 'SERIAL',
-        status: 'DISCONNECTED',
-        config: { protocol: 'CAS', baudRate: 9600 }
-     };
-     setDevices(prev => [...prev, newScale]);
-  }
-
-  const toggleConnection = (id: string) => {
-    setDevices(prev => prev.map(d => {
-      if (d.id === id) {
-        return { 
-          ...d, 
-          status: d.status === 'CONNECTED' ? 'DISCONNECTED' : 'CONNECTED' 
-        };
-      }
-      return d;
-    }));
+  const handleDigitClick = (index: number) => {
+     if (!editingScale?.labelConfig) return;
+     if (index < 2 || index > 11) return;
+     const newItemDigits = index - 1;
+     const newValueDigits = 10 - newItemDigits;
+     setEditingScale({
+        ...editingScale,
+        labelConfig: { ...editingScale.labelConfig, itemDigits: newItemDigits, valueDigits: newValueDigits }
+     });
+     setTestResult(null);
   };
 
-  const removeDevice = (id: string) => {
-     if(confirm("¿Olvidar este dispositivo?")) {
-        setDevices(prev => prev.filter(d => d.id !== id));
+  const addAd = () => {
+     const url = prompt("Introduce la URL de la imagen publicitaria:");
+     if (url) {
+        setDisplayConfig({
+           ...displayConfig,
+           ads: [...displayConfig.ads, { id: `ad_${Date.now()}`, url, active: true }]
+        });
      }
   };
 
-  const handleTestPrint = (deviceName: string) => {
-    setTestPrintStatus(`Enviando prueba a ${deviceName}...`);
-    setTimeout(() => {
-      setTestPrintStatus(null);
-      alert("Prueba de impresión enviada con éxito.");
-    }, 2000);
-  };
+  const renderCashDro = () => (
+    <div className="space-y-6 animate-in slide-in-from-right-4 duration-300 pb-20">
+       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Config Column */}
+          <div className="space-y-6">
+             <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-200">
+                <div className="flex items-center justify-between">
+                   <div className="flex items-center gap-4">
+                      <div className={`p-3 rounded-2xl ${isCashDroEnabled ? 'bg-emerald-100 text-emerald-600' : 'bg-gray-100 text-gray-400'}`}>
+                         <DollarSign size={24} />
+                      </div>
+                      <div>
+                         <h3 className="font-bold text-gray-800">Gestión de Cajón</h3>
+                         <p className="text-xs text-gray-500">Configura la apertura automática y cajones inteligentes.</p>
+                      </div>
+                   </div>
+                   <button 
+                      onClick={() => setIsCashDroEnabled(!isCashDroEnabled)}
+                      className={`w-14 h-7 rounded-full transition-all relative ${isCashDroEnabled ? 'bg-emerald-600' : 'bg-gray-300'}`}
+                   >
+                      <div className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-all shadow-sm ${isCashDroEnabled ? 'left-8' : 'left-1'}`} />
+                   </button>
+                </div>
+             </div>
 
-  // --- TAB RENDERERS ---
+             <div className={`bg-white p-6 rounded-3xl shadow-sm border border-gray-200 space-y-6 transition-all ${isCashDroEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+                <div>
+                   <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Tipo de Cajón</label>
+                   <div className="grid grid-cols-2 gap-3">
+                      {[
+                         { id: 'STANDARD', label: 'Cajón Estándar (RJ11)', icon: Printer, desc: 'Conectado a impresora' },
+                         { id: 'INTELLIGENT', label: 'Cajón Inteligente', icon: Smartphone, desc: 'CashDro / Glory / Otros' },
+                      ].map(type => (
+                         <button 
+                           key={type.id}
+                           onClick={() => setCashDroType(type.id as any)}
+                           className={`p-4 rounded-2xl border-2 text-left flex flex-col gap-2 transition-all ${cashDroType === type.id ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
+                         >
+                            <type.icon size={20} />
+                            <div>
+                               <span className="text-sm font-bold block">{type.label}</span>
+                               <span className="text-[10px] opacity-70">{type.desc}</span>
+                            </div>
+                         </button>
+                      ))}
+                   </div>
+                </div>
+
+                {cashDroType === 'INTELLIGENT' ? (
+                   <div className="space-y-4 animate-in slide-in-from-top-2">
+                      <div className="grid grid-cols-2 gap-4">
+                         <div>
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Modelo / Proveedor</label>
+                            <select 
+                               value={intelligentConfig.model}
+                               onChange={(e) => setIntelligentConfig({...intelligentConfig, model: e.target.value})}
+                               className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold"
+                            >
+                               <option value="CASHDRO_7">CashDro 7</option>
+                               <option value="CASHDRO_3">CashDro 3</option>
+                               <option value="GLORY_CI10">Glory CI-10</option>
+                               <option value="AZKOYEN">Azkoyen Cashlogy</option>
+                            </select>
+                         </div>
+                         <div>
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Dirección IP</label>
+                            <input 
+                               type="text" 
+                               value={intelligentConfig.ip}
+                               onChange={(e) => setIntelligentConfig({...intelligentConfig, ip: e.target.value})}
+                               className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-mono font-bold"
+                            />
+                         </div>
+                      </div>
+                      <button className="w-full py-3 bg-blue-50 text-blue-600 rounded-xl font-bold text-xs flex items-center justify-center gap-2 hover:bg-blue-100">
+                         <RefreshCw size={14} /> Probar Sincronización de Fondos
+                      </button>
+                   </div>
+                ) : (
+                   <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                      <div className="flex items-center gap-3 text-sm text-gray-600">
+                         <Info size={18} className="text-blue-500 shrink-0" />
+                         <p>El cajón estándar se abrirá enviando un pulso eléctrico a través de la impresora de tickets seleccionada.</p>
+                      </div>
+                   </div>
+                )}
+             </div>
+
+             <div className={`bg-white p-6 rounded-3xl shadow-sm border border-gray-200 transition-all ${isCashDroEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+                <h3 className="font-bold text-gray-700 text-sm uppercase mb-4">Acciones Manuales</h3>
+                <button className="w-full py-4 bg-gray-900 text-white rounded-2xl font-bold flex items-center justify-center gap-3 shadow-lg active:scale-95 transition-all">
+                   <Zap size={20} className="text-yellow-400 fill-current" /> Abrir Cajón Ahora
+                </button>
+             </div>
+          </div>
+
+          {/* Stats Column */}
+          <div className="space-y-6">
+             {cashDroType === 'INTELLIGENT' && (
+                <div className="bg-slate-900 rounded-[2.5rem] p-8 text-white shadow-2xl relative overflow-hidden">
+                   <div className="absolute top-0 right-0 w-40 h-40 bg-blue-500/10 rounded-full -mr-10 -mt-10 blur-3xl"></div>
+                   <div className="relative z-10">
+                      <div className="flex justify-between items-center mb-8">
+                         <div>
+                            <h4 className="text-xs font-bold text-blue-400 uppercase tracking-widest">Nivel de Efectivo</h4>
+                            <p className="text-3xl font-black mt-1">Sincronizado</p>
+                         </div>
+                         <div className="p-3 bg-white/10 rounded-2xl backdrop-blur-md">
+                            <Database size={24} className="text-blue-400" />
+                         </div>
+                      </div>
+
+                      <div className="space-y-6">
+                         <div>
+                            <div className="flex justify-between text-xs font-bold mb-2">
+                               <span className="text-slate-400">BILLETES</span>
+                               <span>85%</span>
+                            </div>
+                            <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                               <div className="h-full bg-blue-500 w-[85%] rounded-full shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div>
+                            </div>
+                         </div>
+                         <div>
+                            <div className="flex justify-between text-xs font-bold mb-2">
+                               <span className="text-slate-400">MONEDAS</span>
+                               <span>42%</span>
+                            </div>
+                            <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                               <div className="h-full bg-emerald-500 w-[42%] rounded-full shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
+                            </div>
+                         </div>
+                      </div>
+
+                      <div className="mt-10 pt-6 border-t border-white/5 flex justify-between items-end">
+                         <div>
+                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Total en Máquina</p>
+                            <p className="text-4xl font-black text-white">$14,580.00</p>
+                         </div>
+                         <div className="text-right">
+                            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-full border border-emerald-500/20">
+                               <RefreshCw size={10} /> AUTO-SYNC ON
+                            </span>
+                         </div>
+                      </div>
+                   </div>
+                </div>
+             )}
+
+             <div className="bg-white p-8 rounded-[2.5rem] border border-gray-200 shadow-sm">
+                <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                   <ShieldCheck size={20} className="text-blue-500" /> Auditoría de Aperturas
+                </h3>
+                <div className="space-y-3">
+                   {[
+                      { time: '11:24 AM', user: 'Ana C.', reason: 'Venta #452', type: 'AUTO' },
+                      { time: '10:15 AM', user: 'Admin', reason: 'Apertura Manual', type: 'MANUAL' },
+                      { time: '09:00 AM', user: 'Ana C.', reason: 'Fondo de Caja', type: 'AUTO' },
+                   ].map((log, i) => (
+                      <div key={i} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-100 text-xs">
+                         <div className="flex items-center gap-3">
+                            <span className="font-mono text-gray-400">{log.time}</span>
+                            <div>
+                               <p className="font-bold text-gray-700">{log.reason}</p>
+                               <p className="text-[10px] text-gray-400">{log.user}</p>
+                            </div>
+                         </div>
+                         <span className={`font-black text-[9px] px-1.5 py-0.5 rounded ${log.type === 'MANUAL' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                            {log.type}
+                         </span>
+                      </div>
+                   ))}
+                </div>
+             </div>
+          </div>
+       </div>
+    </div>
+  );
+
+  const renderCustomerDisplay = () => (
+    <div className="space-y-6 animate-in slide-in-from-right-4 duration-300 pb-20">
+       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* CONFIGURATION COLUMN */}
+          <div className="space-y-6">
+             {/* Master Enable */}
+             <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-200">
+                <div className="flex items-center justify-between">
+                   <div className="flex items-center gap-4">
+                      <div className={`p-3 rounded-2xl ${displayConfig.isEnabled ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-400'}`}>
+                         <Tv size={24} />
+                      </div>
+                      <div>
+                         <h3 className="font-bold text-gray-800">Visor de Cliente</h3>
+                         <p className="text-xs text-gray-500">Activa una pantalla secundaria para el cliente.</p>
+                      </div>
+                   </div>
+                   <button 
+                      onClick={() => setDisplayConfig({...displayConfig, isEnabled: !displayConfig.isEnabled})}
+                      className={`w-14 h-7 rounded-full transition-all relative ${displayConfig.isEnabled ? 'bg-blue-600' : 'bg-gray-300'}`}
+                   >
+                      <div className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-all shadow-sm ${displayConfig.isEnabled ? 'left-8' : 'left-1'}`} />
+                   </button>
+                </div>
+             </div>
+
+             {/* Connection & Setup */}
+             <div className={`bg-white p-6 rounded-3xl shadow-sm border border-gray-200 space-y-6 transition-all ${displayConfig.isEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+                <div>
+                   <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Conexión</label>
+                   <div className="grid grid-cols-2 gap-3">
+                      {[
+                         { id: 'VIRTUAL', label: 'Segunda Pantalla (HDMI)', icon: MonitorPlay },
+                         { id: 'NETWORK', label: 'Tablet Red (IP)', icon: Network },
+                         { id: 'USB', label: 'Display VFD (USB)', icon: Usb },
+                      ].map(conn => (
+                         <button 
+                           key={conn.id}
+                           onClick={() => setDisplayConfig({...displayConfig, connectionType: conn.id as any})}
+                           className={`p-3 rounded-xl border-2 flex items-center gap-3 transition-all ${displayConfig.connectionType === conn.id ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
+                         >
+                            <conn.icon size={18} />
+                            <span className="text-xs font-bold">{conn.label}</span>
+                         </button>
+                      ))}
+                   </div>
+                </div>
+
+                <div>
+                   <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Mensaje de Bienvenida (Idle)</label>
+                   <div className="relative">
+                      <input 
+                         type="text" 
+                         value={displayConfig.welcomeMessage}
+                         onChange={(e) => setDisplayConfig({...displayConfig, welcomeMessage: e.target.value})}
+                         className="w-full p-3 pl-10 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none focus:ring-2 focus:ring-blue-100"
+                         placeholder="Ej. ¡Gracias por preferirnos!"
+                      />
+                      <MessageSquare className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300" size={18} />
+                   </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                   <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer" onClick={() => setDisplayConfig({...displayConfig, showItemImages: !displayConfig.showItemImages})}>
+                      <input type="checkbox" checked={displayConfig.showItemImages} onChange={() => {}} className="w-5 h-5 text-blue-600 rounded" />
+                      <span className="text-sm font-bold text-gray-600">Fotos de Artículos</span>
+                   </div>
+                   <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer" onClick={() => setDisplayConfig({...displayConfig, showQrPayment: !displayConfig.showQrPayment})}>
+                      <input type="checkbox" checked={displayConfig.showQrPayment} onChange={() => {}} className="w-5 h-5 text-blue-600 rounded" />
+                      <span className="text-sm font-bold text-gray-600">QR de Pago</span>
+                   </div>
+                </div>
+             </div>
+
+             {/* Ads Management */}
+             <div className={`bg-white p-6 rounded-3xl shadow-sm border border-gray-200 transition-all ${displayConfig.isEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+                <div className="flex justify-between items-center mb-4">
+                   <h3 className="font-bold text-gray-700 text-sm uppercase">Banners Publicitarios</h3>
+                   <button onClick={addAd} className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100">
+                      <Plus size={16} />
+                   </button>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                   {displayConfig.ads.map(ad => (
+                      <div key={ad.id} className="relative group rounded-xl overflow-hidden aspect-video border border-gray-200 bg-gray-100">
+                         <img src={ad.url} className="w-full h-full object-cover" alt="Publicidad" />
+                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <button 
+                              onClick={() => setDisplayConfig({...displayConfig, ads: displayConfig.ads.filter(a => a.id !== ad.id)})}
+                              className="p-2 bg-white rounded-full text-red-500 hover:scale-110 transition-transform"
+                            >
+                               <Trash2 size={16} />
+                            </button>
+                         </div>
+                      </div>
+                   ))}
+                </div>
+             </div>
+          </div>
+
+          {/* PREVIEW COLUMN */}
+          <div className="flex flex-col items-center">
+             <div className="flex bg-gray-200 p-1 rounded-xl mb-6">
+                <button onClick={() => setPreviewMode('CHECKOUT')} className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${previewMode === 'CHECKOUT' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'}`}>Modo Cobro</button>
+                <button onClick={() => setPreviewMode('IDLE')} className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${previewMode === 'IDLE' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'}`}>Modo Inactivo</button>
+             </div>
+
+             <div className="relative w-full max-w-2xl bg-gray-900 rounded-[2.5rem] p-4 shadow-2xl border-4 border-gray-800">
+                <div className="bg-white rounded-[1.5rem] overflow-hidden aspect-[16/10] flex flex-col relative">
+                   {previewMode === 'IDLE' ? (
+                      <div className="flex-1 flex flex-col">
+                         <div className="flex-1 relative overflow-hidden">
+                            <img src={displayConfig.ads[0]?.url} className="w-full h-full object-cover" alt="Publicidad" />
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex flex-col justify-end p-10 text-white">
+                               <h4 className="text-4xl font-black mb-2">{displayConfig.welcomeMessage}</h4>
+                               <p className="text-lg text-white/70 font-medium tracking-wide">Descarga nuestra App para ofertas exclusivas.</p>
+                            </div>
+                         </div>
+                         <div className="h-20 bg-gray-900 flex items-center justify-between px-10 text-white shrink-0">
+                            <div className="flex items-center gap-4">
+                               <div className="w-10 h-10 bg-white/10 rounded-lg flex items-center justify-center font-black text-xl italic text-blue-400">CP</div>
+                               <div><p className="font-bold text-sm leading-none">{globalConfig.companyInfo.name}</p></div>
+                            </div>
+                            <div className="text-right"><p className="text-xl font-mono font-bold">{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p></div>
+                         </div>
+                      </div>
+                   ) : (
+                      <div className="flex-1 flex overflow-hidden">
+                         <div className="flex-1 flex flex-col border-r border-gray-100 bg-white">
+                            <div className="bg-slate-900 px-6 py-4 text-white shrink-0 flex justify-between">
+                               <span className="font-black text-xs uppercase tracking-widest">Resumen de Cuenta</span>
+                               <span className="text-[10px] font-bold text-blue-400">#000452</span>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar">
+                               {[
+                                  { name: 'Zapatillas Runner X', qty: 1, price: 2500, img: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=100&auto=format&fit=crop' },
+                                  { name: 'Tomate Barceló (Fresco)', qty: 2.5, price: 35, img: 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?q=80&w=100&auto=format&fit=crop' },
+                               ].map((item, i) => (
+                                  <div key={i} className="flex gap-4 items-center">
+                                     {displayConfig.showItemImages && <img src={item.img} className="w-12 h-12 rounded-xl object-cover shadow-sm" />}
+                                     <div className="flex-1">
+                                        <p className="font-bold text-gray-800 text-sm leading-tight">{item.name}</p>
+                                        <p className="text-[10px] text-gray-400 font-medium">{item.qty} un x ${item.price.toFixed(2)}</p>
+                                     </div>
+                                     <div className="text-right font-black text-gray-800 text-sm">${(item.qty * item.price).toFixed(2)}</div>
+                                  </div>
+                               ))}
+                            </div>
+                         </div>
+                         <div className="w-56 bg-slate-50 flex flex-col p-6 items-center justify-between shrink-0">
+                            <div className="text-center">
+                               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total a Pagar</p>
+                               <p className="text-4xl font-black text-slate-900 leading-none tracking-tighter">${(2587.50).toLocaleString()}</p>
+                            </div>
+                            {displayConfig.showQrPayment && (
+                               <div className="bg-white p-3 rounded-2xl shadow-lg border border-slate-100 flex flex-col items-center gap-2">
+                                  <QrCode size={80} className="text-slate-800" />
+                                  <span className="text-[8px] font-black text-slate-400 uppercase">Paga con QR</span>
+                               </div>
+                            )}
+                            <div className="w-full pt-4 border-t border-slate-200">
+                               <p className="text-center text-[10px] font-bold text-emerald-600 bg-emerald-50 py-1 rounded-full">Terminal {selectedTerminalId}</p>
+                            </div>
+                         </div>
+                      </div>
+                   )}
+                </div>
+                <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 w-40 h-10 bg-gray-800 rounded-t-2xl shadow-xl"></div>
+             </div>
+             <p className="text-xs text-gray-400 mt-16 text-center max-w-sm font-medium">Sugerencia: El visor de cliente aumenta la confianza y reduce errores en caja.</p>
+          </div>
+       </div>
+       <div className="fixed bottom-10 right-20 z-50">
+          <button onClick={handleSaveAllHardware} className="px-10 py-5 bg-blue-600 text-white rounded-[2rem] font-black text-xl shadow-2xl shadow-blue-500/40 hover:bg-blue-700 active:scale-95 transition-all flex items-center gap-3">
+             <Save size={24} /> Confirmar Todo el Hardware
+          </button>
+       </div>
+    </div>
+  );
+
+  const renderLabelScales = () => (
+    <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
+      <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-200">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+              <Scale className="text-blue-600" /> Balanzas de Pesaje
+            </h3>
+            <p className="text-sm text-gray-500">Configura balanzas de mostrador y lectura de etiquetas Deli.</p>
+          </div>
+          <button onClick={createNewScale} className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 flex items-center gap-2">
+            <Plus size={20} /> Nueva Balanza
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+           {scales.map(scale => (
+              <div key={scale.id} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-200 group relative">
+                 <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 flex gap-2">
+                    <button onClick={() => setEditingScale(scale)} className="p-2 bg-gray-50 text-gray-400 hover:text-blue-600 rounded-lg"><SettingsIcon size={16} /></button>
+                    <button onClick={() => setScales(scales.filter(s => s.id !== scale.id))} className="p-2 bg-gray-50 text-gray-400 hover:text-red-600 rounded-lg"><Trash2 size={16} /></button>
+                 </div>
+                 <div className="flex items-center gap-4 mb-4">
+                    <div className={`p-3 rounded-2xl ${scale.isEnabled ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-400'}`}><Scale size={24} /></div>
+                    <div>
+                       <h4 className="font-bold text-gray-800">{scale.name || 'Sin nombre'}</h4>
+                       <span className="text-[10px] font-black uppercase text-gray-400 tracking-widest">{scale.technology === 'DIRECT' ? 'Conexión PC' : 'Lectura Etiquetas'}</span>
+                    </div>
+                 </div>
+              </div>
+           ))}
+        </div>
+      </div>
+    </div>
+  );
 
   const renderPeripherals = () => (
     <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <button onClick={startScan} disabled={isScanning} className="p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 hover:border-blue-300 hover:bg-blue-50 transition-all shadow-sm">
-             <Bluetooth size={24} className={isScanning ? 'animate-spin text-blue-500' : 'text-gray-600'} />
-             <span className="text-sm font-bold text-gray-700">{isScanning ? 'Buscando...' : 'Escanear Bluetooth'}</span>
+          <button className="p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 hover:border-blue-300 hover:bg-blue-50 transition-all shadow-sm">
+             <Bluetooth size={24} className="text-gray-600" />
+             <span className="text-sm font-bold text-gray-700">Escanear Bluetooth</span>
           </button>
-          <button onClick={() => setShowIpModal(true)} className="p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 hover:border-blue-300 hover:bg-blue-50 transition-all shadow-sm">
+          <button className="p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 hover:border-blue-300 hover:bg-blue-50 transition-all shadow-sm">
              <Network size={24} className="text-gray-600" />
              <span className="text-sm font-bold text-gray-700">Agregar por IP</span>
           </button>
-          <button onClick={handleConnectUsb} className="p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 hover:border-blue-300 hover:bg-blue-50 transition-all shadow-sm">
+          <button className="p-4 bg-white border border-gray-200 rounded-xl flex flex-col items-center gap-2 hover:border-blue-300 hover:bg-blue-50 transition-all shadow-sm">
              <Usb size={24} className="text-gray-600" />
              <span className="text-sm font-bold text-gray-700">Detectar USB</span>
           </button>
        </div>
 
        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="p-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
-             <h3 className="font-bold text-gray-700 flex items-center gap-2">
-                <Printer size={18} /> Dispositivos Vinculados
-             </h3>
-             <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-bold">{devices.length}</span>
-          </div>
           <div className="divide-y divide-gray-100">
-             {devices.map(device => (
+             {MOCK_PRINTERS.map(device => (
                 <div key={device.id} className="p-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
                    <div className="flex items-center gap-4">
                       <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${device.status === 'CONNECTED' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'}`}>
                          {device.type === 'PRINTER' && <Printer size={24} />}
-                         {device.type === 'SCANNER' && <ScanBarcode size={24} />}
-                         {device.type === 'SCALE' && <Scale size={24} />}
                       </div>
                       <div>
                          <h4 className="font-bold text-gray-800">{device.name}</h4>
@@ -190,320 +546,123 @@ const HardwareSettings: React.FC = () => {
                             <span className="uppercase font-bold">{device.connection}</span>
                             <span>•</span>
                             <span className={device.status === 'CONNECTED' ? 'text-green-600 font-bold' : 'text-gray-400'}>{device.status}</span>
-                            {device.config?.ipAddress && <span>• {device.config.ipAddress}</span>}
                          </div>
                       </div>
                    </div>
-                   <div className="flex items-center gap-2">
-                      {device.type === 'PRINTER' && device.status === 'CONNECTED' && (
-                         <button onClick={() => handleTestPrint(device.name)} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Test Print">
-                            <FileText size={18} />
-                         </button>
-                      )}
-                      <button onClick={() => toggleConnection(device.id)} className={`p-2 rounded-lg font-bold text-xs transition-colors ${device.status === 'CONNECTED' ? 'text-orange-500 hover:bg-orange-50' : 'text-green-600 hover:bg-green-50'}`}>
-                         {device.status === 'CONNECTED' ? 'Desconectar' : 'Conectar'}
-                      </button>
-                      <button onClick={() => removeDevice(device.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                         <X size={18} />
-                      </button>
-                   </div>
+                   <button className="p-2 text-gray-400 hover:text-red-600"><X size={18} /></button>
                 </div>
              ))}
-             {devices.length === 0 && (
-                <div className="p-8 text-center text-gray-400">No hay dispositivos configurados.</div>
-             )}
           </div>
        </div>
     </div>
   );
 
-  const renderScales = () => (
-     <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 flex flex-col md:flex-row gap-8 items-center">
-           <div className="w-full md:w-1/2 flex flex-col items-center justify-center p-8 bg-gray-50 rounded-xl border-2 border-dashed border-gray-200">
-              <Scale size={64} className="text-gray-300 mb-4" />
-              <div className="text-4xl font-black text-gray-800 font-mono mb-2">
-                 {scaleReading !== null ? scaleReading.toFixed(3) : '0.000'} <span className="text-lg text-gray-400">kg</span>
-              </div>
-              <div className="flex gap-2">
-                 <span className={`w-3 h-3 rounded-full ${scaleReading !== null ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                 <span className="text-xs font-bold text-gray-500 uppercase">{scaleReading !== null ? 'Estable' : 'Sin señal'}</span>
-              </div>
-           </div>
-           
-           <div className="w-full md:w-1/2 space-y-4">
-              <h3 className="font-bold text-lg text-gray-800">Configuración de Balanza</h3>
-              <div className="grid grid-cols-2 gap-4">
-                 <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Puerto (COM)</label>
-                    <select className="w-full p-2 border rounded-lg bg-white text-sm">
-                       <option>COM1</option>
-                       <option>COM2</option>
-                       <option>USB Virtual</option>
-                    </select>
-                 </div>
-                 <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Protocolo</label>
-                    <select className="w-full p-2 border rounded-lg bg-white text-sm">
-                       <option>CAS NCI</option>
-                       <option>Dibal</option>
-                       <option>Epelsa</option>
-                       <option>Toledo</option>
-                    </select>
-                 </div>
-              </div>
-              <div className="flex gap-2">
-                 <button onClick={() => setScaleReading(Number((Math.random() * 2).toFixed(3)))} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700">
-                    Probar Lectura
-                 </button>
-                 <button onClick={() => setScaleReading(0)} className="px-4 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold text-sm hover:bg-gray-200">
-                    Tara (Zero)
-                 </button>
-              </div>
-           </div>
-        </div>
-     </div>
-  );
-
-  const renderDisplay = () => (
-     <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
-        <div className="flex justify-between items-start gap-8">
-           <div className="flex-1 space-y-6">
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                 <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2">
-                       <Monitor size={18} /> Pantalla Cliente
-                    </h3>
-                    <div onClick={() => setDisplayConfig({...displayConfig, isEnabled: !displayConfig.isEnabled})} className={`w-12 h-6 rounded-full cursor-pointer transition-colors relative ${displayConfig.isEnabled ? 'bg-green-500' : 'bg-gray-300'}`}>
-                       <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${displayConfig.isEnabled ? 'left-7' : 'left-1'}`}></div>
-                    </div>
-                 </div>
-                 
-                 <div className={`space-y-4 transition-opacity ${displayConfig.isEnabled ? 'opacity-100' : 'opacity-50 pointer-events-none'}`}>
-                    <div>
-                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Mensaje de Bienvenida</label>
-                       <input 
-                          type="text" 
-                          value={displayConfig.welcomeMessage}
-                          onChange={(e) => setDisplayConfig({...displayConfig, welcomeMessage: e.target.value})}
-                          className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                       />
-                    </div>
-                    <div>
-                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Imagen en Reposo (Publicidad)</label>
-                       <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 flex flex-col items-center justify-center text-gray-400 hover:bg-gray-50 cursor-pointer transition-colors">
-                          <ImageIcon size={32} className="mb-2" />
-                          <span className="text-xs font-bold">Click para subir imagen</span>
-                       </div>
-                    </div>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                       <input type="checkbox" checked={displayConfig.showItemDetails} onChange={(e) => setDisplayConfig({...displayConfig, showItemDetails: e.target.checked})} className="w-4 h-4 text-blue-600 rounded" />
-                       <span className="text-sm font-medium text-gray-700">Mostrar detalle de items al escanear</span>
-                    </label>
-                 </div>
-              </div>
-           </div>
-
-           {/* Preview Mockup */}
-           <div className="w-80 hidden md:block">
-              <p className="text-center text-xs font-bold text-gray-400 uppercase mb-2">Vista Previa</p>
-              <div className="bg-gray-900 border-8 border-gray-800 rounded-xl overflow-hidden aspect-video relative shadow-xl">
-                 {/* Simulate Screen Content */}
-                 <div className="absolute inset-0 bg-gradient-to-br from-blue-900 to-slate-900 flex flex-col items-center justify-center text-white p-4 text-center">
-                    <h2 className="text-xl font-bold mb-2">{displayConfig.welcomeMessage}</h2>
-                    <div className="w-full bg-white/10 rounded-lg p-2 mt-4">
-                       <div className="flex justify-between text-xs mb-1 opacity-60"><span>Producto</span><span>Precio</span></div>
-                       <div className="flex justify-between text-sm font-bold"><span>Coca Cola</span><span>$2.00</span></div>
-                    </div>
-                    <div className="mt-auto w-full flex justify-between items-end border-t border-white/20 pt-2">
-                       <span className="text-xs opacity-70">Total a Pagar</span>
-                       <span className="text-2xl font-black">$2.00</span>
-                    </div>
-                 </div>
-              </div>
-           </div>
-        </div>
-     </div>
-  );
-
-  const renderCashDro = () => (
-     <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
-        <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-lg relative overflow-hidden">
-           <div className="absolute top-0 right-0 w-64 h-64 bg-green-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
-           
-           <div className="flex justify-between items-start relative z-10">
-              <div>
-                 <h3 className="text-2xl font-black flex items-center gap-2">
-                    <Server /> CashDro Integration
-                 </h3>
-                 <p className="text-slate-400 text-sm mt-1">Gestión automática de efectivo.</p>
-              </div>
-              <div className={`px-3 py-1 rounded-full text-xs font-bold border ${cashDroStatus === 'READY' ? 'bg-green-500/20 border-green-500 text-green-400' : 'bg-red-500/20 border-red-500 text-red-400'}`}>
-                 {cashDroStatus}
-              </div>
-           </div>
-
-           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8 relative z-10">
-              <div className="space-y-4">
-                 <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">IP Address</label>
-                    <input 
-                       type="text" 
-                       value={cashDroConfig.ipAddress}
-                       onChange={(e) => setCashDroConfig({...cashDroConfig, ipAddress: e.target.value})}
-                       className="w-full p-3 bg-slate-800 border border-slate-700 rounded-xl text-white outline-none focus:border-green-500"
-                    />
-                 </div>
-                 <div className="grid grid-cols-2 gap-4">
-                    <div>
-                       <label className="block text-xs font-bold text-slate-500 uppercase mb-1">User</label>
-                       <input 
-                          type="text" 
-                          value={cashDroConfig.user}
-                          onChange={(e) => setCashDroConfig({...cashDroConfig, user: e.target.value})}
-                          className="w-full p-3 bg-slate-800 border border-slate-700 rounded-xl text-white outline-none focus:border-green-500"
-                       />
-                    </div>
-                    <div>
-                       <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Password</label>
-                       <input 
-                          type="password" 
-                          value={cashDroConfig.password}
-                          onChange={(e) => setCashDroConfig({...cashDroConfig, password: e.target.value})}
-                          className="w-full p-3 bg-slate-800 border border-slate-700 rounded-xl text-white outline-none focus:border-green-500"
-                       />
-                    </div>
-                 </div>
-                 <button 
-                    onClick={() => { setCashDroStatus('CONNECTING'); setTimeout(() => setCashDroStatus('READY'), 2000); }}
-                    className="w-full py-3 bg-green-600 hover:bg-green-500 text-white font-bold rounded-xl transition-colors shadow-lg shadow-green-900/20"
-                 >
-                    {cashDroStatus === 'CONNECTING' ? 'Conectando...' : 'Conectar CashDro'}
-                 </button>
-              </div>
-
-              {/* Status Monitor */}
-              <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 flex flex-col justify-between opacity-80">
-                 <div className="space-y-4">
-                    <div className="flex justify-between items-center border-b border-slate-700 pb-2">
-                       <span className="text-sm text-slate-400">Estado Billetero</span>
-                       <span className="text-green-400 font-bold flex items-center gap-1"><CheckCircle size={14}/> OK</span>
-                    </div>
-                    <div className="flex justify-between items-center border-b border-slate-700 pb-2">
-                       <span className="text-sm text-slate-400">Estado Monedero</span>
-                       <span className="text-green-400 font-bold flex items-center gap-1"><CheckCircle size={14}/> OK</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                       <span className="text-sm text-slate-400">Nivel de Cambio</span>
-                       <div className="flex items-center gap-2">
-                          <div className="w-24 h-2 bg-slate-700 rounded-full overflow-hidden">
-                             <div className="w-[70%] h-full bg-blue-500"></div>
-                          </div>
-                          <span className="text-xs font-bold">70%</span>
-                       </div>
-                    </div>
-                 </div>
-                 <div className="mt-4 pt-4 border-t border-slate-700 flex gap-2">
-                    <button className="flex-1 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold">Vaciaje</button>
-                    <button className="flex-1 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold">Carga</button>
-                 </div>
-              </div>
-           </div>
-        </div>
-     </div>
-  );
-
   return (
     <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">
-      
-      {/* Header */}
       <div className="bg-white px-8 py-6 border-b border-gray-200 flex justify-between items-center shrink-0">
-        <div>
+        <div className="flex items-center gap-4">
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition-colors">
+             <ArrowLeft size={24} />
+          </button>
           <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2">
-             <SettingsIcon className="text-slate-900" /> Configuración Hardware
+             <SettingsIcon className="text-slate-900" /> Hardware & Periféricos
           </h1>
-          <p className="text-sm text-gray-500">Administra impresoras, cajones y periféricos.</p>
         </div>
       </div>
 
       <div className="flex-1 overflow-hidden p-8 flex flex-col">
-         
-         {/* Tabs */}
          <div className="flex space-x-1 bg-gray-200 p-1 rounded-xl mb-6 self-start">
             {[
                { id: 'PERIPHERALS', label: 'Impresoras y Escáneres', icon: Printer },
                { id: 'SCALES', label: 'Balanzas', icon: Scale },
-               { id: 'DISPLAY', label: 'Visor Cliente', icon: Monitor },
+               { id: 'DISPLAY', label: 'Visor Cliente', icon: Tv },
                { id: 'CASHDRO', label: 'CashDro / Cajón', icon: DollarSign },
             ].map(tab => (
                <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id as HardwareTab)}
                   className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${
-                     activeTab === tab.id 
-                        ? 'bg-white text-blue-600 shadow-sm' 
-                        : 'text-gray-500 hover:text-gray-700 hover:bg-gray-300/50'
+                     activeTab === tab.id ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-300/50'
                   }`}
                >
-                  <tab.icon size={16} />
-                  {tab.label}
+                  <tab.icon size={16} /> {tab.label}
                </button>
             ))}
          </div>
 
-         {/* Content */}
          <div className="flex-1 overflow-y-auto">
             {activeTab === 'PERIPHERALS' && renderPeripherals()}
-            {activeTab === 'SCALES' && renderScales()}
-            {activeTab === 'DISPLAY' && renderDisplay()}
+            {activeTab === 'SCALES' && renderLabelScales()}
+            {activeTab === 'DISPLAY' && renderCustomerDisplay()}
             {activeTab === 'CASHDRO' && renderCashDro()}
          </div>
-
       </div>
 
-      {/* IP Modal */}
-      {showIpModal && (
-         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-               <h3 className="text-lg font-bold text-gray-800 mb-4">Agregar Impresora de Red</h3>
-               <div className="space-y-4">
-                  <div>
-                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre</label>
-                     <input 
-                        type="text" 
-                        value={ipForm.name} 
-                        onChange={(e) => setIpForm({...ipForm, name: e.target.value})} 
-                        className="w-full p-3 border rounded-xl"
-                        placeholder="Ej. Cocina"
-                     />
-                  </div>
-                  <div>
-                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Dirección IP</label>
-                     <input 
-                        type="text" 
-                        value={ipForm.ip} 
-                        onChange={(e) => setIpForm({...ipForm, ip: e.target.value})} 
-                        className="w-full p-3 border rounded-xl font-mono"
-                     />
-                  </div>
-                  <div>
-                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Puerto</label>
-                     <input 
-                        type="text" 
-                        value={ipForm.port} 
-                        onChange={(e) => setIpForm({...ipForm, port: e.target.value})} 
-                        className="w-full p-3 border rounded-xl font-mono"
-                     />
-                  </div>
-                  <div className="flex gap-2 pt-2">
-                     <button onClick={() => setShowIpModal(false)} className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl">Cancelar</button>
-                     <button onClick={handleAddIpPrinter} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700">Guardar</button>
-                  </div>
-               </div>
-            </div>
-         </div>
-      )}
+      {/* SCALE MODAL */}
+      {editingScale && (
+        <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+           <div className="bg-white rounded-[2.5rem] w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+              <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                 <div className="flex items-center gap-3">
+                    <Scale className="text-blue-600" />
+                    <h3 className="text-xl font-black text-gray-800">Configuración de Balanza</h3>
+                 </div>
+                 <button onClick={() => setEditingScale(null)} className="p-2 hover:bg-gray-200 rounded-full transition-colors"><X size={20} /></button>
+              </div>
 
+              <div className="flex-1 overflow-y-auto p-8 space-y-8 no-scrollbar">
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                       <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Nombre</label>
+                       <input type="text" value={editingScale.name} onChange={(e) => setEditingScale({...editingScale, name: e.target.value})} className="w-full p-4 bg-gray-50 border border-gray-200 rounded-2xl font-bold text-gray-700" placeholder="Ej. Balanza Carnicería" />
+                    </div>
+                    <div>
+                       <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Tecnología</label>
+                       <select value={editingScale.technology} onChange={(e) => setEditingScale({...editingScale, technology: e.target.value as ScaleTech})} className="w-full p-4 bg-gray-50 border border-gray-200 rounded-2xl font-bold text-gray-700 outline-none">
+                          <option value="DIRECT">Conexión Directa (Serial/COM)</option>
+                          <option value="LABEL">Lectura de Etiquetas (Barcode)</option>
+                       </select>
+                    </div>
+                 </div>
+
+                 {editingScale.technology === 'LABEL' && (
+                    <div className="space-y-8 animate-in slide-in-from-bottom-4">
+                       <div className="flex bg-gray-100 p-1.5 rounded-2xl w-full md:w-80">
+                          <button onClick={() => setEditingScale({ ...editingScale, labelConfig: { ...editingScale.labelConfig!, mode: 'WEIGHT', decimals: 3 }})} className={`flex-1 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${editingScale.labelConfig?.mode === 'WEIGHT' ? 'bg-white shadow-md text-emerald-600' : 'text-gray-500'}`}><Scale size={18} /> Por Peso</button>
+                          <button onClick={() => setEditingScale({ ...editingScale, labelConfig: { ...editingScale.labelConfig!, mode: 'PRICE', decimals: 2 }})} className={`flex-1 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${editingScale.labelConfig?.mode === 'PRICE' ? 'bg-white shadow-md text-blue-600' : 'text-gray-500'}`}><DollarSign size={18} /> Por Precio</button>
+                       </div>
+
+                       <div className="bg-gray-50 p-8 rounded-[2.5rem] border border-gray-200 relative shadow-inner overflow-x-auto no-scrollbar">
+                          <div className="flex gap-1.5 min-w-[600px]">
+                            {[...Array(13)].map((_, i) => {
+                              let color = "bg-slate-200 text-slate-400";
+                              let label = "";
+                              let isInteractive = (i >= 2 && i <= 11);
+                              if (i < 2) { color = "bg-slate-300 text-slate-600"; label = "P"; }
+                              else if (i < 2 + (editingScale.labelConfig?.itemDigits || 5)) { color = "bg-indigo-500 text-white shadow-lg"; label = "I"; }
+                              else if (i < 12) { color = editingScale.labelConfig?.mode === 'WEIGHT' ? 'bg-emerald-500 text-white shadow-lg' : 'bg-blue-600 text-white shadow-lg'; label = editingScale.labelConfig?.mode === 'WEIGHT' ? 'kg' : '$'; }
+                              else { color = "bg-amber-400 text-white shadow-lg"; label = "C"; }
+
+                              return (
+                                <div key={i} onClick={() => isInteractive && handleDigitClick(i + 1)} className={`flex flex-col items-center gap-3 flex-1 transition-all ${isInteractive ? 'cursor-pointer hover:scale-110 active:scale-95' : 'opacity-80'}`}>
+                                  <div className={`w-full aspect-square rounded-2xl flex items-center justify-center font-black text-xl border-b-4 border-black/10 transition-all ${color}`}>{i + 1}</div>
+                                  <span className="text-[10px] font-black text-gray-400 uppercase">{label}</span>
+                                </div>
+                              )
+                            })}
+                          </div>
+                       </div>
+                    </div>
+                 )}
+              </div>
+
+              <div className="p-6 border-t border-gray-100 bg-gray-50 flex justify-end gap-3 z-20">
+                 <button onClick={() => setEditingScale(null)} className="px-6 py-3 text-gray-500 font-bold hover:bg-gray-200 rounded-xl transition-colors">Cancelar</button>
+                 <button onClick={handleSaveScale} className="px-10 py-3 bg-blue-600 text-white font-black text-lg rounded-2xl shadow-xl hover:bg-blue-700 active:scale-95 transition-all">Aplicar</button>
+              </div>
+           </div>
+        </div>
+      )}
     </div>
   );
 };
