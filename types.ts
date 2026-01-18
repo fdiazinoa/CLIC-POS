@@ -11,6 +11,38 @@ export enum SubVertical {
   BAR = 'Discoteca/Bar'
 }
 
+// --- FISCAL NCF TYPES ---
+export type NCFType = 'B01' | 'B02' | 'B14' | 'B15';
+
+export interface FiscalRangeDGII {
+  id: string;
+  type: NCFType;
+  prefix: string;
+  startNumber: number;
+  endNumber: number;
+  currentGlobal: number; // Último entregado a cualquier terminal
+  expiryDate: string;
+  isActive: boolean;
+}
+
+export interface FiscalAllocation {
+  id: string;
+  terminalId: string;
+  type: NCFType;
+  rangeStart: number;
+  rangeEnd: number;
+  assignedAt: string;
+  status: 'ACTIVE' | 'EXHAUSTED';
+}
+
+export interface LocalFiscalBuffer {
+  type: NCFType;
+  prefix: string;
+  currentNumber: number; // El que se usará en la próxima factura
+  endNumber: number;     // Límite de este lote
+  expiryDate: string;
+}
+
 // --- KARDEX TYPES ---
 export type LedgerConcept = 'COMPRA' | 'VENTA' | 'AJUSTE_ENTRADA' | 'AJUSTE_SALIDA' | 'TRASPASO_ENTRADA' | 'TRASPASO_SALIDA' | 'INICIAL';
 
@@ -20,16 +52,48 @@ export interface InventoryLedgerEntry {
   warehouseId: string;
   productId: string;
   concept: LedgerConcept;
-  documentRef: string; // Factura, Orden de Compra, etc.
+  documentRef: string; 
   qtyIn: number;
   qtyOut: number;
-  unitCost: number; // Costo del movimiento
-  balanceQty: number; // Snapshot de cantidad total en el almacén después del movimiento
-  balanceAvgCost: number; // Snapshot del Costo Promedio Ponderado resultante
+  unitCost: number; 
+  balanceQty: number; 
+  balanceAvgCost: number; 
+}
+
+// --- WATCHLIST & BI TYPES ---
+export type WatchlistCriteria = 'MANUAL' | 'RECENT_IN' | 'DORMANT_STOCKS' | 'LOW_STOCK';
+
+export interface WatchlistAlertSettings {
+  maxDormancyDays: number;
+  minVelocity: number;
+  minSellThrough: number;
+  criticalWeeksOfSupply: number;
+  overstockWeeksOfSupply: number;
+}
+
+export interface Watchlist {
+  id: string;
+  name: string;
+  description?: string;
+  criteria: WatchlistCriteria;
+  productIds: string[];
+  createdAt: string;
+  color?: string;
+  alertSettings: WatchlistAlertSettings;
+}
+
+export interface WatchlistKPIs {
+  productId: string;
+  lastSaleDate: string | null;
+  daysSinceLastSale: number;
+  velocity7d: number; 
+  sellThrough: number; 
+  weeksOfSupply: number;
+  totalSoldPeriod: number;
 }
 
 export type ScaleTech = 'DIRECT' | 'LABEL';
-// ... rest of the existing interfaces ...
+
 export interface TaxDefinition {
   id: string;
   name: string;
@@ -64,12 +128,24 @@ export interface DocumentSeries {
   color: string; 
 }
 
+export interface NCFConfig {
+  batchSize: number;
+  lowBatchThreshold: number;
+}
+
 export interface TerminalConfig {
   currentDeviceId?: string;
   lastPairingDate?: string;
   isBlocked?: boolean;
   deviceBindingToken: string;
   
+  fiscal: {
+    batchSize: number; // Deprecated but kept for compatibility
+    lowBatchThreshold: number;
+    // New: Configuration per NCF Type
+    typeConfigs?: Partial<Record<NCFType, NCFConfig>>;
+  };
+
   security: {
     deviceBindingToken: string;
     requirePinForVoid: boolean;
@@ -285,6 +361,7 @@ export interface Customer {
   applyChainedTax?: boolean;
   addresses?: CustomerAddress[];
   creditDays?: number;
+  defaultNcfType?: NCFType;
 }
 
 export interface ProductAttribute {
@@ -330,7 +407,7 @@ export interface Product {
   stock?: number;
   image?: string;
   barcode?: string;
-  cost?: number; // Este campo representará el Costo Promedio Ponderado actual
+  cost?: number; 
   type?: 'PRODUCT' | 'SERVICE' | 'KIT';
   images: string[];
   attributes: ProductAttribute[];
@@ -349,6 +426,7 @@ export interface Product {
   subfamilyId?: string;
   brandId?: string;
   operationalFlags?: ProductOperationalFlags;
+  createdAt?: string;
 }
 
 export interface CartItem extends Product {
@@ -358,6 +436,7 @@ export interface CartItem extends Product {
   note?: string;
   originalPrice?: number;
   salespersonId?: string;
+  ncf?: string; // NCF asignado a esta línea o al ticket
 }
 
 export interface Transaction {
@@ -368,10 +447,13 @@ export interface Transaction {
   payments: any[];
   userId: string;
   userName: string;
+  terminalId?: string; // Nuevo: Para auditoría por caja
   status: 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND';
   customerId?: string;
   customerName?: string;
   refundReason?: string;
+  ncf?: string; // NCF final del documento
+  ncfType?: NCFType;
 }
 
 export type ViewState = 'SETUP' | 'WIZARD' | 'LOGIN' | 'POS' | 'SETTINGS' | 'CUSTOMERS' | 'HISTORY' | 'FINANCE' | 'Z_REPORT' | 'SUPPLY_CHAIN' | 'FRANCHISE_DASHBOARD' | 'DEVICE_UNAUTHORIZED';

@@ -5,15 +5,17 @@ import {
   Filter, Tag, Image as ImageIcon, DollarSign,
   Calendar, CheckCircle2, XCircle, Layers, ClipboardList,
   ChevronDown, ChevronRight, Box, AlertCircle, MapPin, Grid, Sun,
-  CheckSquare, Square, MoreHorizontal, Settings2
+  CheckSquare, Square, MoreHorizontal, Settings2, Activity
 } from 'lucide-react';
-import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season } from '../types';
+import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season, Watchlist } from '../types';
 import ProductForm from './ProductForm';
 import TariffForm from './TariffForm';
 import VariantManager from './VariantManager';
 import GroupForm from './GroupForm';
 import SeasonForm from './SeasonForm';
 import BulkEditModal from './BulkEditModal';
+import WatchlistMonitor from './WatchlistMonitor';
+import { db } from '../utils/db';
 
 interface CatalogManagerProps {
   products: Product[];
@@ -25,7 +27,7 @@ interface CatalogManagerProps {
   onClose: () => void;
 }
 
-type ViewMode = 'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS' | 'GROUPS' | 'SEASONS';
+type ViewMode = 'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS' | 'GROUPS' | 'SEASONS' | 'BI_MONITOR';
 
 // --- SUB-COMPONENT: STOCK ROW ---
 const StockRow: React.FC<{ product: Product; warehouseId: string }> = ({ product, warehouseId }) => {
@@ -182,6 +184,9 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkModal, setShowBulkModal] = useState(false);
 
+  // Watchlists State
+  const [watchlists, setWatchlists] = useState<Watchlist[]>(() => db.get('watchlists') || []);
+
   const tariffs = config.tariffs || [];
   const [editingTariff, setEditingTariff] = useState<Tariff | null | 'NEW'>(null);
   const [editingGroup, setEditingGroup] = useState<ProductGroup | null | 'NEW'>(null);
@@ -212,14 +217,12 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
   };
 
   const handleBulkUpdate = (changes: any) => {
-    // Cerramos el modal primero para evitar conflictos visuales
     setShowBulkModal(false);
 
     const updatedProducts = products.map(p => {
       if (!selectedIds.has(p.id)) return p;
       let newP = { ...p };
       
-      // Aplicar Cambios de Almacén
       if (changes.warehouseActions) {
         let currentActive = new Set(p.activeInWarehouses || []);
         Object.entries(changes.warehouseActions).forEach(([whId, action]) => {
@@ -229,7 +232,6 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
         newP.activeInWarehouses = Array.from(currentActive);
       }
 
-      // Aplicar Flags
       if (changes.flags) {
         const newFlags = { ...(p.operationalFlags || {}) };
         Object.entries(changes.flags).forEach(([key, cfg]: [string, any]) => {
@@ -238,20 +240,22 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
         newP.operationalFlags = newFlags as any;
       }
 
-      // Aplicar Clasificación
       if (changes.classification?.categoryId) newP.category = changes.classification.categoryId;
 
       return newP;
     });
 
-    // Actualización de estado
     onUpdateProducts(updatedProducts);
     setSelectedIds(new Set());
     
-    // Notificación diferida
     setTimeout(() => {
         alert("Operación masiva completada con éxito.");
     }, 200);
+  };
+
+  const handleUpdateWatchlists = (newLists: Watchlist[]) => {
+    setWatchlists(newLists);
+    db.save('watchlists', newLists);
   };
 
   if (viewMode === 'VARIANTS') return <VariantManager onClose={() => setViewMode('PRODUCTS')} />;
@@ -289,8 +293,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
   return (
     <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300 relative">
       
-      {/* BULK ACTION BAR (INVISIBLE UNLESS SELECTION) */}
-      {selectedIds.size > 0 && (
+      {/* BULK ACTION BAR */}
+      {selectedIds.size > 0 && viewMode === 'PRODUCTS' && (
          <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
             <div className="bg-slate-900 text-white px-8 py-4 rounded-[2rem] shadow-2xl flex items-center gap-8 border border-slate-700 backdrop-blur-md bg-opacity-90">
                <div className="flex items-center gap-3 border-r border-slate-700 pr-8">
@@ -323,10 +327,11 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                  <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition-colors"><ArrowLeft size={24} /></button>
                  <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2"><Package className="text-blue-600" /> Gestión de Catálogo</h1>
               </div>
-              <button onClick={() => { if (viewMode === 'PRODUCTS') setEditingProduct('NEW'); else if (viewMode === 'TARIFFS') setEditingTariff('NEW'); else if (viewMode === 'GROUPS') setEditingGroup('NEW'); else if (viewMode === 'SEASONS') setEditingSeason('NEW'); }} className={`px-6 py-3 text-white rounded-xl font-bold shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 ${viewMode === 'STOCKS' ? 'opacity-0 pointer-events-none' : 'bg-blue-600'}`}><Plus size={20} /> {viewMode === 'GROUPS' ? 'Nuevo Grupo' : viewMode === 'TARIFFS' ? 'Nueva Tarifa' : viewMode === 'SEASONS' ? 'Nueva Temporada' : 'Nuevo Artículo'}</button>
+              <button onClick={() => { if (viewMode === 'PRODUCTS') setEditingProduct('NEW'); else if (viewMode === 'TARIFFS') setEditingTariff('NEW'); else if (viewMode === 'GROUPS') setEditingGroup('NEW'); else if (viewMode === 'SEASONS') setEditingSeason('NEW'); }} className={`px-6 py-3 text-white rounded-xl font-bold shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 ${['STOCKS', 'BI_MONITOR'].includes(viewMode) ? 'opacity-0 pointer-events-none' : 'bg-blue-600'}`}><Plus size={20} /> {viewMode === 'GROUPS' ? 'Nuevo Grupo' : viewMode === 'TARIFFS' ? 'Nueva Tarifa' : viewMode === 'SEASONS' ? 'Nueva Temporada' : 'Nuevo Artículo'}</button>
            </div>
            <div className="flex gap-8 mt-2 overflow-x-auto no-scrollbar">
               <button onClick={() => setViewMode('PRODUCTS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'PRODUCTS' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400'}`}><Package size={18} /> Productos</button>
+              <button onClick={() => setViewMode('BI_MONITOR')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'BI_MONITOR' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400'}`}><Activity size={18} /> Monitor BI</button>
               <button onClick={() => setViewMode('VARIANTS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap border-transparent text-gray-400`}><Layers size={18} /> Variantes y Atributos</button>
               <button onClick={() => setViewMode('GROUPS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'GROUPS' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400'}`}><Grid size={18} /> Grupos</button>
               <button onClick={() => setViewMode('SEASONS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'SEASONS' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-gray-400'}`}><Sun size={18} /> Temporadas</button>
@@ -336,9 +341,9 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden flex flex-col p-8 max-w-7xl mx-auto w-full">
+      <div className="flex-1 overflow-hidden flex flex-col w-full">
          {viewMode === 'PRODUCTS' && (
-            <>
+            <div className="p-8 max-w-7xl mx-auto w-full flex-1 flex flex-col overflow-hidden">
                <div className="flex gap-4 mb-6">
                   <div 
                     onClick={toggleAllSelection}
@@ -368,7 +373,6 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                             onClick={() => selectedIds.size > 0 && toggleSelection(product.id)}
                             className={`bg-white rounded-2xl p-4 shadow-sm border-2 transition-all group flex flex-col h-[280px] relative ${isSelected ? 'border-blue-500 ring-4 ring-blue-50' : 'border-gray-200 hover:shadow-md hover:border-blue-300'}`}
                           >
-                             {/* Checkbox Overlay */}
                              <button 
                                onClick={(e) => { e.stopPropagation(); toggleSelection(product.id); }}
                                className={`absolute top-2 left-2 z-10 p-1.5 rounded-lg transition-all ${isSelected ? 'bg-blue-600 text-white scale-110 shadow-lg' : 'bg-white/90 text-gray-300 opacity-0 group-hover:opacity-100 border border-gray-100'}`}
@@ -395,11 +399,27 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                      })}
                   </div>
                </div>
-            </>
+            </div>
+         )}
+
+         {viewMode === 'BI_MONITOR' && (
+            <WatchlistMonitor 
+               products={products}
+               transactions={transactions}
+               watchlists={watchlists}
+               config={config}
+               warehouses={warehouses}
+               onUpdateWatchlists={handleUpdateWatchlists}
+               onOpenKardex={(p) => setEditingProduct(p)} // Reusar ProductForm para Kardex tab
+               onOpenPromo={(p) => { 
+                  // Ir a promos (simulado o abrir modal de promo express)
+                  alert(`Abriendo diseñador de ofertas para: ${p.name}`);
+               }}
+            />
          )}
 
          {viewMode === 'STOCKS' && (
-            <div className="flex flex-col h-full animate-in fade-in slide-in-from-bottom-2">
+            <div className="p-8 max-w-7xl mx-auto w-full flex-1 flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-2">
                <div className="mb-6 flex justify-between items-end">
                   <div><h2 className="text-lg font-bold text-gray-800">Inventario por Almacén</h2><p className="text-sm text-gray-500">Existencias físicas y valorizadas.</p></div>
                   <span className="text-xs bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full font-bold border border-emerald-100 flex items-center gap-1"><CheckCircle2 size={12} /> Tiempo Real</span>
@@ -410,7 +430,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             </div>
          )}
 
-         {viewMode === 'TARIFFS' && <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in">{tariffs.map(tariff => (<div key={tariff.id} className="bg-white rounded-3xl p-6 shadow-sm border border-gray-200 hover:shadow-md transition-all relative overflow-hidden group"><div className={`absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl ${tariff.active ? 'from-green-50' : 'from-gray-100'} to-transparent rounded-bl-full`}></div><div className="relative z-10"><div className="flex justify-between items-start mb-4"><div className={`p-3 rounded-2xl ${tariff.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}><Tag size={24} /></div><div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={() => setEditingTariff(tariff)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-purple-600"><Edit2 size={16} /></button></div></div><h3 className="text-xl font-bold text-gray-800 mb-1">{tariff.name}</h3><div className="flex items-center gap-2 mb-6"><span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase ${tariff.active ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>{tariff.active ? 'Activa' : 'Inactiva'}</span><span className="text-xs text-gray-400 font-mono uppercase">{tariff.strategy.type}</span></div><div className="space-y-3"><div className="flex items-center gap-3 text-sm text-gray-600"><Calendar size={16} className="text-gray-400" /><span>{tariff.schedule.daysOfWeek.length === 7 ? 'Todos los días' : `${tariff.schedule.daysOfWeek.length} días/sem`}</span></div><div className="flex items-center gap-3 text-sm text-gray-600"><DollarSign size={16} className="text-gray-400" /><span>{tariff.currency} {tariff.strategy.type === 'COST_PLUS' ? `(Margen ${tariff.strategy.factor}%)` : ''}</span></div></div></div></div>))}<button onClick={() => setEditingTariff('NEW')} className="bg-gray-50 rounded-3xl p-6 border-2 border-dashed border-gray-200 hover:border-purple-300 hover:bg-purple-50 transition-all flex flex-col items-center justify-center text-gray-400 hover:text-purple-600 gap-4"><div className="p-4 bg-white rounded-full shadow-sm"><Plus size={32} /></div><span className="font-bold">Crear Nueva Lista</span></button></div>}
+         {viewMode === 'TARIFFS' && <div className="p-8 max-w-7xl mx-auto w-full flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in">{tariffs.map(tariff => (<div key={tariff.id} className="bg-white rounded-3xl p-6 shadow-sm border border-gray-200 hover:shadow-md transition-all relative overflow-hidden group"><div className={`absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl ${tariff.active ? 'from-green-50' : 'from-gray-100'} to-transparent rounded-bl-full`}></div><div className="relative z-10"><div className="flex justify-between items-start mb-4"><div className={`p-3 rounded-2xl ${tariff.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}><Tag size={24} /></div><div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={() => setEditingTariff(tariff)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-purple-600"><Edit2 size={16} /></button></div></div><h3 className="text-xl font-bold text-gray-800 mb-1">{tariff.name}</h3><div className="flex items-center gap-2 mb-6"><span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase ${tariff.active ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>{tariff.active ? 'Activa' : 'Inactiva'}</span><span className="text-xs text-gray-400 font-mono uppercase">{tariff.strategy.type}</span></div><div className="space-y-3"><div className="flex items-center gap-3 text-sm text-gray-600"><Calendar size={16} className="text-gray-400" /><span>{tariff.schedule.daysOfWeek.length === 7 ? 'Todos los días' : `${tariff.schedule.daysOfWeek.length} días/sem`}</span></div><div className="flex items-center gap-3 text-sm text-gray-600"><DollarSign size={16} className="text-gray-400" /><span>{tariff.currency} {tariff.strategy.type === 'COST_PLUS' ? `(Margen ${tariff.strategy.factor}%)` : ''}</span></div></div></div></div>))}<button onClick={() => setEditingTariff('NEW')} className="bg-gray-50 rounded-3xl p-6 border-2 border-dashed border-gray-200 hover:border-purple-300 hover:bg-purple-50 transition-all flex flex-col items-center justify-center text-gray-400 hover:text-purple-600 gap-4"><div className="p-4 bg-white rounded-full shadow-sm"><Plus size={32} /></div><span className="font-bold">Crear Nueva Lista</span></button></div>}
       </div>
 
       {showBulkModal && (

@@ -2,24 +2,52 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Receipt, Upload, Type, LayoutTemplate, QrCode, 
-  ToggleLeft, ToggleRight, Trash2, Save 
+  ToggleLeft, ToggleRight, Trash2, Save, MapPin, Phone, Hash
 } from 'lucide-react';
-import { BusinessConfig, ReceiptConfig } from '../types';
+import { BusinessConfig, ReceiptConfig, CompanyInfo } from '../types';
 
 interface ReceiptDesignerProps {
   config: BusinessConfig;
   onUpdateConfig: (newConfig: BusinessConfig) => void;
 }
 
-// Datos de prueba mejorados para mostrar pesos y fotos claramente
 const PREVIEW_ITEMS = [
-  { name: 'Pollo Fresco (Peso)', qty: 2.450, unit: 'lb', price: 3.50, total: 8.58, isWeight: true, img: 'https://images.unsplash.com/photo-1587593810167-a84920ea0781?q=80&w=50&auto=format&fit=crop' },
-  { name: 'Coca Cola 500ml', qty: 2, unit: 'un', price: 2.50, total: 5.00, isWeight: false, img: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?q=80&w=50&auto=format&fit=crop' },
-  { name: 'Sandwich Mixto', qty: 1, unit: 'un', price: 5.00, total: 5.00, isWeight: false, img: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af?q=80&w=50&auto=format&fit=crop' },
+  { 
+    name: 'Pollo Fresco (Peso)', 
+    qty: 2.450, 
+    unit: 'kg', 
+    price: 3.50, 
+    total: 8.58, 
+    isWeight: true, 
+    discount: 0.50,
+    tax: 1.54,
+    variant: 'Marinado Especial',
+    seller: 'Ana P.',
+    note: 'Entregar troceado',
+    img: 'https://images.unsplash.com/photo-1587593810167-a84920ea0781?q=80&w=50&auto=format&fit=crop' 
+  },
+  { 
+    name: 'Coca Cola 500ml', 
+    qty: 2, 
+    unit: 'un', 
+    price: 2.50, 
+    total: 5.00, 
+    isWeight: false, 
+    discount: 0,
+    tax: 0.90,
+    seller: 'Ana P.',
+    img: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?q=80&w=50&auto=format&fit=crop' 
+  },
 ];
 
 const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfig }) => {
-  const [localConfig, setLocalConfig] = useState<ReceiptConfig>({
+  // Estado local para Empresa (para no guardar cambios parciales accidentalmente)
+  const [localCompany, setLocalCompany] = useState<CompanyInfo>({
+    ...config.companyInfo
+  });
+
+  // Estado local para Configuración de Ticket
+  const [localReceipt, setLocalReceipt] = useState<ReceiptConfig>({
     logo: config.receiptConfig?.logo || '',
     footerMessage: config.receiptConfig?.footerMessage || '¡Gracias por su compra!\nVuelva pronto.',
     showCustomerInfo: config.receiptConfig?.showCustomerInfo ?? true,
@@ -28,22 +56,37 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
     showForeignCurrencyTotals: config.receiptConfig?.showForeignCurrencyTotals ?? false,
   });
 
-  const showImagesInTicket = config.terminals?.[0]?.config?.workflow?.inventory?.showProductImagesInReceipt ?? false;
-  const mockTotal = 21.92; // Total of PREVIEW_ITEMS
+  const [isSaving, setIsSaving] = useState(false);
 
+  const mockSubtotal = 13.58;
+  const mockDiscount = 0.50;
+  const mockTax = 2.44;
+  const mockTotal = 15.52;
+
+  // FUNCIÓN PRINCIPAL DE GUARDADO
   const handleSave = () => {
-    onUpdateConfig({
+    setIsSaving(true);
+    
+    // Unificamos toda la configuración nueva
+    const finalConfig: BusinessConfig = {
       ...config,
-      receiptConfig: localConfig
-    });
-    alert("Diseño de ticket guardado correctamente.");
+      companyInfo: localCompany,
+      receiptConfig: localReceipt
+    };
+
+    // Simulamos un delay para feedback visual
+    setTimeout(() => {
+      onUpdateConfig(finalConfig);
+      setIsSaving(false);
+      alert("Configuración de ticket y empresa guardada exitosamente.");
+    }, 600);
   };
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => setLocalConfig(prev => ({ ...prev, logo: reader.result as string }));
+      reader.onloadend = () => setLocalReceipt(prev => ({ ...prev, logo: reader.result as string }));
       reader.readAsDataURL(file);
     }
   };
@@ -67,20 +110,20 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
            <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
               <LayoutTemplate size={20} className="text-blue-500" />
-              Cabecera & Logo
+              Datos de Empresa & Logo
            </h2>
            
-           <div className="flex gap-4 mb-4">
+           <div className="flex gap-4 mb-6">
               <div className="w-24 h-24 rounded-xl bg-gray-50 border-2 border-dashed border-gray-300 flex items-center justify-center relative overflow-hidden group cursor-pointer">
-                 {localConfig.logo ? (
-                    <img src={localConfig.logo} alt="Logo" className="w-full h-full object-contain" />
+                 {localReceipt.logo ? (
+                    <img src={localReceipt.logo} alt="Logo" className="w-full h-full object-contain" />
                  ) : (
                     <Upload className="text-gray-400" size={24} />
                  )}
                  <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*" onChange={handleLogoUpload} />
-                 {localConfig.logo && (
+                 {localReceipt.logo && (
                     <div 
-                      onClick={(e) => { e.stopPropagation(); setLocalConfig(prev => ({...prev, logo: ''})); }}
+                      onClick={(e) => { e.stopPropagation(); setLocalReceipt(prev => ({...prev, logo: ''})); }}
                       className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                        <Trash2 className="text-white" size={20} />
@@ -88,42 +131,51 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                  )}
               </div>
               <div className="flex-1 space-y-2">
-                 <p className="text-xs text-gray-500">Sube el logo de tu negocio. Se mostrará en blanco y negro en la mayoría de impresoras.</p>
-                 <div className="p-3 bg-blue-50 text-blue-800 text-xs rounded-lg font-medium">
-                    Recomendado: PNG Transparente
+                 <p className="text-xs text-gray-500 font-medium">Sube el logo de tu negocio para el encabezado del ticket.</p>
+                 <div className="p-3 bg-blue-50 text-blue-800 text-[10px] rounded-lg font-bold uppercase tracking-wider">
+                    Sugerencia: Blanco y negro (Grayscale)
                  </div>
               </div>
            </div>
 
-           <div className="space-y-3">
+           <div className="space-y-4">
               <div>
-                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre del Negocio</label>
+                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 ml-1">Nombre Comercial</label>
                  <input 
                     type="text" 
-                    value={config.companyInfo.name} 
-                    onChange={e => onUpdateConfig({...config, companyInfo: {...config.companyInfo, name: e.target.value}})}
-                    className="w-full p-2 border rounded-lg text-sm bg-gray-50" 
+                    value={localCompany.name} 
+                    onChange={e => setLocalCompany({...localCompany, name: e.target.value})}
+                    className="w-full p-3 border border-gray-200 rounded-xl text-sm font-bold bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all" 
                  />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-4">
                  <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Dirección</label>
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 ml-1">RNC / Cédula</label>
                     <input 
                        type="text" 
-                       value={config.companyInfo.address} 
-                       onChange={e => onUpdateConfig({...config, companyInfo: {...config.companyInfo, address: e.target.value}})}
-                       className="w-full p-2 border rounded-lg text-sm bg-gray-50" 
+                       value={localCompany.rnc} 
+                       onChange={e => setLocalCompany({...localCompany, rnc: e.target.value})}
+                       className="w-full p-3 border border-gray-200 rounded-xl text-sm font-mono bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all" 
                     />
                  </div>
                  <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">RNC / Tax ID</label>
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 ml-1">Teléfono</label>
                     <input 
                        type="text" 
-                       value={config.companyInfo.rnc} 
-                       onChange={e => onUpdateConfig({...config, companyInfo: {...config.companyInfo, rnc: e.target.value}})}
-                       className="w-full p-2 border rounded-lg text-sm bg-gray-50" 
+                       value={localCompany.phone} 
+                       onChange={e => setLocalCompany({...localCompany, phone: e.target.value})}
+                       className="w-full p-3 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all" 
                     />
                  </div>
+              </div>
+              <div>
+                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 ml-1">Dirección Física</label>
+                 <input 
+                    type="text" 
+                    value={localCompany.address} 
+                    onChange={e => setLocalCompany({...localCompany, address: e.target.value})}
+                    className="w-full p-3 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all" 
+                 />
               </div>
            </div>
         </div>
@@ -131,188 +183,146 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
            <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
               <Type size={20} className="text-purple-500" />
-              Contenido & Pie de Página
+              Contenido Opcional
            </h2>
            
-           <div className="space-y-3 mb-6">
-              <ToggleSwitch label="Mostrar Datos del Cliente" checked={localConfig.showCustomerInfo || false} onChange={v => setLocalConfig(prev => ({...prev, showCustomerInfo: v}))} />
-              <ToggleSwitch label="Mostrar Ahorro Total" checked={localConfig.showSavings || false} onChange={v => setLocalConfig(prev => ({...prev, showSavings: v}))} />
-              <ToggleSwitch label="Mostrar Totales en Otras Monedas" checked={localConfig.showForeignCurrencyTotals || false} onChange={v => setLocalConfig(prev => ({...prev, showForeignCurrencyTotals: v}))} />
-              <ToggleSwitch label="Mostrar Código QR Factura" checked={localConfig.showQr || false} onChange={v => setLocalConfig(prev => ({...prev, showQr: v}))} />
+           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+              <ToggleSwitch label="Datos del Cliente" checked={localReceipt.showCustomerInfo || false} onChange={v => setLocalReceipt(prev => ({...prev, showCustomerInfo: v}))} />
+              <ToggleSwitch label="Ahorro Total" checked={localReceipt.showSavings || false} onChange={v => setLocalReceipt(prev => ({...prev, showSavings: v}))} />
+              <ToggleSwitch label="Otras Monedas" checked={localReceipt.showForeignCurrencyTotals || false} onChange={v => setLocalReceipt(prev => ({...prev, showForeignCurrencyTotals: v}))} />
+              <ToggleSwitch label="Código QR Factura" checked={localReceipt.showQr || false} onChange={v => setLocalReceipt(prev => ({...prev, showQr: v}))} />
            </div>
 
            <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Mensaje de Despedida</label>
+              <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 ml-1">Mensaje en Pie de Ticket</label>
               <textarea 
                  rows={3}
-                 value={localConfig.footerMessage}
-                 onChange={e => setLocalConfig(prev => ({...prev, footerMessage: e.target.value}))}
-                 className="w-full p-3 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-purple-500 outline-none resize-none"
-                 placeholder="Ej. Gracias por su visita..."
+                 value={localReceipt.footerMessage}
+                 onChange={(e) => setLocalReceipt(prev => ({...prev, footerMessage: e.target.value}))}
+                 className="w-full p-4 border border-gray-200 rounded-2xl text-sm focus:ring-4 focus:ring-purple-50 outline-none resize-none bg-gray-50 transition-all"
+                 placeholder="Ej. Gracias por su visita."
               />
            </div>
         </div>
 
         <button 
            onClick={handleSave}
-           className="w-full py-4 bg-gray-900 text-white rounded-2xl font-bold shadow-xl hover:bg-gray-800 transition-all flex items-center justify-center gap-2"
+           disabled={isSaving}
+           className={`w-full py-5 rounded-2xl font-black text-lg shadow-xl transition-all flex items-center justify-center gap-3 ${isSaving ? 'bg-gray-400 cursor-not-allowed' : 'bg-slate-900 text-white hover:bg-black active:scale-[0.98]'}`}
         >
-           <Save size={20} /> Guardar Diseño
+           {isSaving ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Save size={24} />}
+           {isSaving ? 'Guardando...' : 'Guardar Cambios'}
         </button>
 
       </div>
 
       {/* RIGHT: PREVIEW */}
-      <div className="w-full lg:w-1/2 bg-gray-200/80 rounded-3xl border-2 border-gray-300/50 flex items-start justify-center p-8 overflow-y-auto shadow-inner relative">
-         <div className="absolute top-4 right-4 bg-white/50 backdrop-blur px-3 py-1 rounded-full text-xs font-bold text-gray-500 border border-gray-200">
-            Vista Previa (80mm)
-         </div>
-         
-         {/* THE TICKET */}
-         <div className="w-[380px] bg-white shadow-2xl relative transition-all duration-300 shrink-0">
-            
-            <div className="p-6 pb-12 font-mono text-gray-800 text-sm leading-snug">
+      <div className="w-full lg:w-1/2 bg-slate-200 rounded-[2.5rem] border-2 border-slate-300/50 flex items-start justify-center p-8 overflow-y-auto shadow-inner">
+         <div className="w-[380px] bg-white shadow-2xl relative shrink-0">
+            <div className="p-6 pb-12 font-mono text-gray-800 text-sm leading-tight">
                
-               {/* Header */}
-               <div className="text-center mb-6">
-                  {localConfig.logo && (
-                     <img src={localConfig.logo} alt="Logo" className="h-16 mx-auto mb-2 grayscale object-contain" />
+               {/* Header Preview */}
+               <div className="text-center mb-4">
+                  {localReceipt.logo && (
+                     <img src={localReceipt.logo} alt="Logo" className="h-12 mx-auto mb-2 grayscale object-contain" />
                   )}
-                  <h1 className="font-bold text-xl uppercase mb-1">{config.companyInfo.name || 'NOMBRE TIENDA'}</h1>
-                  <p className="text-xs text-gray-500">{config.companyInfo.address || 'Dirección línea 1'}</p>
-                  <p className="text-xs text-gray-500">Tel: {config.companyInfo.phone || '000-000-0000'}</p>
-                  <p className="text-xs text-gray-500">RNC: {config.companyInfo.rnc || '123456789'}</p>
+                  <h1 className="font-bold text-lg uppercase leading-none mb-1">{localCompany.name}</h1>
+                  <p className="text-[10px] text-gray-700">RNC: {localCompany.rnc}</p>
+                  <p className="text-[10px] text-gray-700">{localCompany.address}</p>
+                  <p className="text-[10px] text-gray-700">TEL: {localCompany.phone}</p>
+
+                  <div className="mt-4 pt-4 border-t border-dashed border-gray-300 space-y-1">
+                     <p className="text-[12px] font-black uppercase">Factura de Crédito Fiscal</p>
+                     <p className="text-[11px] font-mono font-bold">NCF: B0100000001</p>
+                     <p className="text-[11px] font-mono font-bold">Ticket No.: 000452</p>
+                  </div>
                </div>
 
-               {/* Transaction Info */}
-               <div className="border-b-2 border-dashed border-gray-300 pb-3 mb-3">
+               {/* Line Items */}
+               <div className="border-y-2 border-dashed border-gray-200 py-3 mb-4 space-y-4">
+                  {PREVIEW_ITEMS.map((item, idx) => (
+                    <div key={idx} className="space-y-0.5">
+                       <div className="flex justify-between font-bold">
+                          <span>{item.name}</span>
+                          <span>{config.currencySymbol}{item.total.toFixed(2)}</span>
+                       </div>
+                       
+                       <div className="text-[10px] flex gap-2">
+                          <span>{item.qty} x {item.price.toFixed(2)}</span>
+                          {item.discount > 0 && <span>(DESC: -{config.currencySymbol}{item.discount.toFixed(2)})</span>}
+                       </div>
+
+                       <div className="text-[10px] text-gray-500">
+                          ITBIS Aplicado: {config.currencySymbol}{item.tax.toFixed(2)}
+                       </div>
+
+                       {item.variant && (
+                          <div className="text-[10px] italic">
+                             Opciones: {item.variant}
+                          </div>
+                       )}
+
+                       <div className="text-[10px]">
+                          Vendedor: {item.seller}
+                       </div>
+                    </div>
+                  ))}
+               </div>
+
+               {/* Totals Block */}
+               <div className="space-y-1 mb-4">
                   <div className="flex justify-between text-xs">
-                     <span>FECHA: {new Date().toLocaleDateString()}</span>
-                     <span>HORA: {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                     <span>SUBTOTAL</span>
+                     <span>{config.currencySymbol}{mockSubtotal.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between text-xs mt-1">
-                     <span>TICKET: #000458</span>
-                     <span>CAJERO: Admin</span>
-                  </div>
-                  {localConfig.showCustomerInfo && (
-                     <div className="mt-2 pt-2 border-t border-dotted border-gray-200 text-xs">
-                        <p className="font-bold">CLIENTE: Juan Pérez</p>
-                        <p>RNC/Cédula: 402-0000000-1</p>
+                  {mockDiscount > 0 && (
+                     <div className="flex justify-between text-xs">
+                        <span>DESCUENTO TOTAL</span>
+                        <span>-{config.currencySymbol}{mockDiscount.toFixed(2)}</span>
                      </div>
                   )}
-               </div>
-
-               {/* Items Table - Enhanced for Weights and Optional Images */}
-               <table className="w-full text-xs mb-4">
-                  <thead>
-                     <tr className="text-left border-b border-gray-800">
-                        <th className="pb-1 w-12">CANT.</th>
-                        <th className="pb-1">DESCRIPCIÓN</th>
-                        <th className="pb-1 text-right">TOTAL</th>
-                     </tr>
-                  </thead>
-                  <tbody>
-                     {PREVIEW_ITEMS.map((item, idx) => (
-                        <React.Fragment key={idx}>
-                          <tr>
-                             <td className="py-1 align-top font-bold">
-                                {item.isWeight ? item.qty.toFixed(3) : item.qty}
-                             </td>
-                             <td className="py-1 align-top">
-                                <div className="flex items-start gap-2">
-                                   {showImagesInTicket && (
-                                      <img src={item.img} className="w-6 h-6 rounded-sm object-cover grayscale shrink-0 border border-gray-200" alt="prod" />
-                                   )}
-                                   <span>{item.name}</span>
-                                </div>
-                             </td>
-                             <td className="py-1 align-top text-right font-bold">{config.currencySymbol}{item.total.toFixed(2)}</td>
-                          </tr>
-                          {item.isWeight && (
-                            <tr>
-                              <td colSpan={showImagesInTicket ? 1 : 1}></td>
-                              <td className="pb-2 text-[10px] text-gray-500 italic pl-8">
-                                Detalle: {item.qty.toFixed(3)} {item.unit} x {config.currencySymbol}{item.price.toFixed(2)}
-                              </td>
-                              <td></td>
-                            </tr>
-                          )}
-                        </React.Fragment>
-                     ))}
-                  </tbody>
-               </table>
-
-               {/* Totals */}
-               <div className="border-t-2 border-gray-800 pt-2 mb-2">
-                  <div className="flex justify-between text-xs mb-1">
-                     <span>SUBTOTAL</span>
-                     <span>{config.currencySymbol}18.58</span>
+                  <div className="flex justify-between text-xs">
+                     <span>TOTAL IMPUESTOS</span>
+                     <span>{config.currencySymbol}{mockTax.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between text-xs mb-1">
-                     <span>IMPUESTOS (18%)</span>
-                     <span>{config.currencySymbol}3.34</span>
+                  <div className="flex justify-between text-lg font-black border-t-2 border-slate-900 mt-2 pt-2">
+                     <span>TOTAL</span>
+                     <span>{config.currencySymbol}{mockTotal.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between text-lg font-bold mt-2">
-                     <span>TOTAL A PAGAR</span>
-                     <span>{config.currencySymbol}21.92</span>
-                  </div>
-               </div>
 
-               {/* Savings Block - Centered and Renamed */}
-               {localConfig.showSavings && (
-                  <div className="w-full text-center text-xs mb-4 font-bold text-gray-800 border-y border-dashed border-gray-300 py-2">
-                     *** Ahorro en Compra: {config.currencySymbol}2.50 ***
-                  </div>
-               )}
-
-               {/* Foreign Currencies */}
-               {localConfig.showForeignCurrencyTotals && (
-                  <div className="border-t border-dashed border-gray-300 pt-2 mb-4">
-                     {config.currencies.filter(c => !c.isBase && c.isEnabled).length > 0 ? (
-                        config.currencies.filter(c => !c.isBase && c.isEnabled).map(c => (
-                           <div key={c.code} className="flex justify-between text-xs font-bold text-gray-600">
-                              <span>Total {c.code}</span>
-                              {/* Assuming rate means 1 Base = X Foreign, or using inverse logic. 
-                                  Standard POS usually stores rate as 1 Unit Foreign = X Units Base (e.g. 1 USD = 58 DOP).
-                                  So TotalForeign = TotalBase / Rate. */}
-                              <span>{c.symbol}{(mockTotal / (c.rate || 1)).toFixed(2)}</span>
-                           </div>
-                        ))
-                     ) : (
-                        // Mock display if no foreign currencies configured yet
-                        <div className="flex justify-between text-xs font-bold text-gray-400">
-                           <span>Total USD</span>
-                           <span>$0.37</span>
+                  {/* FEATURE: Otras Monedas */}
+                  {localReceipt.showForeignCurrencyTotals && (
+                    <div className="mt-4 pt-2 border-t border-dotted border-gray-300 space-y-1">
+                      <p className="text-[9px] text-gray-500 font-bold uppercase tracking-tighter">Equivalente en Divisas</p>
+                      {config.currencies.filter(c => !c.isBase).map(c => (
+                        <div key={c.code} className="flex justify-between text-[11px] font-bold">
+                           <span>TOTAL {c.code} (Tasa: {c.rate.toFixed(2)})</span>
+                           <span>{c.symbol}{(mockTotal / (c.rate || 1)).toFixed(2)}</span>
                         </div>
-                     )}
-                  </div>
-               )}
+                      ))}
+                    </div>
+                  )}
+
+                  {/* FEATURE: Ahorro Total */}
+                  {localReceipt.showSavings && mockDiscount > 0 && (
+                    <div className="mt-4 p-2 border-2 border-dashed border-slate-800 text-center bg-slate-50">
+                       <p className="text-[10px] font-black uppercase leading-none mb-1">¡Usted ha ahorrado!</p>
+                       <p className="text-sm font-black">{config.currencySymbol}{mockDiscount.toFixed(2)}</p>
+                    </div>
+                  )}
+               </div>
 
                {/* Footer */}
-               <div className="text-center space-y-4">
-                  <p className="text-xs whitespace-pre-wrap">{localConfig.footerMessage}</p>
-                  
-                  {localConfig.showQr && (
-                     <div className="flex flex-col items-center gap-1">
-                        <QrCode size={64} className="text-gray-800" />
-                        <span className="text-[10px] text-gray-400">#000458-VERIFICAR</span>
-                     </div>
+               <div className="text-center space-y-4 pt-4 border-t border-dashed border-gray-200">
+                  <p className="text-[10px] whitespace-pre-wrap">{localReceipt.footerMessage}</p>
+                  {localReceipt.showQr && (
+                    <div className="flex flex-col items-center gap-1">
+                      <QrCode size={48} className="text-slate-800" />
+                      <span className="text-[8px] font-bold uppercase">e-Factura Validada</span>
+                    </div>
                   )}
-                  
-                  <p className="text-[10px] text-gray-400 mt-4 uppercase font-bold tracking-widest">*** COPIA DEL CLIENTE ***</p>
                </div>
             </div>
-
-            <div 
-               className="absolute bottom-0 left-0 w-full h-4 bg-gray-200/0"
-               style={{
-                  height: '12px',
-                  background: 'radial-gradient(circle, transparent 50%, #ffffff 50%)',
-                  backgroundSize: '20px 20px',
-                  backgroundPosition: '0 10px',
-                  transform: 'rotate(180deg) translateY(-100%)'
-               }}
-            ></div>
          </div>
       </div>
 

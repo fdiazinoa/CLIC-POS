@@ -3,7 +3,7 @@ import React, { useState, useMemo } from 'react';
 import { 
   ArrowLeft, Search, Calendar, ChevronDown, ChevronUp, 
   Printer, RotateCcw, AlertCircle, Check, X, FileText, 
-  User, DollarSign, Box, Filter, Gift, QrCode
+  User, DollarSign, Box, Filter, Gift, QrCode, StickyNote
 } from 'lucide-react';
 import { Transaction, BusinessConfig, CartItem } from '../types';
 
@@ -152,24 +152,6 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
-          {searchTerm && (
-             <div className="absolute right-4 top-1/2 -translate-y-1/2 text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded font-bold uppercase tracking-wider">
-                Filtro Activo
-             </div>
-          )}
-        </div>
-        
-        {/* Quick Chips */}
-        <div className="flex justify-center gap-2 mt-3 text-xs">
-           {['Hoy', 'Ayer', 'Devoluciones'].map(filter => (
-              <button 
-                 key={filter} 
-                 onClick={() => setSearchTerm(filter === 'Devoluciones' ? 'refund' : filter)}
-                 className="px-3 py-1 bg-white border border-gray-200 rounded-full text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
-              >
-                 {filter}
-              </button>
-           ))}
         </div>
       </header>
 
@@ -193,7 +175,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
                      isReturnActive ? 'ring-2 ring-red-400 border-red-200 shadow-xl scale-[1.01] z-10' : 'border-gray-100 hover:shadow-md'
                   }`}
                >
-                  {/* Card Header (Always Visible) */}
+                  {/* Card Header */}
                   <div 
                      onClick={() => toggleExpand(tx.id)}
                      className="p-5 flex items-center justify-between cursor-pointer active:bg-gray-50"
@@ -205,11 +187,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
                         <div>
                            <div className="flex items-center gap-2">
                               <h3 className="font-bold text-gray-900 text-lg">Ticket #{tx.id}</h3>
-                              {isRefunded && (
-                                 <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[10px] font-bold uppercase rounded-md tracking-wide">
-                                    Reembolsado
-                                 </span>
-                              )}
+                              {isRefunded && <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[10px] font-bold uppercase rounded-md">Reembolsado</span>}
                            </div>
                            <div className="flex items-center gap-3 text-sm text-gray-500 mt-1">
                               <span className="flex items-center gap-1"><Calendar size={14} /> {new Date(tx.date).toLocaleDateString()}</span>
@@ -225,46 +203,50 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
                      </div>
                   </div>
 
-                  {/* Expanded Content (Accordion) */}
+                  {/* Expanded Content */}
                   {(isExpanded || isReturnActive) && (
                      <div className="border-t border-gray-100 bg-gray-50/50 animate-in slide-in-from-top-2 duration-200">
-                        {/* Items List */}
-                        <div className="p-2 space-y-1">
+                        <div className="p-3 space-y-1">
                            {tx.items.map((item, idx) => (
                               <div 
                                  key={idx} 
                                  onClick={() => isReturnActive && toggleItemSelection(item.cartId)}
-                                 className={`flex justify-between items-center p-3 rounded-xl transition-colors ${
-                                    isReturnActive 
-                                       ? 'cursor-pointer hover:bg-white border border-transparent' 
-                                       : ''
-                                 } ${
-                                    selectedItems.has(item.cartId) ? 'bg-red-50 border-red-200' : ''
-                                 }`}
+                                 className={`p-3 rounded-xl transition-all ${
+                                    isReturnActive ? 'cursor-pointer hover:bg-white border border-transparent' : ''
+                                 } ${selectedItems.has(item.cartId) ? 'bg-red-50 border-red-200 shadow-sm' : ''}`}
                               >
-                                 <div className="flex items-center gap-3">
-                                    {isReturnActive && (
-                                       <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
-                                          selectedItems.has(item.cartId) ? 'bg-red-500 border-red-500 text-white' : 'bg-white border-gray-300'
-                                       }`}>
-                                          {selectedItems.has(item.cartId) && <Check size={12} strokeWidth={3} />}
-                                       </div>
-                                    )}
-                                    <span className={`font-bold bg-white w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 text-xs ${isReturnActive ? 'opacity-50' : ''}`}>
-                                       {item.quantity}x
-                                    </span>
-                                    <div>
-                                       <p className="font-medium text-gray-800 text-sm">{item.name}</p>
-                                       {item.modifiers && item.modifiers.length > 0 && (
-                                         <p className="text-[10px] font-bold text-blue-500 uppercase tracking-tight">
-                                           {item.modifiers.join(' • ')}
-                                         </p>
+                                 <div className="flex justify-between items-start">
+                                    <div className="flex items-center gap-3">
+                                       {isReturnActive && (
+                                          <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
+                                             selectedItems.has(item.cartId) ? 'bg-red-500 border-red-500 text-white' : 'bg-white border-gray-300'
+                                          }`}>
+                                             {selectedItems.has(item.cartId) && <Check size={12} strokeWidth={3} />}
+                                          </div>
                                        )}
+                                       <span className={`font-bold bg-white w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 text-xs`}>
+                                          {item.quantity}x
+                                       </span>
+                                       <div>
+                                          <p className="font-bold text-gray-800 text-sm leading-tight">{item.name}</p>
+                                          {/* Properties visiblity in history */}
+                                          {item.modifiers && item.modifiers.length > 0 && (
+                                            <div className="flex gap-1 mt-1">
+                                               {item.modifiers.map((m, mi) => (
+                                                  <span key={mi} className="text-[9px] font-black uppercase text-blue-500 bg-blue-50 px-1 rounded border border-blue-100">{m}</span>
+                                               ))}
+                                            </div>
+                                          )}
+                                       </div>
                                     </div>
+                                    <span className="font-bold text-gray-700 text-sm">{config.currencySymbol}{(item.price * item.quantity).toFixed(2)}</span>
                                  </div>
-                                 <span className="font-bold text-gray-700 text-sm">
-                                    {config.currencySymbol}{(item.price * item.quantity).toFixed(2)}
-                                 </span>
+                                 {item.note && (
+                                   <div className="ml-11 mt-1.5 flex items-start gap-1 text-[10px] text-yellow-700 font-medium">
+                                      <StickyNote size={10} className="mt-0.5" />
+                                      <span>Nota: {item.note}</span>
+                                   </div>
+                                 )}
                               </div>
                            ))}
                         </div>
@@ -272,73 +254,28 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
                         {/* Controls Footer */}
                         <div className="p-4 bg-white border-t border-gray-200 flex justify-between items-center gap-4">
                            {!isReturnActive ? (
-                              <>
-                                 <div className="flex gap-2">
-                                    <button className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg font-bold text-sm hover:bg-gray-200 transition-colors">
-                                       <Printer size={16} /> Re-imprimir
-                                    </button>
-                                    <button 
-                                      onClick={(e) => handlePrintGiftReceipt(e, tx)}
-                                      className="flex items-center gap-2 px-4 py-2 bg-purple-50 text-purple-600 border border-purple-100 rounded-lg font-bold text-sm hover:bg-purple-100 transition-colors"
-                                    >
-                                       <Gift size={16} /> Ticket Regalo
-                                    </button>
-                                 </div>
+                              <div className="flex gap-2 w-full">
+                                 <button className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-100 text-gray-600 rounded-xl font-bold text-sm hover:bg-gray-200 transition-colors">
+                                    <Printer size={16} /> Re-imprimir
+                                 </button>
+                                 <button onClick={(e) => handlePrintGiftReceipt(e, tx)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-50 text-purple-600 border border-purple-100 rounded-xl font-bold text-sm hover:bg-purple-100 transition-colors">
+                                    <Gift size={16} /> Regalo
+                                 </button>
                                  {!isRefunded && (
-                                    <button 
-                                       onClick={(e) => startReturnMode(e, tx.id)}
-                                       className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 border border-red-100 rounded-lg font-bold text-sm hover:bg-red-100 transition-colors"
-                                    >
+                                    <button onClick={(e) => startReturnMode(e, tx.id)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 border border-red-100 rounded-xl font-bold text-sm hover:bg-red-100 transition-colors">
                                        <RotateCcw size={16} /> Devolución
                                     </button>
                                  )}
-                              </>
+                              </div>
                            ) : (
-                              /* RETURN MODE CONTROLS */
-                              <div className="w-full animate-in fade-in">
-                                 <div className="flex items-center justify-between mb-4 bg-red-50 p-3 rounded-xl border border-red-100">
-                                    <div className="flex items-center gap-2 text-red-700 font-bold text-sm">
-                                       <AlertCircle size={18} />
-                                       <span>Modo Devolución Activo</span>
-                                    </div>
-                                    <div className="text-right">
-                                       <p className="text-[10px] text-red-400 uppercase font-bold">Total a Reembolsar</p>
-                                       <p className="text-xl font-black text-red-600">{config.currencySymbol}{currentRefundTotal.toFixed(2)}</p>
-                                    </div>
+                              <div className="w-full">
+                                 <div className="flex items-center justify-between mb-4 bg-red-50 p-4 rounded-2xl border border-red-100">
+                                    <div className="flex items-center gap-2 text-red-700 font-bold text-sm"><AlertCircle size={18} /><span>Reembolso Activo</span></div>
+                                    <div className="text-right"><p className="text-[10px] text-red-400 uppercase font-bold tracking-widest">A Devolver</p><p className="text-2xl font-black text-red-600">{config.currencySymbol}{currentRefundTotal.toFixed(2)}</p></div>
                                  </div>
-
-                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                                    <div>
-                                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Motivo</label>
-                                       <select 
-                                          value={returnReason}
-                                          onChange={(e) => setReturnReason(e.target.value as ReturnReason)}
-                                          className="w-full p-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-medium outline-none focus:border-red-400"
-                                       >
-                                          {REASONS.map(r => (
-                                             <option key={r.id} value={r.id}>{r.label}</option>
-                                          ))}
-                                       </select>
-                                    </div>
-                                    <div className="flex items-end text-xs text-gray-400 pb-2">
-                                       * El inventario se ajustará automáticamente si aplica.
-                                    </div>
-                                 </div>
-
-                                 <div className="flex gap-3">
-                                    <button 
-                                       onClick={cancelReturnMode}
-                                       className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200"
-                                    >
-                                       Cancelar
-                                    </button>
-                                    <button 
-                                       onClick={() => confirmRefund(tx)}
-                                       disabled={selectedItems.size === 0}
-                                       className="flex-[2] py-3 bg-red-600 text-white rounded-xl font-bold shadow-lg shadow-red-200 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                                    >
-                                       <Check size={18} /> Confirmar Reembolso
-                                    </button>
+                                 <div className="grid grid-cols-2 gap-3">
+                                    <button onClick={cancelReturnMode} className="py-3 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200">Cancelar</button>
+                                    <button onClick={() => confirmRefund(tx)} disabled={selectedItems.size === 0} className="py-3 bg-red-600 text-white rounded-xl font-bold shadow-lg disabled:opacity-50 flex items-center justify-center gap-2"><Check size={18} /> Confirmar</button>
                                  </div>
                               </div>
                            )}
@@ -351,75 +288,32 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
         )}
       </div>
 
-      {/* GIFT RECEIPT PREVIEW MODAL */}
+      {/* GIFT RECEIPT MODAL */}
       {giftReceiptTx && (
         <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
            <div className="bg-white rounded-2xl shadow-2xl overflow-hidden w-full max-w-sm flex flex-col">
               <div className="p-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
-                 <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                    <Gift className="text-purple-600" size={20} />
-                    Ticket Regalo (Vista Previa)
-                 </h3>
-                 <button onClick={() => setGiftReceiptTx(null)} className="text-gray-400 hover:text-gray-600">
-                    <X size={20} />
-                 </button>
+                 <h3 className="font-bold text-gray-800 flex items-center gap-2"><Gift className="text-purple-600" size={20} /> Ticket Regalo</h3>
+                 <button onClick={() => setGiftReceiptTx(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
               </div>
-              
-              {/* Receipt Content */}
               <div className="p-6 bg-white overflow-y-auto max-h-[60vh] font-mono text-sm leading-relaxed text-gray-700">
-                 <div className="text-center mb-6">
-                    <h2 className="font-bold text-lg uppercase">{config.companyInfo.name}</h2>
-                    <p className="text-xs">{config.companyInfo.address}</p>
-                    <p className="text-xs mt-2 font-bold">*** TICKET DE REGALO ***</p>
-                    <p className="text-xs">No válido como factura fiscal</p>
-                 </div>
-
-                 <div className="border-b-2 border-dashed border-gray-300 pb-2 mb-2 text-xs">
-                    <p>Fecha: {new Date(giftReceiptTx.date).toLocaleString()}</p>
-                    <p>Ref: {giftReceiptTx.id}</p>
-                 </div>
-
+                 <div className="text-center mb-6"><h2 className="font-bold text-lg uppercase">{config.companyInfo.name}</h2><p className="text-xs">{config.companyInfo.address}</p><p className="text-xs mt-2 font-bold">*** TICKET DE REGALO ***</p></div>
+                 <div className="border-b-2 border-dashed border-gray-300 pb-2 mb-2 text-xs"><p>Fecha: {new Date(giftReceiptTx.date).toLocaleString()}</p><p>Ref: {giftReceiptTx.id}</p></div>
                  <table className="w-full text-xs mb-4">
-                    <thead>
-                       <tr className="border-b border-gray-800">
-                          <th className="text-left py-1">Cant</th>
-                          <th className="text-left py-1">Descripción</th>
-                       </tr>
-                    </thead>
+                    <thead><tr className="border-b border-gray-800"><th className="text-left py-1">Cant</th><th className="text-left py-1">Descripción</th></tr></thead>
                     <tbody>
                        {giftReceiptTx.items.map((item, i) => (
-                          <tr key={i}>
-                             <td className="py-1 align-top w-8">{item.quantity}</td>
-                             <td className="py-1 align-top">
-                                {item.name}
-                                {item.modifiers && item.modifiers.length > 0 && (
-                                  <div className="text-[9px] uppercase font-bold text-gray-500">
-                                    {item.modifiers.join(' • ')}
-                                  </div>
-                                )}
-                             </td>
-                          </tr>
+                          <tr key={i}><td className="py-1 align-top w-8">{item.quantity}</td><td className="py-1 align-top">{item.name} {item.modifiers && <span className="text-[9px] uppercase opacity-50 block">{item.modifiers.join(' • ')}</span>}</td></tr>
                        ))}
                     </tbody>
                  </table>
-
                  <div className="border-t-2 border-dashed border-gray-300 pt-4 text-center space-y-4">
-                    <p className="text-xs">Este documento permite realizar cambios o devoluciones sin mostrar el importe de compra.</p>
-                    <div className="flex flex-col items-center">
-                       <QrCode size={64} className="text-gray-800" />
-                       <span className="text-[10px] mt-1">{giftReceiptTx.id}</span>
-                    </div>
-                    <p className="text-xs font-bold">¡Gracias por su preferencia!</p>
+                    <p className="text-xs">Válido para cambios por 30 días.</p>
+                    <div className="flex flex-col items-center"><QrCode size={64} className="text-gray-800" /><span className="text-[10px] mt-1">{giftReceiptTx.id}</span></div>
                  </div>
               </div>
-
               <div className="p-4 bg-gray-50 border-t border-gray-200">
-                 <button 
-                    onClick={() => { alert("Imprimiendo..."); setGiftReceiptTx(null); }}
-                    className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold shadow-lg hover:bg-purple-700 transition-transform active:scale-95 flex items-center justify-center gap-2"
-                 >
-                    <Printer size={20} /> Imprimir Ticket
-                 </button>
+                 <button onClick={() => { alert("Imprimiendo..."); setGiftReceiptTx(null); }} className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold shadow-lg hover:bg-purple-700 transition-transform active:scale-95 flex items-center justify-center gap-2"><Printer size={20} /> Imprimir Ticket</button>
               </div>
            </div>
         </div>

@@ -2,8 +2,7 @@
 import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff, TaxDefinition } from './types';
 
 export const DEFAULT_DOCUMENT_SERIES: DocumentSeries[] = [
-  { id: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar para clientes finales.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
-  { id: 'INVOICE', name: 'Factura Fiscal', description: 'Documento con valor fiscal (B01).', prefix: 'B01', nextNumber: 1, padding: 8, icon: 'FileText', color: 'indigo' },
+  { id: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar para todas las ventas.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
   { id: 'REFUND', name: 'Devolución / Abono', description: 'Notas de crédito por devoluciones.', prefix: 'NC', nextNumber: 1, padding: 6, icon: 'RotateCcw', color: 'orange' },
   { id: 'TRANSFER', name: 'Nota de Traspaso', description: 'Movimiento de inventario entre almacenes.', prefix: 'TR', nextNumber: 1, padding: 6, icon: 'ArrowRightLeft', color: 'purple' },
 ];
@@ -42,6 +41,14 @@ export const INITIAL_TARIFFS: Tariff[] = [
 
 export const DEFAULT_TERMINAL_CONFIG = {
   deviceBindingToken: 'dev_token_init',
+  fiscal: {
+    batchSize: 100,
+    lowBatchThreshold: 20,
+    typeConfigs: {
+      'B01': { batchSize: 50, lowBatchThreshold: 10 },
+      'B02': { batchSize: 200, lowBatchThreshold: 20 }
+    }
+  },
   security: {
     deviceBindingToken: 'dev_token_init',
     requirePinForVoid: true,
@@ -108,7 +115,6 @@ export const MOCK_CUSTOMERS: Customer[] = [
   { id: 'c3', name: 'Cliente de Contado', phone: '', email: '', tier: 'BRONZE', loyaltyPoints: 0, currentDebt: 0 }
 ];
 
-// Helper to generate products
 const generateProducts = () => {
   const categories = [
     { name: 'Verduras', type: 'SERVICE', unit: '/kg' },
@@ -124,70 +130,51 @@ const generateProducts = () => {
   ];
 
   const items = [
-    // Verduras
     { n: 'Zanahoria Fresca', c: 'Verduras', p: 25.00 }, { n: 'Cebolla Roja', c: 'Verduras', p: 45.00 },
     { n: 'Papa Granola', c: 'Verduras', p: 30.00 }, { n: 'Tomate Barceló', c: 'Verduras', p: 35.00 },
     { n: 'Pimiento Morrón', c: 'Verduras', p: 60.00 }, { n: 'Ajo Importado', c: 'Verduras', p: 120.00 },
     { n: 'Brócoli', c: 'Verduras', p: 55.00 }, { n: 'Lechuga Repollada', c: 'Verduras', p: 40.00 },
     { n: 'Pepino', c: 'Verduras', p: 20.00 }, { n: 'Cilantro Ancho', c: 'Verduras', p: 10.00 },
-    
-    // Frutas
     { n: 'Manzana Roja', c: 'Frutas', p: 40.00 }, { n: 'Guineo Maduro', c: 'Frutas', p: 15.00 },
     { n: 'Uva Globo', c: 'Frutas', p: 180.00 }, { n: 'Fresa Paquete', c: 'Frutas', p: 150.00 },
     { n: 'Melón Cantaloupe', c: 'Frutas', p: 85.00 }, { n: 'Sandía', c: 'Frutas', p: 25.00 },
     { n: 'Piña Dulce', c: 'Frutas', p: 70.00 }, { n: 'Mango Mingolo', c: 'Frutas', p: 20.00 },
     { n: 'Limón Persa', c: 'Frutas', p: 12.00 }, { n: 'Chinola', c: 'Frutas', p: 15.00 },
-
-    // Carnicería
     { n: 'Pollo Entero', c: 'Carnicería', p: 75.00 }, { n: 'Carne Molida Res', c: 'Carnicería', p: 145.00 },
     { n: 'Chuleta Ahumada', c: 'Carnicería', p: 160.00 }, { n: 'Bistec de Res', c: 'Carnicería', p: 220.00 },
     { n: 'Pechuga Pollo', c: 'Carnicería', p: 135.00 }, { n: 'Costilla Cerdo', c: 'Carnicería', p: 180.00 },
     { n: 'Salchicha Italiana', c: 'Carnicería', p: 210.00 }, { n: 'Filete Pescado', c: 'Carnicería', p: 195.00 },
     { n: 'Camarones', c: 'Carnicería', p: 450.00 }, { n: 'Longaniza', c: 'Carnicería', p: 110.00 },
-
-    // Lácteos
     { n: 'Leche Entera 1L', c: 'Lácteos', p: 75.00 }, { n: 'Queso Gouda', c: 'Lácteos', p: 350.00 },
     { n: 'Yogurt Fresa', c: 'Lácteos', p: 45.00 }, { n: 'Mantequilla Barra', c: 'Lácteos', p: 95.00 },
     { n: 'Crema de Leche', c: 'Lácteos', p: 120.00 }, { n: 'Queso Mozzarella', c: 'Lácteos', p: 280.00 },
     { n: 'Leche Evaporada', c: 'Lácteos', p: 55.00 }, { n: 'Queso Cheddar', c: 'Lácteos', p: 220.00 },
     { n: 'Helado Vainilla', c: 'Lácteos', p: 350.00 }, { n: 'Leche Condensada', c: 'Lácteos', p: 85.00 },
-
-    // Bebidas
     { n: 'Coca Cola 2L', c: 'Bebidas', p: 80.00 }, { n: 'Agua 500ml', c: 'Bebidas', p: 15.00 },
     { n: 'Jugo Naranja 1L', c: 'Bebidas', p: 110.00 }, { n: 'Cerveza Presidente', c: 'Bebidas', p: 150.00 },
     { n: 'Sprite 2L', c: 'Bebidas', p: 80.00 }, { n: 'Malta Morena', c: 'Bebidas', p: 45.00 },
     { n: 'Gatorade Azul', c: 'Bebidas', p: 65.00 }, { n: 'Vino Tinto Mesa', c: 'Bebidas', p: 450.00 },
     { n: 'Ron Dorado', c: 'Bebidas', p: 600.00 }, { n: 'Agua con Gas', c: 'Bebidas', p: 35.00 },
-
-    // Alacena
     { n: 'Arroz Premium 5lb', c: 'Alacena', p: 220.00 }, { n: 'Aceite Soja 1L', c: 'Alacena', p: 180.00 },
     { n: 'Pasta Espagueti', c: 'Alacena', p: 45.00 }, { n: 'Salsa Tomate', c: 'Alacena', p: 30.00 },
     { n: 'Habichuelas Lata', c: 'Alacena', p: 55.00 }, { n: 'Azúcar Crema 2lb', c: 'Alacena', p: 60.00 },
     { n: 'Sal Molida', c: 'Alacena', p: 15.00 }, { n: 'Harina Trigo', c: 'Alacena', p: 40.00 },
     { n: 'Atún en Agua', c: 'Alacena', p: 75.00 }, { n: 'Café Molido 1lb', c: 'Alacena', p: 280.00 },
-
-    // Snacks
     { n: 'Papas Lay\'s', c: 'Snacks', p: 60.00 }, { n: 'Galletas Chocolate', c: 'Snacks', p: 45.00 },
     { n: 'Chocolate Barra', c: 'Snacks', p: 35.00 }, { n: 'Maní Salado', c: 'Snacks', p: 25.00 },
     { n: 'Doritos Queso', c: 'Snacks', p: 65.00 }, { n: 'Gomitas Osito', c: 'Snacks', p: 30.00 },
     { n: 'Galletas Soda', c: 'Snacks', p: 20.00 }, { n: 'Barra Cereal', c: 'Snacks', p: 40.00 },
     { n: 'Palomitas Micro', c: 'Snacks', p: 50.00 }, { n: 'Chicle Menta', c: 'Snacks', p: 10.00 },
-
-    // Panadería
     { n: 'Pan Sobao', c: 'Panadería', p: 10.00 }, { n: 'Baguette', c: 'Panadería', p: 45.00 },
     { n: 'Pan Viga Blanco', c: 'Panadería', p: 110.00 }, { n: 'Donas Glaseadas', c: 'Panadería', p: 60.00 },
     { n: 'Croissant', c: 'Panadería', p: 75.00 }, { n: 'Pastelito Pollo', c: 'Panadería', p: 35.00 },
     { n: 'Bizcocho Libra', c: 'Panadería', p: 450.00 }, { n: 'Pan de Maíz', c: 'Panadería', p: 50.00 },
     { n: 'Galletas Avena', c: 'Panadería', p: 15.00 }, { n: 'Tostadas', c: 'Panadería', p: 85.00 },
-
-    // Limpieza
     { n: 'Detergente Polvo', c: 'Limpieza', p: 120.00 }, { n: 'Cloro 1L', c: 'Limpieza', p: 45.00 },
     { n: 'Jabón Lavaplatos', c: 'Limpieza', p: 85.00 }, { n: 'Suavizante Ropa', c: 'Limpieza', p: 110.00 },
     { n: 'Desinfectante', c: 'Limpieza', p: 95.00 }, { n: 'Escoba Plástica', c: 'Limpieza', p: 150.00 },
     { n: 'Bolsas Basura', c: 'Limpieza', p: 70.00 }, { n: 'Esponja Fregar', c: 'Limpieza', p: 25.00 },
     { n: 'Limpiavidrios', c: 'Limpieza', p: 130.00 }, { n: 'Papel Toalla', c: 'Limpieza', p: 90.00 },
-
-    // Cuidado Personal
     { n: 'Shampoo 400ml', c: 'Cuidado Personal', p: 220.00 }, { n: 'Jabón Baño', c: 'Cuidado Personal', p: 45.00 },
     { n: 'Pasta Dental', c: 'Cuidado Personal', p: 115.00 }, { n: 'Desodorante', c: 'Cuidado Personal', p: 140.00 },
     { n: 'Papel Higiénico 4u', c: 'Cuidado Personal', p: 85.00 }, { n: 'Cepillo Dental', c: 'Cuidado Personal', p: 75.00 },
@@ -214,14 +201,12 @@ const generateProducts = () => {
       variants: [],
       tariffs: [{ tariffId: 'trf-gen', price: item.p }],
       appliedTaxIds: isWeighable ? ['tax-exempt'] : ['tax-18'],
-      // Mock images based on category to make it look good
       image: `https://source.unsplash.com/200x200/?${encodeURIComponent(item.c === 'Cuidado Personal' ? 'soap' : item.c === 'Alacena' ? 'pantry' : item.n)}`
     } as Product;
   });
 };
 
 export const RETAIL_PRODUCTS: Product[] = [
-  // --- PRODUCTOS PESADOS (Originales) ---
   { 
     id: 'p-pesado-1', 
     name: 'Tomates Orgánicos (Peso)', 
@@ -254,7 +239,6 @@ export const RETAIL_PRODUCTS: Product[] = [
     tariffs: [{ tariffId: 'trf-gen', price: 5.99 }],
     appliedTaxIds: ['tax-18']
   },
-  // --- PRODUCTOS CON VARIANTE (Originales) ---
   { 
     id: 'p-var-1', 
     name: 'Zapatillas Runner 5.0', 
@@ -275,7 +259,6 @@ export const RETAIL_PRODUCTS: Product[] = [
     appliedTaxIds: ['tax-18']
   },
   { id: 'p1', name: 'Camiseta Algodón Premium', price: 25.00, category: 'Ropa', stock: 45, minStock: 10, cost: 12.00, barcode: '74210001', images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 25.00 }, { tariffId: 'trf-vip', price: 20.00 }], appliedTaxIds: ['tax-18'] },
-  // --- INJECTED 100 ITEMS ---
   ...generateProducts()
 ];
 

@@ -9,12 +9,13 @@ import {
   ArrowRightLeft, Globe, DollarSign,
   ChevronDown, Check, AlertCircle, Layers,
   ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle,
-  MessageSquare, PlayCircle, Download, Lock, ArrowUpRight
+  MessageSquare, PlayCircle, Download, Lock, ArrowUpRight, Landmark,
+  UserCheck, StickyNote, Inbox, Printer
 } from 'lucide-react';
 import { Html5Qrcode } from "html5-qrcode";
 import { 
   BusinessConfig, User as UserType, RoleDefinition, 
-  Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse
+  Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType
 } from '../types';
 import UnifiedPaymentModal from './PaymentModal';
 import TicketOptionsModal from './TicketOptionsModal';
@@ -22,7 +23,7 @@ import CartItemOptionsModal from './CartItemOptionsModal';
 import ProductVariantSelector from './ProductVariantSelector';
 import ScaleModal from './ScaleModal';
 import GlobalDiscountModal from './GlobalDiscountModal';
-import CurrencySettings from './CurrencySettings';
+import { db } from '../utils/db';
 
 interface POSInterfaceProps {
   config: BusinessConfig;
@@ -72,7 +73,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 }) => {
   const cartEndRef = useRef<HTMLDivElement>(null);
 
-  const activeTerminalConfig = useMemo(() => config.terminals?.[0]?.config || config.terminals?.[0]?.config, [config]);
+  const activeTerminalConfig = config.terminals?.[0]?.config;
+  const terminalId = config.terminals?.[0]?.id || 'T1';
   const defaultSalesWarehouseId = activeTerminalConfig?.inventoryScope?.defaultSalesWarehouseId;
 
   const allowedTariffs = useMemo(() => {
@@ -98,15 +100,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   const [showTicketOptions, setShowTicketOptions] = useState(false);
   const [showParkedList, setShowParkedList] = useState(false);
   const [showGlobalDiscount, setShowGlobalDiscount] = useState(false);
-  const [showCurrencyModal, setShowCurrencyModal] = useState(false);
-  const [showSellerModal, setShowSellerModal] = useState(false);
   const [editingItem, setEditingItem] = useState<CartItem | null>(null);
   const [selectedProductForVariants, setSelectedProductForVariants] = useState<Product | null>(null);
   const [productForScale, setProductForScale] = useState<Product | null>(null);
 
   const [isScannerOpen, setIsScannerOpen] = useState(false);
-  const [scannerError, setScannerError] = useState<string | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
+
+  const fiscalStatus = useMemo(() => {
+    const type: NCFType = selectedCustomer?.defaultNcfType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02');
+    const localBuffer = db.get('localFiscalBuffer').find((b: any) => b.type === type);
+    const hasLocal = localBuffer && localBuffer.currentNumber <= localBuffer.endNumber;
+    const canRequest = db.canRequestMoreNCF(type);
+    const hasNCF = hasLocal || canRequest;
+    return { type, hasNCF, localBuffer, isUsingPool: !hasLocal && canRequest };
+  }, [selectedCustomer, cart]);
 
   const canAddItemToCart = (product: Product): boolean => {
     if (!defaultSalesWarehouseId) return true;
@@ -122,59 +130,28 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
-      const isAvailableInWarehouse = defaultSalesWarehouseId 
-        ? p.activeInWarehouses?.includes(defaultSalesWarehouseId) ?? true 
-        : true;
+      const isAvailableInWarehouse = defaultSalesWarehouseId ? p.activeInWarehouses?.includes(defaultSalesWarehouseId) ?? true : true;
       const matchSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
       const matchCat = categoryFilter === 'ALL' || p.category === categoryFilter;
       return matchSearch && matchCat && isAvailableInWarehouse;
     });
-  }, [products, searchTerm, categoryFilter, activeTariffId, defaultSalesWarehouseId]);
+  }, [products, searchTerm, categoryFilter, defaultSalesWarehouseId]);
 
-  const categories = useMemo(() => {
-    return ['ALL', ...Array.from(new Set(products.map(p => p.category)))];
-  }, [products]);
+  const categories = useMemo(() => ['ALL', ...Array.from(new Set(products.map(p => p.category)))], [products]);
 
-  const getProductPrice = (p: Product) => {
-    return p.tariffs.find(t => t.tariffId === activeTariffId)?.price || p.price;
-  };
-
-  const handleScanSuccess = (decodedText: string) => {
-    if (scannerRef.current) {
-        scannerRef.current.stop().then(() => {
-            scannerRef.current?.clear();
-            setIsScannerOpen(false);
-        });
-    } else {
-        setIsScannerOpen(false);
-    }
-    const foundProduct = products.find(p => p.barcode === decodedText);
-    if (foundProduct) {
-        handleProductClick(foundProduct);
-        setSearchTerm('');
-    } else {
-      setErrorToast("Producto no encontrado.");
-      setTimeout(() => setErrorToast(null), 2000);
-    }
-  };
+  const getProductPrice = (p: Product) => p.tariffs.find(t => t.tariffId === activeTariffId)?.price || p.price;
 
   const cartSubtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-  
-  const discountAmount = useMemo(() => {
-    if (globalDiscount.type === 'PERCENT') {
-      return cartSubtotal * (globalDiscount.value / 100);
-    }
-    return Math.min(globalDiscount.value, cartSubtotal);
-  }, [cartSubtotal, globalDiscount]);
-
+  const discountAmount = globalDiscount.type === 'PERCENT' ? cartSubtotal * (globalDiscount.value / 100) : Math.min(globalDiscount.value, cartSubtotal);
   const netSubtotal = cartSubtotal - discountAmount;
 
   const taxBreakdown = useMemo(() => {
     const breakdown: Record<string, { name: string, amount: number }> = {};
     cart.forEach(item => {
-      const itemNet = (item.price * item.quantity) * (netSubtotal / cartSubtotal || 1);
-      const itemTaxIds = item.appliedTaxIds || [];
-      itemTaxIds.forEach(taxId => {
+      const itemRatio = (item.price * item.quantity) / (cartSubtotal || 1);
+      const itemNet = (item.price * item.quantity) - (discountAmount * itemRatio);
+      
+      (item.appliedTaxIds || []).forEach(taxId => {
         const taxDef = config.taxes.find(t => t.id === taxId);
         if (taxDef) {
           if (!breakdown[taxId]) breakdown[taxId] = { name: taxDef.name, amount: 0 };
@@ -183,19 +160,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       });
     });
     return Object.values(breakdown);
-  }, [cart, netSubtotal, cartSubtotal, config.taxes]);
+  }, [cart, netSubtotal, cartSubtotal, config.taxes, discountAmount]);
 
   const cartTax = taxBreakdown.reduce((sum, t) => sum + t.amount, 0);
   const cartTotal = netSubtotal + cartTax;
-
-  const baseCurrency = useMemo(() => config.currencies.find(c => c.isBase) || config.currencies[0], [config.currencies]);
+  const baseCurrency = config.currencies.find(c => c.isBase) || config.currencies[0];
 
   useEffect(() => {
-    if (cart.length === 0) {
-      setMobileView('PRODUCTS');
-    } else {
-      cartEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
+    if (cart.length === 0) setMobileView('PRODUCTS');
+    else cartEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [cart.length]);
 
   const handleProductClick = (product: Product) => {
@@ -228,10 +201,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
   };
 
   const handlePaymentConfirm = (payments: any[]) => {
+    const finalNcf = db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100);
+
+    if (!finalNcf) {
+       alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
+       return;
+    }
+
     const txn: Transaction = {
-      id: `T-${Date.now()}`, date: new Date().toISOString(), items: cart, total: cartTotal, payments: payments,
-      userId: currentUser.id, userName: currentUser.name, status: 'COMPLETED',
-      customerId: selectedCustomer?.id, customerName: selectedCustomer?.name
+      id: `T-${Date.now()}`, 
+      date: new Date().toISOString(), 
+      items: cart, 
+      total: cartTotal, 
+      payments: payments,
+      userId: currentUser.id, 
+      userName: currentUser.name, 
+      terminalId: terminalId, // Guardamos el ID de la terminal para auditoría
+      status: 'COMPLETED',
+      customerId: selectedCustomer?.id, 
+      customerName: selectedCustomer?.name,
+      ncf: finalNcf,
+      ncfType: fiscalStatus.type
     };
     onTransactionComplete(txn); setShowPaymentModal(false); onUpdateCart([]); onSelectCustomer(null);
     setMobileView('PRODUCTS'); setGlobalDiscount({value: 0, type: 'PERCENT'});
@@ -248,8 +238,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         timestamp: new Date().toISOString()
      };
      onUpdateParkedTickets([...parkedTickets, newParked]);
-     onUpdateCart([]);
-     onSelectCustomer(null);
+     onUpdateCart([]); onSelectCustomer(null);
      setErrorToast("Ticket Guardado");
      setTimeout(() => setErrorToast(null), 2000);
   };
@@ -262,6 +251,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
      }
      onUpdateParkedTickets(parkedTickets.filter(p => p.id !== parked.id));
      setShowParkedList(false);
+     setMobileView('TICKET');
   };
 
   return (
@@ -275,40 +265,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         </div>
       )}
 
-      {/* MOBILE FLOATING CART ACCESS BAR */}
+      {/* --- BOTÓN FLOTANTE MÓVIL (IR AL TICKET) --- */}
       {mobileView === 'PRODUCTS' && cart.length > 0 && (
-        <div className="md:hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-[90%] animate-in slide-in-from-bottom-10 fade-in duration-500">
-           <button 
-             onClick={() => setMobileView('TICKET')}
-             className="w-full flex items-center justify-between px-6 py-4 bg-blue-600 text-white rounded-[2rem] font-black shadow-[0_20px_50px_rgba(37,99,235,0.4)] active:scale-95 transition-all border-b-4 border-blue-800"
-           >
-              <div className="flex items-center gap-4">
-                 <div className="relative">
-                    <ShoppingCart size={28} />
-                    <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] w-6 h-6 flex items-center justify-center rounded-full border-2 border-blue-600">{cart.length}</span>
-                 </div>
-                 <div className="text-left leading-none">
-                    <p className="text-xs text-blue-200 uppercase tracking-widest font-bold mb-1">Ver Pedido</p>
-                    <p className="text-xl">{baseCurrency.symbol}{cartTotal.toFixed(2)}</p>
-                 </div>
-              </div>
-              <ChevronRight size={24} className="animate-bounce-x" />
-           </button>
-        </div>
+        <button 
+          onClick={() => setMobileView('TICKET')}
+          className="md:hidden fixed bottom-6 right-6 z-50 bg-blue-600 text-white p-5 rounded-full shadow-[0_15px_40px_rgba(37,99,235,0.4)] flex items-center justify-center animate-in zoom-in-50"
+        >
+          <div className="relative">
+            <ShoppingCart size={28} />
+            <span className="absolute -top-3 -right-3 bg-red-500 text-white text-[10px] font-black w-6 h-6 rounded-full flex items-center justify-center border-2 border-white shadow-sm">
+              {cart.reduce((acc, i) => acc + i.quantity, 0)}
+            </span>
+          </div>
+        </button>
       )}
 
+      {/* LEFT AREA: PRODUCTS */}
       <div className={`flex-1 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'}`}>
-        <header className="bg-white px-8 py-4 border-b border-gray-200 flex items-center gap-6 shadow-sm z-10">
-          {/* USER IDENTITY SECTION */}
+        <header className="bg-white px-8 py-4 border-b border-gray-200 flex items-center gap-6 shadow-sm z-10 shrink-0">
           <div className="flex items-center gap-3 pr-4 border-r border-gray-100">
              <div className="w-10 h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
-                {currentUser.photo ? (
-                   <img src={currentUser.photo} className="w-full h-full object-cover" alt={currentUser.name} />
-                ) : (
-                   <div className="w-full h-full flex items-center justify-center bg-blue-50 text-blue-600 font-bold">
-                      {currentUser.name.charAt(0)}
-                   </div>
-                )}
+                {currentUser.photo ? <img src={currentUser.photo} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center bg-blue-50 text-blue-600 font-bold">{currentUser.name.charAt(0)}</div>}
              </div>
              <div className="hidden lg:block leading-tight">
                 <p className="text-sm font-black text-gray-800 truncate max-w-[120px]">{currentUser.name}</p>
@@ -331,23 +308,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                    </div>
                    <ChevronDown size={16} className={`text-purple-400 ${showTariffSelector ? 'rotate-180' : ''}`} />
                 </button>
-                {showTariffSelector && (
-                   <div className="absolute top-full mt-2 left-0 w-64 bg-white rounded-3xl shadow-2xl border border-gray-100 p-2 z-[60]">
-                      {allowedTariffs.map(t => (
-                         <button key={t.id} onClick={() => { setActiveTariffId(t.id); setShowTariffSelector(false); }} className={`w-full text-left p-3 rounded-2xl flex items-center justify-between transition-all ${activeTariffId === t.id ? 'bg-purple-600 text-white' : 'hover:bg-purple-50 text-gray-700'}`}>
-                            <span className="font-bold text-sm">{t.name}</span>
-                            {activeTariffId === t.id && <Check size={16} strokeWidth={4} />}
-                         </button>
-                      ))}
-                   </div>
-                )}
              </div>
           </div>
         </header>
 
-        <div className="bg-white px-8 py-3 flex gap-2 overflow-x-auto no-scrollbar border-b border-gray-100 shrink-0">
-           {categories.map(cat => (
-              <button key={cat} onClick={() => setCategoryFilter(cat)} className={`px-5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider whitespace-nowrap ${categoryFilter === cat ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-100 text-gray-500'}`}>{cat === 'ALL' ? 'Todos' : cat}</button>
+        {/* --- CATEGORY SELECTOR BAR --- */}
+        <div className="bg-white border-b border-gray-200 px-8 py-3 flex gap-2 overflow-x-auto no-scrollbar shrink-0">
+           {categories.map((cat) => (
+              <button
+                 key={cat}
+                 onClick={() => setCategoryFilter(cat)}
+                 className={`px-6 py-2.5 rounded-full text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap shadow-sm border ${
+                    categoryFilter === cat 
+                       ? 'bg-blue-600 border-blue-500 text-white shadow-blue-200 scale-105' 
+                       : 'bg-white border-gray-200 text-gray-400 hover:border-blue-300 hover:text-blue-600'
+                 }`}
+              >
+                 {cat === 'ALL' ? 'Todas' : cat}
+              </button>
            ))}
         </div>
 
@@ -369,151 +347,227 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
         </div>
       </div>
 
+      {/* RIGHT SIDEBAR: CURRENT TICKET */}
       <div className={`w-full md:w-96 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' ? 'hidden md:flex' : 'flex'}`}>
+         
          <div className="p-5 border-b border-gray-100 bg-gray-50/50 flex flex-col gap-3 shrink-0">
+            {/* Header con Navegación para volver a productos */}
             <div className="flex justify-between items-center">
                <div className="flex items-center gap-2">
-                  <button onClick={() => setMobileView('PRODUCTS')} className="md:hidden p-2 -ml-2 text-gray-400"><ArrowLeft size={20} /></button>
+                  <button onClick={() => setMobileView('PRODUCTS')} className="md:hidden p-2 -ml-2 text-gray-400 hover:text-blue-600 transition-colors">
+                     <ArrowLeft size={20} />
+                  </button>
                   <h2 className="font-black text-gray-800 uppercase text-xs tracking-widest">Ticket Actual</h2>
                </div>
                <div className="flex gap-1">
-                  <button onClick={handleParkCurrentTicket} disabled={cart.length === 0} className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 disabled:opacity-20"><PauseCircle size={18} /></button>
-                  <button onClick={() => setShowParkedList(true)} className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 relative">
-                     <Download size={18} />
-                     {parkedTickets.length > 0 && (
-                        <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white text-[9px] font-black rounded-full flex items-center justify-center border-2 border-white animate-in zoom-in">
-                           {parkedTickets.length}
-                        </span>
-                     )}
+                  <button onClick={handleParkCurrentTicket} title="Guardar Ticket" className="p-2 hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Save size={18} /></button>
+                  <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="p-2 hover:bg-orange-50 rounded-lg text-gray-400 hover:text-orange-600 transition-colors relative">
+                    <Inbox size={18} />
+                    {parkedTickets.length > 0 && <span className="absolute top-0 right-0 w-3 h-3 bg-orange-500 rounded-full border-2 border-white"></span>}
                   </button>
-                  <button onClick={onOpenHistory} className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600"><History size={18} /></button>
-                  <button onClick={onOpenFinance} className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600"><Lock size={18} /></button>
-                  <button onClick={onOpenSettings} className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600"><Settings size={18} /></button>
-                  <button onClick={() => setShowTicketOptions(true)} className="p-2 hover:bg-gray-200 rounded-lg text-gray-500"><MoreVertical size={18} /></button>
+                  <button onClick={onOpenHistory} title="Historial" className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><History size={18} /></button>
+                  <button onClick={onOpenSettings} title="Configuración" className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Settings size={18} /></button>
                </div>
             </div>
+
             {selectedCustomer ? (
                <div className="flex items-center justify-between bg-blue-50 p-3 rounded-xl border border-blue-100 cursor-pointer" onClick={onOpenCustomers}>
                   <div className="flex items-center gap-3">
                      <div className="w-8 h-8 bg-blue-200 text-blue-700 rounded-full flex items-center justify-center font-bold text-xs">{selectedCustomer.name.charAt(0)}</div>
-                     <p className="text-xs font-bold text-blue-900">{selectedCustomer.name}</p>
+                     <div>
+                        <p className="text-xs font-bold text-blue-900 leading-none">{selectedCustomer.name}</p>
+                        <span className="text-[9px] font-black text-blue-500 uppercase tracking-tighter">
+                           {selectedCustomer.defaultNcfType || (selectedCustomer.requiresFiscalInvoice ? 'B01' : 'B02')}
+                        </span>
+                     </div>
                   </div>
                   <button onClick={(e) => { e.stopPropagation(); onSelectCustomer(null); }} className="p-1 text-blue-400"><X size={14}/></button>
                </div>
             ) : (
                <button onClick={onOpenCustomers} className="w-full flex items-center justify-between p-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 group"><div className="flex items-center gap-2"><UserPlus size={18} /><span className="text-xs font-bold uppercase">Asignar Cliente</span></div><ChevronRight size={16} /></button>
             )}
+
+            <div className={`mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${fiscalStatus.hasNCF ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100 animate-pulse'}`}>
+               <Landmark size={12} />
+               <span>Status Fiscal: {fiscalStatus.type} {fiscalStatus.hasNCF ? (fiscalStatus.isUsingPool ? 'Reservado en Pool' : 'Lote Activo') : 'Agotado'}</span>
+               {fiscalStatus.localBuffer && !fiscalStatus.isUsingPool && (
+                  <span className="ml-auto opacity-60">Quedan: {fiscalStatus.localBuffer.endNumber - fiscalStatus.localBuffer.currentNumber + 1}</span>
+               )}
+            </div>
          </div>
 
-         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+         {/* --- CART ITEMS LIST (DETALLE DE LÍNEA) --- */}
+         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar bg-slate-50/30">
             {cart.map((item) => {
-               const salesperson = item.salespersonId ? users.find(u => u.id === item.salespersonId) : null;
-               const hasDiscount = item.originalPrice && item.originalPrice > item.price;
-               const savingsPerUnit = hasDiscount ? (item.originalPrice! - item.price) : 0;
-               const totalSavingsForItem = savingsPerUnit * item.quantity;
-               
-               // DETECCION DE ARTICULO SIMPLE PARA AHORRAR ESPACIO
-               const isSimpleItem = !salesperson && !hasDiscount && (!item.modifiers || item.modifiers.length === 0) && !item.note;
+              const hasDiscount = item.originalPrice && item.price < item.originalPrice;
+              const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
+              
+              const lineNet = item.price * item.quantity;
+              const lineTax = (item.appliedTaxIds || []).reduce((acc, taxId) => {
+                 const taxDef = config.taxes.find(t => t.id === taxId);
+                 return acc + (lineNet * (taxDef?.rate || 0));
+              }, 0);
 
-               return (
-                  <div 
-                    key={item.cartId} 
-                    onClick={() => setEditingItem(item)} 
-                    className={`flex gap-3 px-3 transition-all hover:bg-gray-50 rounded-xl cursor-pointer group border border-transparent hover:border-gray-100 animate-in slide-in-from-right-2 ${isSimpleItem ? 'py-1.5' : 'py-3'}`}
-                  >
-                     <div className="flex-1 min-w-0">
-                        <div className="flex justify-between items-start">
-                           <span className={`font-bold text-gray-700 leading-tight line-clamp-2 ${isSimpleItem ? 'text-xs' : 'text-sm'}`}>{item.name}</span>
-                           <span className={`font-bold text-gray-900 ${isSimpleItem ? 'text-xs' : 'text-sm'}`}>{baseCurrency.symbol}{(item.price * item.quantity).toFixed(2)}</span>
-                        </div>
+              return (
+                <div key={item.cartId} onClick={() => setEditingItem(item)} className="flex flex-col gap-1 px-3 py-3 transition-all hover:bg-white rounded-xl cursor-pointer group border border-transparent hover:border-gray-200 hover:shadow-sm animate-in slide-in-from-right-2">
+                   <div className="flex justify-between items-start">
+                      <div className="flex-1 min-w-0 pr-2">
+                        <span className="font-bold text-gray-700 leading-tight text-sm line-clamp-2">{item.name}</span>
+                      </div>
+                      <span className="font-black text-gray-900 text-sm shrink-0">{baseCurrency.symbol}{(lineNet).toFixed(2)}</span>
+                   </div>
 
-                        <div className={`flex justify-between items-center ${isSimpleItem ? 'mt-0.5' : 'mt-1'}`}>
-                           <div className={`${isSimpleItem ? 'text-[10px]' : 'text-xs'} text-gray-400 font-medium`}>
-                              <span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-bold">{item.quantity.toFixed(3)}</span> x {baseCurrency.symbol}{item.price.toFixed(2)}
-                           </div>
-                           
-                           {hasDiscount && (
-                              <span className="text-[10px] font-black text-red-500 animate-in slide-in-from-right-1 duration-200">
-                                -{baseCurrency.symbol}{totalSavingsForItem.toFixed(2)}
-                              </span>
-                           )}
-                        </div>
+                   {/* 1. Cantidad x Precio + Descuento (En la misma línea) */}
+                   <div className="flex items-center gap-2 mt-1">
+                      <span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-black text-[9px] uppercase tracking-tighter">
+                         {item.quantity.toFixed(item.type === 'SERVICE' ? 3 : 0)}x {baseCurrency.symbol}{item.price.toFixed(2)}
+                      </span>
+                      {hasDiscount && (
+                        <span className="bg-red-50 text-red-600 px-1.5 py-0.5 rounded text-[9px] font-black border border-red-100">-{discountPct}% DESC.</span>
+                      )}
+                   </div>
 
-                        {!isSimpleItem && (
-                          <div className="flex flex-col gap-1 mt-2 border-t border-gray-50 pt-1.5">
-                             {item.modifiers && item.modifiers.length > 0 && (
-                               <div className="flex flex-wrap gap-1">
-                                 {item.modifiers.map((m, i) => <span key={i} className="bg-blue-50 text-blue-600 text-[9px] font-black uppercase px-1.5 py-0.5 rounded border border-blue-100/50">{m}</span>)}
-                               </div>
-                             )}
-                             {salesperson && <div className="flex items-center gap-1 text-[10px] text-emerald-600 font-bold"><User size={10}/> {salesperson.name}</div>}
-                             {item.note && <div className="flex items-start gap-1 text-[10px] text-amber-600 italic bg-amber-50/30 p-1.5 rounded-lg border border-amber-100/30"><MessageSquare size={10} className="shrink-0 mt-0.5"/> <span>{item.note}</span></div>}
-                          </div>
-                        )}
-                     </div>
-                  </div>
-               );
+                   {/* 2. Impuesto de la línea */}
+                   <div className="text-[10px] text-slate-400 font-bold flex items-center gap-1">
+                      <span>Impuestos: {baseCurrency.symbol}{lineTax.toFixed(2)}</span>
+                   </div>
+
+                   {/* 3. Variantes / Modificadores */}
+                   {item.modifiers && item.modifiers.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                         {item.modifiers.map((m, mi) => (
+                            <span key={mi} className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[9px] font-bold border border-blue-100 uppercase">{m}</span>
+                         ))}
+                      </div>
+                   )}
+
+                   {/* 4. Vendedor */}
+                   {item.salespersonId && (
+                      <div className="mt-1">
+                         <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 border border-indigo-100 w-fit">
+                            <UserCheck size={10} /> Vendedor: {users.find(u => u.id === item.salespersonId)?.name.split(' ')[0]}
+                         </span>
+                      </div>
+                   )}
+
+                   {/* 5. Nota */}
+                   {item.note && (
+                      <div className="mt-1.5 flex items-start gap-1 text-[10px] text-orange-600 font-medium bg-orange-50/50 p-1.5 rounded-lg border border-orange-100/50">
+                         <StickyNote size={10} className="mt-0.5 shrink-0" />
+                         <span className="italic">{item.note}</span>
+                      </div>
+                   )}
+                </div>
+              )
             })}
          </div>
 
-         <div className="bg-white border-t border-gray-200 p-5 space-y-3 shadow-inner">
-            <div className="space-y-1">
-               <div className="flex justify-between text-gray-500 text-xs font-medium"><span>Subtotal</span><span>{baseCurrency.symbol}{netSubtotal.toFixed(2)}</span></div>
-               {taxBreakdown.map((tax, idx) => (<div key={idx} className="flex justify-between text-gray-400 text-[10px]"><span>{tax.name}</span><span>{baseCurrency.symbol}{tax.amount.toFixed(2)}</span></div>))}
-            </div>
-            <div className="flex justify-between items-end pt-2 border-t border-dashed border-gray-200">
-               <div><p className="text-xs text-gray-400 font-bold uppercase tracking-widest">Total a Pagar</p></div>
-               <div className="text-3xl font-black text-gray-800 leading-none">{baseCurrency.symbol}{cartTotal.toFixed(2)}</div>
+         {/* Sidebar Footer */}
+         <div className="bg-white border-t border-gray-200 p-5 space-y-4 shadow-inner shrink-0">
+            
+            {/* --- BOTONES DE ACCIÓN (RESTAURADOS) --- */}
+            <div className="grid grid-cols-3 gap-2">
+               <button 
+                  onClick={() => setShowGlobalDiscount(true)}
+                  className={`flex flex-col items-center justify-center py-2.5 rounded-xl border-2 transition-all ${globalDiscount.value > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-gray-100 text-gray-400 hover:border-gray-200'}`}
+               >
+                  <Percent size={18} />
+                  <span className="text-[10px] font-black uppercase mt-1">Descuento</span>
+               </button>
+               <button 
+                  onClick={onOpenFinance}
+                  className="flex flex-col items-center justify-center py-2.5 rounded-xl border-2 bg-white border-gray-100 text-gray-400 hover:border-gray-200 transition-all"
+               >
+                  <Lock size={18} />
+                  <span className="text-[10px] font-black uppercase mt-1">Cierre Z</span>
+               </button>
+               <button 
+                  onClick={onLogout}
+                  className="flex flex-col items-center justify-center py-2.5 rounded-xl border-2 bg-white border-gray-100 text-gray-400 hover:border-red-100 hover:text-red-500 transition-all"
+               >
+                  <LogOut size={18} />
+                  <span className="text-[10px] font-black uppercase mt-1">Salir</span>
+               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 mt-2">
-               <button onClick={() => setShowGlobalDiscount(true)} className="flex items-center justify-center gap-2 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold text-xs hover:bg-gray-200 transition-all"><Percent size={14} /> Descuento Gral.</button>
-               <button onClick={onOpenFinance} className="flex items-center justify-center gap-2 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold text-xs hover:bg-gray-200 transition-all"><ArrowUpRight size={14} /> Salida Caja</button>
+            {/* --- BLOQUE DE TOTALES (ORDEN SOLICITADO) --- */}
+            <div className="space-y-1.5 border-t border-dashed border-gray-200 pt-3">
+               <div className="flex justify-between items-center text-xs font-bold text-gray-50">
+                  <span>SUBTOTAL</span>
+                  <span>{baseCurrency.symbol}{cartSubtotal.toFixed(2)}</span>
+               </div>
+               {discountAmount > 0 && (
+                  <div className="flex justify-between items-center text-xs font-black text-red-500">
+                     <span>DESCUENTO</span>
+                     <span>-{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>
+                  </div>
+               )}
+               <div className="flex justify-between items-center text-xs font-bold text-gray-50">
+                  <span>IMPUESTOS</span>
+                  <span>{baseCurrency.symbol}{cartTax.toFixed(2)}</span>
+               </div>
+               
+               <div className="flex justify-between items-end pt-2">
+                  <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
+                     {baseCurrency.symbol}{cartTotal.toFixed(2)}
+                  </div>
+                  <div className="text-right">
+                     <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total General</p>
+                  </div>
+               </div>
             </div>
 
-            <button onClick={() => { if(cart.length > 0) setShowPaymentModal(true); }} disabled={cart.length === 0} className="w-full py-4 bg-gray-900 text-white rounded-2xl font-black text-lg shadow-xl hover:bg-black active:scale-[0.98] transition-all disabled:opacity-50 flex justify-between px-6 items-center mt-2"><span>Cobrar</span><ArrowRight size={24} /></button>
+            {/* Checkout Button */}
+            <button 
+              onClick={() => { 
+                if (cart.length > 0 && fiscalStatus.hasNCF) {
+                  setShowPaymentModal(true); 
+                } else if (!fiscalStatus.hasNCF) {
+                  alert("No hay secuencias fiscales disponibles.");
+                }
+              }} 
+              disabled={cart.length === 0 || !fiscalStatus.hasNCF} 
+              className={`w-full py-5 rounded-2xl font-black text-xl shadow-xl active:scale-[0.98] transition-all flex justify-between px-8 items-center mt-2 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
+            >
+               <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : 'Cobrar'}</span>
+               <ArrowRight size={24} />
+            </button>
          </div>
       </div>
 
-      {isScannerOpen && (
-        <div className="fixed inset-0 z-[9999] bg-black flex flex-col items-center justify-center animate-in fade-in">
-           <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start z-20">
-              <h2 className="text-white text-lg font-bold flex items-center gap-2"><ScanBarcode className="text-blue-400" /> Escáner Activo</h2>
-              <button onClick={() => setIsScannerOpen(false)} className="p-3 bg-white/10 rounded-full text-white"><X size={24} /></button>
-           </div>
-           <div id="reader" className="w-full max-w-lg overflow-hidden rounded-lg"></div>
-        </div>
-      )}
-
-      {showParkedList && (
-         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
-               <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                  <h3 className="text-xl font-black text-gray-800">Recuperar Ticket</h3>
-                  <button onClick={() => setShowParkedList(false)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20}/></button>
-               </div>
-               <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                  {parkedTickets.length === 0 ? (
-                     <div className="text-center py-20 text-gray-400 italic">No hay tickets guardados.</div>
-                  ) : (
-                     parkedTickets.map(p => (
-                        <div key={p.id} onClick={() => handleRestoreTicket(p)} className="p-4 bg-white border border-gray-200 rounded-2xl flex justify-between items-center cursor-pointer hover:border-blue-500 hover:shadow-md transition-all">
-                           <div><p className="font-bold text-gray-800">{p.name}</p><p className="text-xs text-gray-400 font-mono">ID: {p.id} · {p.items.length} items</p></div>
-                           <ChevronRight size={20} className="text-gray-300" />
-                        </div>
-                     ))
-                  )}
-               </div>
-            </div>
-         </div>
-      )}
-
+      {/* Modals & Overlays */}
       {showPaymentModal && <UnifiedPaymentModal total={cartTotal} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} />}
-      {showTicketOptions && <TicketOptionsModal onClose={() => setShowTicketOptions(false)} onAction={(a) => { if(a==='ASSIGN_SELLER') setShowSellerModal(true); if(a==='DISCOUNT') setShowGlobalDiscount(true); if(a==='FINANCE') onOpenFinance(); setShowTicketOptions(false); }} />}
       {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
       {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr) => { addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
       {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
       {showGlobalDiscount && <GlobalDiscountModal currentSubtotal={cartSubtotal} currencySymbol={baseCurrency.symbol} initialValue={globalDiscount.value.toString()} initialType={globalDiscount.type} themeColor={config.themeColor} onClose={() => setShowGlobalDiscount(false)} onConfirm={(val, type) => { setGlobalDiscount({value: parseFloat(val) || 0, type}); setShowGlobalDiscount(false); }} />}
+      
+      {/* List of Parked Tickets */}
+      {showParkedList && (
+         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-[2.5rem] w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95">
+               <div className="p-6 border-b bg-gray-50 flex justify-between items-center">
+                  <h3 className="font-black text-xl text-gray-800">Tickets en Espera</h3>
+                  <button onClick={() => setShowParkedList(false)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20}/></button>
+               </div>
+               <div className="p-4 overflow-y-auto max-h-[60vh] space-y-3">
+                  {parkedTickets.map(pt => (
+                     <div key={pt.id} onClick={() => handleRestoreTicket(pt)} className="p-4 bg-white border border-gray-100 rounded-2xl hover:border-orange-400 hover:bg-orange-50 cursor-pointer group transition-all">
+                        <div className="flex justify-between items-start mb-2">
+                           <span className="font-bold text-gray-800">{pt.name}</span>
+                           <span className="text-[10px] font-bold text-gray-400 uppercase">{new Date(pt.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                           <span className="text-xs text-gray-500">{pt.items.length} productos</span>
+                           <ArrowRight size={16} className="text-orange-300 group-hover:text-orange-500 transition-colors" />
+                        </div>
+                     </div>
+                  ))}
+                  {parkedTickets.length === 0 && <div className="py-10 text-center text-gray-400 italic">No hay tickets guardados</div>}
+               </div>
+            </div>
+         </div>
+      )}
     </div>
   );
 };

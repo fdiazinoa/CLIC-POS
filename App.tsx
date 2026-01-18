@@ -42,7 +42,7 @@ import TerminalBindingScreen from './components/TerminalBindingScreen';
 
 const App: React.FC = () => {
   // --- GLOBAL STATE ---
-  const [currentView, setCurrentView] = useState<ViewState>('LOGIN'); // Default to LOGIN as DB initializes
+  const [currentView, setCurrentView] = useState<ViewState>('LOGIN');
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any)); 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   
@@ -50,13 +50,12 @@ const App: React.FC = () => {
   const [deviceId, setDeviceId] = useState<string>('');
   const [isDataLoaded, setIsDataLoaded] = useState<boolean>(false); 
 
-  // --- DATA STORES (Initialized Empty, populated by Effect) ---
+  // --- DATA STORES ---
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<RoleDefinition[]>(DEFAULT_ROLES);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-  // Completed missing state definitions
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
@@ -66,10 +65,11 @@ const App: React.FC = () => {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
 
-  // --- INITIAL DATA LOAD ---
+  // --- INITIAL DATA LOAD & DEVICE CHECK ---
   useEffect(() => {
     const data = db.init();
     if (data) {
+      // 1. Cargar persistencia
       setConfig(data.config);
       setUsers(data.users || []);
       setCustomers(data.customers || []);
@@ -81,26 +81,66 @@ const App: React.FC = () => {
       setSuppliers(data.suppliers || []);
       setParkedTickets(data.parkedTickets || []);
       setTransfers(data.transfers || []);
+
+      // 2. Gestión de Identidad de Dispositivo (Persistente)
+      let storedDeviceId = localStorage.getItem('pos_device_id');
+      if (!storedDeviceId) {
+        storedDeviceId = 'DEV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+        localStorage.setItem('pos_device_id', storedDeviceId);
+      }
+      setDeviceId(storedDeviceId);
+
+      // 3. Verificación de Vinculación
+      const isDevicePaired = data.config.terminals.some(
+        (t: any) => t.config.currentDeviceId === storedDeviceId
+      );
+
+      if (!isDevicePaired) {
+        setCurrentView('DEVICE_UNAUTHORIZED');
+      }
+
       setIsDataLoaded(true);
     }
-    
-    // Simulate getting a unique device identifier
-    setDeviceId('DEVICE-' + Math.random().toString(36).substring(2, 10).toUpperCase());
   }, []);
 
   // --- CORE EVENT HANDLERS ---
+  
+  const handlePairTerminal = (terminalId: string) => {
+    const newTerminals = config.terminals.map(t => {
+      // Desvincular este dispositivo de cualquier otra terminal donde estuviera
+      if (t.config.currentDeviceId === deviceId) {
+        return { ...t, config: { ...t.config, currentDeviceId: undefined } };
+      }
+      // Vincular a la terminal seleccionada
+      if (t.id === terminalId) {
+        return { 
+          ...t, 
+          config: { 
+            ...t.config, 
+            currentDeviceId: deviceId,
+            lastPairingDate: new Date().toISOString()
+          } 
+        };
+      }
+      return t;
+    });
+
+    const updatedConfig = { ...config, terminals: newTerminals };
+    setConfig(updatedConfig);
+    db.save('config', updatedConfig);
+    setCurrentView('LOGIN');
+  };
+
   const handleTransactionComplete = (txn: Transaction) => {
     const newTransactions = [...transactions, txn];
     setTransactions(newTransactions);
     db.save('transactions', newTransactions);
 
-    // Update inventory balances and record movements in Kardex ledger
     txn.items.forEach(item => {
       const whId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
       db.recordInventoryMovement(whId, item.id, 'VENTA', txn.id, -item.quantity);
     });
 
-    // Re-initialize state from DB to get recalculated costs and stocks
     const freshData = db.init();
     setProducts(freshData.products);
   };
@@ -124,7 +164,6 @@ const App: React.FC = () => {
   };
 
   const handleZReport = (cashCounted: number, notes: string) => {
-    // Reset daily transaction and movement data upon closing
     setTransactions([]);
     setCashMovements([]);
     db.save('transactions', []);
@@ -144,6 +183,16 @@ const App: React.FC = () => {
 
   const renderView = () => {
     switch (currentView) {
+      case 'DEVICE_UNAUTHORIZED':
+        return (
+          <TerminalBindingScreen 
+            config={config} 
+            deviceId={deviceId} 
+            adminUsers={users.filter(u => u.role === 'ADMIN')} 
+            onPair={handlePairTerminal} 
+          />
+        );
+
       case 'LOGIN':
         return <LoginScreen availableUsers={users} subVertical={config.subVertical} onLogin={(u) => { setCurrentUser(u); setCurrentView('POS'); }} />;
       
@@ -288,5 +337,4 @@ const App: React.FC = () => {
   );
 };
 
-// Added missing default export
 export default App;

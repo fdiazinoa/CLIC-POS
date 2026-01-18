@@ -2,17 +2,24 @@
 import { 
   BusinessConfig, Product, User, Customer, Transaction, 
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
-  // Add missing types for SEED_DATA
-  RoleDefinition, ParkedTicket, PurchaseOrder, Supplier
+  RoleDefinition, ParkedTicket, PurchaseOrder, Supplier, Watchlist,
+  NCFType, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer
 } from '../types';
 import { 
   MOCK_USERS, RETAIL_PRODUCTS, FOOD_PRODUCTS, 
   MOCK_CUSTOMERS, INITIAL_TARIFFS, getInitialConfig,
-  // Add missing constant for SEED_DATA
   DEFAULT_ROLES
 } from '../constants';
 
 const DB_KEY = 'clic_pos_db_v1';
+
+const DEFAULT_ALERTS = {
+  maxDormancyDays: 30,
+  minVelocity: 0.5,
+  minSellThrough: 15,
+  criticalWeeksOfSupply: 1,
+  overstockWeeksOfSupply: 12
+};
 
 // --- SEED DATA ---
 const DEFAULT_WAREHOUSES: Warehouse[] = [
@@ -29,17 +36,26 @@ const SEED_DATA = {
           defaultSalesWarehouseId: "wh_central",
           visibleWarehouseIds: DEFAULT_WAREHOUSES.map(w => w.id)
        };
+       // Initial multi-NCF config
+       baseConfig.terminals[0].config.fiscal = {
+          batchSize: 100,
+          lowBatchThreshold: 20,
+          typeConfigs: {
+             'B01': { batchSize: 50, lowBatchThreshold: 20 },
+             'B02': { batchSize: 500, lowBatchThreshold: 10 }
+          }
+       };
     }
     return baseConfig;
   })(),
   users: MOCK_USERS,
-  // Add roles to SEED_DATA
   roles: DEFAULT_ROLES,
   customers: MOCK_CUSTOMERS,
   warehouses: DEFAULT_WAREHOUSES,
   products: RETAIL_PRODUCTS.map(p => ({
     ...p,
-    cost: p.cost || p.price * 0.6, // Asegurar que tengan un costo inicial
+    createdAt: new Date(Date.now() - (Math.random() * 90 * 24 * 60 * 60 * 1000)).toISOString(),
+    cost: p.cost || p.price * 0.6,
     stockBalances: p.name.includes('Tomate') 
       ? { "wh_central": 100, "wh_norte": 0 } 
       : p.name.includes('Zapatillas') 
@@ -49,19 +65,22 @@ const SEED_DATA = {
   transactions: [] as Transaction[],
   cashMovements: [] as CashMovement[],
   transfers: [] as StockTransfer[],
-  // Add parkedTickets to SEED_DATA
   parkedTickets: [] as ParkedTicket[],
-  // Add purchaseOrders to SEED_DATA
   purchaseOrders: [] as PurchaseOrder[],
-  // Add suppliers to SEED_DATA
   suppliers: [
     { id: 'sup1', name: 'Distribuidora Global', contactName: 'Juan Distribuidor', phone: '809-555-1111', email: 'ventas@global.com' },
     { id: 'sup2', name: 'Frescos del Campo', contactName: 'Maria Campo', phone: '809-555-2222', email: 'maria@frescos.com' }
   ] as Supplier[],
-  inventoryLedger: [] as InventoryLedgerEntry[] // Nueva colección de Kardex
+  inventoryLedger: [] as InventoryLedgerEntry[],
+  watchlists: [] as Watchlist[],
+  // --- FISCAL COLLECTIONS ---
+  fiscalRanges: [
+    { id: 'fr1', type: 'B01', prefix: 'B01', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
+    { id: 'fr2', type: 'B02', prefix: 'B02', startNumber: 1, endNumber: 50000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true }
+  ] as FiscalRangeDGII[],
+  fiscalAllocations: [] as FiscalAllocation[],
+  localFiscalBuffer: [] as LocalFiscalBuffer[]
 };
-
-// --- DB MANAGER ---
 
 export const db = {
   init: () => {
@@ -77,39 +96,11 @@ export const db = {
       }
     }
 
-    // Ensure all required collections exist (backward compatibility for old local storage)
     let modified = false;
     if (!data.inventoryLedger) { data.inventoryLedger = []; modified = true; }
-    if (!data.roles) { data.roles = SEED_DATA.roles; modified = true; }
-    if (!data.parkedTickets) { data.parkedTickets = []; modified = true; }
-    if (!data.purchaseOrders) { data.purchaseOrders = []; modified = true; }
-    if (!data.suppliers) { data.suppliers = SEED_DATA.suppliers; modified = true; }
-
-    // ENFORCE INITIAL MOVEMENT if missing for products with stock
-    data.products.forEach((p: Product) => {
-        const hasLedger = data.inventoryLedger.some((e: InventoryLedgerEntry) => e.productId === p.id);
-        if (!hasLedger && p.stockBalances) {
-            Object.entries(p.stockBalances).forEach(([whId, qty]) => {
-                if (qty > 0) {
-                    const entry: InventoryLedgerEntry = {
-                        id: `INIT_${p.id}_${whId}_${Date.now()}`,
-                        createdAt: new Date(Date.now() - 3600000).toISOString(), // 1 hour ago
-                        warehouseId: whId,
-                        productId: p.id,
-                        concept: 'INICIAL',
-                        documentRef: 'Apertura de Sistema',
-                        qtyIn: qty,
-                        qtyOut: 0,
-                        unitCost: p.cost || 0,
-                        balanceQty: qty,
-                        balanceAvgCost: p.cost || 0
-                    };
-                    data.inventoryLedger.push(entry);
-                    modified = true;
-                }
-            });
-        }
-    });
+    if (!data.fiscalRanges) { data.fiscalRanges = SEED_DATA.fiscalRanges; modified = true; }
+    if (!data.fiscalAllocations) { data.fiscalAllocations = []; modified = true; }
+    if (!data.localFiscalBuffer) { data.localFiscalBuffer = []; modified = true; }
 
     if (!existing || modified) {
       localStorage.setItem(DB_KEY, JSON.stringify(data));
@@ -124,7 +115,7 @@ export const db = {
 
   get: (collection: keyof typeof SEED_DATA) => {
     const data = JSON.parse(localStorage.getItem(DB_KEY) || '{}');
-    return data[collection] || SEED_DATA[collection];
+    return data[collection] || (SEED_DATA as any)[collection];
   },
 
   save: (collection: keyof typeof SEED_DATA, payload: any) => {
@@ -133,18 +124,104 @@ export const db = {
     localStorage.setItem(DB_KEY, JSON.stringify(data));
   },
 
-  // --- CORE KARDEX LOGIC ---
+  // --- CORE FISCAL LOGIC: BATCH ALLOCATION ---
   
   /**
-   * Registra un movimiento y recalcula el costo promedio ponderado si es una entrada.
+   * Verifica si es posible pedir más NCFs del pool global.
    */
+  canRequestMoreNCF: (type: NCFType): boolean => {
+    const data = JSON.parse(localStorage.getItem(DB_KEY) || '{}');
+    const range = data.fiscalRanges.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
+    if (!range) return false;
+    if (new Date(range.expiryDate) < new Date()) return false;
+    return range.currentGlobal < range.endNumber;
+  },
+
+  /**
+   * Solicita un nuevo lote de NCFs al servidor central.
+   */
+  requestFiscalBatch: (terminalId: string, type: NCFType, batchSize: number): LocalFiscalBuffer | null => {
+    const data = JSON.parse(localStorage.getItem(DB_KEY) || '{}');
+    const range = data.fiscalRanges.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
+
+    if (!range) return null;
+
+    if (new Date(range.expiryDate) < new Date()) {
+      console.error("Rango fiscal vencido.");
+      return null;
+    }
+
+    // El primer número disponible es el último entregado + 1
+    const start = range.currentGlobal + 1;
+    const end = Math.min(range.endNumber, start + batchSize - 1);
+
+    if (start > range.endNumber) {
+      console.error("Rango fiscal agotado totalmente en el servidor.");
+      return null;
+    }
+
+    const allocation: FiscalAllocation = {
+      id: `AL-${Date.now()}`,
+      terminalId,
+      type,
+      rangeStart: start,
+      rangeEnd: end,
+      assignedAt: new Date().toISOString(),
+      status: 'ACTIVE'
+    };
+
+    // Actualizar servidor (Data central): Descontamos estrictamente del pool
+    range.currentGlobal = end;
+    data.fiscalAllocations.push(allocation);
+
+    const localBuffer: LocalFiscalBuffer = {
+      type,
+      prefix: range.prefix,
+      currentNumber: start,
+      endNumber: end,
+      expiryDate: range.expiryDate
+    };
+
+    const existingBufferIdx = data.localFiscalBuffer.findIndex((b: LocalFiscalBuffer) => b.type === type);
+    if (existingBufferIdx >= 0) {
+      data.localFiscalBuffer[existingBufferIdx] = localBuffer;
+    } else {
+      data.localFiscalBuffer.push(localBuffer);
+    }
+
+    localStorage.setItem(DB_KEY, JSON.stringify(data));
+    return localBuffer;
+  },
+
+  /**
+   * Consume el siguiente NCF disponible en el buffer local.
+   */
+  getNextNCF: (type: NCFType, terminalId: string, customBatchSize?: number): string | null => {
+    const data = JSON.parse(localStorage.getItem(DB_KEY) || '{}');
+    let buffer = data.localFiscalBuffer.find((b: LocalFiscalBuffer) => b.type === type);
+
+    const terminalConfig = data.config.terminals.find((t: any) => t.id === terminalId);
+    const size = customBatchSize || terminalConfig?.config.fiscal?.typeConfigs?.[type]?.batchSize || terminalConfig?.config.fiscal?.batchSize || 100;
+
+    if (!buffer || buffer.currentNumber > buffer.endNumber) {
+      buffer = db.requestFiscalBatch(terminalId, type, size);
+      if (!buffer) return null; 
+    }
+
+    const ncf = `${buffer.prefix}${buffer.currentNumber.toString().padStart(8, '0')}`;
+    buffer.currentNumber += 1;
+    
+    localStorage.setItem(DB_KEY, JSON.stringify(data));
+    return ncf;
+  },
+
   recordInventoryMovement: (
     warehouseId: string, 
     productId: string, 
     concept: LedgerConcept, 
     documentRef: string,
-    qty: number, // Positivo para entradas, Negativo para salidas
-    movementCost?: number // Requerido para compras/ajustes entrada
+    qty: number,
+    movementCost?: number
   ) => {
     const data = JSON.parse(localStorage.getItem(DB_KEY) || '{}');
     const productIndex = data.products.findIndex((p: Product) => p.id === productId);
@@ -155,8 +232,6 @@ export const db = {
     const currentAvgCost = product.cost || 0;
     
     let newAvgCost = currentAvgCost;
-    
-    // Algoritmo CPP: Solo recalculamos en entradas de valor (Compras/Ajustes)
     if (qty > 0 && movementCost !== undefined) {
       if (currentStock <= 0) {
         newAvgCost = movementCost;
@@ -168,7 +243,6 @@ export const db = {
     }
 
     const newBalanceQty = currentStock + qty;
-
     const entry: InventoryLedgerEntry = {
       id: `LEDGER_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
       createdAt: new Date().toISOString(),
@@ -183,13 +257,11 @@ export const db = {
       balanceAvgCost: newAvgCost
     };
 
-    // Actualizar producto en la estructura de datos local de la DB
     product.cost = newAvgCost;
     if (!product.stockBalances) product.stockBalances = {};
     product.stockBalances[warehouseId] = newBalanceQty;
     product.stock = Object.values(product.stockBalances).reduce((a: any, b: any) => a + b, 0);
 
-    // Guardar ledger e integrar cambios al producto
     data.inventoryLedger = [entry, ...(data.inventoryLedger || [])];
     localStorage.setItem(DB_KEY, JSON.stringify(data));
     return entry;
