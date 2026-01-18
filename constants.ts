@@ -73,7 +73,8 @@ export const DEFAULT_TERMINAL_CONFIG = {
       allowSalesWithOpenZ: false,
       maxCashInDrawer: 20000,
       askGuestsOnTicketOpen: false,
-      autoPrintZReport: true
+      autoPrintZReport: true,
+      zReportEmails: ''
     },
     offline: {
       mode: 'OPTIMISTIC' as const,

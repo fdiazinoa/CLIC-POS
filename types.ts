@@ -171,6 +171,7 @@ export interface TerminalConfig {
       maxCashInDrawer: number;
       askGuestsOnTicketOpen: boolean;
       autoPrintZReport: boolean;
+      zReportEmails?: string;
     };
     offline: {
       mode: 'OPTIMISTIC' | 'STRICT' | 'READ_ONLY';

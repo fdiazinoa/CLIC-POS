@@ -216,7 +216,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       payments: payments,
       userId: currentUser.id, 
       userName: currentUser.name, 
-      terminalId: terminalId, // Guardamos el ID de la terminal para auditoría
+      terminalId: terminalId, 
       status: 'COMPLETED',
       customerId: selectedCustomer?.id, 
       customerName: selectedCustomer?.name,
@@ -331,18 +331,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
         <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
            <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6 pb-32">
-             {filteredProducts.map(product => (
-               <div key={product.id} onClick={() => handleProductClick(product)} className="bg-white rounded-[2rem] p-4 shadow-sm border border-gray-100 cursor-pointer hover:shadow-xl hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group flex flex-col h-full relative overflow-hidden">
-                   <div className="aspect-square bg-gray-50 rounded-[1.5rem] mb-4 overflow-hidden relative">
-                     {product.image ? <img src={product.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform" /> : <div className="w-full h-full flex items-center justify-center text-gray-200"><Grid size={48} strokeWidth={1} /></div>}
-                   </div>
-                   <div className="flex flex-col flex-1">
-                     <span className="text-[9px] font-bold text-purple-500 uppercase mb-1 opacity-60">{product.category}</span>
-                     <h3 className="font-bold text-gray-800 text-sm leading-tight mb-2 line-clamp-2 flex-1">{product.name}</h3>
-                     <div className="mt-auto pt-2 border-t border-gray-50"><span className="font-black text-lg text-gray-900">{baseCurrency.symbol}{getProductPrice(product).toFixed(2)}</span></div>
-                   </div>
-               </div>
-             ))}
+             {filteredProducts.map(product => {
+               const isWeighted = product.type === 'SERVICE' || product.name.toLowerCase().includes('(peso)');
+               const hasVariants = product.attributes && product.attributes.length > 0;
+
+               return (
+                 <div key={product.id} onClick={() => handleProductClick(product)} className="bg-white rounded-[2rem] p-4 shadow-sm border border-gray-100 cursor-pointer hover:shadow-xl hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group flex flex-col h-full relative overflow-hidden">
+                     <div className="aspect-square bg-gray-50 rounded-[1.5rem] mb-4 overflow-hidden relative">
+                       {product.image ? <img src={product.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform" /> : <div className="w-full h-full flex items-center justify-center text-gray-200"><Grid size={48} strokeWidth={1} /></div>}
+                       
+                       {/* BADGES DE TIPO DE ARTÍCULO */}
+                       {isWeighted && (
+                          <div className="absolute top-2 left-2 bg-emerald-500 text-white p-1.5 rounded-lg shadow-lg z-10 animate-in zoom-in-50" title="Requiere Balanza">
+                             <ScaleIcon size={14} strokeWidth={3} />
+                          </div>
+                       )}
+                       {!isWeighted && hasVariants && (
+                          <div className="absolute top-2 left-2 bg-blue-600 text-white p-1.5 rounded-lg shadow-lg z-10 animate-in zoom-in-50" title="Tiene Variantes">
+                             <Layers size={14} strokeWidth={3} />
+                          </div>
+                       )}
+                     </div>
+                     <div className="flex flex-col flex-1">
+                       <span className="text-[9px] font-bold text-purple-500 uppercase mb-1 opacity-60">{product.category}</span>
+                       <h3 className="font-bold text-gray-800 text-sm leading-tight mb-2 line-clamp-2 flex-1">{product.name}</h3>
+                       <div className="mt-auto pt-2 border-t border-gray-50"><span className="font-black text-lg text-gray-900">{baseCurrency.symbol}{getProductPrice(product).toFixed(2)}</span></div>
+                     </div>
+                 </div>
+               );
+             })}
            </div>
         </div>
       </div>
@@ -465,7 +482,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {/* Sidebar Footer */}
          <div className="bg-white border-t border-gray-200 p-5 space-y-4 shadow-inner shrink-0">
             
-            {/* --- BOTONES DE ACCIÓN (RESTAURADOS) --- */}
+            {/* --- BOTONES DE ACCIÓN --- */}
             <div className="grid grid-cols-3 gap-2">
                <button 
                   onClick={() => setShowGlobalDiscount(true)}
@@ -490,7 +507,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </button>
             </div>
 
-            {/* --- BLOQUE DE TOTALES (ORDEN SOLICITADO) --- */}
+            {/* --- BLOQUE DE TOTALES --- */}
             <div className="space-y-1.5 border-t border-dashed border-gray-200 pt-3">
                <div className="flex justify-between items-center text-xs font-bold text-gray-50">
                   <span>SUBTOTAL</span>
@@ -544,7 +561,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       
       {/* List of Parked Tickets */}
       {showParkedList && (
-         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in zoom-in-95">
             <div className="bg-white rounded-[2.5rem] w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95">
                <div className="p-6 border-b bg-gray-50 flex justify-between items-center">
                   <h3 className="font-black text-xl text-gray-800">Tickets en Espera</h3>

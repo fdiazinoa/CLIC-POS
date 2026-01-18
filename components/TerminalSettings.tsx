@@ -10,9 +10,9 @@ import {
   Link2Off, MonitorOff, Cloud, RefreshCw, Activity, Wifi, Server, AlertTriangle,
   Circle, CheckCircle, ChevronDown, Landmark, Link, Shield, Globe, HardDrive,
   Building2, Printer, Settings2, Info, Unlink, BarChart3, ShieldQuestion,
-  ToggleLeft, ToggleRight, Radio, Power
+  ToggleLeft, ToggleRight, Radio, Power, Scale, Tv, Mail
 } from 'lucide-react';
-import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction } from '../types';
+import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG } from '../constants';
 import { db } from '../utils/db';
 
@@ -22,6 +22,13 @@ interface TerminalSettingsProps {
   onClose: () => void;
   warehouses?: Warehouse[];
 }
+
+// Mock de impresoras disponibles (En un sistema real esto vendría de un escaneo o config global)
+const AVAILABLE_PRINTERS = [
+  { id: 'p1', name: 'Impresora Térmica 80mm (USB)', type: 'TICKET' },
+  { id: 'p2', name: 'Impresora Cocina (LAN)', type: 'KITCHEN' },
+  { id: 'p3', name: 'Impresora Etiquetas (Bluetooth)', type: 'LABEL' }
+];
 
 type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'PRICING' | 'DOCUMENTS' | 'OFFLINE' | 'TAXES' | 'INVENTORY';
 
@@ -81,15 +88,13 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
   const handleAddTerminal = () => {
     const terminalNumber = terminals.length + 1;
     const nextId = `t${terminalNumber}`;
-    const suffix = terminalNumber.toString().padStart(2, '0'); // e.g. "02"
+    const suffix = terminalNumber.toString().padStart(2, '0');
 
-    // Clonamos la configuración base pero personalizamos los prefijos de las series
     const newConfig = JSON.parse(JSON.stringify(DEFAULT_TERMINAL_CONFIG));
     
-    // IMPORTANTE: Evitar colisión de prefijos en centralización
     newConfig.documentSeries = DEFAULT_DOCUMENT_SERIES.map(series => ({
       ...series,
-      prefix: `${series.prefix}${suffix}` // Ej: TCK02, NC02, TR02
+      prefix: `${series.prefix}${suffix}`
     }));
 
     const newTerminal = {
@@ -111,6 +116,18 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
        ...typeConfig,
        [key]: val
     });
+  };
+
+  const toggleScaleAssignment = (scale: ScaleDevice) => {
+    if (!activeTerminal) return;
+    const currentScales = activeTerminal.config.hardware.scales || [];
+    const isAssigned = currentScales.some(s => s.id === scale.id);
+    
+    const updatedScales = isAssigned 
+      ? currentScales.filter(s => s.id !== scale.id)
+      : [...currentScales, scale];
+      
+    handleUpdateActiveConfig('hardware', 'scales', updatedScales);
   };
 
   const unlinkSeriesFromTerminal = (seriesId: string) => {
@@ -264,6 +281,102 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                    )}
                                 </div>
 
+                                {/* --- SECCIÓN: ASIGNACIÓN DE HARDWARE --- */}
+                                <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm space-y-8">
+                                   <div className="flex items-center justify-between">
+                                      <h3 className="text-xl font-black text-gray-800 flex items-center gap-2">
+                                         <HardDrive size={24} className="text-indigo-600"/> Hardware Asignado
+                                      </h3>
+                                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Configuración Periférica</span>
+                                   </div>
+
+                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                      {/* Impresora de Tickets */}
+                                      <div className="space-y-4">
+                                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Impresora de Tickets</label>
+                                         <div className="relative group">
+                                            <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-hover:text-blue-500 transition-colors">
+                                               <Printer size={20} />
+                                            </div>
+                                            <select 
+                                               value={activeTerminal.config.hardware.receiptPrinterId || ''}
+                                               onChange={(e) => handleUpdateActiveConfig('hardware', 'receiptPrinterId', e.target.value)}
+                                               className="w-full pl-12 pr-4 py-4 bg-slate-50 border-2 border-transparent rounded-2xl font-bold text-slate-800 focus:bg-white focus:border-blue-400 outline-none transition-all appearance-none"
+                                            >
+                                               <option value="">-- No asignada --</option>
+                                               {AVAILABLE_PRINTERS.map(p => (
+                                                  <option key={p.id} value={p.id}>{p.name}</option>
+                                               ))}
+                                            </select>
+                                            <ChevronDown size={18} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                                         </div>
+                                      </div>
+
+                                      {/* Visor de Cliente */}
+                                      <div className="space-y-4">
+                                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Visor de Cliente (VFD/LCD)</label>
+                                         <button 
+                                            onClick={() => {
+                                               const current = activeTerminal.config.hardware.customerDisplay;
+                                               handleUpdateActiveConfig('hardware', 'customerDisplay', {
+                                                  ...current,
+                                                  isEnabled: !current?.isEnabled
+                                               });
+                                            }}
+                                            className={`w-full p-4 rounded-2xl border-2 flex items-center justify-between transition-all ${activeTerminal.config.hardware.customerDisplay?.isEnabled ? 'border-blue-500 bg-blue-50' : 'border-slate-100 bg-slate-50'}`}
+                                         >
+                                            <div className="flex items-center gap-3">
+                                               <Tv size={20} className={activeTerminal.config.hardware.customerDisplay?.isEnabled ? 'text-blue-600' : 'text-slate-400'} />
+                                               <span className={`font-bold text-sm ${activeTerminal.config.hardware.customerDisplay?.isEnabled ? 'text-blue-900' : 'text-slate-500'}`}>
+                                                  {activeTerminal.config.hardware.customerDisplay?.isEnabled ? 'Display Activado' : 'Display Desactivado'}
+                                               </span>
+                                            </div>
+                                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${activeTerminal.config.hardware.customerDisplay?.isEnabled ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-slate-300'}`}>
+                                               {activeTerminal.config.hardware.customerDisplay?.isEnabled && <Check size={14} strokeWidth={3} />}
+                                            </div>
+                                         </button>
+                                      </div>
+                                   </div>
+
+                                   {/* Asignación de Balanzas */}
+                                   <div className="space-y-4">
+                                      <div className="flex justify-between items-end">
+                                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Balanzas de Pesaje</label>
+                                         <span className="text-[10px] text-slate-400 font-medium">Puedes asignar múltiples balanzas a una terminal</span>
+                                      </div>
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                         {(config.scales || []).map(scale => {
+                                            const isAssigned = activeTerminal.config.hardware.scales?.some(s => s.id === scale.id);
+                                            return (
+                                               <div 
+                                                  key={scale.id}
+                                                  onClick={() => toggleScaleAssignment(scale)}
+                                                  className={`p-4 rounded-2xl border-2 flex items-center justify-between cursor-pointer transition-all ${isAssigned ? 'border-emerald-500 bg-emerald-50 shadow-sm' : 'border-slate-100 bg-white hover:border-slate-200'}`}
+                                               >
+                                                  <div className="flex items-center gap-3">
+                                                     <div className={`p-2 rounded-xl ${isAssigned ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>
+                                                        <Scale size={18} />
+                                                     </div>
+                                                     <div>
+                                                        <p className={`font-bold text-sm ${isAssigned ? 'text-emerald-900' : 'text-slate-700'}`}>{scale.name}</p>
+                                                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-tighter">{scale.technology === 'DIRECT' ? 'SERIAL/USB' : 'ETIQUETAS'}</p>
+                                                     </div>
+                                                  </div>
+                                                  <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-colors ${isAssigned ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-200'}`}>
+                                                     {isAssigned && <Check size={14} strokeWidth={3} />}
+                                                  </div>
+                                               </div>
+                                            );
+                                         })}
+                                         {(config.scales || []).length === 0 && (
+                                            <div className="col-span-full py-6 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                                               <p className="text-sm text-slate-400 font-medium italic">No hay balanzas configuradas globalmente.</p>
+                                            </div>
+                                         )}
+                                      </div>
+                                   </div>
+                                </div>
+
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
                                     <Toggle label="Validación en Tiempo Real" description="Verifica stock centralizado antes de procesar el cobro." checked={activeTerminal.config.workflow.inventory.realTimeValidation} onChange={(v: boolean) => handleUpdateActiveConfig('workflow.inventory', 'realTimeValidation', v)} icon={Database} />
                                     <Toggle label="Permitir Stock Negativo" description="Permite facturar artículos sin existencias físicas." checked={activeTerminal.config.workflow.inventory.allowNegativeStock} danger={true} onChange={(v: boolean) => handleUpdateActiveConfig('workflow.inventory', 'allowNegativeStock', v)} icon={AlertTriangle} />
@@ -406,7 +519,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                            e.stopPropagation();
                                                            handleUpdateActiveConfig('inventoryScope', 'defaultSalesWarehouseId', wh.id);
                                                         }}
-                                                        className={`px-2 py-1 rounded-md text-[9px] font-black uppercase transition-all ${isDefault ? 'bg-emerald-500 text-white shadow-sm' : 'bg-white text-gray-400 border border-gray-200 hover:text-emerald-600'}`}
+                                                        className={`px-2 py-1 rounded-md text-[9px] font-black uppercase transition-all ${isDefault ? 'bg-emerald-50 text-white shadow-sm' : 'bg-white text-gray-400 border border-gray-200 hover:text-emerald-600'}`}
                                                      >
                                                         {isDefault ? 'Despacho Defecto' : 'Fijar Defecto'}
                                                      </button>
@@ -509,24 +622,48 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  />
                               </div>
 
-                              <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm">
-                                 <div className="flex items-center gap-4 mb-6">
-                                    <div className="p-3 bg-indigo-100 text-indigo-600 rounded-xl">
-                                       <DollarSign size={24} />
+                              <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm space-y-6">
+                                 <div>
+                                    <div className="flex items-center gap-4 mb-4">
+                                       <div className="p-3 bg-indigo-100 text-indigo-600 rounded-xl">
+                                          <DollarSign size={24} />
+                                       </div>
+                                       <div>
+                                          <h3 className="font-bold text-lg text-gray-900">Límite de Efectivo en Gaveta</h3>
+                                          <p className="text-sm text-gray-400">Notificar retiro (drop) cuando el efectivo supere este monto.</p>
+                                       </div>
                                     </div>
-                                    <div>
-                                       <h3 className="font-bold text-lg text-gray-900">Límite de Efectivo en Gaveta</h3>
-                                       <p className="text-sm text-gray-400">Notificar retiro (drop) cuando el efectivo supere este monto.</p>
+                                    <div className="relative">
+                                       <span className="absolute left-4 top-1/2 -translate-y-1/2 font-black text-gray-400 text-lg">{config.currencySymbol}</span>
+                                       <input 
+                                          type="number" 
+                                          value={activeTerminal.config.workflow.session.maxCashInDrawer}
+                                          onChange={(e) => handleUpdateActiveConfig('workflow.session', 'maxCashInDrawer', parseFloat(e.target.value) || 0)}
+                                          className="w-full pl-12 pr-4 py-4 bg-gray-50 border-2 border-transparent rounded-2xl text-2xl font-black text-gray-800 focus:bg-white focus:border-indigo-400 outline-none transition-all"
+                                       />
                                     </div>
                                  </div>
-                                 <div className="relative">
-                                    <span className="absolute left-4 top-1/2 -translate-y-1/2 font-black text-gray-400 text-lg">{config.currencySymbol}</span>
-                                    <input 
-                                       type="number" 
-                                       value={activeTerminal.config.workflow.session.maxCashInDrawer}
-                                       onChange={(e) => handleUpdateActiveConfig('workflow.session', 'maxCashInDrawer', parseFloat(e.target.value) || 0)}
-                                       className="w-full pl-12 pr-4 py-4 bg-gray-50 border-2 border-transparent rounded-2xl text-2xl font-black text-gray-800 focus:bg-white focus:border-indigo-400 outline-none transition-all"
-                                    />
+
+                                 <div className="pt-6 border-t border-gray-100">
+                                    <div className="flex items-center gap-4 mb-4">
+                                       <div className="p-3 bg-blue-100 text-blue-600 rounded-xl">
+                                          <Mail size={24} />
+                                       </div>
+                                       <div>
+                                          <h3 className="font-bold text-lg text-gray-900">Destinatarios Reporte Z</h3>
+                                          <p className="text-sm text-gray-400">Emails que recibirán el cierre automáticamente al finalizar.</p>
+                                       </div>
+                                    </div>
+                                    <div className="relative">
+                                       <input 
+                                          type="text" 
+                                          placeholder="ejemplo@correo.com, jefe@tienda.com"
+                                          value={activeTerminal.config.workflow.session.zReportEmails || ''}
+                                          onChange={(e) => handleUpdateActiveConfig('workflow.session', 'zReportEmails', e.target.value)}
+                                          className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl font-bold text-gray-700 focus:bg-white focus:border-blue-400 outline-none transition-all"
+                                       />
+                                       <p className="text-[10px] text-gray-400 mt-2 uppercase font-bold px-1">Separa múltiples correos con comas.</p>
+                                    </div>
                                  </div>
                               </div>
                            </div>
