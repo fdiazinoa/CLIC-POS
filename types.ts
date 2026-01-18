@@ -189,6 +189,7 @@ export interface TerminalConfig {
   hardware: {
     cashDrawerTrigger: 'PRINTER' | 'DIRECT';
     receiptPrinterId?: string;
+    printerAssignments?: Record<string, string>; // Roles: TICKET, LABEL, KITCHEN, LOGISTICS
     customerDisplay?: CustomerDisplayConfig;
     scales?: ScaleDevice[];
   };

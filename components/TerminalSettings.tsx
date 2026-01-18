@@ -10,7 +10,7 @@ import {
   Link2Off, MonitorOff, Cloud, RefreshCw, Activity, Wifi, Server, AlertTriangle,
   Circle, CheckCircle, ChevronDown, Landmark, Link, Shield, Globe, HardDrive,
   Building2, Printer, Settings2, Info, Unlink, BarChart3, ShieldQuestion,
-  ToggleLeft, ToggleRight, Radio, Power, Scale, Tv, Mail
+  ToggleLeft, ToggleRight, Radio, Power, Scale, Tv, Mail, ShoppingBag, Truck
 } from 'lucide-react';
 import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG } from '../constants';
@@ -23,11 +23,12 @@ interface TerminalSettingsProps {
   warehouses?: Warehouse[];
 }
 
-// Mock de impresoras disponibles (En un sistema real esto vendría de un escaneo o config global)
-const AVAILABLE_PRINTERS = [
-  { id: 'p1', name: 'Impresora Térmica 80mm (USB)', type: 'TICKET' },
-  { id: 'p2', name: 'Impresora Cocina (LAN)', type: 'KITCHEN' },
-  { id: 'p3', name: 'Impresora Etiquetas (Bluetooth)', type: 'LABEL' }
+// Roles de impresora para el terminal
+const PRINTER_ROLES = [
+  { id: 'TICKET', label: 'Ticket de Venta', icon: Receipt },
+  { id: 'LABEL', label: 'Etiquetas (Deli/Precios)', icon: Tag },
+  { id: 'KITCHEN', label: 'Comandas de Cocina', icon: ShoppingBag },
+  { id: 'LOGISTICS', label: 'Logística / Almacén', icon: Truck },
 ];
 
 type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'PRICING' | 'DOCUMENTS' | 'OFFLINE' | 'TAXES' | 'INVENTORY';
@@ -128,6 +129,20 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       : [...currentScales, scale];
       
     handleUpdateActiveConfig('hardware', 'scales', updatedScales);
+  };
+
+  const updatePrinterAssignment = (role: string, printerId: string) => {
+    if (!activeTerminal) return;
+    const currentAssignments = activeTerminal.config.hardware.printerAssignments || {};
+    handleUpdateActiveConfig('hardware', 'printerAssignments', {
+       ...currentAssignments,
+       [role]: printerId
+    });
+    
+    // Mantener compatibilidad con el legacyId
+    if (role === 'TICKET') {
+      handleUpdateActiveConfig('hardware', 'receiptPrinterId', printerId);
+    }
   };
 
   const unlinkSeriesFromTerminal = (seriesId: string) => {
@@ -283,35 +298,52 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
 
                                 {/* --- SECCIÓN: ASIGNACIÓN DE HARDWARE --- */}
                                 <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm space-y-8">
-                                   <div className="flex items-center justify-between">
+                                   <div className="flex items-center justify-between border-b border-slate-100 pb-4">
                                       <h3 className="text-xl font-black text-gray-800 flex items-center gap-2">
                                          <HardDrive size={24} className="text-indigo-600"/> Hardware Asignado
                                       </h3>
                                       <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Configuración Periférica</span>
                                    </div>
 
-                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                      {/* Impresora de Tickets */}
-                                      <div className="space-y-4">
-                                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Impresora de Tickets</label>
-                                         <div className="relative group">
-                                            <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-hover:text-blue-500 transition-colors">
-                                               <Printer size={20} />
-                                            </div>
-                                            <select 
-                                               value={activeTerminal.config.hardware.receiptPrinterId || ''}
-                                               onChange={(e) => handleUpdateActiveConfig('hardware', 'receiptPrinterId', e.target.value)}
-                                               className="w-full pl-12 pr-4 py-4 bg-slate-50 border-2 border-transparent rounded-2xl font-bold text-slate-800 focus:bg-white focus:border-blue-400 outline-none transition-all appearance-none"
-                                            >
-                                               <option value="">-- No asignada --</option>
-                                               {AVAILABLE_PRINTERS.map(p => (
-                                                  <option key={p.id} value={p.id}>{p.name}</option>
-                                               ))}
-                                            </select>
-                                            <ChevronDown size={18} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                                         </div>
+                                   {/* Asignación de Impresoras por Rol */}
+                                   <div className="space-y-6">
+                                      <div className="flex justify-between items-end">
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Asignación de Impresoras por Función</label>
+                                        <p className="text-[10px] text-slate-400 font-medium">Define qué impresora ejecuta cada tarea</p>
                                       </div>
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                         {PRINTER_ROLES.map(role => (
+                                            <div key={role.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
+                                               <div className="flex items-center gap-2 text-slate-600">
+                                                  <role.icon size={16} />
+                                                  <span className="text-xs font-bold uppercase tracking-tight">{role.label}</span>
+                                               </div>
+                                               <div className="relative group">
+                                                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-hover:text-blue-500 transition-colors pointer-events-none">
+                                                     <Printer size={16} />
+                                                  </div>
+                                                  <select 
+                                                     value={activeTerminal.config.hardware.printerAssignments?.[role.id] || ''}
+                                                     onChange={(e) => updatePrinterAssignment(role.id, e.target.value)}
+                                                     className="w-full pl-10 pr-8 py-3 bg-white border border-slate-200 rounded-xl font-bold text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 appearance-none transition-all"
+                                                  >
+                                                     <option value="">-- No asignada --</option>
+                                                     {/* Simulación de impresoras disponibles */}
+                                                     <option value="p1">Impresora Térmica 80mm (USB)</option>
+                                                     <option value="p2">Impresora de Cocina (LAN)</option>
+                                                     <option value="p3">Zebra Etiquetas (BT)</option>
+                                                     <option value="p4">Epson Warehouse (Wifi)</option>
+                                                  </select>
+                                                  <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                                               </div>
+                                            </div>
+                                         ))}
+                                      </div>
+                                   </div>
 
+                                   <div className="h-px bg-slate-100"></div>
+
+                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                       {/* Visor de Cliente */}
                                       <div className="space-y-4">
                                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Visor de Cliente (VFD/LCD)</label>
@@ -342,7 +374,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                    <div className="space-y-4">
                                       <div className="flex justify-between items-end">
                                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Balanzas de Pesaje</label>
-                                         <span className="text-[10px] text-slate-400 font-medium">Puedes asignar múltiples balanzas a una terminal</span>
+                                         <span className="text-[10px] text-slate-400 font-medium">Asigna las balanzas registradas globalmente</span>
                                       </div>
                                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                          {(config.scales || []).map(scale => {
@@ -369,8 +401,11 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                             );
                                          })}
                                          {(config.scales || []).length === 0 && (
-                                            <div className="col-span-full py-6 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
-                                               <p className="text-sm text-slate-400 font-medium italic">No hay balanzas configuradas globalmente.</p>
+                                            <div className="col-span-full py-10 text-center bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center gap-3 group hover:border-blue-400 transition-colors">
+                                               <div className="p-3 bg-white rounded-full shadow-sm text-slate-300 group-hover:text-blue-400 transition-colors">
+                                                  <Scale size={32} />
+                                               </div>
+                                               <p className="text-xs text-slate-400 font-bold uppercase tracking-widest px-4">No hay balanzas configuradas globalmente en Hardware.</p>
                                             </div>
                                          )}
                                       </div>

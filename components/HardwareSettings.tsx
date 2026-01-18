@@ -86,6 +86,9 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
     
     setScales(newScales);
     setEditingScale(null);
+    
+    // Auto-persist to global config
+    onUpdateConfig({ ...globalConfig, scales: newScales });
   };
 
   const createNewScale = () => {
@@ -97,6 +100,14 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       directConfig: { port: 'COM1', baudRate: 9600, dataBits: 8, protocol: 'CAS' },
       labelConfig: { mode: 'WEIGHT', prefixes: ['20'], decimals: 3, itemDigits: 5, valueDigits: 5 }
     });
+  };
+
+  const handleDeleteScale = (id: string) => {
+    if (confirm("¿Eliminar esta balanza?")) {
+      const newScales = scales.filter(s => s.id !== id);
+      setScales(newScales);
+      onUpdateConfig({ ...globalConfig, scales: newScales });
+    }
   };
 
   const handleDigitClick = (index: number) => {
@@ -434,8 +445,8 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                             </div>
                             <div className="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar">
                                {[
-                                  { name: 'Zapatillas Runner X', qty: 1, price: 2500, img: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=100&auto=format&fit=crop' },
-                                  { name: 'Tomate Barceló (Fresco)', qty: 2.5, price: 35, img: 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?q=80&w=100&auto=format&fit=crop' },
+                                  { name: 'Zapatillas Runner X', qty: 1, price: 2500, img: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=100&auto=format&fit=facearea&facepad=2&w=100&h=100&q=80' },
+                                  { name: 'Tomate Barceló (Fresco)', qty: 2.5, price: 35, img: 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?q=80&w=200&auto=format&fit=crop' },
                                ].map((item, i) => (
                                   <div key={i} className="flex gap-4 items-center">
                                      {displayConfig.showItemImages && <img src={item.img} className="w-12 h-12 rounded-xl object-cover shadow-sm" />}
@@ -499,7 +510,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
               <div key={scale.id} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-200 group relative">
                  <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 flex gap-2">
                     <button onClick={() => setEditingScale(scale)} className="p-2 bg-gray-50 text-gray-400 hover:text-blue-600 rounded-lg"><SettingsIcon size={16} /></button>
-                    <button onClick={() => setScales(scales.filter(s => s.id !== scale.id))} className="p-2 bg-gray-50 text-gray-400 hover:text-red-600 rounded-lg"><Trash2 size={16} /></button>
+                    <button onClick={() => handleDeleteScale(scale.id)} className="p-2 bg-gray-50 text-gray-400 hover:text-red-600 rounded-lg"><Trash2 size={16} /></button>
                  </div>
                  <div className="flex items-center gap-4 mb-4">
                     <div className={`p-3 rounded-2xl ${scale.isEnabled ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-400'}`}><Scale size={24} /></div>
@@ -657,7 +668,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
               </div>
 
               <div className="p-6 border-t border-gray-100 bg-gray-50 flex justify-end gap-3 z-20">
-                 <button onClick={() => setEditingScale(null)} className="px-6 py-3 text-gray-500 font-bold hover:bg-gray-200 rounded-xl transition-colors">Cancelar</button>
+                 <button onClick={() => setEditingScale(null)} className="px-6 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition-colors">Cancelar</button>
                  <button onClick={handleSaveScale} className="px-10 py-3 bg-blue-600 text-white font-black text-lg rounded-2xl shadow-xl hover:bg-blue-700 active:scale-95 transition-all">Aplicar</button>
               </div>
            </div>

@@ -90,7 +90,9 @@ export const DEFAULT_TERMINAL_CONFIG = {
   },
   documentSeries: DEFAULT_DOCUMENT_SERIES,
   hardware: {
-    cashDrawerTrigger: 'PRINTER' as const
+    cashDrawerTrigger: 'PRINTER' as const,
+    printerAssignments: {},
+    scales: []
   },
   ux: {
     theme: 'LIGHT' as const,
@@ -293,6 +295,7 @@ export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
       { id: 'card', name: 'Tarjeta', type: 'CARD', isEnabled: true, icon: 'CreditCard', color: 'bg-blue-500', opensDrawer: false, requiresSignature: false, integration: 'NONE' }
     ],
     tariffs: INITIAL_TARIFFS,
-    terminals: [{ id: 't1', config: DEFAULT_TERMINAL_CONFIG }]
+    terminals: [{ id: 't1', config: DEFAULT_TERMINAL_CONFIG }],
+    scales: [] 
   };
 };
