@@ -10,7 +10,9 @@ import {
   Link2Off, MonitorOff, Cloud, RefreshCw, Activity, Wifi, Server, AlertTriangle,
   Circle, CheckCircle, ChevronDown, Landmark, Link, Shield, Globe, HardDrive,
   Building2, Printer, Settings2, Info, Unlink, BarChart3, ShieldQuestion,
-  ToggleLeft, ToggleRight, Radio, Power, Scale, Tv, Mail, ShoppingBag, Truck
+  ToggleLeft, ToggleRight, Radio, Power, Scale, Tv, Mail, ShoppingBag, Truck,
+  /* Added missing icons to fix "Cannot find name" errors on lines 293 and 300 */
+  Package, Layers
 } from 'lucide-react';
 import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG } from '../constants';
@@ -23,41 +25,24 @@ interface TerminalSettingsProps {
   warehouses?: Warehouse[];
 }
 
-// Roles de impresora para el terminal
 const PRINTER_ROLES = [
   { id: 'TICKET', label: 'Ticket de Venta', icon: Receipt },
-  { id: 'LABEL', label: 'Etiquetas (Deli/Precios)', icon: Tag },
-  { id: 'KITCHEN', label: 'Comandas de Cocina', icon: ShoppingBag },
-  { id: 'LOGISTICS', label: 'Logística / Almacén', icon: Truck },
+  { id: 'LABEL', label: 'Etiquetas', icon: Tag },
+  { id: 'KITCHEN', label: 'Cocina', icon: ShoppingBag },
+  { id: 'LOGISTICS', label: 'Logística', icon: Truck },
 ];
 
-type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'PRICING' | 'DOCUMENTS' | 'OFFLINE' | 'TAXES' | 'INVENTORY';
+type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY';
 
 const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [] }) => {
   const [terminals, setTerminals] = useState(config.terminals || []);
   const [selectedTerminalId, setSelectedTerminalId] = useState<string>(terminals[0]?.id || '');
   const [activeTab, setActiveTab] = useState<TerminalTab>('OPERATIONAL');
-  
-  const [isLinkingSeries, setIsLinkingSeries] = useState(false);
   const tabsRef = useRef<HTMLDivElement>(null);
 
   const activeTerminal = useMemo(() => 
     terminals.find(t => t.id === selectedTerminalId), 
   [terminals, selectedTerminalId]);
-
-  // --- FISCAL CONSUMPTION CALCULATION ---
-  const terminalFiscalStats = useMemo(() => {
-    const txns = db.get('transactions') as Transaction[] || [];
-    const stats: Record<NCFType, number> = { 'B01': 0, 'B02': 0, 'B14': 0, 'B15': 0 };
-    
-    txns.filter(t => t.terminalId === selectedTerminalId).forEach(tx => {
-      if (tx.ncfType) {
-        stats[tx.ncfType] = (stats[tx.ncfType] || 0) + 1;
-      }
-    });
-
-    return stats;
-  }, [selectedTerminalId]);
 
   const handleUpdateActiveConfig = (sectionPath: string, key: string, value: any) => {
     if (!activeTerminal) return;
@@ -107,76 +92,10 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
     setSelectedTerminalId(nextId);
   };
 
-  const handleUpdateTypeConfig = (type: NCFType, key: keyof NCFConfig, val: number) => {
-    if (!activeTerminal) return;
-    const currentFiscal = activeTerminal.config.fiscal || { batchSize: 100, lowBatchThreshold: 20 };
-    const typeConfigs = currentFiscal.typeConfigs || {};
-    const typeConfig = typeConfigs[type] || { batchSize: 100, lowBatchThreshold: 20 };
-    
-    handleUpdateActiveConfig('fiscal.typeConfigs', type, {
-       ...typeConfig,
-       [key]: val
-    });
-  };
-
-  const toggleScaleAssignment = (scale: ScaleDevice) => {
-    if (!activeTerminal) return;
-    const currentScales = activeTerminal.config.hardware.scales || [];
-    const isAssigned = currentScales.some(s => s.id === scale.id);
-    
-    const updatedScales = isAssigned 
-      ? currentScales.filter(s => s.id !== scale.id)
-      : [...currentScales, scale];
-      
-    handleUpdateActiveConfig('hardware', 'scales', updatedScales);
-  };
-
-  const updatePrinterAssignment = (role: string, printerId: string) => {
-    if (!activeTerminal) return;
-    const currentAssignments = activeTerminal.config.hardware.printerAssignments || {};
-    handleUpdateActiveConfig('hardware', 'printerAssignments', {
-       ...currentAssignments,
-       [role]: printerId
-    });
-    
-    // Mantener compatibilidad con el legacyId
-    if (role === 'TICKET') {
-      handleUpdateActiveConfig('hardware', 'receiptPrinterId', printerId);
-    }
-  };
-
-  const unlinkSeriesFromTerminal = (seriesId: string) => {
-    if (!activeTerminal) return;
-    const currentSeries = activeTerminal.config.documentSeries || [];
-    handleUpdateActiveConfig('', 'documentSeries', currentSeries.filter(s => s.id !== seriesId));
-  };
-
-  const linkSeriesToTerminal = (series: DocumentSeries) => {
-    if (!activeTerminal) return;
-    const currentSeries = activeTerminal.config.documentSeries || [];
-    if (currentSeries.some(s => s.id === series.id)) return;
-    handleUpdateActiveConfig('', 'documentSeries', [...currentSeries, series]);
-    setIsLinkingSeries(false);
-  };
-
-  const handleUnpairDevice = () => {
-    if (confirm("¿Desvincular este dispositivo de la terminal? El dispositivo actual perderá acceso inmediatamente.")) {
-      handleUpdateActiveConfig('', 'currentDeviceId', undefined);
-      handleUpdateActiveConfig('', 'lastPairingDate', undefined);
-    }
-  };
-
   const handleSave = () => {
     onUpdateConfig({ ...config, terminals: terminals });
-    alert("Configuraciones de terminales guardadas.");
+    alert("Configuraciones de terminales guardadas correctamente.");
     onClose();
-  };
-
-  const scrollTabs = (direction: 'left' | 'right') => {
-    if (tabsRef.current) {
-      const scrollAmount = 300;
-      tabsRef.current.scrollBy({ left: direction === 'left' ? -scrollAmount : scrollAmount, behavior: 'smooth' });
-    }
   };
 
   const Toggle = ({ label, description, checked, onChange, danger = false, icon: Icon }: any) => (
@@ -199,6 +118,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
 
   return (
     <div className="flex h-full bg-gray-50 animate-in fade-in overflow-hidden relative">
+        {/* SIDEBAR */}
         <aside className="w-80 bg-white border-r border-gray-200 flex flex-col shrink-0 z-20 shadow-sm">
             <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                <div>
@@ -225,229 +145,124 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
             </div>
         </aside>
 
+        {/* MAIN AREA */}
         <div className="flex-1 flex flex-col min-w-0 h-full">
             <header className="bg-white px-8 py-5 border-b border-gray-200 flex justify-between items-center shrink-0 z-10">
-                <div className="flex items-center gap-4">
-                   <h2 className="text-2xl font-black text-gray-800 flex items-center gap-3"><SettingsIcon className="text-blue-600" /> Terminal: <span className="text-blue-600">{selectedTerminalId}</span></h2>
-                </div>
+                <h2 className="text-2xl font-black text-gray-800 flex items-center gap-3"><SettingsIcon className="text-blue-600" /> Terminal: <span className="text-blue-600">{selectedTerminalId}</span></h2>
                 <div className="flex gap-3">
-                    <button onClick={handleSave} className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold flex items-center gap-2 shadow-xl shadow-blue-500/20 hover:bg-blue-700 active:scale-95 transition-all"><Save size={20}/> Guardar Cambios</button>
+                    <button onClick={handleSave} className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold flex items-center gap-2 shadow-xl hover:bg-blue-700 transition-all"><Save size={20}/> Guardar Cambios</button>
                     <button onClick={onClose} className="p-3 bg-gray-100 text-gray-500 hover:bg-gray-200 rounded-xl transition-colors"><X size={20}/></button>
                 </div>
             </header>
 
-            <div className="relative bg-white border-b border-gray-100 shrink-0">
-                <button onClick={() => scrollTabs('left')} className="absolute left-0 top-0 bottom-0 z-10 w-12 bg-gradient-to-r from-white via-white/80 to-transparent flex items-center justify-center text-gray-400"><ChevronLeft size={24} /></button>
-                <div ref={tabsRef} className="flex gap-8 px-12 overflow-x-auto no-scrollbar scroll-smooth">
+            {/* TABS NAVIGATION */}
+            <div className="relative bg-white border-b border-gray-100 shrink-0 overflow-x-auto no-scrollbar flex px-4">
                 {[
                   { id: 'OPERATIONAL', label: 'Operativa', icon: Database },
                   { id: 'FISCAL', label: 'Lotes Fiscales', icon: Landmark },
-                  { id: 'INVENTORY', label: 'Alcance Inventario', icon: Box },
+                  { id: 'INVENTORY', label: 'Almacenes', icon: Box },
                   { id: 'SECURITY', label: 'Seguridad', icon: ShieldAlert },
                   { id: 'SESSION', label: 'Sesión y Z', icon: Clock },
-                  { id: 'DOCUMENTS', label: 'Series Internas', icon: FileText },
                   { id: 'OFFLINE', label: 'Conexión', icon: Cloud },
                 ].map(tab => (
-                  <button key={tab.id} onClick={() => setActiveTab(tab.id as TerminalTab)} className={`pb-4 pt-4 text-sm font-bold flex items-center gap-2 border-b-4 transition-all whitespace-nowrap ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+                  <button 
+                    key={tab.id} 
+                    onClick={() => setActiveTab(tab.id as TerminalTab)} 
+                    className={`pb-4 pt-4 px-4 text-sm font-bold flex items-center gap-2 border-b-4 transition-all whitespace-nowrap ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  >
                     <tab.icon size={18} /> {tab.label}
                   </button>
                 ))}
-                </div>
-                <button onClick={() => scrollTabs('right')} className="absolute right-0 top-0 bottom-0 z-10 w-12 bg-gradient-to-l from-white via-white/80 to-transparent flex items-center justify-center text-gray-400"><ChevronRight size={24} /></button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-slate-50/50">
+            {/* TAB CONTENT */}
+            <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50 custom-scrollbar">
                 {activeTerminal ? (
-                    <div className="max-w-4xl mx-auto pb-20 space-y-8">
+                    <div className="max-w-4xl mx-auto space-y-8 animate-in slide-in-from-right-4">
                         
-                        {/* OPERATIONAL SECTION */}
+                        {/* 1. OPERATIONAL SECTION */}
                         {activeTab === 'OPERATIONAL' && (
-                           <div className="space-y-6 animate-in slide-in-from-right-4">
-                                <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm mb-6">
-                                   <h3 className="text-xl font-black text-gray-800 mb-6 flex items-center gap-2">
-                                      <Smartphone size={24} className="text-blue-600"/> Vinculación de Dispositivo
-                                   </h3>
-                                   
-                                   {activeTerminal.config.currentDeviceId ? (
-                                      <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 flex justify-between items-center">
-                                         <div className="flex items-center gap-4">
-                                            <div className="p-3 bg-blue-600 text-white rounded-xl shadow-lg">
-                                               <Monitor size={24} />
-                                            </div>
-                                            <div>
-                                               <p className="text-xs font-black text-blue-400 uppercase tracking-widest">Dispositivo Vinculado</p>
-                                               <p className="text-lg font-mono font-bold text-blue-900">{activeTerminal.config.currentDeviceId}</p>
-                                               <p className="text-[10px] text-blue-600 font-medium">Vinculado el: {new Date(activeTerminal.config.lastPairingDate || '').toLocaleString()}</p>
-                                            </div>
-                                         </div>
-                                         <button 
-                                            onClick={handleUnpairDevice}
-                                            className="px-4 py-2 bg-white text-red-500 rounded-xl font-bold text-xs border-2 border-red-100 hover:bg-red-50 transition-all flex items-center gap-2"
-                                         >
-                                            <Unlink size={14} /> Desvincular Dispositivo
-                                         </button>
-                                      </div>
-                                   ) : (
-                                      <div className="bg-slate-100 p-6 rounded-2xl border border-dashed border-slate-300 text-center">
-                                         <MonitorOff size={32} className="mx-auto text-slate-400 mb-2" />
-                                         <p className="text-slate-500 font-bold">Sin dispositivo vinculado</p>
-                                         <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest">El próximo administrador que inicie sesión aquí vinculará su hardware.</p>
-                                      </div>
-                                   )}
-                                </div>
-
-                                {/* --- SECCIÓN: ASIGNACIÓN DE HARDWARE --- */}
-                                <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm space-y-8">
-                                   <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-                                      <h3 className="text-xl font-black text-gray-800 flex items-center gap-2">
-                                         <HardDrive size={24} className="text-indigo-600"/> Hardware Asignado
-                                      </h3>
-                                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Configuración Periférica</span>
-                                   </div>
-
-                                   {/* Asignación de Impresoras por Rol */}
-                                   <div className="space-y-6">
-                                      <div className="flex justify-between items-end">
-                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Asignación de Impresoras por Función</label>
-                                        <p className="text-[10px] text-slate-400 font-medium">Define qué impresora ejecuta cada tarea</p>
-                                      </div>
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                         {PRINTER_ROLES.map(role => (
-                                            <div key={role.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
-                                               <div className="flex items-center gap-2 text-slate-600">
-                                                  <role.icon size={16} />
-                                                  <span className="text-xs font-bold uppercase tracking-tight">{role.label}</span>
-                                               </div>
-                                               <div className="relative group">
-                                                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-hover:text-blue-500 transition-colors pointer-events-none">
-                                                     <Printer size={16} />
-                                                  </div>
-                                                  <select 
-                                                     value={activeTerminal.config.hardware.printerAssignments?.[role.id] || ''}
-                                                     onChange={(e) => updatePrinterAssignment(role.id, e.target.value)}
-                                                     className="w-full pl-10 pr-8 py-3 bg-white border border-slate-200 rounded-xl font-bold text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 appearance-none transition-all"
-                                                  >
-                                                     <option value="">-- No asignada --</option>
-                                                     {/* Simulación de impresoras disponibles */}
-                                                     <option value="p1">Impresora Térmica 80mm (USB)</option>
-                                                     <option value="p2">Impresora de Cocina (LAN)</option>
-                                                     <option value="p3">Zebra Etiquetas (BT)</option>
-                                                     <option value="p4">Epson Warehouse (Wifi)</option>
-                                                  </select>
-                                                  <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                                               </div>
-                                            </div>
-                                         ))}
-                                      </div>
-                                   </div>
-
-                                   <div className="h-px bg-slate-100"></div>
-
-                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                      {/* Visor de Cliente */}
-                                      <div className="space-y-4">
-                                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Visor de Cliente (VFD/LCD)</label>
-                                         <button 
-                                            onClick={() => {
-                                               const current = activeTerminal.config.hardware.customerDisplay;
-                                               handleUpdateActiveConfig('hardware', 'customerDisplay', {
-                                                  ...current,
-                                                  isEnabled: !current?.isEnabled
-                                               });
-                                            }}
-                                            className={`w-full p-4 rounded-2xl border-2 flex items-center justify-between transition-all ${activeTerminal.config.hardware.customerDisplay?.isEnabled ? 'border-blue-500 bg-blue-50' : 'border-slate-100 bg-slate-50'}`}
-                                         >
-                                            <div className="flex items-center gap-3">
-                                               <Tv size={20} className={activeTerminal.config.hardware.customerDisplay?.isEnabled ? 'text-blue-600' : 'text-slate-400'} />
-                                               <span className={`font-bold text-sm ${activeTerminal.config.hardware.customerDisplay?.isEnabled ? 'text-blue-900' : 'text-slate-500'}`}>
-                                                  {activeTerminal.config.hardware.customerDisplay?.isEnabled ? 'Display Activado' : 'Display Desactivado'}
-                                               </span>
-                                            </div>
-                                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${activeTerminal.config.hardware.customerDisplay?.isEnabled ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-slate-300'}`}>
-                                               {activeTerminal.config.hardware.customerDisplay?.isEnabled && <Check size={14} strokeWidth={3} />}
-                                            </div>
-                                         </button>
-                                      </div>
-                                   </div>
-
-                                   {/* Asignación de Balanzas */}
-                                   <div className="space-y-4">
-                                      <div className="flex justify-between items-end">
-                                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Balanzas de Pesaje</label>
-                                         <span className="text-[10px] text-slate-400 font-medium">Asigna las balanzas registradas globalmente</span>
-                                      </div>
-                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                         {(config.scales || []).map(scale => {
-                                            const isAssigned = activeTerminal.config.hardware.scales?.some(s => s.id === scale.id);
-                                            return (
-                                               <div 
-                                                  key={scale.id}
-                                                  onClick={() => toggleScaleAssignment(scale)}
-                                                  className={`p-4 rounded-2xl border-2 flex items-center justify-between cursor-pointer transition-all ${isAssigned ? 'border-emerald-500 bg-emerald-50 shadow-sm' : 'border-slate-100 bg-white hover:border-slate-200'}`}
-                                               >
-                                                  <div className="flex items-center gap-3">
-                                                     <div className={`p-2 rounded-xl ${isAssigned ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-100 text-slate-400'}`}>
-                                                        <Scale size={18} />
-                                                     </div>
-                                                     <div>
-                                                        <p className={`font-bold text-sm ${isAssigned ? 'text-emerald-900' : 'text-slate-700'}`}>{scale.name}</p>
-                                                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-tighter">{scale.technology === 'DIRECT' ? 'SERIAL/USB' : 'ETIQUETAS'}</p>
-                                                     </div>
-                                                  </div>
-                                                  <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-colors ${isAssigned ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-200'}`}>
-                                                     {isAssigned && <Check size={14} strokeWidth={3} />}
-                                                  </div>
-                                               </div>
-                                            );
-                                         })}
-                                         {(config.scales || []).length === 0 && (
-                                            <div className="col-span-full py-10 text-center bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center gap-3 group hover:border-blue-400 transition-colors">
-                                               <div className="p-3 bg-white rounded-full shadow-sm text-slate-300 group-hover:text-blue-400 transition-colors">
-                                                  <Scale size={32} />
-                                               </div>
-                                               <p className="text-xs text-slate-400 font-bold uppercase tracking-widest px-4">No hay balanzas configuradas globalmente en Hardware.</p>
-                                            </div>
-                                         )}
-                                      </div>
-                                   </div>
-                                </div>
-
-                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                                    <Toggle label="Validación en Tiempo Real" description="Verifica stock centralizado antes de procesar el cobro." checked={activeTerminal.config.workflow.inventory.realTimeValidation} onChange={(v: boolean) => handleUpdateActiveConfig('workflow.inventory', 'realTimeValidation', v)} icon={Database} />
-                                    <Toggle label="Permitir Stock Negativo" description="Permite facturar artículos sin existencias físicas." checked={activeTerminal.config.workflow.inventory.allowNegativeStock} danger={true} onChange={(v: boolean) => handleUpdateActiveConfig('workflow.inventory', 'allowNegativeStock', v)} icon={AlertTriangle} />
-                                </div>
-                           </div>
-                        )}
-
-                        {/* FISCAL BATCHES SECTION */}
-                        {activeTab === 'FISCAL' && (
-                           <div className="animate-in slide-in-from-right-4 space-y-8">
-                              <div className="bg-slate-900 p-8 rounded-[2.5rem] border border-slate-800 shadow-2xl relative overflow-hidden">
-                                 <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 rounded-full blur-3xl -mr-10 -mt-10" />
-                                 <div className="relative z-10">
-                                    <div className="flex justify-between items-center mb-6">
-                                       <div>
-                                          <h4 className="text-xs font-black text-blue-400 uppercase tracking-[0.2em] mb-1">Auditoría de Emisión</h4>
-                                          <p className="text-2xl font-black text-white">Consumo Acumulado en Caja</p>
+                           <div className="space-y-6">
+                              <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
+                                 <h3 className="text-xl font-black flex items-center gap-2"><HardDrive size={24} className="text-indigo-600"/> Hardware Asignado</h3>
+                                 
+                                 {/* Impresoras por Rol */}
+                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {PRINTER_ROLES.map(role => (
+                                       <div key={role.id} className="p-4 bg-slate-50 rounded-2xl border space-y-2">
+                                          <div className="flex items-center gap-2 text-slate-600"><role.icon size={16} /><span className="text-xs font-bold uppercase">{role.label}</span></div>
+                                          <select 
+                                             value={activeTerminal.config.hardware?.printerAssignments?.[role.id] || ''}
+                                             onChange={(e) => {
+                                                const current = activeTerminal.config.hardware?.printerAssignments || {};
+                                                handleUpdateActiveConfig('hardware', 'printerAssignments', { ...current, [role.id]: e.target.value });
+                                             }}
+                                             className="w-full p-3 bg-white border rounded-xl font-bold text-sm outline-none"
+                                          >
+                                             <option value="">-- No asignada --</option>
+                                             {(config.availablePrinters || []).map(p => <option key={p.id} value={p.id}>{p.name} ({p.connection})</option>)}
+                                          </select>
                                        </div>
-                                       <div className="p-3 bg-white/5 rounded-2xl border border-white/10">
-                                          <BarChart3 className="text-blue-400" size={24} />
+                                    ))}
+                                 </div>
+
+                                 <div className="h-px bg-slate-100"></div>
+
+                                 {/* Visor de Cliente */}
+                                 <div className="space-y-4">
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">Visor de Cliente (VFD/LCD)</label>
+                                    <div className={`p-6 rounded-3xl border-2 transition-all flex items-center justify-between ${activeTerminal.config.hardware?.customerDisplay?.isEnabled ? 'border-blue-500 bg-blue-50/50' : 'border-slate-100 bg-white'}`}>
+                                       <div className="flex items-center gap-4">
+                                          <div className={`p-3 rounded-2xl ${activeTerminal.config.hardware?.customerDisplay?.isEnabled ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-100 text-slate-400'}`}>
+                                             <Tv size={24} />
+                                          </div>
+                                          <div>
+                                             <p className={`font-black text-sm uppercase ${activeTerminal.config.hardware?.customerDisplay?.isEnabled ? 'text-blue-900' : 'text-slate-500'}`}>
+                                                {activeTerminal.config.hardware?.customerDisplay?.isEnabled ? 'Visualización Activada' : 'Visualización Desactivada'}
+                                             </p>
+                                             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">Gestiona anuncios y mensajes de bienvenida</p>
+                                          </div>
+                                       </div>
+                                       <div className="flex items-center gap-3">
+                                          {activeTerminal.config.hardware?.customerDisplay?.isEnabled && (
+                                             <button 
+                                                onClick={() => alert("Usa el menú: Hardware Global -> Visor Cliente para cargar Ads y banners.")}
+                                                className="px-4 py-2 bg-white text-blue-600 rounded-xl text-xs font-black border-2 border-blue-200 hover:bg-blue-50 shadow-sm transition-all"
+                                             >
+                                                CONFIGURAR CONTENIDO
+                                             </button>
+                                          )}
+                                          <button 
+                                             onClick={() => {
+                                                const current = activeTerminal.config.hardware?.customerDisplay;
+                                                handleUpdateActiveConfig('hardware', 'customerDisplay', { ...current, isEnabled: !current?.isEnabled });
+                                             }}
+                                             className={`w-14 h-7 rounded-full relative transition-all ${activeTerminal.config.hardware?.customerDisplay?.isEnabled ? 'bg-blue-600' : 'bg-gray-300'}`}
+                                          >
+                                             <div className={`absolute top-1 w-5 h-5 rounded-full bg-white shadow-sm transition-all ${activeTerminal.config.hardware?.customerDisplay?.isEnabled ? 'left-8' : 'left-1'}`} />
+                                          </button>
                                        </div>
                                     </div>
+                                 </div>
 
-                                    <div className="grid grid-cols-2 gap-4">
-                                       {['B01', 'B02'].map((type) => {
-                                          const consumed = terminalFiscalStats[type as NCFType] || 0;
-                                          const color = type === 'B01' ? 'text-blue-400' : 'text-emerald-400';
-                                          
+                                 {/* Balanzas */}
+                                 <div className="space-y-4">
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">Balanzas de Pesaje Asignadas</label>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                       {(config.scales || []).map(scale => {
+                                          const isAssigned = activeTerminal.config.hardware?.scales?.some(s => s.id === scale.id);
                                           return (
-                                             <div key={type} className="bg-white/5 p-4 rounded-2xl border border-white/5">
-                                                <div className="flex justify-between items-center mb-2">
-                                                   <span className={`text-[10px] font-black uppercase ${color}`}>{type === 'B01' ? 'Crédito Fiscal' : 'Consumo'}</span>
-                                                   <span className="text-[10px] font-bold text-slate-500">{type}</span>
-                                                </div>
-                                                <p className="text-3xl font-mono font-black text-white">{consumed.toLocaleString()}</p>
-                                                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-tighter mt-1">Total Emitidos</p>
+                                             <div 
+                                                key={scale.id}
+                                                onClick={() => {
+                                                   const current = activeTerminal.config.hardware?.scales || [];
+                                                   const updated = isAssigned ? current.filter(s => s.id !== scale.id) : [...current, scale];
+                                                   handleUpdateActiveConfig('hardware', 'scales', updated);
+                                                }}
+                                                className={`p-4 rounded-2xl border-2 flex items-center justify-between cursor-pointer transition-all ${isAssigned ? 'border-emerald-500 bg-emerald-50 shadow-sm' : 'border-slate-100 bg-white hover:border-slate-200'}`}
+                                             >
+                                                <div className="flex gap-3 items-center"><Scale size={18} className={isAssigned ? 'text-emerald-600' : 'text-slate-400'}/><span className={`text-sm font-bold ${isAssigned ? 'text-emerald-900' : 'text-slate-700'}`}>{scale.name}</span></div>
+                                                {isAssigned && <CheckCircle size={18} className="text-emerald-600" />}
                                              </div>
                                           );
                                        })}
@@ -455,131 +270,42 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  </div>
                               </div>
 
-                              <div className="flex items-center gap-4 mb-4">
-                                 <div className="p-4 bg-indigo-100 text-indigo-600 rounded-2xl"><Landmark size={32} /></div>
-                                 <div>
-                                    <h3 className="text-xl font-black text-gray-800">Reservas Locales (Pool DGII)</h3>
-                                    <p className="text-sm text-gray-500">Configura el tamaño de la reserva fiscal que esta terminal descarga del pool central.</p>
-                                 </div>
-                              </div>
-
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                 {['B01', 'B02'].map((type) => {
-                                    const typeConfig = activeTerminal.config.fiscal?.typeConfigs?.[type as NCFType] || { batchSize: 100, lowBatchThreshold: 20 };
-                                    
-                                    return (
-                                       <div key={type} className="bg-white p-6 rounded-[2rem] border border-gray-200 shadow-sm relative overflow-hidden group">
-                                          <div className="absolute top-0 left-0 w-1.5 h-full bg-indigo-500" />
-                                          <div className="flex justify-between items-center mb-6">
-                                             <div className="flex items-center gap-2">
-                                                <span className="bg-indigo-600 text-white px-2.5 py-1 rounded-lg text-xs font-black tracking-widest">{type}</span>
-                                                <h4 className="font-bold text-gray-800">{type === 'B01' ? 'Crédito Fiscal' : 'Consumo'}</h4>
-                                             </div>
-                                             <Settings2 size={18} className="text-gray-300 group-hover:text-indigo-400 transition-colors" />
-                                          </div>
-
-                                          <div className="space-y-6">
-                                             <div>
-                                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Reserva por Lote (Docs)</label>
-                                                <div className="relative">
-                                                   <input 
-                                                      type="number"
-                                                      value={typeConfig.batchSize}
-                                                      onChange={(e) => handleUpdateTypeConfig(type as NCFType, 'batchSize', parseInt(e.target.value) || 0)}
-                                                      className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl text-2xl font-black text-indigo-600 focus:bg-white focus:border-indigo-400 outline-none transition-all"
-                                                   />
-                                                   <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-bold text-gray-400 uppercase">Cantidad</span>
-                                                </div>
-                                             </div>
-
-                                             <div>
-                                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Umbral de Alerta (%)</label>
-                                                <div className="relative">
-                                                   <input 
-                                                      type="number"
-                                                      value={typeConfig.lowBatchThreshold}
-                                                      onChange={(e) => handleUpdateTypeConfig(type as NCFType, 'lowBatchThreshold', parseInt(e.target.value) || 0)}
-                                                      className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl text-2xl font-black text-indigo-600 focus:bg-white focus:border-indigo-400 outline-none transition-all"
-                                                   />
-                                                   <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-bold text-gray-400 uppercase">Trigger</span>
-                                                </div>
-                                             </div>
-                                          </div>
-                                       </div>
-                                    );
-                                 })}
+                              {/* Toggles de Flujo Operativo */}
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                  <Toggle 
+                                    label="Validación en Tiempo Real" 
+                                    description="Verifica stock centralizado antes de completar ventas." 
+                                    checked={activeTerminal.config.workflow.inventory.realTimeValidation} 
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.inventory', 'realTimeValidation', v)} 
+                                    icon={Database} 
+                                  />
+                                  <Toggle 
+                                    label="Permitir Stock Negativo" 
+                                    description="Facturar artículos aunque el sistema marque cero existencias." 
+                                    checked={activeTerminal.config.workflow.inventory.allowNegativeStock} 
+                                    danger={true}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.inventory', 'allowNegativeStock', v)} 
+                                    icon={AlertTriangle} 
+                                  />
+                                  <Toggle 
+                                    label="Reservar Stock al Marcar" 
+                                    description="Bloquea el artículo al añadirlo al carrito." 
+                                    checked={activeTerminal.config.workflow.inventory.reserveStockOnCart} 
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.inventory', 'reserveStockOnCart', v)} 
+                                    icon={Package} 
+                                  />
+                                  <Toggle 
+                                    label="Mostrar Stock en Tiles" 
+                                    description="Visualiza existencias directamente en los botones de productos." 
+                                    checked={activeTerminal.config.workflow.inventory.showStockOnTiles} 
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.inventory', 'showStockOnTiles', v)} 
+                                    icon={Layers} 
+                                  />
                               </div>
                            </div>
                         )}
 
-                        {/* INVENTORY SCOPE SECTION */}
-                        {activeTab === 'INVENTORY' && (
-                          <div className="space-y-6 animate-in slide-in-from-right-4">
-                             <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm">
-                                <h3 className="text-xl font-black text-gray-800 mb-6 flex items-center gap-2">
-                                   <Building2 size={24} className="text-blue-600"/> Alcance de Almacenes
-                                </h3>
-                                
-                                <div className="space-y-4">
-                                   <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Almacenes Visibles</label>
-                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                      {warehouses.map(wh => {
-                                         const isVisible = activeTerminal.config.inventoryScope?.visibleWarehouseIds.includes(wh.id);
-                                         const isDefault = activeTerminal.config.inventoryScope?.defaultSalesWarehouseId === wh.id;
-                                         
-                                         return (
-                                            <div 
-                                               key={wh.id}
-                                               onClick={() => {
-                                                  const current = activeTerminal.config.inventoryScope?.visibleWarehouseIds || [];
-                                                  const updated = isVisible ? current.filter(id => id !== wh.id) : [...current, wh.id];
-                                                  handleUpdateActiveConfig('inventoryScope', 'visibleWarehouseIds', updated);
-                                               }}
-                                               className={`p-4 rounded-2xl border-2 flex items-center justify-between cursor-pointer transition-all ${isVisible ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'}`}
-                                            >
-                                               <div className="flex items-center gap-3">
-                                                  <div className={`p-2 rounded-lg ${isVisible ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
-                                                     <Box size={18} />
-                                                  </div>
-                                                  <div>
-                                                     <p className={`font-bold text-sm ${isVisible ? 'text-blue-900' : 'text-gray-700'}`}>{wh.name}</p>
-                                                     <p className="text-[10px] text-gray-400 font-mono uppercase">{wh.code}</p>
-                                                  </div>
-                                               </div>
-                                               
-                                               <div className="flex items-center gap-2">
-                                                  {isVisible && (
-                                                     <button 
-                                                        onClick={(e) => {
-                                                           e.stopPropagation();
-                                                           handleUpdateActiveConfig('inventoryScope', 'defaultSalesWarehouseId', wh.id);
-                                                        }}
-                                                        className={`px-2 py-1 rounded-md text-[9px] font-black uppercase transition-all ${isDefault ? 'bg-emerald-50 text-white shadow-sm' : 'bg-white text-gray-400 border border-gray-200 hover:text-emerald-600'}`}
-                                                     >
-                                                        {isDefault ? 'Despacho Defecto' : 'Fijar Defecto'}
-                                                     </button>
-                                                  )}
-                                                  <div className={`w-5 h-5 rounded flex items-center justify-center border-2 ${isVisible ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-200'}`}>
-                                                     {isVisible && <Check size={14} strokeWidth={3} />}
-                                                  </div>
-                                               </div>
-                                            </div>
-                                         );
-                                      })}
-                                   </div>
-                                </div>
-                             </div>
-
-                             <div className="p-5 bg-orange-50 rounded-2xl border border-orange-100 flex items-start gap-4">
-                                <AlertTriangle size={24} className="text-orange-500 shrink-0 mt-0.5" />
-                                <p className="text-xs text-orange-800 font-medium leading-relaxed">
-                                   <strong>Importante:</strong> El almacén de despacho por defecto es desde donde se restará el inventario automáticamente al completar una venta. Los almacenes visibles determinan qué stock puede consultar el cajero.
-                                </p>
-                             </div>
-                          </div>
-                        )}
-
-                        {/* SECURITY SECTION */}
+                        {/* 2. SECURITY SECTION */}
                         {activeTab === 'SECURITY' && (
                           <div className="space-y-6 animate-in slide-in-from-right-4">
                              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -630,7 +356,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                           </div>
                         )}
 
-                        {/* SESSION & Z SECTION */}
+                        {/* 3. SESSION & Z SECTION */}
                         {activeTab === 'SESSION' && (
                            <div className="space-y-6 animate-in slide-in-from-right-4">
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -704,53 +430,64 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                            </div>
                         )}
 
-                        {/* DOCUMENTS SECTION */}
-                        {activeTab === 'DOCUMENTS' && (
-                           <div className="space-y-6 animate-in slide-in-from-right-4">
-                              <div className="flex justify-between items-center px-2">
-                                 <div>
-                                    <h3 className="text-xl font-black text-gray-800">Series Internas Vinculadas</h3>
-                                    <p className="text-sm text-gray-500">Documentos que este terminal puede emitir bajo su propia numeración.</p>
-                                 </div>
-                                 <button 
-                                    onClick={() => setIsLinkingSeries(true)}
-                                    className="px-5 py-2 bg-blue-600 text-white rounded-xl font-bold text-sm shadow-lg flex items-center gap-2"
-                                 >
-                                    <Plus size={18} /> Vincular Serie
-                                 </button>
-                              </div>
-
-                              <div className="grid grid-cols-1 gap-4">
-                                 {activeTerminal.config.documentSeries.map(series => (
-                                    <div key={series.id} className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm flex items-center justify-between">
-                                       <div className="flex items-center gap-4">
-                                          <div className={`p-3 rounded-xl bg-slate-100 text-slate-600`}>
-                                             <FileText size={20} />
-                                          </div>
-                                          <div>
-                                             <h4 className="font-bold text-gray-800">{series.name}</h4>
-                                             <p className="text-xs text-gray-400 font-mono uppercase">Prefijo: {series.prefix} • Próximo: #{series.nextNumber}</p>
-                                          </div>
-                                       </div>
-                                       <button 
-                                          onClick={() => unlinkSeriesFromTerminal(series.id)}
-                                          className="p-2 text-gray-300 hover:text-red-500 transition-colors"
-                                       >
-                                          <Unlink size={18} />
-                                       </button>
-                                    </div>
-                                 ))}
-                                 {activeTerminal.config.documentSeries.length === 0 && (
-                                    <div className="py-12 bg-white rounded-3xl border border-dashed border-gray-200 text-center">
-                                       <Link2Off size={32} className="mx-auto text-gray-300 mb-2" />
-                                       <p className="text-gray-400 font-bold">Sin series vinculadas</p>
-                                    </div>
-                                 )}
-                              </div>
-                           </div>
+                        {/* 4. INVENTORY SCOPE */}
+                        {activeTab === 'INVENTORY' && (
+                          <div className="space-y-6 animate-in slide-in-from-right-4">
+                             <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm">
+                                <h3 className="text-xl font-black text-gray-800 mb-6 flex items-center gap-2">
+                                   <Building2 size={24} className="text-blue-600"/> Alcance de Almacenes
+                                </h3>
+                                
+                                <div className="space-y-4">
+                                   <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Almacenes Visibles en Terminal</label>
+                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                      {warehouses.map(wh => {
+                                         const isVisible = activeTerminal.config.inventoryScope?.visibleWarehouseIds.includes(wh.id);
+                                         const isDefault = activeTerminal.config.inventoryScope?.defaultSalesWarehouseId === wh.id;
+                                         
+                                         return (
+                                            <div 
+                                               key={wh.id}
+                                               onClick={() => {
+                                                  const current = activeTerminal.config.inventoryScope?.visibleWarehouseIds || [];
+                                                  const updated = isVisible ? current.filter(id => id !== wh.id) : [...current, wh.id];
+                                                  handleUpdateActiveConfig('inventoryScope', 'visibleWarehouseIds', updated);
+                                               }}
+                                               className={`p-4 rounded-2xl border-2 flex items-center justify-between cursor-pointer transition-all ${isVisible ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'}`}
+                                            >
+                                               <div className="flex items-center gap-3">
+                                                  <div className={`p-2 rounded-lg ${isVisible ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
+                                                     <Box size={18} />
+                                                  </div>
+                                                  <div>
+                                                     <p className={`font-bold text-sm ${isVisible ? 'text-blue-900' : 'text-gray-700'}`}>{wh.name}</p>
+                                                     <p className="text-[10px] text-gray-400 font-mono uppercase">{wh.code}</p>
+                                                  </div>
+                                               </div>
+                                               
+                                               <div className="flex items-center gap-2">
+                                                  {isVisible && (
+                                                     <button 
+                                                        onClick={(e) => {
+                                                           e.stopPropagation();
+                                                           handleUpdateActiveConfig('inventoryScope', 'defaultSalesWarehouseId', wh.id);
+                                                        }}
+                                                        className={`px-2 py-1 rounded-md text-[9px] font-black uppercase transition-all ${isDefault ? 'bg-emerald-600 text-white shadow-sm' : 'bg-white text-gray-400 border border-gray-200 hover:text-emerald-600'}`}
+                                                     >
+                                                        {isDefault ? 'Despacho OK' : 'Fijar Defecto'}
+                                                     </button>
+                                                  )}
+                                               </div>
+                                            </div>
+                                         );
+                                      })}
+                                   </div>
+                                </div>
+                             </div>
+                          </div>
                         )}
 
-                        {/* CONNECTION / OFFLINE SECTION */}
+                        {/* 5. CONNECTION / OFFLINE SECTION */}
                         {activeTab === 'OFFLINE' && (
                            <div className="space-y-6 animate-in slide-in-from-right-4">
                               <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm space-y-8">
@@ -769,7 +506,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                           <button 
                                              key={mode.id}
                                              onClick={() => handleUpdateActiveConfig('workflow.offline', 'mode', mode.id)}
-                                             className={`p-4 rounded-2xl border-2 text-left transition-all ${activeTerminal.config.workflow.offline.mode === mode.id ? 'border-blue-500 bg-blue-50 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-300'}`}
+                                             className={`p-4 rounded-2xl border-2 text-left transition-all ${activeTerminal.config.workflow.offline.mode === mode.id ? 'border-blue-500 bg-blue-50 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'}`}
                                           >
                                              <div className="flex items-center gap-2 mb-2">
                                                 <div className={`w-2 h-2 rounded-full ${mode.color}`} />
@@ -797,34 +534,57 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                           <Server size={32} />
                                        </div>
                                     </div>
-                                    <p className="text-[10px] text-gray-400 font-bold uppercase mt-2">Capacidad máxima de almacenamiento local antes de forzar sincronización.</p>
+                                 </div>
+                              </div>
+                           </div>
+                        )}
+
+                        {/* 6. FISCAL SETTINGS */}
+                        {activeTab === 'FISCAL' && (
+                           <div className="animate-in slide-in-from-right-4 space-y-6">
+                              <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm">
+                                 <h3 className="text-xl font-black text-gray-800 mb-6 flex items-center gap-2">
+                                    <Landmark size={24} className="text-indigo-600"/> Gestión de Lotes DGII
+                                 </h3>
+                                 <p className="text-sm text-gray-500 mb-6">Configura el tamaño del lote de NCF que esta terminal descarga automáticamente del pool central.</p>
+                                 
+                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                    {['B01', 'B02'].map((type) => {
+                                       const typeConfig = activeTerminal.config.fiscal?.typeConfigs?.[type as NCFType] || { batchSize: 100, lowBatchThreshold: 20 };
+                                       
+                                       return (
+                                          <div key={type} className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-4">
+                                             <div className="flex items-center gap-2">
+                                                <span className="bg-indigo-600 text-white px-2.5 py-1 rounded-lg text-xs font-black tracking-widest">{type}</span>
+                                                <h4 className="font-bold text-gray-800">{type === 'B01' ? 'Crédito Fiscal' : 'Consumo'}</h4>
+                                             </div>
+                                             <div>
+                                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Docs por Lote</label>
+                                                <input 
+                                                   type="number" 
+                                                   value={typeConfig.batchSize}
+                                                   onChange={(e) => {
+                                                      const current = activeTerminal.config.fiscal?.typeConfigs || {};
+                                                      handleUpdateActiveConfig('fiscal.typeConfigs', type, { ...typeConfig, batchSize: parseInt(e.target.value) || 0 });
+                                                   }}
+                                                   className="w-full p-3 bg-white border rounded-xl font-bold text-indigo-600"
+                                                />
+                                             </div>
+                                          </div>
+                                       );
+                                    })}
                                  </div>
                               </div>
                            </div>
                         )}
                     </div>
-                ) : <div className="h-full flex items-center justify-center text-gray-400 italic"><p>Selecciona una terminal</p></div>}
+                ) : (
+                    <div className="h-full flex items-center justify-center text-gray-400 italic">
+                        <p>Selecciona una terminal del panel izquierdo para configurar.</p>
+                    </div>
+                )}
             </div>
         </div>
-
-        {isLinkingSeries && (
-           <div className="fixed inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-              <div className="bg-white rounded-[2.5rem] w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95">
-                 <div className="p-6 border-b bg-gray-50 flex justify-between items-center"><h3 className="font-black text-xl text-gray-800">Vincular Serie Interna</h3><button onClick={() => setIsLinkingSeries(false)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20}/></button></div>
-                 <div className="p-4 overflow-y-auto max-h-[60vh] space-y-2">
-                    {DEFAULT_DOCUMENT_SERIES.map(series => {
-                       const isLinked = activeTerminal?.config.documentSeries?.some(s => s.id === series.id);
-                       return (
-                          <button key={series.id} disabled={isLinked} onClick={() => linkSeriesToTerminal(series)} className={`w-full p-4 rounded-2xl border-2 flex items-center justify-between transition-all ${isLinked ? 'opacity-40 grayscale cursor-not-allowed border-gray-100' : 'bg-white border-gray-100 hover:border-blue-400 hover:bg-blue-50 group'}`}>
-                             <div className="flex items-center gap-4"><div className="p-2 bg-gray-100 rounded-lg text-gray-500 group-hover:bg-blue-100 group-hover:text-blue-600"><FileText size={18}/></div><div className="text-left"><p className="font-bold text-sm text-gray-800">{series.name}</p><p className="text-[10px] text-gray-400 font-bold uppercase">{series.prefix}</p></div></div>
-                             {isLinked ? <CheckCircle2 size={18} className="text-green-500" /> : <Plus size={18} className="text-gray-300 group-hover:text-blue-500" />}
-                          </button>
-                       );
-                    })}
-                 </div>
-              </div>
-           </div>
-        )}
     </div>
   );
 };

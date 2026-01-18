@@ -296,6 +296,7 @@ export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
     ],
     tariffs: INITIAL_TARIFFS,
     terminals: [{ id: 't1', config: DEFAULT_TERMINAL_CONFIG }],
+    availablePrinters: [],
     scales: [] 
   };
 };

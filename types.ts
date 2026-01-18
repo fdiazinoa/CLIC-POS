@@ -11,6 +11,18 @@ export enum SubVertical {
   BAR = 'Discoteca/Bar'
 }
 
+// --- HARDWARE TYPES ---
+export type ConnectionType = 'BLUETOOTH' | 'NETWORK' | 'USB' | 'SERIAL' | 'VIRTUAL';
+
+export interface PrinterDevice {
+  id: string;
+  name: string;
+  connection: ConnectionType;
+  address?: string; // IP o MAC
+  status: 'CONNECTED' | 'DISCONNECTED';
+  type: 'TICKET' | 'LABEL' | 'KITCHEN' | 'LOGISTICS';
+}
+
 // --- FISCAL NCF TYPES ---
 export type NCFType = 'B01' | 'B02' | 'B14' | 'B15';
 
@@ -299,6 +311,7 @@ export interface BusinessConfig {
   receiptConfig?: ReceiptConfig;
   tipsConfig?: TipConfiguration;
   emailConfig?: EmailConfig;
+  availablePrinters?: PrinterDevice[];
   scales?: ScaleDevice[];
   scaleLabelConfig?: {
     isEnabled: boolean;
