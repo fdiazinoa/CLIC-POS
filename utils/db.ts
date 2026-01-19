@@ -3,12 +3,12 @@ import {
   BusinessConfig, Product, User, Customer, Transaction, 
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, Supplier, Watchlist,
-  NCFType, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer
+  NCFType, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries
 } from '../types';
 import { 
   MOCK_USERS, RETAIL_PRODUCTS, FOOD_PRODUCTS, 
   MOCK_CUSTOMERS, INITIAL_TARIFFS, getInitialConfig,
-  DEFAULT_ROLES
+  DEFAULT_ROLES, DEFAULT_TERMINAL_CONFIG, DEFAULT_DOCUMENT_SERIES
 } from '../constants';
 
 const DB_KEY = 'clic_pos_db_v1';
@@ -47,6 +47,7 @@ const SEED_DATA = {
   suppliers: [] as Supplier[],
   inventoryLedger: [] as InventoryLedgerEntry[],
   watchlists: [] as Watchlist[],
+  internalSequences: DEFAULT_DOCUMENT_SERIES as DocumentSeries[],
   fiscalRanges: [
     { id: 'fr1', type: 'B01', prefix: 'B01', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
     { id: 'fr2', type: 'B02', prefix: 'B02', startNumber: 1, endNumber: 50000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true }
@@ -71,16 +72,45 @@ export const db = {
 
     let modified = false;
 
-    if (!data.config) data.config = JSON.parse(JSON.stringify(SEED_DATA.config));
-    if (!data.config.availablePrinters) { data.config.availablePrinters = []; modified = true; }
+    if (!data.config) {
+      data.config = JSON.parse(JSON.stringify(SEED_DATA.config));
+      modified = true;
+    }
     
+    // Nueva clave global para secuencias internas
+    if (!data.internalSequences) {
+      data.internalSequences = JSON.parse(JSON.stringify(DEFAULT_DOCUMENT_SERIES));
+      modified = true;
+    }
+
     if (data.config.terminals && Array.isArray(data.config.terminals)) {
       data.config.terminals.forEach((t: any) => {
+        // Asegurar estructura de hardware
         if (!t.config.hardware) {
           t.config.hardware = { printerAssignments: {}, scales: [] };
           modified = true;
         }
-        // Ensure customer display structure
+
+        // Migración: Asignaciones de documentos
+        if (!t.config.documentAssignments) {
+          t.config.documentAssignments = {
+            'TICKET': 'TICKET',
+            'REFUND': 'REFUND',
+            'TRANSFER': 'TRANSFER'
+          };
+          modified = true;
+        }
+        
+        // Asegurar estructura fiscal detallada
+        if (!t.config.fiscal) {
+          t.config.fiscal = JSON.parse(JSON.stringify(DEFAULT_TERMINAL_CONFIG.fiscal));
+          modified = true;
+        } else if (!t.config.fiscal.typeConfigs) {
+          t.config.fiscal.typeConfigs = JSON.parse(JSON.stringify(DEFAULT_TERMINAL_CONFIG.fiscal.typeConfigs));
+          modified = true;
+        }
+
+        // Asegurar visor de cliente
         if (!t.config.hardware.customerDisplay) {
           t.config.hardware.customerDisplay = {
             isEnabled: false,
@@ -91,10 +121,6 @@ export const db = {
             connectionType: 'VIRTUAL',
             ads: []
           };
-          modified = true;
-        }
-        if (!t.config.hardware.customerDisplay.ads) {
-          t.config.hardware.customerDisplay.ads = [];
           modified = true;
         }
       });

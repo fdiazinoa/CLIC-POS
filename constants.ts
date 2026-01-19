@@ -41,12 +41,13 @@ export const INITIAL_TARIFFS: Tariff[] = [
 
 export const DEFAULT_TERMINAL_CONFIG = {
   deviceBindingToken: 'dev_token_init',
+  isPrimaryNode: false,
   fiscal: {
     batchSize: 100,
     lowBatchThreshold: 20,
     typeConfigs: {
-      'B01': { batchSize: 50, lowBatchThreshold: 10 },
-      'B02': { batchSize: 200, lowBatchThreshold: 20 }
+      'B01': { batchSize: 50, lowBatchThreshold: 10, lowBatchThresholdPct: 20 },
+      'B02': { batchSize: 200, lowBatchThreshold: 20, lowBatchThresholdPct: 20 }
     }
   },
   security: {

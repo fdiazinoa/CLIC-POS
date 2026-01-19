@@ -49,9 +49,31 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
     return stats;
   }, [transactions]);
 
+  const handleAddNewSeries = () => {
+    setEditingSeries({
+      id: `DOC_${Date.now()}`,
+      name: '',
+      description: 'Documento interno personalizado.',
+      prefix: 'DOC',
+      nextNumber: 1,
+      padding: 6,
+      icon: 'FileText',
+      color: 'blue'
+    });
+  };
+
   const handleSaveInternalSeries = () => {
     if (!editingSeries) return;
-    const updated = seriesList.map(s => s.id === editingSeries.id ? editingSeries : s);
+    
+    let updated;
+    const exists = seriesList.some(s => s.id === editingSeries.id);
+    
+    if (exists) {
+      updated = seriesList.map(s => s.id === editingSeries.id ? editingSeries : s);
+    } else {
+      updated = [...seriesList, editingSeries];
+    }
+    
     setSeriesList(updated);
     
     const config = db.get('config');
@@ -61,6 +83,19 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
     }
     
     setEditingSeries(null);
+  };
+
+  const handleDeleteSeries = (id: string) => {
+    if (!confirm("¿Desea eliminar este tipo de documento? Las transacciones existentes no se verán afectadas pero no podrá emitir nuevos bajo esta serie.")) return;
+    
+    const updated = seriesList.filter(s => s.id !== id);
+    setSeriesList(updated);
+    
+    const config = db.get('config');
+    if (config && config.terminals && config.terminals[0]) {
+      config.terminals[0].config.documentSeries = updated;
+      db.save('config', config);
+    }
   };
 
   const handleSaveRange = () => {
@@ -108,27 +143,49 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
         <div className="max-w-6xl mx-auto h-full overflow-y-auto custom-scrollbar">
            
            {activeSubTab === 'SERIES' && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-bottom-4">
-                 {seriesList.map((series) => (
-                    <div key={series.id} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm hover:shadow-md transition-all flex justify-between items-center group">
-                       <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center font-bold">{series.prefix.substring(0,2)}</div>
-                          <div>
-                            <h3 className="font-bold text-gray-800">{series.name}</h3>
-                            <p className="text-xs text-gray-400">Próximo: <span className="font-mono font-bold text-blue-600">{series.prefix}{series.nextNumber.toString().padStart(series.padding || 1, '0')}</span></p>
+              <div className="space-y-6 animate-in slide-in-from-bottom-4">
+                 <div className="flex justify-between items-center px-2">
+                    <h2 className="text-lg font-bold text-gray-800 uppercase tracking-widest text-xs opacity-50">Listado de Secuencias</h2>
+                    <button 
+                       onClick={handleAddNewSeries}
+                       className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 flex items-center gap-2 active:scale-95 transition-all"
+                    >
+                       <Plus size={20} /> Nuevo Tipo
+                    </button>
+                 </div>
+
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
+                    {seriesList.map((series) => (
+                       <div key={series.id} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm hover:shadow-md transition-all flex justify-between items-center group">
+                          <div className="flex items-center gap-4">
+                             <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center font-bold uppercase">{series.prefix.substring(0,2)}</div>
+                             <div>
+                               <h3 className="font-bold text-gray-800">{series.name}</h3>
+                               <p className="text-xs text-gray-400">Próximo: <span className="font-mono font-bold text-blue-600">{series.prefix}{series.nextNumber.toString().padStart(series.padding || 1, '0')}</span></p>
+                             </div>
+                          </div>
+                          <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                             <button 
+                              onClick={() => setEditingSeries({...series})}
+                              className="p-3 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl"
+                             >
+                              <Edit2 size={18} />
+                             </button>
+                             {series.id !== 'TICKET' && series.id !== 'REFUND' && (
+                                <button 
+                                 onClick={() => handleDeleteSeries(series.id)}
+                                 className="p-3 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl"
+                                >
+                                 <Trash2 size={18} />
+                                </button>
+                             )}
                           </div>
                        </div>
-                       <button 
-                        onClick={() => setEditingSeries({...series})}
-                        className="p-3 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
-                       >
-                        <Edit2 size={18} />
-                       </button>
-                    </div>
-                 ))}
-                 {seriesList.length === 0 && (
-                    <div className="col-span-full py-20 text-center text-gray-400 italic">No hay series internas configuradas.</div>
-                 )}
+                    ))}
+                    {seriesList.length === 0 && (
+                       <div className="col-span-full py-20 text-center text-gray-400 italic">No hay series internas configuradas.</div>
+                    )}
+                 </div>
               </div>
            )}
 
@@ -267,12 +324,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
         </div>
       </div>
 
-      {/* MODAL EDITAR SERIE INTERNA */}
+      {/* MODAL EDITAR/NUEVA SERIE INTERNA */}
       {editingSeries && (
         <div className="fixed inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
            <div className="bg-white rounded-[2.5rem] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95">
               <div className="p-6 border-b bg-gray-50 flex justify-between items-center">
-                 <h3 className="text-xl font-black text-gray-800">Editar Secuencia</h3>
+                 <h3 className="text-xl font-black text-gray-800">{seriesList.some(s => s.id === editingSeries.id) ? 'Editar Secuencia' : 'Nueva Secuencia'}</h3>
                  <button onClick={() => setEditingSeries(null)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20}/></button>
               </div>
               <div className="p-8 space-y-6">
@@ -282,6 +339,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                       type="text" 
                       value={editingSeries.name} 
                       onChange={e => setEditingSeries({...editingSeries, name: e.target.value})}
+                      placeholder="Ej. Nota de Entrega"
                       className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl font-bold" 
                     />
                  </div>
@@ -292,6 +350,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                         type="text" 
                         value={editingSeries.prefix} 
                         onChange={e => setEditingSeries({...editingSeries, prefix: e.target.value.toUpperCase()})}
+                        placeholder="Ej. NE"
                         className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono font-bold" 
                        />
                     </div>
@@ -305,10 +364,23 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                        />
                     </div>
                  </div>
+                 <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Relleno de ceros (Padding)</label>
+                    <select 
+                        value={editingSeries.padding} 
+                        onChange={e => setEditingSeries({...editingSeries, padding: parseInt(e.target.value)})}
+                        className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl font-bold"
+                    >
+                        <option value={0}>Sin ceros</option>
+                        <option value={4}>4 dígitos (0001)</option>
+                        <option value={6}>6 dígitos (000001)</option>
+                        <option value={8}>8 dígitos (00000001)</option>
+                    </select>
+                 </div>
               </div>
               <div className="p-6 bg-gray-50 border-t flex gap-3">
                  <button onClick={() => setEditingSeries(null)} className="flex-1 py-3 text-gray-500 font-bold">Cancelar</button>
-                 <button onClick={handleSaveInternalSeries} className="flex-[2] py-3 bg-blue-600 text-white rounded-xl font-black shadow-lg">Guardar Cambios</button>
+                 <button onClick={handleSaveInternalSeries} className="flex-[2] py-3 bg-blue-600 text-white rounded-xl font-black shadow-lg">Confirmar Serie</button>
               </div>
            </div>
         </div>

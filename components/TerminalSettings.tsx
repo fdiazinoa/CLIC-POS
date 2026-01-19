@@ -11,8 +11,9 @@ import {
   Circle, CheckCircle, ChevronDown, Landmark, Link, Shield, Globe, HardDrive,
   Building2, Printer, Settings2, Info, Unlink, BarChart3, ShieldQuestion,
   ToggleLeft, ToggleRight, Radio, Power, Scale, Tv, Mail, ShoppingBag, Truck,
-  /* Added missing icons to fix "Cannot find name" errors on lines 293 and 300 */
-  Package, Layers
+  Package, Layers, Crown, ListOrdered, Link2, Sparkles, Palette, MousePointer2,
+  // Added Sun to fix "Cannot find name 'Sun'" error
+  Sun
 } from 'lucide-react';
 import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG } from '../constants';
@@ -32,13 +33,22 @@ const PRINTER_ROLES = [
   { id: 'LOGISTICS', label: 'Logística', icon: Truck },
 ];
 
+const DOCUMENT_ROLES = [
+  { id: 'TICKET', label: 'Ticket de Venta (POS)', description: 'Secuencia principal para cobros estándar.', icon: Receipt },
+  { id: 'REFUND', label: 'Notas de Crédito (Devoluciones)', description: 'Documento legal para abonos y retornos.', icon: RotateCcw },
+  { id: 'TRANSFER', label: 'Notas de Traspaso', description: 'Comprobantes de movimiento entre almacenes.', icon: ArrowRightLeft },
+];
+
 type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY';
 
 const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [] }) => {
   const [terminals, setTerminals] = useState(config.terminals || []);
   const [selectedTerminalId, setSelectedTerminalId] = useState<string>(terminals[0]?.id || '');
   const [activeTab, setActiveTab] = useState<TerminalTab>('OPERATIONAL');
-  const tabsRef = useRef<HTMLDivElement>(null);
+  const [showConflictModal, setShowConflictModal] = useState<string | null>(null); 
+  
+  // Cargar secuencias maestras desde la BD global
+  const masterSequences = useMemo(() => db.get('internalSequences') as DocumentSeries[], []);
 
   const activeTerminal = useMemo(() => 
     terminals.find(t => t.id === selectedTerminalId), 
@@ -71,17 +81,56 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
     }));
   };
 
+  const handleAssignSequence = (roleId: string, sequenceId: string) => {
+    if (!activeTerminal) return;
+    const currentAssignments = activeTerminal.config.documentAssignments || {};
+    handleUpdateActiveConfig('', 'documentAssignments', { ...currentAssignments, [roleId]: sequenceId });
+  };
+
+  const handleToggleMasterNode = (enabled: boolean) => {
+    if (!activeTerminal) return;
+
+    if (enabled) {
+      const currentMaster = terminals.find(t => t.config.isPrimaryNode && t.id !== activeTerminal.id);
+      if (currentMaster) {
+        setShowConflictModal(currentMaster.id);
+        return;
+      }
+    }
+
+    setTerminals(prev => prev.map(t => ({
+      ...t,
+      config: {
+        ...t.config,
+        isPrimaryNode: t.id === activeTerminal.id ? enabled : (enabled ? false : t.config.isPrimaryNode)
+      }
+    })));
+  };
+
+  const confirmMasterTransfer = () => {
+    if (!activeTerminal) return;
+    setTerminals(prev => prev.map(t => ({
+      ...t,
+      config: {
+        ...t.config,
+        isPrimaryNode: t.id === activeTerminal.id
+      }
+    })));
+    setShowConflictModal(null);
+  };
+
   const handleAddTerminal = () => {
     const terminalNumber = terminals.length + 1;
     const nextId = `t${terminalNumber}`;
-    const suffix = terminalNumber.toString().padStart(2, '0');
 
     const newConfig = JSON.parse(JSON.stringify(DEFAULT_TERMINAL_CONFIG));
     
-    newConfig.documentSeries = DEFAULT_DOCUMENT_SERIES.map(series => ({
-      ...series,
-      prefix: `${series.prefix}${suffix}`
-    }));
+    // Por defecto asignamos las secuencias básicas si existen
+    newConfig.documentAssignments = {
+      'TICKET': 'TICKET',
+      'REFUND': 'REFUND',
+      'TRANSFER': 'TRANSFER'
+    };
 
     const newTerminal = {
       id: nextId,
@@ -137,7 +186,14 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                     <div key={t.id} onClick={() => setSelectedTerminalId(t.id)} className={`group p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between ${selectedTerminalId === t.id ? 'bg-blue-50 border-blue-500 shadow-md ring-4 ring-blue-50' : 'bg-white border-transparent hover:border-gray-200'}`}>
                       <div className="flex items-center gap-3">
                           <div className={`p-2.5 rounded-xl ${selectedTerminalId === t.id ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100 text-gray-400'}`}><Monitor size={20} /></div>
-                          <h3 className={`font-bold text-sm ${selectedTerminalId === t.id ? 'text-blue-900' : 'text-gray-700'}`}>{t.id}</h3>
+                          <div>
+                            <h3 className={`font-bold text-sm ${selectedTerminalId === t.id ? 'text-blue-900' : 'text-gray-700'}`}>{t.id}</h3>
+                            {t.config.isPrimaryNode && (
+                              <span className="flex items-center gap-1 text-[9px] font-black text-blue-600 uppercase tracking-widest mt-0.5">
+                                <Crown size={10} /> Master
+                              </span>
+                            )}
+                          </div>
                       </div>
                       {selectedTerminalId === t.id && <ChevronRight size={16} className="text-blue-500" />}
                     </div>
@@ -160,6 +216,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                 {[
                   { id: 'OPERATIONAL', label: 'Operativa', icon: Database },
                   { id: 'FISCAL', label: 'Lotes Fiscales', icon: Landmark },
+                  { id: 'DOCUMENTS', label: 'Series / Documentos', icon: Link2 },
                   { id: 'INVENTORY', label: 'Almacenes', icon: Box },
                   { id: 'SECURITY', label: 'Seguridad', icon: ShieldAlert },
                   { id: 'SESSION', label: 'Sesión y Z', icon: Clock },
@@ -183,13 +240,61 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                         {/* 1. OPERATIONAL SECTION */}
                         {activeTab === 'OPERATIONAL' && (
                            <div className="space-y-6">
+                              <div className="bg-indigo-50 border-2 border-indigo-200 p-6 rounded-3xl shadow-sm">
+                                <Toggle 
+                                  label="Es Terminal Principal / Servidor Local" 
+                                  description="Esta terminal consolidará los cierres y transacciones de la tienda." 
+                                  checked={activeTerminal.config.isPrimaryNode} 
+                                  onChange={handleToggleMasterNode} 
+                                  icon={Crown} 
+                                />
+                                <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mt-4 ml-2">
+                                  Nota: Solo puede haber una terminal principal por establecimiento.
+                                </p>
+                              </div>
+
                               <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
-                                 <h3 className="text-xl font-black flex items-center gap-2"><HardDrive size={24} className="text-indigo-600"/> Hardware Asignado</h3>
-                                 
-                                 {/* Impresoras por Rol */}
+                                 <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><Tag size={24} className="text-purple-600"/> Precios y Tarifas</h3>
+                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                       <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Tarifa Predeterminada</label>
+                                       <select 
+                                          value={activeTerminal.config.pricing.defaultTariffId}
+                                          onChange={(e) => handleUpdateActiveConfig('pricing', 'defaultTariffId', e.target.value)}
+                                          className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-100 transition-all"
+                                       >
+                                          {config.tariffs.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                       </select>
+                                    </div>
+                                    <div>
+                                       <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Tarifas Autorizadas en esta Caja</label>
+                                       <div className="flex flex-wrap gap-2 mt-2">
+                                          {config.tariffs.map(t => {
+                                             const isAllowed = activeTerminal.config.pricing.allowedTariffIds.includes(t.id);
+                                             return (
+                                                <button 
+                                                   key={t.id}
+                                                   onClick={() => {
+                                                      const current = activeTerminal.config.pricing.allowedTariffIds;
+                                                      const updated = isAllowed ? current.filter(id => id !== t.id) : [...current, t.id];
+                                                      handleUpdateActiveConfig('pricing', 'allowedTariffIds', updated);
+                                                   }}
+                                                   className={`px-3 py-2 rounded-xl text-xs font-bold border-2 transition-all ${isAllowed ? 'bg-purple-600 border-purple-600 text-white shadow-md' : 'bg-white border-slate-100 text-slate-400'}`}
+                                                >
+                                                   {t.name}
+                                                </button>
+                                             )
+                                          })}
+                                       </div>
+                                    </div>
+                                 </div>
+                              </div>
+
+                              <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
+                                 <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><HardDrive size={24} className="text-indigo-600"/> Hardware Asignado</h3>
                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {PRINTER_ROLES.map(role => (
-                                       <div key={role.id} className="p-4 bg-slate-50 rounded-2xl border space-y-2">
+                                       <div key={role.id} className="p-4 bg-slate-50 rounded-2xl border space-y-2 transition-all hover:bg-white hover:border-indigo-200">
                                           <div className="flex items-center gap-2 text-slate-600"><role.icon size={16} /><span className="text-xs font-bold uppercase">{role.label}</span></div>
                                           <select 
                                              value={activeTerminal.config.hardware?.printerAssignments?.[role.id] || ''}
@@ -205,107 +310,184 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        </div>
                                     ))}
                                  </div>
+                              </div>
 
-                                 <div className="h-px bg-slate-100"></div>
-
-                                 {/* Visor de Cliente */}
-                                 <div className="space-y-4">
-                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">Visor de Cliente (VFD/LCD)</label>
-                                    <div className={`p-6 rounded-3xl border-2 transition-all flex items-center justify-between ${activeTerminal.config.hardware?.customerDisplay?.isEnabled ? 'border-blue-500 bg-blue-50/50' : 'border-slate-100 bg-white'}`}>
-                                       <div className="flex items-center gap-4">
-                                          <div className={`p-3 rounded-2xl ${activeTerminal.config.hardware?.customerDisplay?.isEnabled ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-100 text-slate-400'}`}>
-                                             <Tv size={24} />
-                                          </div>
-                                          <div>
-                                             <p className={`font-black text-sm uppercase ${activeTerminal.config.hardware?.customerDisplay?.isEnabled ? 'text-blue-900' : 'text-slate-500'}`}>
-                                                {activeTerminal.config.hardware?.customerDisplay?.isEnabled ? 'Visualización Activada' : 'Visualización Desactivada'}
-                                             </p>
-                                             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">Gestiona anuncios y mensajes de bienvenida</p>
-                                          </div>
-                                       </div>
-                                       <div className="flex items-center gap-3">
-                                          {activeTerminal.config.hardware?.customerDisplay?.isEnabled && (
+                              <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
+                                 <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><MousePointer2 size={24} className="text-blue-600"/> Experiencia de Usuario (UX)</h3>
+                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="space-y-4">
+                                       <Toggle 
+                                          label="Mostrar Imágenes de Productos" 
+                                          description="Visualiza las miniaturas en la grilla del POS." 
+                                          checked={activeTerminal.config.ux.showProductImages} 
+                                          onChange={(v: boolean) => handleUpdateActiveConfig('ux', 'showProductImages', v)} 
+                                          icon={ImageIcon}
+                                       />
+                                       <div>
+                                          <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Densidad de Grilla</label>
+                                          <div className="flex bg-slate-100 p-1 rounded-2xl">
                                              <button 
-                                                onClick={() => alert("Usa el menú: Hardware Global -> Visor Cliente para cargar Ads y banners.")}
-                                                className="px-4 py-2 bg-white text-blue-600 rounded-xl text-xs font-black border-2 border-blue-200 hover:bg-blue-50 shadow-sm transition-all"
+                                                onClick={() => handleUpdateActiveConfig('ux', 'gridDensity', 'COMFORTABLE')}
+                                                className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.gridDensity === 'COMFORTABLE' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'}`}
                                              >
-                                                CONFIGURAR CONTENIDO
+                                                Cómoda
                                              </button>
-                                          )}
-                                          <button 
-                                             onClick={() => {
-                                                const current = activeTerminal.config.hardware?.customerDisplay;
-                                                handleUpdateActiveConfig('hardware', 'customerDisplay', { ...current, isEnabled: !current?.isEnabled });
-                                             }}
-                                             className={`w-14 h-7 rounded-full relative transition-all ${activeTerminal.config.hardware?.customerDisplay?.isEnabled ? 'bg-blue-600' : 'bg-gray-300'}`}
-                                          >
-                                             <div className={`absolute top-1 w-5 h-5 rounded-full bg-white shadow-sm transition-all ${activeTerminal.config.hardware?.customerDisplay?.isEnabled ? 'left-8' : 'left-1'}`} />
-                                          </button>
+                                             <button 
+                                                onClick={() => handleUpdateActiveConfig('ux', 'gridDensity', 'COMPACT')}
+                                                className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.gridDensity === 'COMPACT' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'}`}
+                                             >
+                                                Compacta
+                                             </button>
+                                          </div>
                                        </div>
                                     </div>
-                                 </div>
-
-                                 {/* Balanzas */}
-                                 <div className="space-y-4">
-                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">Balanzas de Pesaje Asignadas</label>
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                       {(config.scales || []).map(scale => {
-                                          const isAssigned = activeTerminal.config.hardware?.scales?.some(s => s.id === scale.id);
-                                          return (
-                                             <div 
-                                                key={scale.id}
-                                                onClick={() => {
-                                                   const current = activeTerminal.config.hardware?.scales || [];
-                                                   const updated = isAssigned ? current.filter(s => s.id !== scale.id) : [...current, scale];
-                                                   handleUpdateActiveConfig('hardware', 'scales', updated);
-                                                }}
-                                                className={`p-4 rounded-2xl border-2 flex items-center justify-between cursor-pointer transition-all ${isAssigned ? 'border-emerald-500 bg-emerald-50 shadow-sm' : 'border-slate-100 bg-white hover:border-slate-200'}`}
+                                    <div className="space-y-4">
+                                       <div>
+                                          <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Tema Visual</label>
+                                          <div className="flex bg-slate-100 p-1 rounded-2xl">
+                                             <button 
+                                                onClick={() => handleUpdateActiveConfig('ux', 'theme', 'LIGHT')}
+                                                className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.theme === 'LIGHT' ? 'bg-white text-orange-500 shadow-sm' : 'text-slate-400'}`}
                                              >
-                                                <div className="flex gap-3 items-center"><Scale size={18} className={isAssigned ? 'text-emerald-600' : 'text-slate-400'}/><span className={`text-sm font-bold ${isAssigned ? 'text-emerald-900' : 'text-slate-700'}`}>{scale.name}</span></div>
-                                                {isAssigned && <CheckCircle size={18} className="text-emerald-600" />}
-                                             </div>
-                                          );
-                                       })}
+                                                <Sun size={14}/> Claro
+                                             </button>
+                                             <button 
+                                                onClick={() => handleUpdateActiveConfig('ux', 'theme', 'DARK')}
+                                                className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.theme === 'DARK' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}
+                                             >
+                                                <RefreshCw size={14}/> Oscuro
+                                             </button>
+                                          </div>
+                                       </div>
+                                       <div>
+                                          <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Layout de Teclas Rápidas</label>
+                                          <div className="flex bg-slate-100 p-1 rounded-2xl">
+                                             <button 
+                                                onClick={() => handleUpdateActiveConfig('ux', 'quickKeysLayout', 'A')}
+                                                className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.quickKeysLayout === 'A' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'}`}
+                                             >
+                                                Modelo A
+                                             </button>
+                                             <button 
+                                                onClick={() => handleUpdateActiveConfig('ux', 'quickKeysLayout', 'B')}
+                                                className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.quickKeysLayout === 'B' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'}`}
+                                             >
+                                                Modelo B
+                                             </button>
+                                          </div>
+                                       </div>
                                     </div>
                                  </div>
                               </div>
 
-                              {/* Toggles de Flujo Operativo */}
-                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                                  <Toggle 
-                                    label="Validación en Tiempo Real" 
-                                    description="Verifica stock centralizado antes de completar ventas." 
-                                    checked={activeTerminal.config.workflow.inventory.realTimeValidation} 
-                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.inventory', 'realTimeValidation', v)} 
-                                    icon={Database} 
-                                  />
-                                  <Toggle 
-                                    label="Permitir Stock Negativo" 
-                                    description="Facturar artículos aunque el sistema marque cero existencias." 
-                                    checked={activeTerminal.config.workflow.inventory.allowNegativeStock} 
-                                    danger={true}
-                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.inventory', 'allowNegativeStock', v)} 
-                                    icon={AlertTriangle} 
-                                  />
-                                  <Toggle 
-                                    label="Reservar Stock al Marcar" 
-                                    description="Bloquea el artículo al añadirlo al carrito." 
-                                    checked={activeTerminal.config.workflow.inventory.reserveStockOnCart} 
-                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.inventory', 'reserveStockOnCart', v)} 
-                                    icon={Package} 
-                                  />
-                                  <Toggle 
-                                    label="Mostrar Stock en Tiles" 
-                                    description="Visualiza existencias directamente en los botones de productos." 
-                                    checked={activeTerminal.config.workflow.inventory.showStockOnTiles} 
-                                    onChange={(v: boolean) => handleUpdateActiveConfig('workflow.inventory', 'showStockOnTiles', v)} 
-                                    icon={Layers} 
-                                  />
+                              <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
+                                 <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><Calculator size={24} className="text-emerald-600"/> Criterios Financieros</h3>
+                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="space-y-4">
+                                       <Toggle 
+                                          label="Precios con ITBIS Incluido" 
+                                          description="Muestra el PVP final en las baldosas y búsqueda." 
+                                          checked={activeTerminal.config.financial.taxInclusivePrices} 
+                                          onChange={(v: boolean) => handleUpdateActiveConfig('financial', 'taxInclusivePrices', v)} 
+                                          icon={Percent}
+                                       />
+                                       <Toggle 
+                                          label="Desglose de Impuestos en Ticket" 
+                                          description="Imprime ITBIS 18/16/0 detallado al final." 
+                                          checked={activeTerminal.config.financial.printTaxBreakdown} 
+                                          onChange={(v: boolean) => handleUpdateActiveConfig('financial', 'printTaxBreakdown', v)} 
+                                          icon={FileText}
+                                       />
+                                    </div>
+                                    <div>
+                                       <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Método de Redondeo</label>
+                                       <select 
+                                          value={activeTerminal.config.financial.roundingMethod}
+                                          onChange={(e) => handleUpdateActiveConfig('financial', 'roundingMethod', e.target.value)}
+                                          className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-100 transition-all"
+                                       >
+                                          <option value="ROUND_HALF_UP">Matemático Estándar (0.5+)</option>
+                                          <option value="ROUND_FLOOR">Truncar Centavos</option>
+                                          <option value="NONE">Sin Redondeo</option>
+                                       </select>
+                                       <p className="text-[10px] text-gray-400 mt-2 ml-1">Afecta el cálculo del cambio y totales globales.</p>
+                                    </div>
+                                 </div>
                               </div>
                            </div>
                         )}
 
-                        {/* 2. SECURITY SECTION */}
+                        {/* 2. DOCUMENTS / ASSIGNMENTS SECTION */}
+                        {activeTab === 'DOCUMENTS' && (
+                           <div className="space-y-6 animate-in slide-in-from-right-4">
+                              <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm">
+                                 <h3 className="text-xl font-black text-gray-800 mb-6 flex items-center gap-2">
+                                    <Link2 size={24} className="text-blue-600"/> Vinculación de Secuencias Internas
+                                 </h3>
+                                 <p className="text-sm text-gray-500 mb-8">Asigna qué secuencia del **Document Center** utilizará cada función operativa de esta caja.</p>
+                                 
+                                 <div className="space-y-4">
+                                    {DOCUMENT_ROLES.map((role) => {
+                                       const assignedId = activeTerminal.config.documentAssignments?.[role.id] || '';
+                                       const assignedSeq = masterSequences.find(s => s.id === assignedId);
+
+                                       return (
+                                          <div key={role.id} className={`p-6 rounded-3xl border-2 transition-all flex flex-col gap-6 ${assignedId ? 'bg-white border-slate-100 shadow-sm' : 'bg-orange-50 border-orange-200 border-dashed'}`}>
+                                             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                                <div className="flex items-center gap-4">
+                                                   <div className={`p-3 rounded-2xl ${assignedId ? 'bg-blue-600 text-white shadow-md' : 'bg-orange-200 text-orange-700'}`}>
+                                                      <role.icon size={24} />
+                                                   </div>
+                                                   <div>
+                                                      <h4 className="font-black text-slate-800">{role.label}</h4>
+                                                      <p className="text-xs text-slate-400 font-medium">{role.description}</p>
+                                                   </div>
+                                                </div>
+
+                                                <div className="w-full md:w-64">
+                                                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">Secuencia Vinculada</label>
+                                                   <select 
+                                                      value={assignedId}
+                                                      onChange={(e) => handleAssignSequence(role.id, e.target.value)}
+                                                      className="w-full p-3 bg-gray-50 border border-slate-200 rounded-xl font-bold text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-100 transition-all"
+                                                   >
+                                                      <option value="">-- Sin Vincular --</option>
+                                                      {masterSequences.map(s => (
+                                                         <option key={s.id} value={s.id}>{s.name} ({s.prefix})</option>
+                                                      ))}
+                                                   </select>
+                                                </div>
+                                             </div>
+
+                                             {assignedSeq && (
+                                                <div className="pt-4 border-t border-slate-50 flex items-center justify-between">
+                                                   <div className="flex items-center gap-4">
+                                                      <div className="flex flex-col">
+                                                         <span className="text-[10px] font-black text-slate-400 uppercase">Prefijo Maestro</span>
+                                                         <span className="font-mono font-bold text-blue-600">{assignedSeq.prefix}</span>
+                                                      </div>
+                                                      <div className="w-px h-6 bg-slate-100 mx-2"></div>
+                                                      <div className="flex flex-col">
+                                                         <span className="text-[10px] font-black text-slate-400 uppercase">Próximo correlativo</span>
+                                                         <span className="font-mono font-bold text-slate-700">#{assignedSeq.nextNumber.toString().padStart(assignedSeq.padding, '0')}</span>
+                                                      </div>
+                                                   </div>
+                                                   <div className="text-right">
+                                                      <span className="text-[9px] font-black bg-blue-50 text-blue-600 px-2 py-1 rounded border border-blue-100 uppercase tracking-wider">
+                                                         Vista Previa: {assignedSeq.prefix}{assignedSeq.nextNumber.toString().padStart(assignedSeq.padding, '0')}
+                                                      </span>
+                                                   </div>
+                                                </div>
+                                             )}
+                                          </div>
+                                       )
+                                    })}
+                                 </div>
+                              </div>
+                           </div>
+                        )}
+
+                        {/* 3. SECURITY SECTION */}
                         {activeTab === 'SECURITY' && (
                           <div className="space-y-6 animate-in slide-in-from-right-4">
                              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -356,7 +538,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                           </div>
                         )}
 
-                        {/* 3. SESSION & Z SECTION */}
                         {activeTab === 'SESSION' && (
                            <div className="space-y-6 animate-in slide-in-from-right-4">
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -404,47 +585,22 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        />
                                     </div>
                                  </div>
-
-                                 <div className="pt-6 border-t border-gray-100">
-                                    <div className="flex items-center gap-4 mb-4">
-                                       <div className="p-3 bg-blue-100 text-blue-600 rounded-xl">
-                                          <Mail size={24} />
-                                       </div>
-                                       <div>
-                                          <h3 className="font-bold text-lg text-gray-900">Destinatarios Reporte Z</h3>
-                                          <p className="text-sm text-gray-400">Emails que recibirán el cierre automáticamente al finalizar.</p>
-                                       </div>
-                                    </div>
-                                    <div className="relative">
-                                       <input 
-                                          type="text" 
-                                          placeholder="ejemplo@correo.com, jefe@tienda.com"
-                                          value={activeTerminal.config.workflow.session.zReportEmails || ''}
-                                          onChange={(e) => handleUpdateActiveConfig('workflow.session', 'zReportEmails', e.target.value)}
-                                          className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl font-bold text-gray-700 focus:bg-white focus:border-blue-400 outline-none transition-all"
-                                       />
-                                       <p className="text-[10px] text-gray-400 mt-2 uppercase font-bold px-1">Separa múltiples correos con comas.</p>
-                                    </div>
-                                 </div>
                               </div>
                            </div>
                         )}
 
-                        {/* 4. INVENTORY SCOPE */}
                         {activeTab === 'INVENTORY' && (
                           <div className="space-y-6 animate-in slide-in-from-right-4">
                              <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm">
                                 <h3 className="text-xl font-black text-gray-800 mb-6 flex items-center gap-2">
                                    <Building2 size={24} className="text-blue-600"/> Alcance de Almacenes
                                 </h3>
-                                
                                 <div className="space-y-4">
                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Almacenes Visibles en Terminal</label>
                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                       {warehouses.map(wh => {
                                          const isVisible = activeTerminal.config.inventoryScope?.visibleWarehouseIds.includes(wh.id);
                                          const isDefault = activeTerminal.config.inventoryScope?.defaultSalesWarehouseId === wh.id;
-                                         
                                          return (
                                             <div 
                                                key={wh.id}
@@ -453,7 +609,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                   const updated = isVisible ? current.filter(id => id !== wh.id) : [...current, wh.id];
                                                   handleUpdateActiveConfig('inventoryScope', 'visibleWarehouseIds', updated);
                                                }}
-                                               className={`p-4 rounded-2xl border-2 flex items-center justify-between cursor-pointer transition-all ${isVisible ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'}`}
+                                               className={`p-4 rounded-2xl border-2 flex items-center justify-between cursor-pointer transition-all ${isVisible ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-300'}`}
                                             >
                                                <div className="flex items-center gap-3">
                                                   <div className={`p-2 rounded-lg ${isVisible ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
@@ -464,7 +620,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                      <p className="text-[10px] text-gray-400 font-mono uppercase">{wh.code}</p>
                                                   </div>
                                                </div>
-                                               
                                                <div className="flex items-center gap-2">
                                                   {isVisible && (
                                                      <button 
@@ -487,14 +642,12 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                           </div>
                         )}
 
-                        {/* 5. CONNECTION / OFFLINE SECTION */}
                         {activeTab === 'OFFLINE' && (
                            <div className="space-y-6 animate-in slide-in-from-right-4">
                               <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm space-y-8">
                                  <h3 className="text-xl font-black text-gray-800 mb-6 flex items-center gap-2">
                                     <Cloud size={24} className="text-blue-600"/> Comportamiento de Red
                                  </h3>
-
                                  <div className="space-y-4">
                                     <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Modo de Operación</label>
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -506,7 +659,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                           <button 
                                              key={mode.id}
                                              onClick={() => handleUpdateActiveConfig('workflow.offline', 'mode', mode.id)}
-                                             className={`p-4 rounded-2xl border-2 text-left transition-all ${activeTerminal.config.workflow.offline.mode === mode.id ? 'border-blue-500 bg-blue-50 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'}`}
+                                             className={`p-4 rounded-2xl border-2 text-left transition-all ${activeTerminal.config.workflow.offline.mode === mode.id ? 'border-blue-500 bg-blue-50 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-300'}`}
                                           >
                                              <div className="flex items-center gap-2 mb-2">
                                                 <div className={`w-2 h-2 rounded-full ${mode.color}`} />
@@ -517,7 +670,6 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        ))}
                                     </div>
                                  </div>
-
                                  <div>
                                     <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2 ml-1">Límite de Transacciones Offline</label>
                                     <div className="flex items-center gap-4">
@@ -530,16 +682,13 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                           />
                                           <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400 uppercase">Docs</span>
                                        </div>
-                                       <div className="p-4 bg-slate-100 rounded-2xl text-slate-400">
-                                          <Server size={32} />
-                                       </div>
+                                       <div className="p-4 bg-slate-100 rounded-2xl text-slate-400"><Server size={32} /></div>
                                     </div>
                                  </div>
                               </div>
                            </div>
                         )}
 
-                        {/* 6. FISCAL SETTINGS */}
                         {activeTab === 'FISCAL' && (
                            <div className="animate-in slide-in-from-right-4 space-y-6">
                               <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm">
@@ -547,28 +696,46 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     <Landmark size={24} className="text-indigo-600"/> Gestión de Lotes DGII
                                  </h3>
                                  <p className="text-sm text-gray-500 mb-6">Configura el tamaño del lote de NCF que esta terminal descarga automáticamente del pool central.</p>
-                                 
                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                     {['B01', 'B02'].map((type) => {
-                                       const typeConfig = activeTerminal.config.fiscal?.typeConfigs?.[type as NCFType] || { batchSize: 100, lowBatchThreshold: 20 };
-                                       
+                                       const typeConfig = activeTerminal.config.fiscal?.typeConfigs?.[type as NCFType] || { batchSize: 100, lowBatchThreshold: 20, lowBatchThresholdPct: 20 };
                                        return (
                                           <div key={type} className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-4">
                                              <div className="flex items-center gap-2">
                                                 <span className="bg-indigo-600 text-white px-2.5 py-1 rounded-lg text-xs font-black tracking-widest">{type}</span>
                                                 <h4 className="font-bold text-gray-800">{type === 'B01' ? 'Crédito Fiscal' : 'Consumo'}</h4>
                                              </div>
-                                             <div>
-                                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Docs por Lote</label>
-                                                <input 
-                                                   type="number" 
-                                                   value={typeConfig.batchSize}
-                                                   onChange={(e) => {
-                                                      const current = activeTerminal.config.fiscal?.typeConfigs || {};
-                                                      handleUpdateActiveConfig('fiscal.typeConfigs', type, { ...typeConfig, batchSize: parseInt(e.target.value) || 0 });
-                                                   }}
-                                                   className="w-full p-3 bg-white border rounded-xl font-bold text-indigo-600"
-                                                />
+                                             
+                                             <div className="space-y-4">
+                                                <div>
+                                                   <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Docs por Lote</label>
+                                                   <input 
+                                                      type="number" 
+                                                      value={typeConfig.batchSize}
+                                                      onChange={(e) => {
+                                                         const current = activeTerminal.config.fiscal?.typeConfigs || {};
+                                                         handleUpdateActiveConfig('fiscal.typeConfigs', type, { ...typeConfig, batchSize: parseInt(e.target.value) || 0 });
+                                                      }}
+                                                      className="w-full p-3 bg-white border rounded-xl font-bold text-indigo-600 outline-none focus:ring-2 focus:ring-indigo-100"
+                                                   />
+                                                </div>
+                                                
+                                                <div>
+                                                   <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Alerta Agotamiento (%)</label>
+                                                   <div className="relative">
+                                                      <input 
+                                                         type="number" 
+                                                         min="1" max="99"
+                                                         value={typeConfig.lowBatchThresholdPct || 20}
+                                                         onChange={(e) => {
+                                                            const current = activeTerminal.config.fiscal?.typeConfigs || {};
+                                                            handleUpdateActiveConfig('fiscal.typeConfigs', type, { ...typeConfig, lowBatchThresholdPct: parseInt(e.target.value) || 0 });
+                                                         }}
+                                                         className="w-full p-3 pr-10 bg-white border rounded-xl font-bold text-orange-600 outline-none focus:ring-2 focus:ring-orange-100"
+                                                      />
+                                                      <span className="absolute right-4 top-1/2 -translate-y-1/2 font-black text-orange-400 text-xs">%</span>
+                                                   </div>
+                                                </div>
                                              </div>
                                           </div>
                                        );
@@ -585,6 +752,35 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                 )}
             </div>
         </div>
+
+        {/* MODAL DE CONFLICTO DE JERARQUIA */}
+        {showConflictModal && (
+           <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in">
+              <div className="bg-white rounded-[2.5rem] w-full max-w-md shadow-2xl p-10 overflow-hidden text-center animate-in zoom-in-95">
+                 <div className="w-20 h-20 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <ShieldAlert size={40} />
+                 </div>
+                 <h3 className="text-2xl font-black text-slate-800 mb-2">Conflicto de Jerarquía</h3>
+                 <p className="text-slate-500 mb-8 leading-relaxed">
+                    La terminal <span className="font-black text-blue-600">'{showConflictModal}'</span> ya está configurada como la Principal. ¿Desea transferir el rol de mando a esta terminal?
+                 </p>
+                 <div className="flex flex-col gap-3">
+                    <button 
+                       onClick={confirmMasterTransfer}
+                       className="w-full py-4 bg-orange-600 text-white rounded-2xl font-black shadow-lg shadow-orange-200 hover:bg-orange-700 active:scale-95 transition-all"
+                    >
+                       Transferir Rol Master
+                    </button>
+                    <button 
+                       onClick={() => setShowConflictModal(null)}
+                       className="w-full py-4 bg-slate-100 text-slate-500 rounded-2xl font-bold hover:bg-slate-200 transition-all"
+                    >
+                       Cancelar
+                    </button>
+                 </div>
+              </div>
+           </div>
+        )}
     </div>
   );
 };

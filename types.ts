@@ -143,6 +143,7 @@ export interface DocumentSeries {
 export interface NCFConfig {
   batchSize: number;
   lowBatchThreshold: number;
+  lowBatchThresholdPct?: number; // Umbral de alerta por porcentaje
 }
 
 export interface TerminalConfig {
@@ -150,6 +151,7 @@ export interface TerminalConfig {
   lastPairingDate?: string;
   isBlocked?: boolean;
   deviceBindingToken: string;
+  isPrimaryNode?: boolean; // Rol jerárquico de la terminal
   
   fiscal: {
     batchSize: number; // Deprecated but kept for compatibility
@@ -198,6 +200,7 @@ export interface TerminalConfig {
     acceptedCurrencies: string[];
   };
   documentSeries: DocumentSeries[];
+  documentAssignments?: Record<string, string>; // Mapeo de Rol -> ID de DocumentSeries maestra
   hardware: {
     cashDrawerTrigger: 'PRINTER' | 'DIRECT';
     receiptPrinterId?: string;

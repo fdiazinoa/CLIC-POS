@@ -7,9 +7,19 @@ import {
   Save, Info, AlertTriangle, Check, Tv, MonitorPlay, QrCode, Trash2,
   Cable, Radio, MousePointer2, Image as ImageIcon, ArrowLeft,
   Smartphone, Wallet, ShieldCheck, Database, HardDrive, Loader2, Wifi,
-  Cpu, Keyboard
+  Cpu, Keyboard, Activity, Layers, Activity as Wave
 } from 'lucide-react';
 import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech, PrinterDevice, ConnectionType } from '../types';
+
+// Perfiles predefinidos de balanzas populares
+const SCALE_PRESETS = [
+  { id: 'CAS_PD2', brand: 'CAS', model: 'PD-II / ER', baud: 9600, data: 7, parity: 'Even', protocol: 'NCI', icon: '⚖️' },
+  { id: 'TOLEDO_8217', brand: 'Toledo', model: 'Mettler 8217', baud: 9600, data: 7, parity: 'Even', protocol: 'Standard', icon: '⚖️' },
+  { id: 'DIBAL_G310', brand: 'Dibal', model: 'G-310 / G-325', baud: 9600, data: 8, parity: 'None', protocol: 'Protocolo T', icon: '⚖️' },
+  { id: 'BIZERBA', brand: 'Bizerba', model: 'SC-II / BC-II', baud: 9600, data: 8, parity: 'None', protocol: 'Dialog 06', icon: '⚖️' },
+  { id: 'ISHIDA', brand: 'Ishida', model: 'Uni-7 / Uni-5', baud: 9600, data: 8, parity: 'None', protocol: 'Standard', icon: '⚖️' },
+  { id: 'MANUAL', brand: 'Genérica', model: 'Configuración Manual', baud: 9600, data: 8, parity: 'None', protocol: 'NCI', icon: '⚙️' },
+];
 
 const DEFAULT_DISPLAY_CONFIG: CustomerDisplayConfig = {
   isEnabled: true,
@@ -68,7 +78,27 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       id: `scale_${Date.now()}`,
       name: 'Nueva Balanza',
       isEnabled: true,
-      technology: 'DIRECT'
+      technology: 'DIRECT',
+      directConfig: {
+        port: 'COM1',
+        baudRate: 9600,
+        dataBits: 8,
+        protocol: 'NCI'
+      }
+    });
+  };
+
+  const handleApplyPreset = (preset: typeof SCALE_PRESETS[0]) => {
+    if (!editingScale) return;
+    setEditingScale({
+      ...editingScale,
+      name: preset.id === 'MANUAL' ? editingScale.name : `${preset.brand} ${preset.model}`,
+      directConfig: {
+        port: editingScale.directConfig?.port || 'COM1',
+        baudRate: preset.baud,
+        dataBits: preset.data,
+        protocol: preset.protocol
+      }
     });
   };
 
@@ -492,27 +522,112 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
 
       {editingScale && (
         <div className="fixed inset-0 z-[130] bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
-           <div className="bg-white rounded-[3rem] w-full max-w-lg shadow-2xl p-10 overflow-hidden animate-in zoom-in-95">
-              <div className="flex justify-between items-center mb-8 border-b border-slate-50 pb-4">
-                 <h3 className="text-2xl font-black text-slate-800">Parámetros de Balanza</h3>
-                 <button onClick={() => setEditingScale(null)} className="p-2 hover:bg-slate-100 rounded-full"><X/></button>
-              </div>
-              <div className="space-y-6">
-                 <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Alias del Dispositivo</label>
-                    <input type="text" value={editingScale.name} onChange={e => setEditingScale({...editingScale, name: e.target.value})} className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl font-bold text-slate-800 focus:bg-white focus:border-blue-400 outline-none transition-all" placeholder="Ej. Balanza Deli 01" />
+           <div className="bg-white rounded-[3rem] w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 flex flex-col max-h-[90vh]">
+              <div className="p-8 border-b border-slate-50 flex justify-between items-center shrink-0">
+                 <div className="flex items-center gap-4">
+                    <div className="p-3 bg-blue-100 text-blue-600 rounded-2xl"><Scale size={28}/></div>
+                    <div>
+                       <h3 className="text-2xl font-black text-slate-800">Parámetros de Balanza</h3>
+                       <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">Configuración del Puerto RS-232 / USB</p>
+                    </div>
                  </div>
-                 <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Tecnología de Integración</label>
-                    <select value={editingScale.technology} onChange={e => setEditingScale({...editingScale, technology: e.target.value as any})} className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl font-bold text-slate-800 outline-none focus:bg-white focus:border-blue-400">
-                       <option value="DIRECT">Directa (Comunicación Serie/USB)</option>
-                       <option value="LABEL">Etiquetas (Lectura EAN-13)</option>
-                    </select>
-                 </div>
+                 <button onClick={() => setEditingScale(null)} className="p-2 hover:bg-slate-100 rounded-full"><X size={24}/></button>
               </div>
-              <div className="flex gap-4 mt-12">
-                 <button onClick={() => setEditingScale(null)} className="flex-1 py-4 font-black text-slate-400 hover:bg-slate-50 rounded-2xl transition-all">Cancelar</button>
-                 <button onClick={handleSaveScale} className="flex-[2] py-4 bg-blue-600 text-white rounded-[1.5rem] font-black text-lg shadow-xl shadow-blue-200 active:scale-95 transition-all">Aplicar Cambios</button>
+
+              <div className="flex-1 overflow-y-auto p-8 space-y-8 custom-scrollbar">
+                 {/* SELECTOR DE PRESETS */}
+                 <section>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 ml-1">Seleccionar Marca / Modelo</label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                       {SCALE_PRESETS.map(preset => (
+                          <button 
+                             key={preset.id}
+                             onClick={() => handleApplyPreset(preset)}
+                             className="p-4 rounded-2xl border-2 border-slate-100 hover:border-blue-400 bg-white hover:shadow-lg transition-all text-left flex flex-col gap-2 group"
+                          >
+                             <span className="text-2xl">{preset.icon}</span>
+                             <div>
+                                <p className="font-black text-slate-800 text-sm">{preset.brand}</p>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase leading-tight">{preset.model}</p>
+                             </div>
+                          </button>
+                       ))}
+                    </div>
+                 </section>
+
+                 <div className="h-px bg-slate-100"></div>
+
+                 <section className="space-y-6">
+                    <div>
+                       <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Alias del Dispositivo</label>
+                       <input 
+                         type="text" 
+                         value={editingScale.name} 
+                         onChange={e => setEditingScale({...editingScale, name: e.target.value})} 
+                         className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl font-bold text-slate-800 focus:bg-white focus:border-blue-400 outline-none transition-all" 
+                         placeholder="Ej. Balanza Carnicería 1" 
+                       />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                       <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Tecnología</label>
+                          <select value={editingScale.technology} onChange={e => setEditingScale({...editingScale, technology: e.target.value as any})} className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl font-bold text-slate-800 outline-none focus:bg-white focus:border-blue-400">
+                             <option value="DIRECT">Comunicación Directa (Serie)</option>
+                             <option value="LABEL">Lectura Etiquetas (EAN-13)</option>
+                          </select>
+                       </div>
+                       <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Puerto de Comunicación</label>
+                          <div className="relative">
+                             <input 
+                               type="text" 
+                               value={editingScale.directConfig?.port || 'COM1'} 
+                               onChange={e => setEditingScale({...editingScale, directConfig: {...editingScale.directConfig!, port: e.target.value}})}
+                               className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl font-black text-slate-800 focus:bg-white focus:border-blue-400 outline-none transition-all" 
+                               placeholder="COM1 o /dev/ttyUSB0"
+                             />
+                             <Cpu className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300" size={20}/>
+                          </div>
+                       </div>
+                    </div>
+
+                    <div className="bg-slate-900 rounded-3xl p-6 border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-6">
+                       <div>
+                          <label className="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Baud Rate</label>
+                          <select 
+                             value={editingScale.directConfig?.baudRate} 
+                             onChange={e => setEditingScale({...editingScale, directConfig: {...editingScale.directConfig!, baudRate: parseInt(e.target.value)}})}
+                             className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl p-3 font-mono text-sm font-bold outline-none"
+                          >
+                             {[2400, 4800, 9600, 19200, 38400, 57600, 115200].map(b => <option key={b} value={b}>{b}</option>)}
+                          </select>
+                       </div>
+                       <div>
+                          <label className="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Protocolo Data</label>
+                          <select 
+                             value={editingScale.directConfig?.protocol} 
+                             onChange={e => setEditingScale({...editingScale, directConfig: {...editingScale.directConfig!, protocol: e.target.value}})}
+                             className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl p-3 font-mono text-sm font-bold outline-none"
+                          >
+                             <option value="NCI">NCI Standard</option>
+                             <option value="Standard">Standard (PosScale)</option>
+                             <option value="Dialog 06">Dialog 06</option>
+                             <option value="Protocolo T">Dibal T</option>
+                          </select>
+                       </div>
+                       <div className="flex items-center justify-center pt-5">
+                          <button className="flex items-center gap-2 text-blue-400 font-black text-[10px] uppercase hover:text-blue-300 transition-colors">
+                             <Wave size={16} className="animate-pulse" /> Probar Conexión
+                          </button>
+                       </div>
+                    </div>
+                 </section>
+              </div>
+
+              <div className="p-8 bg-gray-50 border-t flex gap-4 shrink-0">
+                 <button onClick={() => setEditingScale(null)} className="flex-1 py-4 font-black text-slate-400 hover:bg-white rounded-2xl border border-transparent hover:border-slate-200 transition-all">Cancelar</button>
+                 <button onClick={handleSaveScale} className="flex-[2] py-4 bg-blue-600 text-white rounded-[1.5rem] font-black text-lg shadow-xl shadow-blue-200 active:scale-95 transition-all">Aplicar Configuración</button>
               </div>
            </div>
         </div>
