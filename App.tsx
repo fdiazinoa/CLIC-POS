@@ -139,6 +139,11 @@ const App: React.FC = () => {
     setCurrentView('LOGIN');
   };
 
+  const handleConfigUpdate = async (newConfig: BusinessConfig) => {
+    setConfig(newConfig);
+    await db.save('config', newConfig);
+  };
+
   const handleTransactionComplete = async (txn: Transaction) => {
     const newTransactions = [...transactions, txn];
     setTransactions(newTransactions);
@@ -201,6 +206,7 @@ const App: React.FC = () => {
             deviceId={deviceId}
             adminUsers={users.filter(u => u.role === 'ADMIN')}
             onPair={handlePairTerminal}
+            onConfigUpdate={handleConfigUpdate}
           />
         );
 
