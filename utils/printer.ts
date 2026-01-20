@@ -1,15 +1,26 @@
 import { Transaction, BusinessConfig } from '../types';
 
 export const printTicket = (transaction: Transaction, config: BusinessConfig) => {
-    const { companyInfo, currencySymbol, receiptConfig } = config;
+    const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
     const dateStr = new Date(transaction.date).toLocaleDateString();
     const timeStr = new Date(transaction.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    // Calculate totals
-    const subtotal = transaction.items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+    // Calculate totals and savings
+    let subtotal = 0;
+    let discountTotal = 0;
+
+    transaction.items.forEach(item => {
+        const originalPrice = item.originalPrice || item.price;
+        const lineTotal = item.price * item.quantity;
+        const lineDiscount = (originalPrice - item.price) * item.quantity;
+
+        subtotal += lineTotal;
+        discountTotal += lineDiscount;
+    });
+
     const taxTotal = subtotal * config.taxRate;
-    const discountTotal = 0; // TODO: Calculate if available in transaction
     const finalTotal = transaction.total;
+    const savings = discountTotal;
 
     // NCF Type Label Map
     const ncfTypeLabels: Record<string, string> = {
@@ -21,134 +32,222 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
 
     const documentTitle = transaction.ncfType ? (ncfTypeLabels[transaction.ncfType] || 'FACTURA DE VENTA') : 'TICKET DE VENTA';
 
+    // Foreign Currency Calculation
+    const foreignCurrenciesHtml = receiptConfig?.showForeignCurrencyTotals && currencies ? currencies
+        .filter(c => !c.isBase && c.isEnabled)
+        .map(c => {
+            const converted = finalTotal / c.rate;
+            return `<div class="meta-row" style="font-size: 11px; font-weight: bold;">${c.code}: ${c.symbol}${converted.toFixed(2)}</div>`;
+        }).join('') : '';
+
     // Generate HTML content for the receipt
     const receiptHtml = `
         <!DOCTYPE html>
         <html>
         <head>
             <title>Ticket #${transaction.id}</title>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
             <style>
                 @page { margin: 0; }
                 body {
-                    font-family: 'Courier New', Courier, monospace;
+                    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
                     width: 80mm;
                     margin: 0 auto;
                     padding: 10px;
                     font-size: 12px;
-                    line-height: 1.2;
-                    color: black;
+                    line-height: 1.3;
+                    color: #000;
+                    -webkit-font-smoothing: antialiased;
                 }
                 .text-center { text-align: center; }
                 .text-right { text-align: right; }
                 .text-left { text-align: left; }
-                .font-bold { font-weight: bold; }
-                .text-lg { font-size: 16px; }
-                .text-xl { font-size: 20px; }
-                .text-sm { font-size: 10px; }
+                .font-bold { font-weight: 700; }
+                .font-black { font-weight: 900; }
                 
-                .mb-1 { margin-bottom: 4px; }
-                .mb-2 { margin-bottom: 8px; }
-                .mt-2 { margin-top: 8px; }
+                .header-logo {
+                    display: block;
+                    margin: 0 auto 10px auto;
+                    max-width: 60%;
+                    height: auto;
+                    object-fit: contain;
+                }
                 
-                .divider { border-top: 1px dashed #000; margin: 8px 0; }
+                .company-name { font-size: 16px; font-weight: 900; margin-bottom: 4px; text-transform: uppercase; }
+                .company-info { font-size: 10px; color: #333; }
                 
-                .item-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
-                .item-details { font-size: 10px; color: #444; margin-left: 10px; }
+                .divider { border-top: 1px dashed #000; margin: 10px 0; }
+                .divider-solid { border-top: 2px solid #000; margin: 10px 0; }
                 
-                .totals-row { display: flex; justify-content: space-between; margin-bottom: 2px; }
-                .total-final { font-size: 18px; font-weight: 900; margin-top: 5px; }
+                .doc-title { font-size: 14px; font-weight: 900; text-transform: uppercase; margin-bottom: 4px; }
+                .ncf-row { font-size: 13px; font-weight: 700; margin-bottom: 2px; }
+                .meta-row { font-size: 10px; color: #555; }
+
+                .items-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                .items-table th { text-align: left; font-size: 10px; border-bottom: 1px solid #000; padding-bottom: 4px; }
+                .items-table td { padding: 6px 0; vertical-align: top; border-bottom: 1px dotted #ccc; }
+                .items-table tr:last-child td { border-bottom: none; }
                 
-                .qr-placeholder {
+                .item-name { font-weight: 700; font-size: 12px; display: block; }
+                .item-meta { font-size: 10px; color: #555; display: block; line-height: 1.4; }
+                .item-price { text-align: right; font-weight: 700; font-size: 12px; }
+
+                .totals-section { margin-top: 10px; }
+                .total-row { display: flex; justify-content: space-between; margin-bottom: 2px; font-size: 11px; }
+                .total-final { font-size: 20px; font-weight: 900; margin-top: 8px; border-top: 2px solid #000; padding-top: 8px; }
+                
+                .savings-box {
+                    border: 2px dashed #000;
+                    padding: 8px;
+                    margin: 15px 0;
+                    text-align: center;
+                    font-weight: 700;
+                    font-size: 12px;
+                }
+                
+                .footer { margin-top: 20px; text-align: center; font-size: 10px; }
+                
+                #qrcode {
+                    width: 100px;
+                    height: 100px;
                     margin: 15px auto;
-                    width: 80px;
-                    height: 80px;
-                    border: 2px solid #000;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    font-size: 8px;
+                }
+                #qrcode img { margin: 0 auto; }
+                
+                .currency-section {
+                    margin-top: 10px;
+                    padding-top: 5px;
+                    border-top: 1px dotted #000;
+                    text-align: center;
                 }
             </style>
         </head>
         <body>
             <!-- HEADER -->
             <div class="text-center">
-                <div class="font-bold text-lg mb-1">${companyInfo.name}</div>
-                <div class="text-sm">RNC: ${companyInfo.rnc}</div>
-                <div class="text-sm">${companyInfo.address}</div>
-                <div class="text-sm">TEL: ${companyInfo.phone}</div>
+                ${receiptConfig?.logo ? `<img src="${receiptConfig.logo}" class="header-logo" alt="Logo" />` : ''}
+                <div class="company-name">${companyInfo.name}</div>
+                <div class="company-info">
+                    <div>RNC: ${companyInfo.rnc}</div>
+                    <div>${companyInfo.address}</div>
+                    <div>TEL: ${companyInfo.phone}</div>
+                </div>
             </div>
 
             <div class="divider"></div>
             
             <!-- DOCUMENT INFO -->
             <div class="text-center">
-                <div class="font-bold mb-1">${documentTitle}</div>
-                ${transaction.ncf ? `<div class="font-bold">NCF: ${transaction.ncf}</div>` : ''}
-                <div class="text-sm">Ticket No.: ${transaction.id}</div>
-                <div class="text-sm mt-1">${dateStr} ${timeStr}</div>
+                <div class="doc-title">${documentTitle}</div>
+                ${transaction.ncf ? `<div class="ncf-row">NCF: ${transaction.ncf}</div>` : ''}
+                <div class="meta-row">Ticket No.: ${transaction.id}</div>
+                <div class="meta-row">${dateStr} ${timeStr}</div>
             </div>
 
             <div class="divider"></div>
 
             <!-- ITEMS -->
-            <div class="items">
-                ${transaction.items.map(item => `
-                    <div class="mb-2">
-                        <div class="item-row font-bold">
-                            <span>${item.name}</span>
-                            <span>${currencySymbol}${(item.price * item.quantity).toFixed(2)}</span>
-                        </div>
-                        <div class="item-details">
-                            ${item.quantity} x ${item.price.toFixed(2)}
-                            ${item.modifiers ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
-                            ${item.salespersonId ? `<br/>Vend: ${item.salespersonId}` : ''}
-                        </div>
-                    </div>
-                `).join('')}
-            </div>
+            <table class="items-table">
+                <tbody>
+                    ${transaction.items.map(item => {
+        const itemTax = (item.price * item.quantity) * config.taxRate;
+        const originalPrice = item.originalPrice || item.price;
+        const hasDiscount = originalPrice > item.price;
+
+        return `
+                        <tr>
+                            <td style="width: 70%;">
+                                <span class="item-name">${item.name}</span>
+                                <span class="item-meta">
+                                    ${item.quantity} x ${currencySymbol}${item.price.toFixed(2)}
+                                    ${hasDiscount ? `<span style="text-decoration: line-through; color: #999; margin-left: 5px;">${currencySymbol}${originalPrice.toFixed(2)}</span>` : ''}
+                                    ${item.modifiers ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
+                                    <br/>ITBIS Aplicado: ${currencySymbol}${itemTax.toFixed(2)}
+                                </span>
+                            </td>
+                            <td class="item-price">
+                                ${currencySymbol}${(item.price * item.quantity).toFixed(2)}
+                            </td>
+                        </tr>
+                    `}).join('')}
+                </tbody>
+            </table>
 
             <div class="divider"></div>
 
             <!-- TOTALS -->
-            <div class="totals">
-                <div class="totals-row text-sm">
+            <div class="totals-section">
+                <div class="total-row">
                     <span>SUBTOTAL</span>
                     <span>${currencySymbol}${subtotal.toFixed(2)}</span>
                 </div>
                 ${discountTotal > 0 ? `
-                <div class="totals-row text-sm">
-                    <span>DESCUENTO</span>
+                <div class="total-row" style="color: #000;">
+                    <span>DESCUENTO TOTAL</span>
                     <span>-${currencySymbol}${discountTotal.toFixed(2)}</span>
                 </div>` : ''}
-                <div class="totals-row text-sm">
+                <div class="total-row">
                     <span>TOTAL IMPUESTOS</span>
                     <span>${currencySymbol}${taxTotal.toFixed(2)}</span>
                 </div>
                 
-                <div class="totals-row total-final">
+                <div class="total-row total-final">
                     <span>TOTAL</span>
                     <span>${currencySymbol}${finalTotal.toFixed(2)}</span>
                 </div>
+                
+                ${foreignCurrenciesHtml ? `
+                <div class="currency-section">
+                    <div style="font-size: 9px; text-transform: uppercase; margin-bottom: 2px;">Equivalente en Divisas</div>
+                    ${foreignCurrenciesHtml}
+                </div>
+                ` : ''}
             </div>
 
+            <!-- SAVINGS BOX -->
+            ${savings > 0 ? `
+            <div class="savings-box">
+                <div>¡USTED HA AHORRADO!</div>
+                <div style="font-size: 16px;">${currencySymbol}${savings.toFixed(2)}</div>
+            </div>
+            ` : ''}
+
             <!-- FOOTER -->
-            <div class="text-center mt-2">
-                ${receiptConfig?.footerMessage ? `<div class="text-sm mb-2">${receiptConfig.footerMessage}</div>` : ''}
-                <div class="text-sm">¡Gracias por su compra!</div>
-                <div class="text-sm">Vuelva pronto.</div>
+            <div class="footer">
+                ${receiptConfig?.footerMessage ? `<div style="margin-bottom: 8px;">${receiptConfig.footerMessage}</div>` : ''}
+                <div>¡Gracias por su compra!</div>
+                <div>Vuelva pronto.</div>
                 
                 ${receiptConfig?.showQr ? `
-                <div class="qr-placeholder">
-                    QR CODE
-                </div>
-                <div class="text-sm font-bold">E-FACTURA VALIDADA</div>
+                <div id="qrcode"></div>
+                <div style="font-weight: bold; font-size: 9px; margin-top: 5px;">E-FACTURA VALIDADA</div>
                 ` : ''}
             </div>
             
             <script>
                 window.onload = function() {
-                    window.print();
+                    // Generate QR Code
+                    ${receiptConfig?.showQr ? `
+                    try {
+                        new QRCode(document.getElementById("qrcode"), {
+                            text: "${transaction.ncf || transaction.id}",
+                            width: 100,
+                            height: 100,
+                            colorDark : "#000000",
+                            colorLight : "#ffffff",
+                            correctLevel : QRCode.CorrectLevel.H
+                        });
+                    } catch (e) {
+                        console.error("QR Code generation failed", e);
+                        document.getElementById("qrcode").innerHTML = "QR ERROR";
+                    }
+                    ` : ''}
+                    
+                    // Auto print after a short delay to ensure QR is rendered
+                    setTimeout(() => {
+                        window.print();
+                        // Optional: window.close();
+                    }, 500);
                 }
             </script>
         </body>

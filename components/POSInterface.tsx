@@ -253,12 +253,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setEditingItem(null);
    };
 
-   const handlePaymentConfirm = async (payments: any[]) => {
+   const handlePaymentConfirm = async (payments: any[]): Promise<Transaction | null> => {
       const finalNcf = await db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100);
 
       if (!finalNcf) {
          alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
-         return;
+         return null;
       }
 
       const txn: Transaction = {
@@ -276,8 +276,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          ncf: finalNcf,
          ncfType: fiscalStatus.type
       };
-      onTransactionComplete(txn); setShowPaymentModal(false); onUpdateCart([]); onSelectCustomer(null);
+      onTransactionComplete(txn);
+      // setShowPaymentModal(false); // Removed: Modal handles closing
+      onUpdateCart([]); onSelectCustomer(null);
       setMobileView('PRODUCTS'); setGlobalDiscount({ value: 0, type: 'PERCENT' });
+      return txn;
    };
 
    const handleParkCurrentTicket = () => {

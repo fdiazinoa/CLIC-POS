@@ -5,7 +5,7 @@ import {
    Trash2, Plus, Wallet, Printer, Mail,
    ArrowRight, Repeat, ChevronDown, ArrowRightLeft
 } from 'lucide-react';
-import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem } from '../types';
+import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem, Transaction } from '../types';
 import { printTicket } from '../utils/printer';
 
 interface PaymentModalProps {
@@ -14,7 +14,7 @@ interface PaymentModalProps {
    currencySymbol: string;
    config?: BusinessConfig;
    onClose: () => void;
-   onConfirm: (payments: PaymentEntry[]) => void;
+   onConfirm: (payments: PaymentEntry[]) => Promise<Transaction | null>;
    themeColor: string;
 }
 
@@ -23,6 +23,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    const [activeMethod, setActiveMethod] = useState<PaymentMethod>('CASH');
    const [inputAmount, setInputAmount] = useState<string>('');
    const [isSuccessScreen, setIsSuccessScreen] = useState(false);
+   const [completedTransaction, setCompletedTransaction] = useState<Transaction | null>(null);
    const [shouldClearInput, setShouldClearInput] = useState(true);
 
    const currencies = config?.currencies || [];
@@ -80,8 +81,18 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    };
 
    const handleRemovePayment = (id: string) => { setPayments(prev => prev.filter(p => p.id !== id)); };
-   const handleProcessSale = () => { setIsSuccessScreen(true); };
-   const handleFinalize = () => { onConfirm(payments); };
+
+   const handleFinalize = async () => {
+      if (totalPaid < total - 0.01) {
+         alert("Monto insuficiente");
+         return;
+      }
+      const txn = await onConfirm(payments);
+      if (txn) {
+         setCompletedTransaction(txn);
+         setIsSuccessScreen(true);
+      }
+   };
 
    const themeBgClass = { blue: 'bg-blue-600', orange: 'bg-orange-600', gray: 'bg-gray-800' }[themeColor] || 'bg-indigo-600';
    const themeTextClass = { blue: 'text-blue-600', orange: 'text-orange-600', gray: 'text-gray-800' }[themeColor] || 'text-indigo-600';
@@ -101,21 +112,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                <div className="w-full space-y-3">
                   <div className="flex gap-3">
                      <button onClick={() => {
-                        if (!config) return;
-                        const tempTx: any = {
-                           id: 'PENDING',
-                           date: new Date().toISOString(),
-                           items: items,
-                           total: total,
-                           payments: payments,
-                           userName: 'Cajero',
-                           customerName: 'Cliente General'
-                        };
-                        printTicket(tempTx, config);
+                        if (!config || !completedTransaction) return;
+                        printTicket(completedTransaction, config);
                      }} className="flex-1 py-3 rounded-xl bg-gray-100 font-bold text-gray-700 flex items-center justify-center gap-2"><Printer size={18} /> Ticket</button>
                      <button onClick={() => alert("Enviando...")} className="flex-1 py-3 rounded-xl bg-gray-100 font-bold text-gray-700 flex items-center justify-center gap-2"><Mail size={18} /> Email</button>
                   </div>
-                  <button onClick={handleFinalize} className={`w-full py-4 rounded-xl font-bold text-white shadow-xl flex items-center justify-center gap-2 ${themeBgClass}`}><Repeat size={20} /> Nueva Venta</button>
+                  <button onClick={onClose} className={`w-full py-4 rounded-xl font-bold text-white shadow-xl flex items-center justify-center gap-2 ${themeBgClass}`}><Repeat size={20} /> Nueva Venta</button>
                </div>
             </div>
          </div>
@@ -197,7 +199,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                      )}
                   </div>
                   <button
-                     onClick={handleProcessSale}
+                     onClick={handleFinalize}
                      disabled={remaining > 0.01}
                      className={`w-full py-3 md:py-4 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${remaining > 0.01 ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} hover:brightness-110`}`}
                   >
