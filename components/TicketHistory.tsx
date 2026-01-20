@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { Transaction, BusinessConfig, CartItem } from '../types';
 import { validateTerminalDocument } from '../utils/validation';
+import { printTicket } from '../utils/printer';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -262,7 +263,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
                               <div className="p-4 bg-white border-t border-gray-200 flex justify-between items-center gap-4">
                                  {!isReturnActive ? (
                                     <div className="flex gap-2 w-full">
-                                       <button className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-100 text-gray-600 rounded-xl font-bold text-sm hover:bg-gray-200 transition-colors">
+                                       <button onClick={() => printTicket(tx, config)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-100 text-gray-600 rounded-xl font-bold text-sm hover:bg-gray-200 transition-colors">
                                           <Printer size={16} /> Re-imprimir
                                        </button>
                                        <button onClick={(e) => handlePrintGiftReceipt(e, tx)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-50 text-purple-600 border border-purple-100 rounded-xl font-bold text-sm hover:bg-purple-100 transition-colors">
