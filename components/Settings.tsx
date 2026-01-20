@@ -1,9 +1,9 @@
 
 import React, { useState } from 'react';
-import { 
-  Settings as SettingsIcon, X, CreditCard, Receipt, 
-  Monitor, Users, Truck, ShieldCheck, FileText, 
-  Globe, Database, Activity, Mail, Coins, 
+import {
+  Settings as SettingsIcon, X, CreditCard, Receipt,
+  Monitor, Users, Truck, ShieldCheck, FileText,
+  Globe, Database, Activity, Mail, Coins,
   Cpu, HardDrive, Smartphone, Cloud, Lock, Package, Building2,
   Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent
 } from 'lucide-react';
@@ -53,13 +53,13 @@ const Settings: React.FC<SettingsProps> = (props) => {
   const renderContent = () => {
     switch (currentView) {
       case 'WAREHOUSES':
-        return <WarehouseManager warehouses={props.warehouses} products={props.products} transfers={props.transfers || []} onUpdateTransfers={props.onUpdateTransfers || (() => {})} onUpdateWarehouses={props.onUpdateWarehouses} onUpdateProducts={props.onUpdateProducts} onClose={() => setCurrentView('HOME')} />;
+        return <WarehouseManager config={props.config} warehouses={props.warehouses} products={props.products} transfers={props.transfers || []} onUpdateTransfers={props.onUpdateTransfers || (() => { })} onUpdateWarehouses={props.onUpdateWarehouses} onUpdateProducts={props.onUpdateProducts} onClose={() => setCurrentView('HOME')} />;
       case 'CATALOG':
         return <CatalogManager products={props.products} warehouses={props.warehouses} config={props.config} transactions={props.transactions} onUpdateProducts={props.onUpdateProducts} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
       case 'TERMINALS':
         return <TerminalSettings config={props.config} warehouses={props.warehouses} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
       case 'HARDWARE':
-        return <HardwareSettings config={props.config} products={props.products} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />; 
+        return <HardwareSettings config={props.config} products={props.products} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
       case 'EXCHANGE':
         return <CurrencySettings config={props.config} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
       case 'PAYMENTS':
@@ -67,13 +67,13 @@ const Settings: React.FC<SettingsProps> = (props) => {
       case 'RECEIPT':
         return (
           <div className="p-8 h-full flex flex-col overflow-hidden">
-             <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-black text-slate-800">Diseño de Comprobantes</h2>
-                <button onClick={() => setCurrentView('HOME')} className="text-sm font-bold text-blue-600">Volver</button>
-             </div>
-             <div className="flex-1 overflow-hidden">
-                <ReceiptDesigner config={props.config} onUpdateConfig={props.onUpdateConfig} />
-             </div>
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-black text-slate-800">Diseño de Comprobantes</h2>
+              <button onClick={() => setCurrentView('HOME')} className="text-sm font-bold text-blue-600">Volver</button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <ReceiptDesigner config={props.config} onUpdateConfig={props.onUpdateConfig} />
+            </div>
           </div>
         );
       case 'EMAIL':
@@ -83,11 +83,11 @@ const Settings: React.FC<SettingsProps> = (props) => {
       case 'SECURITY':
         return (
           <div className="p-8 h-full overflow-y-auto">
-             <div className="flex justify-between items-center mb-8">
-                <h2 className="text-2xl font-black text-slate-800">Seguridad y Respaldo</h2>
-                <button onClick={() => setCurrentView('HOME')} className="text-sm font-bold text-blue-600">Volver</button>
-             </div>
-             <DataSecurityHub onClose={() => setCurrentView('HOME')} />
+            <div className="flex justify-between items-center mb-8">
+              <h2 className="text-2xl font-black text-slate-800">Seguridad y Respaldo</h2>
+              <button onClick={() => setCurrentView('HOME')} className="text-sm font-bold text-blue-600">Volver</button>
+            </div>
+            <DataSecurityHub onClose={() => setCurrentView('HOME')} />
           </div>
         );
       case 'LOGS':
@@ -98,7 +98,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
         return <DocumentSettings onClose={() => setCurrentView('HOME')} />;
       case 'PROMOTIONS':
         return <PromotionBuilder products={props.products} config={props.config} onClose={() => setCurrentView('HOME')} />;
-      
+
       default:
         return (
           <div className="flex-1 overflow-y-auto p-8 max-w-7xl mx-auto w-full animate-in fade-in">
@@ -113,51 +113,51 @@ const Settings: React.FC<SettingsProps> = (props) => {
             </div>
 
             <div className="space-y-12">
-               <section>
-                  <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Inventario y Catálogo</h2>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                    <SettingsCard icon={Package} label="Artículos y Tarifas" description="Catálogo, Precios, Variantes" color="bg-blue-600" onClick={() => setCurrentView('CATALOG')} />
-                    <SettingsCard icon={Building2} label="Almacenes" description="Ubicaciones, Traspasos, Stock" color="bg-purple-600" onClick={() => setCurrentView('WAREHOUSES')} />
-                    <SettingsCard icon={Truck} label="Proveedores" description="Compras y Abastecimiento" color="bg-emerald-500" onClick={props.onOpenSupplyChain} />
-                  </div>
-               </section>
+              <section>
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Inventario y Catálogo</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <SettingsCard icon={Package} label="Artículos y Tarifas" description="Catálogo, Precios, Variantes" color="bg-blue-600" onClick={() => setCurrentView('CATALOG')} />
+                  <SettingsCard icon={Building2} label="Almacenes" description="Ubicaciones, Traspasos, Stock" color="bg-purple-600" onClick={() => setCurrentView('WAREHOUSES')} />
+                  <SettingsCard icon={Truck} label="Proveedores" description="Compras y Abastecimiento" color="bg-emerald-500" onClick={props.onOpenSupplyChain} />
+                </div>
+              </section>
 
-               <section>
-                  <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Finanzas y Legal</h2>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                    <SettingsCard icon={CreditCard} label="Métodos de Pago" description="Pasarelas, Tarjetas, QR" color="bg-indigo-500" onClick={() => setCurrentView('PAYMENTS')} />
-                    <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} />
-                    <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} />
-                    <SettingsCard icon={FileText} label="Documentos" description="Series, NCF, Prefijos" color="bg-blue-400" onClick={() => setCurrentView('DOCUMENTS')} />
-                  </div>
-               </section>
+              <section>
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Finanzas y Legal</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <SettingsCard icon={CreditCard} label="Métodos de Pago" description="Pasarelas, Tarjetas, QR" color="bg-indigo-500" onClick={() => setCurrentView('PAYMENTS')} />
+                  <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} />
+                  <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} />
+                  <SettingsCard icon={FileText} label="Documentos" description="Series, NCF, Prefijos" color="bg-blue-400" onClick={() => setCurrentView('DOCUMENTS')} />
+                </div>
+              </section>
 
-               <section>
-                  <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Configuración Local</h2>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                    <SettingsCard icon={Monitor} label="Terminales POS" description="Perfiles de Caja, Inventario" color="bg-blue-500" onClick={() => setCurrentView('TERMINALS')} />
-                    <SettingsCard icon={Printer} label="Hardware" description="Impresoras, Balanzas, VFD" color="bg-gray-700" onClick={() => setCurrentView('HARDWARE')} />
-                    <SettingsCard icon={Coins} label="Propinas" description="Cargos por Servicio y Tips" color="bg-yellow-500" onClick={() => setCurrentView('TIPS')} />
-                  </div>
-               </section>
+              <section>
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Configuración Local</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <SettingsCard icon={Monitor} label="Terminales POS" description="Perfiles de Caja, Inventario" color="bg-blue-500" onClick={() => setCurrentView('TERMINALS')} />
+                  <SettingsCard icon={Printer} label="Hardware" description="Impresoras, Balanzas, VFD" color="bg-gray-700" onClick={() => setCurrentView('HARDWARE')} />
+                  <SettingsCard icon={Coins} label="Propinas" description="Cargos por Servicio y Tips" color="bg-yellow-500" onClick={() => setCurrentView('TIPS')} />
+                </div>
+              </section>
 
-               <section>
-                  <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Equipo y Marketing</h2>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                    <SettingsCard icon={Users} label="Equipo y Roles" description="Usuarios, Turnos, Permisos" color="bg-pink-500" onClick={() => setCurrentView('TEAM')} />
-                    <SettingsCard icon={Percent} label="Promociones" description="Descuentos, 2x1 y Temporadas" color="bg-rose-500" onClick={() => setCurrentView('PROMOTIONS')} />
-                    <SettingsCard icon={Receipt} label="Diseño de Ticket" description="Logo, Cabecera y Pie" color="bg-rose-600" onClick={() => setCurrentView('RECEIPT')} />
-                    <SettingsCard icon={Mail} label="E-mail" description="Factura Digital" color="bg-sky-500" onClick={() => setCurrentView('EMAIL')} />
-                  </div>
-               </section>
+              <section>
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Equipo y Marketing</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <SettingsCard icon={Users} label="Equipo y Roles" description="Usuarios, Turnos, Permisos" color="bg-pink-500" onClick={() => setCurrentView('TEAM')} />
+                  <SettingsCard icon={Percent} label="Promociones" description="Descuentos, 2x1 y Temporadas" color="bg-rose-500" onClick={() => setCurrentView('PROMOTIONS')} />
+                  <SettingsCard icon={Receipt} label="Diseño de Ticket" description="Logo, Cabecera y Pie" color="bg-rose-600" onClick={() => setCurrentView('RECEIPT')} />
+                  <SettingsCard icon={Mail} label="E-mail" description="Factura Digital" color="bg-sky-500" onClick={() => setCurrentView('EMAIL')} />
+                </div>
+              </section>
 
-               <section>
-                  <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Sistema y Auditoría</h2>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                    <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} />
-                    <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} />
-                  </div>
-               </section>
+              <section>
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Sistema y Auditoría</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} />
+                  <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} />
+                </div>
+              </section>
             </div>
           </div>
         );

@@ -15,27 +15,27 @@ export const INITIAL_TAXES: TaxDefinition[] = [
 ];
 
 export const INITIAL_TARIFFS: Tariff[] = [
-  { 
-    id: 'trf-gen', 
-    name: 'General (PVP)', 
-    active: true, 
-    currency: 'DOP', 
-    taxIncluded: true, 
-    strategy: { type: 'MANUAL', rounding: 'NONE' }, 
-    scope: { storeIds: ['ALL'], priority: 0 }, 
-    schedule: { daysOfWeek: [0,1,2,3,4,5,6], timeStart: '00:00', timeEnd: '23:59' }, 
-    items: {} 
+  {
+    id: 'trf-gen',
+    name: 'General (PVP)',
+    active: true,
+    currency: 'DOP',
+    taxIncluded: true,
+    strategy: { type: 'MANUAL', rounding: 'NONE' },
+    scope: { storeIds: ['ALL'], priority: 0 },
+    schedule: { daysOfWeek: [0, 1, 2, 3, 4, 5, 6], timeStart: '00:00', timeEnd: '23:59' },
+    items: {}
   },
-  { 
-    id: 'trf-vip', 
-    name: 'VIP / Cliente Oro', 
-    active: true, 
-    currency: 'DOP', 
-    taxIncluded: true, 
-    strategy: { type: 'MANUAL', rounding: 'NONE' }, 
-    scope: { storeIds: ['ALL'], priority: 5 }, 
-    schedule: { daysOfWeek: [0,1,2,3,4,5,6], timeStart: '00:00', timeEnd: '23:59' }, 
-    items: {} 
+  {
+    id: 'trf-vip',
+    name: 'VIP / Cliente Oro',
+    active: true,
+    currency: 'DOP',
+    taxIncluded: true,
+    strategy: { type: 'MANUAL', rounding: 'NONE' },
+    scope: { storeIds: ['ALL'], priority: 5 },
+    schedule: { daysOfWeek: [0, 1, 2, 3, 4, 5, 6], timeStart: '00:00', timeEnd: '23:59' },
+    items: {}
   }
 ];
 
@@ -75,7 +75,13 @@ export const DEFAULT_TERMINAL_CONFIG = {
       maxCashInDrawer: 20000,
       askGuestsOnTicketOpen: false,
       autoPrintZReport: true,
-      zReportEmails: ''
+      zReportEmails: '',
+      checkOpenOrders: true,
+      forceDenominationCount: false,
+      cashVarianceThreshold: 0,
+      emailZReport: false,
+      forceZChange: false,
+      businessStartHour: 0
     },
     offline: {
       mode: 'OPTIMISTIC' as const,
@@ -190,7 +196,7 @@ const generateProducts = () => {
     const cat = categories.find(c => c.name === item.c);
     const type = (cat?.type as any) || 'PRODUCT';
     const isWeighable = type === 'SERVICE';
-    
+
     return {
       id: `prod-${idx + 100}`,
       name: item.n,
@@ -211,54 +217,54 @@ const generateProducts = () => {
 };
 
 export const RETAIL_PRODUCTS: Product[] = [
-  { 
-    id: 'p-pesado-1', 
-    name: 'Tomates Orgánicos (Peso)', 
-    price: 3.50, 
-    category: 'Verduras', 
-    stock: 150, 
-    cost: 1.20, 
-    barcode: 'SC001', 
-    type: 'SERVICE', 
-    images: ['https://images.unsplash.com/photo-1592924357228-91a4daadcfea?q=80&w=200&auto=format&fit=crop'], 
+  {
+    id: 'p-pesado-1',
+    name: 'Tomates Orgánicos (Peso)',
+    price: 3.50,
+    category: 'Verduras',
+    stock: 150,
+    cost: 1.20,
+    barcode: 'SC001',
+    type: 'SERVICE',
+    images: ['https://images.unsplash.com/photo-1592924357228-91a4daadcfea?q=80&w=200&auto=format&fit=crop'],
     image: 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?q=80&w=200&auto=format&fit=crop',
-    attributes: [], 
-    variants: [], 
+    attributes: [],
+    variants: [],
     tariffs: [{ tariffId: 'trf-gen', price: 3.50 }],
     appliedTaxIds: ['tax-exempt']
   },
-  { 
-    id: 'p-pesado-2', 
-    name: 'Pollo Entero (Peso)', 
-    price: 5.99, 
-    category: 'Carnicería', 
-    stock: 80, 
-    cost: 3.50, 
-    barcode: 'SC002', 
-    type: 'SERVICE', 
-    images: ['https://images.unsplash.com/photo-1587593810167-a84920ea0781?q=80&w=200&auto=format&fit=crop'], 
+  {
+    id: 'p-pesado-2',
+    name: 'Pollo Entero (Peso)',
+    price: 5.99,
+    category: 'Carnicería',
+    stock: 80,
+    cost: 3.50,
+    barcode: 'SC002',
+    type: 'SERVICE',
+    images: ['https://images.unsplash.com/photo-1587593810167-a84920ea0781?q=80&w=200&auto=format&fit=crop'],
     image: 'https://images.unsplash.com/photo-1587593810167-a84920ea0781?q=80&w=200&auto=format&fit=crop',
-    attributes: [], 
-    variants: [], 
+    attributes: [],
+    variants: [],
     tariffs: [{ tariffId: 'trf-gen', price: 5.99 }],
     appliedTaxIds: ['tax-18']
   },
-  { 
-    id: 'p-var-1', 
-    name: 'Zapatillas Runner 5.0', 
-    price: 85.00, 
-    category: 'Calzado', 
-    stock: 100, 
-    cost: 40.00, 
-    barcode: 'RUN-001', 
-    type: 'PRODUCT', 
-    images: ['https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=200&auto=format&fit=crop'], 
+  {
+    id: 'p-var-1',
+    name: 'Zapatillas Runner 5.0',
+    price: 85.00,
+    category: 'Calzado',
+    stock: 100,
+    cost: 40.00,
+    barcode: 'RUN-001',
+    type: 'PRODUCT',
+    images: ['https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=200&auto=format&fit=crop'],
     image: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=200&auto=format&fit=crop',
     attributes: [
       { id: 'attr_size', name: 'Talla', options: ['38', '39', '40', '41', '42'], optionCodes: ['38', '39', '40', '41', '42'] },
       { id: 'attr_color', name: 'Color', options: ['Rojo', 'Azul', 'Negro'], optionCodes: ['RJ', 'AZ', 'NG'] }
-    ], 
-    variants: [], 
+    ],
+    variants: [],
     tariffs: [{ tariffId: 'trf-gen', price: 85.00 }],
     appliedTaxIds: ['tax-18']
   },
@@ -280,7 +286,7 @@ export const AVAILABLE_PERMISSIONS = [
 
 export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
   const isFood = [SubVertical.RESTAURANT, SubVertical.FAST_FOOD, SubVertical.BAR].includes(subVertical);
-  
+
   return {
     vertical: isFood ? 'RESTAURANT' : 'RETAIL',
     subVertical,
@@ -298,6 +304,6 @@ export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
     tariffs: INITIAL_TARIFFS,
     terminals: [{ id: 't1', config: DEFAULT_TERMINAL_CONFIG }],
     availablePrinters: [],
-    scales: [] 
+    scales: []
   };
 };

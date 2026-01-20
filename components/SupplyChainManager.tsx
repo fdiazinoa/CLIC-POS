@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
    ArrowLeft, Truck, Package, AlertTriangle, Search, Plus,
    ShoppingCart, Check, X, FileText, Calendar, Archive,
@@ -45,13 +45,28 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
    // Inventory Audit State
    const [isAuditMode, setIsAuditMode] = useState(false);
 
-   // --- DERIVED DATA ---
-   const lowStockProducts = useMemo(() => {
-      return products.filter(p =>
-         p.operationalFlags?.trackInventory && (p.stock || 0) <= (p.minStock || 5)
-      );
-   }, [products]);
+   // Low Stock Alert Logic
+   const [lowStockProducts, setLowStockProducts] = useState<Product[]>([]);
 
+   useEffect(() => {
+      const loadLowStock = async () => {
+         // Assuming 'db' is available in this scope or passed as a prop/context
+         // For this example, we'll use the 'products' prop as the source,
+         // similar to the original useMemo, but filtered here.
+         // If 'db' is truly meant to be used, it needs to be defined or imported.
+         // For now, adapting to use the 'products' prop as the source.
+         const filtered = products.filter(p => {
+            if (!p.operationalFlags?.trackInventory) return false;
+            const stock = p.stock || 0;
+            const min = p.minStock || 5;
+            return stock <= min;
+         });
+         setLowStockProducts(filtered);
+      };
+      loadLowStock();
+   }, [products]); // Dependency on 'products' prop to re-evaluate when products change
+
+   // --- DERIVED DATA ---
    const filteredProducts = useMemo(() => {
       return products.filter(p =>
          p.name.toLowerCase().includes(productSearch.toLowerCase()) ||
@@ -469,8 +484,8 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                         <div
                            key={item.productId}
                            className={`p-4 rounded-2xl border-2 transition-all flex flex-col gap-3 ${isComplete
-                                 ? 'bg-green-50 border-green-500 shadow-sm'
-                                 : item.quantityReceived > 0 ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200'
+                              ? 'bg-green-50 border-green-500 shadow-sm'
+                              : item.quantityReceived > 0 ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200'
                               }`}
                         >
                            <div className="flex justify-between items-start">

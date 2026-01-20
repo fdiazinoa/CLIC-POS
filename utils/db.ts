@@ -1,32 +1,33 @@
 
-import { 
-  BusinessConfig, Product, User, Customer, Transaction, 
+import {
+  BusinessConfig, Product, User, Customer, Transaction,
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, Supplier, Watchlist,
   NCFType, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries
 } from '../types';
-import { 
-  MOCK_USERS, RETAIL_PRODUCTS, FOOD_PRODUCTS, 
+import {
+  MOCK_USERS, RETAIL_PRODUCTS, FOOD_PRODUCTS,
   MOCK_CUSTOMERS, INITIAL_TARIFFS, getInitialConfig,
   DEFAULT_ROLES, DEFAULT_TERMINAL_CONFIG, DEFAULT_DOCUMENT_SERIES
 } from '../constants';
+import { dbAdapter } from '../services/db';
 
 const DB_KEY = 'clic_pos_db_v1';
 
 // --- SEED DATA ---
 const DEFAULT_WAREHOUSES: Warehouse[] = [
-    { id: "wh_central", code: "CEN", name: "Bodega Central", type: "PHYSICAL", address: "Calle Industria #45", allowPosSale: true, allowNegativeStock: false, isMain: true, storeId: "S1" },
-    { id: "wh_norte", code: "NTE", name: "Piso de Venta Norte", type: "PHYSICAL", address: "Plaza Norte, Local 10", allowPosSale: true, allowNegativeStock: false, isMain: false, storeId: "S2" },
+  { id: "wh_central", code: "CEN", name: "Bodega Central", type: "PHYSICAL", address: "Calle Industria #45", allowPosSale: true, allowNegativeStock: false, isMain: true, storeId: "S1" },
+  { id: "wh_norte", code: "NTE", name: "Piso de Venta Norte", type: "PHYSICAL", address: "Plaza Norte, Local 10", allowPosSale: true, allowNegativeStock: false, isMain: false, storeId: "S2" },
 ];
 
 const SEED_DATA = {
   config: (() => {
     const baseConfig = getInitialConfig('Supermercado' as any);
     if (baseConfig.terminals[0]) {
-       baseConfig.terminals[0].config.inventoryScope = {
-          defaultSalesWarehouseId: "wh_central",
-          visibleWarehouseIds: DEFAULT_WAREHOUSES.map(w => w.id)
-       };
+      baseConfig.terminals[0].config.inventoryScope = {
+        defaultSalesWarehouseId: "wh_central",
+        visibleWarehouseIds: DEFAULT_WAREHOUSES.map(w => w.id)
+      };
     }
     return baseConfig;
   })(),
@@ -57,107 +58,58 @@ const SEED_DATA = {
 };
 
 export const db = {
-  init: () => {
-    let data;
-    const existing = localStorage.getItem(DB_KEY);
-    if (!existing) {
-      data = JSON.parse(JSON.stringify(SEED_DATA));
-    } else {
-      try {
-        data = JSON.parse(existing);
-      } catch (e) {
-        data = JSON.parse(JSON.stringify(SEED_DATA));
+  init: async () => {
+    await dbAdapter.connect();
+
+    // Check if seeded
+    const existingConfig = await dbAdapter.getCollection('config');
+    if (!existingConfig || Object.keys(existingConfig).length === 0) {
+      // Seed all collections
+      for (const [key, value] of Object.entries(SEED_DATA)) {
+        if (key === 'config') {
+          // Config is a single object, but our adapter expects collections usually. 
+          // For LocalStorageAdapter we treat everything as key-value, but let's standardize.
+          // Special case for config in this specific legacy db structure
+          await dbAdapter.saveCollection(key, value as any);
+        } else {
+          await dbAdapter.saveCollection(key, value as any[]);
+        }
       }
+      return SEED_DATA;
     }
 
-    let modified = false;
-
-    if (!data.config) {
-      data.config = JSON.parse(JSON.stringify(SEED_DATA.config));
-      modified = true;
-    }
-    
-    // Nueva clave global para secuencias internas
-    if (!data.internalSequences) {
-      data.internalSequences = JSON.parse(JSON.stringify(DEFAULT_DOCUMENT_SERIES));
-      modified = true;
-    }
-
-    if (data.config.terminals && Array.isArray(data.config.terminals)) {
-      data.config.terminals.forEach((t: any) => {
-        // Asegurar estructura de hardware
-        if (!t.config.hardware) {
-          t.config.hardware = { printerAssignments: {}, scales: [] };
-          modified = true;
-        }
-
-        // Migración: Asignaciones de documentos
-        if (!t.config.documentAssignments) {
-          t.config.documentAssignments = {
-            'TICKET': 'TICKET',
-            'REFUND': 'REFUND',
-            'TRANSFER': 'TRANSFER'
-          };
-          modified = true;
-        }
-        
-        // Asegurar estructura fiscal detallada
-        if (!t.config.fiscal) {
-          t.config.fiscal = JSON.parse(JSON.stringify(DEFAULT_TERMINAL_CONFIG.fiscal));
-          modified = true;
-        } else if (!t.config.fiscal.typeConfigs) {
-          t.config.fiscal.typeConfigs = JSON.parse(JSON.stringify(DEFAULT_TERMINAL_CONFIG.fiscal.typeConfigs));
-          modified = true;
-        }
-
-        // Asegurar visor de cliente
-        if (!t.config.hardware.customerDisplay) {
-          t.config.hardware.customerDisplay = {
-            isEnabled: false,
-            welcomeMessage: '¡Bienvenido!',
-            showItemImages: true,
-            showQrPayment: true,
-            layout: 'SPLIT',
-            connectionType: 'VIRTUAL',
-            ads: []
-          };
-          modified = true;
-        }
-      });
-    }
-
-    if (!existing || modified) {
-      localStorage.setItem(DB_KEY, JSON.stringify(data));
+    // Load all data to return consistent structure (Legacy support)
+    const data: any = {};
+    for (const key of Object.keys(SEED_DATA)) {
+      data[key] = await dbAdapter.getCollection(key);
     }
     return data;
   },
 
-  reset: () => {
+  reset: async () => {
     localStorage.removeItem(DB_KEY);
     window.location.reload();
   },
 
-  get: (collection: keyof typeof SEED_DATA) => {
-    const data = JSON.parse(localStorage.getItem(DB_KEY) || '{}');
-    return data[collection] || (SEED_DATA as any)[collection];
+  get: async (collection: keyof typeof SEED_DATA) => {
+    return await dbAdapter.getCollection(collection as string);
   },
 
-  save: (collection: keyof typeof SEED_DATA, payload: any) => {
-    const data = JSON.parse(localStorage.getItem(DB_KEY) || '{}');
-    data[collection] = payload;
-    localStorage.setItem(DB_KEY, JSON.stringify(data));
+  save: async (collection: keyof typeof SEED_DATA, payload: any) => {
+    // This is tricky because legacy 'save' replaced the whole collection or object
+    await dbAdapter.saveCollection(collection as string, payload);
   },
 
-  canRequestMoreNCF: (type: NCFType): boolean => {
-    const data = JSON.parse(localStorage.getItem(DB_KEY) || '{}');
-    const range = data.fiscalRanges?.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
+  canRequestMoreNCF: async (type: NCFType): Promise<boolean> => {
+    const ranges = await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges');
+    const range = ranges?.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
     if (!range) return false;
     return range.currentGlobal < range.endNumber;
   },
 
-  requestFiscalBatch: (terminalId: string, type: NCFType, batchSize: number): LocalFiscalBuffer | null => {
-    const data = JSON.parse(localStorage.getItem(DB_KEY) || '{}');
-    const range = data.fiscalRanges?.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
+  requestFiscalBatch: async (terminalId: string, type: NCFType, batchSize: number): Promise<LocalFiscalBuffer | null> => {
+    const ranges = await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges');
+    const range = ranges?.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
     if (!range || range.currentGlobal >= range.endNumber) return null;
 
     const start = range.currentGlobal + 1;
@@ -165,32 +117,76 @@ export const db = {
     range.currentGlobal = end;
 
     const localBuffer: LocalFiscalBuffer = { type, prefix: range.prefix, currentNumber: start, endNumber: end, expiryDate: range.expiryDate };
-    data.localFiscalBuffer = (data.localFiscalBuffer || []).filter((b: any) => b.type !== type).concat(localBuffer);
 
-    localStorage.setItem(DB_KEY, JSON.stringify(data));
+    // Save updated ranges
+    await dbAdapter.saveCollection('fiscalRanges', ranges);
+
+    // Update local buffers
+    const buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
+    const newBuffers = buffers.filter((b: any) => b.type !== type).concat(localBuffer);
+    await dbAdapter.saveCollection('localFiscalBuffer', newBuffers);
+
     return localBuffer;
   },
 
-  getNextNCF: (type: NCFType, terminalId: string, customBatchSize?: number): string | null => {
-    const data = JSON.parse(localStorage.getItem(DB_KEY) || '{}');
-    let buffer = data.localFiscalBuffer?.find((b: LocalFiscalBuffer) => b.type === type);
+  getNextNCF: async (type: NCFType, terminalId: string, customBatchSize?: number): Promise<string | null> => {
+    let buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
+    let buffer = buffers.find((b: LocalFiscalBuffer) => b.type === type);
+
     if (!buffer || buffer.currentNumber > buffer.endNumber) {
-      buffer = db.requestFiscalBatch(terminalId, type, customBatchSize || 100);
-      if (!buffer) return null; 
+      buffer = await db.requestFiscalBatch(terminalId, type, customBatchSize || 100) as LocalFiscalBuffer;
+      if (!buffer) return null;
+      // Refresh buffers after request
+      buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
+      buffer = buffers.find((b: LocalFiscalBuffer) => b.type === type) as LocalFiscalBuffer;
     }
+
     const ncf = `${buffer.prefix}${buffer.currentNumber.toString().padStart(8, '0')}`;
     buffer.currentNumber += 1;
-    localStorage.setItem(DB_KEY, JSON.stringify(data));
+
+    await dbAdapter.saveCollection('localFiscalBuffer', buffers);
     return ncf;
   },
 
-  recordInventoryMovement: (warehouseId: string, productId: string, concept: LedgerConcept, documentRef: string, qty: number, movementCost?: number) => {
-    const data = JSON.parse(localStorage.getItem(DB_KEY) || '{}');
-    const product = data.products.find((p: Product) => p.id === productId);
+  recordInventoryMovement: async (warehouseId: string, productId: string, concept: LedgerConcept, documentRef: string, qty: number, movementCost?: number) => {
+    const products = await dbAdapter.getCollection<Product>('products');
+    const product = products.find((p: Product) => p.id === productId);
     if (!product) return;
+
+    // 1. Update Product Stock
     if (!product.stockBalances) product.stockBalances = {};
-    product.stockBalances[warehouseId] = (product.stockBalances[warehouseId] || 0) + qty;
+    const previousStock = product.stockBalances[warehouseId] || 0;
+    const newStock = previousStock + qty;
+
+    product.stockBalances[warehouseId] = newStock;
     product.stock = Object.values(product.stockBalances).reduce((a: any, b: any) => a + (b as number), 0);
-    localStorage.setItem(DB_KEY, JSON.stringify(data));
+
+    await dbAdapter.saveCollection('products', products);
+
+    // 2. Create Ledger Entry
+    const ledger = await dbAdapter.getCollection<InventoryLedgerEntry>('inventoryLedger') || [];
+
+    const qtyIn = qty > 0 ? qty : 0;
+    const qtyOut = qty < 0 ? Math.abs(qty) : 0;
+
+    const newEntry: InventoryLedgerEntry = {
+      id: `LEG-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      productId: productId,
+      warehouseId: warehouseId,
+      concept: concept,
+      documentRef: documentRef,
+      createdAt: new Date().toISOString(),
+      qtyIn: qtyIn,
+      qtyOut: qtyOut,
+      unitCost: movementCost || product.cost || 0,
+      balanceQty: newStock,
+      balanceAvgCost: product.cost || 0 // Assuming avg cost is same as current cost for now
+    };
+
+    console.log("📝 Recording Inventory Movement:", newEntry);
+    const newLedger = [...ledger, newEntry];
+    await dbAdapter.saveCollection('inventoryLedger', newLedger);
+    console.log("✅ Inventory Ledger Saved. Total entries:", newLedger.length);
   }
 };
+

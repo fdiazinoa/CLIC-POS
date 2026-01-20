@@ -64,12 +64,12 @@ export interface InventoryLedgerEntry {
   warehouseId: string;
   productId: string;
   concept: LedgerConcept;
-  documentRef: string; 
+  documentRef: string;
   qtyIn: number;
   qtyOut: number;
-  unitCost: number; 
-  balanceQty: number; 
-  balanceAvgCost: number; 
+  unitCost: number;
+  balanceQty: number;
+  balanceAvgCost: number;
 }
 
 // --- WATCHLIST & BI TYPES ---
@@ -98,8 +98,8 @@ export interface WatchlistKPIs {
   productId: string;
   lastSaleDate: string | null;
   daysSinceLastSale: number;
-  velocity7d: number; 
-  sellThrough: number; 
+  velocity7d: number;
+  sellThrough: number;
   weeksOfSupply: number;
   totalSoldPeriod: number;
 }
@@ -109,7 +109,7 @@ export type ScaleTech = 'DIRECT' | 'LABEL';
 export interface TaxDefinition {
   id: string;
   name: string;
-  rate: number; 
+  rate: number;
   type: 'VAT' | 'SERVICE_CHARGE' | 'EXEMPT' | 'OTHER';
 }
 
@@ -136,8 +136,8 @@ export interface DocumentSeries {
   prefix: string;
   nextNumber: number;
   padding: number;
-  icon: string; 
-  color: string; 
+  icon: string;
+  color: string;
 }
 
 export interface NCFConfig {
@@ -152,7 +152,7 @@ export interface TerminalConfig {
   isBlocked?: boolean;
   deviceBindingToken: string;
   isPrimaryNode?: boolean; // Rol jerárquico de la terminal
-  
+
   fiscal: {
     batchSize: number; // Deprecated but kept for compatibility
     lowBatchThreshold: number;
@@ -186,6 +186,14 @@ export interface TerminalConfig {
       askGuestsOnTicketOpen: boolean;
       autoPrintZReport: boolean;
       zReportEmails?: string;
+      // New fields for Z Report Expansion
+      checkOpenOrders: boolean;
+      forceDenominationCount: boolean;
+      cashVarianceThreshold: number;
+      emailZReport: boolean;
+      // New fields for Force Z on Day Change
+      forceZChange: boolean;
+      businessStartHour: number;
     };
     offline: {
       mode: 'OPTIMISTIC' | 'STRICT' | 'READ_ONLY';
@@ -425,7 +433,7 @@ export interface Product {
   stock?: number;
   image?: string;
   barcode?: string;
-  cost?: number; 
+  cost?: number;
   type?: 'PRODUCT' | 'SERVICE' | 'KIT';
   images: string[];
   attributes: ProductAttribute[];
@@ -435,7 +443,7 @@ export interface Product {
   activeInWarehouses?: string[];
   appliedTaxIds: string[];
   minStock?: number;
-  warehouseSettings?: Record<string, {min: number, max: number}>;
+  warehouseSettings?: Record<string, { min: number, max: number }>;
   availableModifiers?: Modifier[];
   description?: string;
   departmentId?: string;
@@ -531,7 +539,7 @@ export interface StockTransfer {
   items: StockTransferItem[];
   status: 'IN_TRANSIT' | 'COMPLETED';
   createdAt: string;
-  sentAt?: string; 
+  sentAt?: string;
   receivedAt?: string;
   createdBy?: string;
 }

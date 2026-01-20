@@ -1,34 +1,35 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  User, 
-  RoleDefinition, 
-  BusinessConfig, 
-  Transaction, 
-  Customer, 
-  Product, 
-  CashMovement, 
-  PurchaseOrder, 
-  Supplier, 
-  PurchaseOrderItem, 
-  CartItem, 
+import {
+  User,
+  RoleDefinition,
+  BusinessConfig,
+  Transaction,
+  Customer,
+  Product,
+  CashMovement,
+  PurchaseOrder,
+  Supplier,
+  PurchaseOrderItem,
+  CartItem,
   ViewState,
   Tariff,
   Warehouse,
   ParkedTicket,
   StockTransfer
 } from './types';
-import { 
-  DEFAULT_ROLES, 
-  FOOD_PRODUCTS, 
+import {
+  DEFAULT_ROLES,
+  FOOD_PRODUCTS,
   RETAIL_PRODUCTS,
   getInitialConfig
 } from './constants';
 import { db } from './utils/db'; // Import Local DB
+import { syncQueue } from './services/sync/SyncQueue';
 
 // Component Imports
 import LoginScreen from './components/LoginScreen';
-import POSInterface from './components/POSInterface'; 
+import POSInterface from './components/POSInterface';
 import Settings from './components/Settings';
 import CustomerManagement from './components/CustomerManagement';
 import TicketHistory from './components/TicketHistory';
@@ -43,12 +44,12 @@ import TerminalBindingScreen from './components/TerminalBindingScreen';
 const App: React.FC = () => {
   // --- GLOBAL STATE ---
   const [currentView, setCurrentView] = useState<ViewState>('LOGIN');
-  const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any)); 
+  const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any));
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  
+
   // --- SECURITY & DEVICE HANDSHAKE ---
   const [deviceId, setDeviceId] = useState<string>('');
-  const [isDataLoaded, setIsDataLoaded] = useState<boolean>(false); 
+  const [isDataLoaded, setIsDataLoaded] = useState<boolean>(false);
 
   // --- DATA STORES ---
   const [users, setUsers] = useState<User[]>([]);
@@ -67,45 +68,52 @@ const App: React.FC = () => {
 
   // --- INITIAL DATA LOAD & DEVICE CHECK ---
   useEffect(() => {
-    const data = db.init();
-    if (data) {
-      // 1. Cargar persistencia
-      setConfig(data.config);
-      setUsers(data.users || []);
-      setCustomers(data.customers || []);
-      setTransactions(data.transactions || []);
-      setProducts(data.products || []);
-      setWarehouses(data.warehouses || []);
-      setCashMovements(data.cashMovements || []);
-      setPurchaseOrders(data.purchaseOrders || []);
-      setSuppliers(data.suppliers || []);
-      setParkedTickets(data.parkedTickets || []);
-      setTransfers(data.transfers || []);
+    const loadData = async () => {
+      const data = await db.init();
+      if (data) {
+        // 1. Cargar persistencia
+        setConfig(data.config);
+        setUsers(data.users || []);
+        setCustomers(data.customers || []);
+        setTransactions(data.transactions || []);
+        setProducts(data.products || []);
+        setWarehouses(data.warehouses || []);
+        setCashMovements(data.cashMovements || []);
+        setPurchaseOrders(data.purchaseOrders || []);
+        setSuppliers(data.suppliers || []);
+        setParkedTickets(data.parkedTickets || []);
+        setTransfers(data.transfers || []);
 
-      // 2. Gestión de Identidad de Dispositivo (Persistente)
-      let storedDeviceId = localStorage.getItem('pos_device_id');
-      if (!storedDeviceId) {
-        storedDeviceId = 'DEV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
-        localStorage.setItem('pos_device_id', storedDeviceId);
+        // 2. Gestión de Identidad de Dispositivo (Persistente)
+        let storedDeviceId = localStorage.getItem('pos_device_id');
+        if (!storedDeviceId) {
+          storedDeviceId = 'DEV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+          localStorage.setItem('pos_device_id', storedDeviceId);
+        }
+        setDeviceId(storedDeviceId);
+
+        // 3. Verificación de Vinculación
+        const isDevicePaired = data.config.terminals.some(
+          (t: any) => t.config.currentDeviceId === storedDeviceId
+        );
+
+        if (!isDevicePaired) {
+          setCurrentView('DEVICE_UNAUTHORIZED');
+        }
+
+        setIsDataLoaded(true);
       }
-      setDeviceId(storedDeviceId);
+    };
+    loadData();
 
-      // 3. Verificación de Vinculación
-      const isDevicePaired = data.config.terminals.some(
-        (t: any) => t.config.currentDeviceId === storedDeviceId
-      );
-
-      if (!isDevicePaired) {
-        setCurrentView('DEVICE_UNAUTHORIZED');
-      }
-
-      setIsDataLoaded(true);
-    }
+    // Start Sync Worker
+    syncQueue.startBackgroundWorker(15000); // Check every 15s
+    return () => syncQueue.stopBackgroundWorker();
   }, []);
 
   // --- CORE EVENT HANDLERS ---
-  
-  const handlePairTerminal = (terminalId: string) => {
+
+  const handlePairTerminal = async (terminalId: string) => {
     const newTerminals = config.terminals.map(t => {
       // Desvincular este dispositivo de cualquier otra terminal donde estuviera
       if (t.config.currentDeviceId === deviceId) {
@@ -113,13 +121,13 @@ const App: React.FC = () => {
       }
       // Vincular a la terminal seleccionada
       if (t.id === terminalId) {
-        return { 
-          ...t, 
-          config: { 
-            ...t.config, 
+        return {
+          ...t,
+          config: {
+            ...t.config,
             currentDeviceId: deviceId,
             lastPairingDate: new Date().toISOString()
-          } 
+          }
         };
       }
       return t;
@@ -127,30 +135,33 @@ const App: React.FC = () => {
 
     const updatedConfig = { ...config, terminals: newTerminals };
     setConfig(updatedConfig);
-    db.save('config', updatedConfig);
+    await db.save('config', updatedConfig);
     setCurrentView('LOGIN');
   };
 
-  const handleTransactionComplete = (txn: Transaction) => {
+  const handleTransactionComplete = async (txn: Transaction) => {
     const newTransactions = [...transactions, txn];
     setTransactions(newTransactions);
-    db.save('transactions', newTransactions);
+    await db.save('transactions', newTransactions);
 
-    txn.items.forEach(item => {
+    // Enqueue for Sync
+    await syncQueue.enqueue('TRANSACTION', txn);
+
+    for (const item of txn.items) {
       const whId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
-      db.recordInventoryMovement(whId, item.id, 'VENTA', txn.id, -item.quantity);
-    });
+      await db.recordInventoryMovement(whId, item.id, 'VENTA', txn.id, -item.quantity);
+    }
 
-    const freshData = db.init();
+    const freshData = await db.init();
     setProducts(freshData.products);
   };
 
-  const handleUpdateConfig = (newConfig: BusinessConfig) => {
+  const handleUpdateConfig = async (newConfig: BusinessConfig) => {
     setConfig(newConfig);
-    db.save('config', newConfig);
+    await db.save('config', newConfig);
   };
 
-  const handleRegisterMovement = (type: 'IN' | 'OUT', amount: number, reason: string) => {
+  const handleRegisterMovement = async (type: 'IN' | 'OUT', amount: number, reason: string) => {
     const move: CashMovement = {
       id: `CM-${Date.now()}`,
       type, amount, reason,
@@ -160,14 +171,14 @@ const App: React.FC = () => {
     };
     const updated = [...cashMovements, move];
     setCashMovements(updated);
-    db.save('cashMovements', updated);
+    await db.save('cashMovements', updated);
   };
 
-  const handleZReport = (cashCounted: number, notes: string) => {
+  const handleZReport = async (cashCounted: number, notes: string) => {
     setTransactions([]);
     setCashMovements([]);
-    db.save('transactions', []);
-    db.save('cashMovements', []);
+    await db.save('transactions', []);
+    await db.save('cashMovements', []);
     setCurrentView('POS');
   };
 
@@ -185,21 +196,21 @@ const App: React.FC = () => {
     switch (currentView) {
       case 'DEVICE_UNAUTHORIZED':
         return (
-          <TerminalBindingScreen 
-            config={config} 
-            deviceId={deviceId} 
-            adminUsers={users.filter(u => u.role === 'ADMIN')} 
-            onPair={handlePairTerminal} 
+          <TerminalBindingScreen
+            config={config}
+            deviceId={deviceId}
+            adminUsers={users.filter(u => u.role === 'ADMIN')}
+            onPair={handlePairTerminal}
           />
         );
 
       case 'LOGIN':
         return <LoginScreen availableUsers={users} subVertical={config.subVertical} onLogin={(u) => { setCurrentUser(u); setCurrentView('POS'); }} />;
-      
+
       case 'POS':
         if (!currentUser) { setCurrentView('LOGIN'); return null; }
         return (
-          <POSInterface 
+          <POSInterface
             config={config}
             currentUser={currentUser}
             roles={roles}
@@ -208,25 +219,26 @@ const App: React.FC = () => {
             products={products}
             warehouses={warehouses}
             cart={cart}
+            transactions={transactions}
             onUpdateCart={setCart}
             selectedCustomer={selectedCustomer}
             onSelectCustomer={setSelectedCustomer}
             parkedTickets={parkedTickets}
-            onUpdateParkedTickets={(pt) => { setParkedTickets(pt); db.save('parkedTickets', pt); }}
+            onUpdateParkedTickets={async (pt) => { setParkedTickets(pt); await db.save('parkedTickets', pt); }}
             onLogout={() => { setCurrentUser(null); setCurrentView('LOGIN'); }}
             onOpenSettings={() => setCurrentView('SETTINGS')}
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
             onOpenHistory={() => setCurrentView('HISTORY')}
             onOpenFinance={() => setCurrentView('FINANCE')}
             onTransactionComplete={handleTransactionComplete}
-            onAddCustomer={(c) => { const updated = [...customers, c]; setCustomers(updated); db.save('customers', updated); }}
+            onAddCustomer={async (c) => { const updated = [...customers, c]; setCustomers(updated); await db.save('customers', updated); }}
             onUpdateConfig={handleUpdateConfig}
           />
         );
 
       case 'SETTINGS':
         return (
-          <Settings 
+          <Settings
             config={config}
             users={users}
             roles={roles}
@@ -234,12 +246,12 @@ const App: React.FC = () => {
             products={products}
             warehouses={warehouses}
             transfers={transfers}
-            onUpdateTransfers={(t) => { setTransfers(t); db.save('transfers', t); }}
+            onUpdateTransfers={async (t) => { setTransfers(t); await db.save('transfers', t); }}
             onUpdateConfig={handleUpdateConfig}
-            onUpdateUsers={(u) => { setUsers(u); db.save('users', u); }}
-            onUpdateRoles={(r) => { setRoles(r); db.save('roles', r); }}
-            onUpdateProducts={(p) => { setProducts(p); db.save('products', p); }}
-            onUpdateWarehouses={(w) => { setWarehouses(w); db.save('warehouses', w); }}
+            onUpdateUsers={async (u) => { setUsers(u); await db.save('users', u); }}
+            onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
+            onUpdateProducts={async (p) => { setProducts(p); await db.save('products', p); }}
+            onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
@@ -249,12 +261,12 @@ const App: React.FC = () => {
 
       case 'CUSTOMERS':
         return (
-          <CustomerManagement 
+          <CustomerManagement
             customers={customers}
             config={config}
-            onAddCustomer={(c) => { const updated = [...customers, c]; setCustomers(updated); db.save('customers', updated); }}
-            onUpdateCustomer={(c) => { const updated = customers.map(cust => cust.id === c.id ? c : cust); setCustomers(updated); db.save('customers', updated); }}
-            onDeleteCustomer={(id) => { const updated = customers.filter(cust => cust.id !== id); setCustomers(updated); db.save('customers', updated); }}
+            onAddCustomer={async (c) => { const updated = [...customers, c]; setCustomers(updated); await db.save('customers', updated); }}
+            onUpdateCustomer={async (c) => { const updated = customers.map(cust => cust.id === c.id ? c : cust); setCustomers(updated); await db.save('customers', updated); }}
+            onDeleteCustomer={async (id) => { const updated = customers.filter(cust => cust.id !== id); setCustomers(updated); await db.save('customers', updated); }}
             onSelect={(c) => { setSelectedCustomer(c); setCurrentView('POS'); }}
             onClose={() => setCurrentView('POS')}
           />
@@ -262,14 +274,14 @@ const App: React.FC = () => {
 
       case 'HISTORY':
         return (
-          <TicketHistory 
+          <TicketHistory
             transactions={transactions}
             config={config}
             onClose={() => setCurrentView('POS')}
-            onRefundTransaction={(tx, items, reason) => {
+            onRefundTransaction={async (tx, items, reason) => {
               const updatedTxns = transactions.map(t => t.id === tx.id ? { ...t, status: 'REFUNDED' as const, refundReason: reason } : t);
               setTransactions(updatedTxns);
-              db.save('transactions', updatedTxns);
+              await db.save('transactions', updatedTxns);
               setCurrentView('POS');
             }}
           />
@@ -277,7 +289,7 @@ const App: React.FC = () => {
 
       case 'FINANCE':
         return (
-          <FinanceDashboard 
+          <FinanceDashboard
             transactions={transactions}
             cashMovements={cashMovements}
             config={config}
@@ -289,7 +301,7 @@ const App: React.FC = () => {
 
       case 'Z_REPORT':
         return (
-          <ZReportDashboard 
+          <ZReportDashboard
             transactions={transactions}
             cashMovements={cashMovements}
             config={config}
@@ -301,22 +313,22 @@ const App: React.FC = () => {
 
       case 'SUPPLY_CHAIN':
         return (
-          <SupplyChainManager 
+          <SupplyChainManager
             products={products}
             suppliers={suppliers}
             purchaseOrders={purchaseOrders}
             config={config}
             onClose={() => setCurrentView('POS')}
-            onCreateOrder={(o) => { const updated = [...purchaseOrders, o]; setPurchaseOrders(updated); db.save('purchaseOrders', updated); }}
-            onUpdateOrder={(o) => { const updated = purchaseOrders.map(p => p.id === o.id ? o : p); setPurchaseOrders(updated); db.save('purchaseOrders', updated); }}
-            onReceiveStock={(items) => {
+            onCreateOrder={async (o) => { const updated = [...purchaseOrders, o]; setPurchaseOrders(updated); await db.save('purchaseOrders', updated); }}
+            onUpdateOrder={async (o) => { const updated = purchaseOrders.map(p => p.id === o.id ? o : p); setPurchaseOrders(updated); await db.save('purchaseOrders', updated); }}
+            onReceiveStock={async (items) => {
               const whId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
-              items.forEach(item => {
+              for (const item of items) {
                 if (item.quantityReceived > 0) {
-                  db.recordInventoryMovement(whId, item.productId, 'COMPRA', 'OC-REC', item.quantityReceived, item.cost);
+                  await db.recordInventoryMovement(whId, item.productId, 'COMPRA', 'OC-REC', item.quantityReceived, item.cost);
                 }
-              });
-              const freshData = db.init();
+              }
+              const freshData = await db.init();
               setProducts(freshData.products);
             }}
           />
