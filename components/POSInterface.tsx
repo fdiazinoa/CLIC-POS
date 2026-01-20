@@ -261,8 +261,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return null;
       }
 
+      // Get Ticket Sequence
+      let ticketId = `T-${Date.now()}`;
+      const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET'];
+      if (assignedSequenceId) {
+         const seqId = await db.getNextSequenceNumber(assignedSequenceId);
+         if (seqId) ticketId = seqId;
+      }
+
       const txn: Transaction = {
-         id: `T-${Date.now()}`,
+         id: ticketId,
          date: new Date().toISOString(),
          items: cart,
          total: cartTotal,

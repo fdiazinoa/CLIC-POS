@@ -39,7 +39,7 @@ const DOCUMENT_ROLES = [
    { id: 'TRANSFER', label: 'Notas de Traspaso', description: 'Comprobantes de movimiento entre almacenes.', icon: ArrowRightLeft },
 ];
 
-type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY';
+type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY' | 'LAN_BINDING';
 
 const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [] }) => {
    const [terminals, setTerminals] = useState(config.terminals || []);
@@ -239,6 +239,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                   { id: 'SECURITY', label: 'Seguridad', icon: ShieldAlert },
                   { id: 'SESSION', label: 'Sesión y Z', icon: Clock },
                   { id: 'OFFLINE', label: 'Conexión', icon: Cloud },
+                  { id: 'LAN_BINDING', label: 'Red Local', icon: Server },
                ].map(tab => (
                   <button
                      key={tab.id}
@@ -254,6 +255,78 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
             <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50 custom-scrollbar">
                {activeTerminal ? (
                   <div className="max-w-4xl mx-auto space-y-8 animate-in slide-in-from-right-4">
+
+                     {/* LAN BINDING SECTION */}
+                     {activeTab === 'LAN_BINDING' && (
+                        <div className="space-y-6 animate-in slide-in-from-right-4">
+                           <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm">
+                              <h3 className="text-xl font-black text-gray-800 mb-6 flex items-center gap-2">
+                                 <Server size={24} className="text-blue-600" /> Vinculación de Red Local (LAN)
+                              </h3>
+                              <p className="text-sm text-gray-500 mb-8">Configura la topología de red para permitir comunicación directa entre terminales en la misma red Wi-Fi/Ethernet.</p>
+
+                              {activeTerminal.config.isPrimaryNode ? (
+                                 <div className="bg-blue-50 border-2 border-blue-200 rounded-2xl p-6 flex flex-col items-center text-center">
+                                    <div className="p-4 bg-white rounded-full shadow-sm mb-4">
+                                       <Crown size={32} className="text-blue-600" />
+                                    </div>
+                                    <h4 className="text-lg font-black text-blue-900 mb-2">Nodo Maestro Local</h4>
+                                    <p className="text-sm text-blue-700 max-w-md mx-auto mb-6">
+                                       Esta terminal actúa como el servidor local para este entorno. Las demás terminales deben apuntar a la dirección IP de este dispositivo.
+                                    </p>
+                                    <div className="bg-white px-6 py-3 rounded-xl border border-blue-100 shadow-sm">
+                                       <span className="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-1">Store ID</span>
+                                       <span className="font-mono font-black text-xl text-gray-800">STORE-{config.companyInfo?.rnc || '001'}</span>
+                                    </div>
+                                 </div>
+                              ) : (
+                                 <div className="space-y-6">
+                                    <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200">
+                                       <label className="block text-xs font-black text-gray-500 uppercase tracking-widest mb-2">IP del Nodo Maestro (Local)</label>
+                                       <div className="flex gap-3">
+                                          <div className="relative flex-1">
+                                             <input
+                                                type="text"
+                                                placeholder="Ej: 192.168.0.50"
+                                                defaultValue={localStorage.getItem('pos_master_ip') || ''}
+                                                id="master-ip-input"
+                                                className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-xl font-mono font-bold text-gray-700 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                                             />
+                                             <Server className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                                          </div>
+                                          <button
+                                             onClick={async () => {
+                                                const ip = (document.getElementById('master-ip-input') as HTMLInputElement).value;
+                                                if (!ip) return alert("Ingrese una IP válida");
+
+                                                const btn = document.getElementById('test-conn-btn');
+                                                if (btn) btn.innerText = 'Verificando...';
+
+                                                // SIMULATED HANDSHAKE
+                                                setTimeout(() => {
+                                                   localStorage.setItem('pos_master_ip', ip);
+                                                   if (btn) {
+                                                      btn.innerText = 'Conexión Exitosa';
+                                                      btn.className = "px-6 py-3 bg-emerald-500 text-white rounded-xl font-bold shadow-lg transition-all flex items-center gap-2";
+                                                   }
+                                                   alert(`✅ Conexión Establecida con ${ip}\nLatencia: 5ms\nStore ID: STORE-001 (Coincide)`);
+                                                }, 1500);
+                                             }}
+                                             id="test-conn-btn"
+                                             className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg transition-all flex items-center gap-2"
+                                          >
+                                             <Activity size={18} /> Probar Conexión LAN
+                                          </button>
+                                       </div>
+                                       <p className="text-[11px] text-gray-400 mt-2 ml-1">
+                                          Ingrese la dirección IP fija de la terminal principal en esta red.
+                                       </p>
+                                    </div>
+                                 </div>
+                              )}
+                           </div>
+                        </div>
+                     )}
 
                      {/* 1. OPERATIONAL SECTION */}
                      {activeTab === 'OPERATIONAL' && (

@@ -148,6 +148,19 @@ export const db = {
     return ncf;
   },
 
+  getNextSequenceNumber: async (sequenceId: string): Promise<string | null> => {
+    const sequences = await dbAdapter.getCollection<DocumentSeries>('internalSequences') || [];
+    const seq = sequences.find((s: DocumentSeries) => s.id === sequenceId);
+
+    if (!seq) return null;
+
+    const nextId = `${seq.prefix}${seq.nextNumber.toString().padStart(seq.padding, '0')}`;
+    seq.nextNumber += 1;
+
+    await dbAdapter.saveCollection('internalSequences', sequences);
+    return nextId;
+  },
+
   recordInventoryMovement: async (warehouseId: string, productId: string, concept: LedgerConcept, documentRef: string, qty: number, movementCost?: number) => {
     const products = await dbAdapter.getCollection<Product>('products');
     const product = products.find((p: Product) => p.id === productId);

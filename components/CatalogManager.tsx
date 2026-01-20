@@ -439,6 +439,104 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             )}
 
             {viewMode === 'TARIFFS' && <div className="p-8 max-w-7xl mx-auto w-full flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in">{tariffs.map(tariff => (<div key={tariff.id} className="bg-white rounded-3xl p-6 shadow-sm border border-gray-200 hover:shadow-md transition-all relative overflow-hidden group"><div className={`absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl ${tariff.active ? 'from-green-50' : 'from-gray-100'} to-transparent rounded-bl-full`}></div><div className="relative z-10"><div className="flex justify-between items-start mb-4"><div className={`p-3 rounded-2xl ${tariff.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}><Tag size={24} /></div><div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={() => setEditingTariff(tariff)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-purple-600"><Edit2 size={16} /></button></div></div><h3 className="text-xl font-bold text-gray-800 mb-1">{tariff.name}</h3><div className="flex items-center gap-2 mb-6"><span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase ${tariff.active ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>{tariff.active ? 'Activa' : 'Inactiva'}</span><span className="text-xs text-gray-400 font-mono uppercase">{tariff.strategy.type}</span></div><div className="space-y-3"><div className="flex items-center gap-3 text-sm text-gray-600"><Calendar size={16} className="text-gray-400" /><span>{tariff.schedule.daysOfWeek.length === 7 ? 'Todos los días' : `${tariff.schedule.daysOfWeek.length} días/sem`}</span></div><div className="flex items-center gap-3 text-sm text-gray-600"><DollarSign size={16} className="text-gray-400" /><span>{tariff.currency} {tariff.strategy.type === 'COST_PLUS' ? `(Margen ${tariff.strategy.factor}%)` : ''}</span></div></div></div></div>))}<button onClick={() => setEditingTariff('NEW')} className="bg-gray-50 rounded-3xl p-6 border-2 border-dashed border-gray-200 hover:border-purple-300 hover:bg-purple-50 transition-all flex flex-col items-center justify-center text-gray-400 hover:text-purple-600 gap-4"><div className="p-4 bg-white rounded-full shadow-sm"><Plus size={32} /></div><span className="font-bold">Crear Nueva Lista</span></button></div>}
+
+            {viewMode === 'GROUPS' && (
+               <div className="p-8 max-w-7xl mx-auto w-full flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in">
+                  {(config.productGroups || []).map(group => (
+                     <div key={group.id} className="bg-white rounded-3xl p-6 shadow-sm border border-gray-200 hover:shadow-md transition-all relative overflow-hidden group">
+                        <div className={`absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-orange-50 to-transparent rounded-bl-full`}></div>
+                        <div className="relative z-10">
+                           <div className="flex justify-between items-start mb-4">
+                              <div className={`p-3 rounded-2xl bg-orange-100 text-orange-600`}>
+                                 <Grid size={24} />
+                              </div>
+                              <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                 <button onClick={() => setEditingGroup(group)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-orange-600"><Edit2 size={16} /></button>
+                                 <button
+                                    onClick={() => {
+                                       if (confirm('¿Eliminar este grupo?')) {
+                                          const newGroups = (config.productGroups || []).filter(g => g.id !== group.id);
+                                          onUpdateConfig({ ...config, productGroups: newGroups });
+                                       }
+                                    }}
+                                    className="p-2 bg-white border rounded-lg text-gray-500 hover:text-red-600"
+                                 >
+                                    <Trash2 size={16} />
+                                 </button>
+                              </div>
+                           </div>
+                           <h3 className="text-xl font-bold text-gray-800 mb-1">{group.name}</h3>
+                           <div className="flex items-center gap-2 mb-4">
+                              <span className="text-xs text-gray-400 font-mono uppercase bg-gray-100 px-2 py-0.5 rounded">{group.code}</span>
+                              <div className={`w-3 h-3 rounded-full ${group.color || 'bg-gray-400'}`}></div>
+                           </div>
+                           <p className="text-sm text-gray-500 mb-4 line-clamp-2">{group.description || 'Sin descripción'}</p>
+                           <div className="flex items-center gap-2 text-sm font-bold text-gray-600 bg-gray-50 p-3 rounded-xl">
+                              <Box size={16} className="text-orange-400" />
+                              <span>{group.productIds.length} Artículos vinculados</span>
+                           </div>
+                        </div>
+                     </div>
+                  ))}
+                  <button onClick={() => setEditingGroup('NEW')} className="bg-gray-50 rounded-3xl p-6 border-2 border-dashed border-gray-200 hover:border-orange-300 hover:bg-orange-50 transition-all flex flex-col items-center justify-center text-gray-400 hover:text-orange-600 gap-4">
+                     <div className="p-4 bg-white rounded-full shadow-sm"><Plus size={32} /></div>
+                     <span className="font-bold">Crear Nuevo Grupo</span>
+                  </button>
+               </div>
+            )}
+
+            {viewMode === 'SEASONS' && (
+               <div className="p-8 max-w-7xl mx-auto w-full flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in">
+                  {(config.seasons || []).map(season => {
+                     const isActive = season.isActive && new Date() >= new Date(season.startDate) && new Date() <= new Date(season.endDate);
+                     return (
+                        <div key={season.id} className="bg-white rounded-3xl p-6 shadow-sm border border-gray-200 hover:shadow-md transition-all relative overflow-hidden group">
+                           <div className={`absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl ${isActive ? 'from-yellow-50' : 'from-gray-100'} to-transparent rounded-bl-full`}></div>
+                           <div className="relative z-10">
+                              <div className="flex justify-between items-start mb-4">
+                                 <div className={`p-3 rounded-2xl ${isActive ? 'bg-yellow-100 text-yellow-600' : 'bg-gray-100 text-gray-400'}`}>
+                                    <Sun size={24} />
+                                 </div>
+                                 <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button onClick={() => setEditingSeason(season)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-yellow-600"><Edit2 size={16} /></button>
+                                    <button
+                                       onClick={() => {
+                                          if (confirm('¿Eliminar esta temporada?')) {
+                                             const newSeasons = (config.seasons || []).filter(s => s.id !== season.id);
+                                             onUpdateConfig({ ...config, seasons: newSeasons });
+                                          }
+                                       }}
+                                       className="p-2 bg-white border rounded-lg text-gray-500 hover:text-red-600"
+                                    >
+                                       <Trash2 size={16} />
+                                    </button>
+                                 </div>
+                              </div>
+                              <h3 className="text-xl font-bold text-gray-800 mb-1">{season.name}</h3>
+                              <div className="flex items-center gap-2 mb-4">
+                                 <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase ${isActive ? 'bg-yellow-500 text-white' : 'bg-gray-200 text-gray-500'}`}>{isActive ? 'Activa' : 'Inactiva'}</span>
+                                 <span className="text-xs text-gray-400 font-mono uppercase">{season.code}</span>
+                              </div>
+                              <div className="space-y-2 mb-4">
+                                 <div className="flex items-center gap-2 text-sm text-gray-600">
+                                    <Calendar size={14} className="text-gray-400" />
+                                    <span>{new Date(season.startDate).toLocaleDateString()} - {new Date(season.endDate).toLocaleDateString()}</span>
+                                 </div>
+                              </div>
+                              <div className="flex items-center gap-2 text-sm font-bold text-gray-600 bg-gray-50 p-3 rounded-xl">
+                                 <Box size={16} className="text-yellow-500" />
+                                 <span>{season.productIds.length} Artículos vinculados</span>
+                              </div>
+                           </div>
+                        </div>
+                     );
+                  })}
+                  <button onClick={() => setEditingSeason('NEW')} className="bg-gray-50 rounded-3xl p-6 border-2 border-dashed border-gray-200 hover:border-yellow-300 hover:bg-yellow-50 transition-all flex flex-col items-center justify-center text-gray-400 hover:text-yellow-600 gap-4">
+                     <div className="p-4 bg-white rounded-full shadow-sm"><Plus size={32} /></div>
+                     <span className="font-bold">Crear Nueva Temporada</span>
+                  </button>
+               </div>
+            )}
          </div>
 
          {showBulkModal && (
