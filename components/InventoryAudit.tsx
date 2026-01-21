@@ -1,13 +1,14 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { 
-  X, ScanBarcode, Search, Check, AlertTriangle, 
-  Save, RefreshCw, Plus, Minus, Camera, Zap 
+import {
+  X, ScanBarcode, Search, Check, AlertTriangle,
+  Save, RefreshCw, Plus, Minus, Camera, Zap
 } from 'lucide-react';
 import { Product } from '../types';
 
 interface InventoryAuditProps {
   products: Product[];
+  mode: 'ADDITIVE' | 'ABSOLUTE';
   onClose: () => void;
   onCommit: (adjustments: { productId: string; newStock: number }[]) => void;
 }
@@ -19,13 +20,13 @@ interface AuditItem {
   lastScannedAt: number; // Timestamp for highlighting
 }
 
-const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, onClose, onCommit }) => {
+const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, mode, onClose, onCommit }) => {
   // --- STATE ---
   const [auditItems, setAuditItems] = useState<AuditItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isCameraActive, setIsCameraActive] = useState(true);
   const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
-  
+
   // Audio refs for feedback
   const successBeep = useRef<HTMLAudioElement | null>(null);
   const errorBeep = useRef<HTMLAudioElement | null>(null);
@@ -53,9 +54,9 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, onClose, onCo
 
   const handleScan = (code: string) => {
     // 1. Find Product
-    const product = products.find(p => 
-      p.barcode === code || 
-      p.id === code || 
+    const product = products.find(p =>
+      p.barcode === code ||
+      p.id === code ||
       // Check variants if available since 'sku' is on ProductVariant, not Product
       p.variants?.some(v => v.sku.toLowerCase() === code.toLowerCase())
     );
@@ -69,7 +70,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, onClose, onCo
     // 2. Update Audit List
     setAuditItems(prev => {
       const existingIdx = prev.findIndex(item => item.product.id === product.id);
-      
+
       if (existingIdx >= 0) {
         // Increment existing
         const newItems = [...prev];
@@ -119,7 +120,8 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, onClose, onCo
       return;
     }
 
-    if (confirm(`¿Ajustar stock de ${auditItems.length} productos? Esta acción actualizará el inventario.`)) {
+    const actionText = mode === 'ADDITIVE' ? 'AGREGAR al' : 'REEMPLAZAR el';
+    if (confirm(`¿${actionText} stock de ${auditItems.length} productos? Esta acción actualizará el inventario.`)) {
       const adjustments = auditItems.map(item => ({
         productId: item.product.id,
         newStock: item.countedStock
@@ -131,6 +133,8 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, onClose, onCo
   // --- RENDER HELPERS ---
 
   const getStatusColor = (item: AuditItem) => {
+    if (mode === 'ADDITIVE') return 'border-blue-400 bg-blue-50'; // Always blue for additive
+
     const diff = item.countedStock - item.systemStock;
     if (diff === 0) return 'border-emerald-500 bg-emerald-50'; // Match
     if (diff < 0) return 'border-red-400 bg-red-50'; // Missing stock
@@ -139,15 +143,15 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, onClose, onCo
 
   return (
     <div className="fixed inset-0 z-[100] bg-slate-900 flex flex-col md:flex-row h-screen w-screen overflow-hidden animate-in fade-in duration-200">
-      
+
       {/* === LEFT: SCANNER VIEW (Active Area) === */}
       <div className="w-full md:w-1/3 bg-black relative flex flex-col border-r border-slate-700">
-        
+
         {/* Header */}
         <div className="absolute top-0 left-0 right-0 p-4 z-20 flex justify-between items-start bg-gradient-to-b from-black/80 to-transparent">
           <div>
             <h2 className="text-white font-bold text-lg flex items-center gap-2">
-              <ScanBarcode className="text-blue-400" /> Modo Auditoría
+              <ScanBarcode className="text-blue-400" /> {mode === 'ADDITIVE' ? 'Modo Aditivo' : 'Modo Auditoría'}
             </h2>
             <p className="text-slate-400 text-xs">Escanea productos uno a uno</p>
           </div>
@@ -162,7 +166,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, onClose, onCo
             <>
               {/* Fake Camera Feed Background */}
               <div className="absolute inset-0 bg-slate-800 opacity-50 animate-pulse"></div>
-              
+
               {/* Viewfinder */}
               <div className="relative z-10 w-64 h-64 border-2 border-blue-500/50 rounded-3xl flex flex-col items-center justify-center shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
                 <div className="w-full h-0.5 bg-red-500/80 absolute top-1/2 shadow-[0_0_10px_rgba(239,68,68,0.8)] animate-[scan_2s_ease-in-out_infinite]"></div>
@@ -181,18 +185,18 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, onClose, onCo
         <div className="p-4 bg-slate-900 border-t border-slate-800 pb-8">
           <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-            <input 
+            <input
               ref={inputRef}
-              type="text" 
+              type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Escanear o escribir código..." 
+              placeholder="Escanear o escribir código..."
               className="w-full pl-12 pr-4 py-4 bg-slate-800 text-white rounded-2xl border-2 border-slate-700 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 outline-none font-mono text-lg"
               autoFocus
             />
             {searchQuery && (
-              <button 
+              <button
                 onClick={() => handleScan(searchQuery)}
                 className="absolute right-2 top-1/2 -translate-y-1/2 bg-blue-600 text-white p-2 rounded-xl"
               >
@@ -201,118 +205,124 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, onClose, onCo
             )}
           </div>
           <div className="flex justify-between items-center mt-3 px-2">
-             <span className="text-xs text-slate-500">
-                {lastScannedCode ? `Último: ${lastScannedCode}` : 'Listo para escanear'}
-             </span>
-             <button onClick={() => setIsCameraActive(!isCameraActive)} className="text-xs text-blue-400 hover:text-blue-300 font-bold">
-                {isCameraActive ? 'Pausar Cámara' : 'Activar Cámara'}
-             </button>
+            <span className="text-xs text-slate-500">
+              {lastScannedCode ? `Último: ${lastScannedCode}` : 'Listo para escanear'}
+            </span>
+            <button onClick={() => setIsCameraActive(!isCameraActive)} className="text-xs text-blue-400 hover:text-blue-300 font-bold">
+              {isCameraActive ? 'Pausar Cámara' : 'Activar Cámara'}
+            </button>
           </div>
         </div>
       </div>
 
       {/* === RIGHT: LIST VIEW (Results) === */}
       <div className="w-full md:w-2/3 bg-slate-100 flex flex-col h-full">
-        
+
         {/* Stats Header */}
         <div className="bg-white p-4 shadow-sm border-b border-slate-200 flex items-center justify-between z-10">
-           <div className="flex gap-6">
-              <div>
-                 <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Items Contados</p>
-                 <p className="text-2xl font-black text-slate-800">{auditItems.length}</p>
-              </div>
-              <div>
-                 <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Unidades Totales</p>
-                 <p className="text-2xl font-black text-blue-600">{auditItems.reduce((acc, i) => acc + i.countedStock, 0)}</p>
-              </div>
+          <div className="flex gap-6">
+            <div>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Items Contados</p>
+              <p className="text-2xl font-black text-slate-800">{auditItems.length}</p>
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Unidades Totales</p>
+              <p className="text-2xl font-black text-blue-600">{auditItems.reduce((acc, i) => acc + i.countedStock, 0)}</p>
+            </div>
+            {mode === 'ABSOLUTE' && (
               <div className="hidden lg:block">
-                 <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Discrepancia</p>
-                 <p className="text-2xl font-black text-orange-500">
-                    {auditItems.reduce((acc, i) => acc + (i.countedStock - i.systemStock), 0) > 0 ? '+' : ''}
-                    {auditItems.reduce((acc, i) => acc + (i.countedStock - i.systemStock), 0)}
-                 </p>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Discrepancia</p>
+                <p className="text-2xl font-black text-orange-500">
+                  {auditItems.reduce((acc, i) => acc + (i.countedStock - i.systemStock), 0) > 0 ? '+' : ''}
+                  {auditItems.reduce((acc, i) => acc + (i.countedStock - i.systemStock), 0)}
+                </p>
               </div>
-           </div>
+            )}
+          </div>
 
-           <button 
-             onClick={handleFinalize}
-             className="px-6 py-3 bg-gray-900 text-white rounded-xl font-bold shadow-lg hover:bg-gray-800 hover:scale-[1.02] active:scale-95 transition-all flex items-center gap-2"
-           >
-              <Save size={20} />
-              <span className="hidden sm:inline">Ajustar Stock</span>
-           </button>
+          <button
+            onClick={handleFinalize}
+            className="px-6 py-3 bg-gray-900 text-white rounded-xl font-bold shadow-lg hover:bg-gray-800 hover:scale-[1.02] active:scale-95 transition-all flex items-center gap-2"
+          >
+            <Save size={20} />
+            <span className="hidden sm:inline">{mode === 'ADDITIVE' ? 'Agregar Stock' : 'Ajustar Stock'}</span>
+          </button>
         </div>
 
         {/* Scrollable List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
-           {auditItems.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-slate-400 opacity-60">
-                 <RefreshCw size={64} className="mb-4" />
-                 <p className="text-xl font-medium">Esperando escaneo...</p>
-                 <p className="text-sm">Escanea un producto para comenzar el recuento.</p>
-              </div>
-           ) : (
-              auditItems.map((item) => {
-                 const diff = item.countedStock - item.systemStock;
-                 const isRecent = Date.now() - item.lastScannedAt < 2000;
+          {auditItems.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-slate-400 opacity-60">
+              <RefreshCw size={64} className="mb-4" />
+              <p className="text-xl font-medium">Esperando escaneo...</p>
+              <p className="text-sm">Escanea un producto para comenzar el recuento.</p>
+            </div>
+          ) : (
+            auditItems.map((item) => {
+              const diff = item.countedStock - item.systemStock;
+              const isRecent = Date.now() - item.lastScannedAt < 2000;
 
-                 return (
-                    <div 
-                       key={item.product.id} 
-                       className={`relative bg-white rounded-2xl p-4 shadow-sm border-2 transition-all duration-300 flex flex-col sm:flex-row gap-4 items-center ${getStatusColor(item)} ${isRecent ? 'scale-[1.02] shadow-lg ring-2 ring-blue-400' : ''}`}
-                    >
-                       {/* Image */}
-                       <div className="w-16 h-16 bg-white rounded-xl overflow-hidden shrink-0 border border-slate-100">
-                          <img src={item.product.image} alt={item.product.name} className="w-full h-full object-cover" />
-                       </div>
+              return (
+                <div
+                  key={item.product.id}
+                  className={`relative bg-white rounded-2xl p-4 shadow-sm border-2 transition-all duration-300 flex flex-col sm:flex-row gap-4 items-center ${getStatusColor(item)} ${isRecent ? 'scale-[1.02] shadow-lg ring-2 ring-blue-400' : ''}`}
+                >
+                  {/* Image */}
+                  <div className="w-16 h-16 bg-white rounded-xl overflow-hidden shrink-0 border border-slate-100">
+                    <img src={item.product.image} alt={item.product.name} className="w-full h-full object-cover" />
+                  </div>
 
-                       {/* Details */}
-                       <div className="flex-1 min-w-0 text-center sm:text-left">
-                          <h4 className="font-bold text-slate-800 text-lg leading-tight truncate">{item.product.name}</h4>
-                          <div className="flex items-center justify-center sm:justify-start gap-3 mt-1 text-sm">
-                             <span className="text-slate-500 font-mono bg-white/50 px-1.5 rounded">{item.product.barcode || 'NO-CODE'}</span>
-                             <span className="text-slate-400 flex items-center gap-1">
-                                Teórico: <strong>{item.systemStock}</strong>
-                             </span>
-                          </div>
-                       </div>
-
-                       {/* Counter Control */}
-                       <div className="flex items-center gap-3 bg-white rounded-xl p-1 shadow-sm border border-slate-100">
-                          <button 
-                             onClick={() => handleManualCountChange(item.product.id, -1)}
-                             className="w-10 h-10 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-600 flex items-center justify-center active:scale-90 transition-transform"
-                          >
-                             <Minus size={20} />
-                          </button>
-                          <div className="w-16 text-center">
-                             <span className="block text-2xl font-black text-slate-800 leading-none">{item.countedStock}</span>
-                          </div>
-                          <button 
-                             onClick={() => handleManualCountChange(item.product.id, 1)}
-                             className="w-10 h-10 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center active:scale-90 transition-transform"
-                          >
-                             <Plus size={20} />
-                          </button>
-                       </div>
-
-                       {/* Difference Indicator */}
-                       <div className={`w-20 text-center shrink-0 ${diff === 0 ? 'opacity-50' : 'opacity-100'}`}>
-                          <span className="block text-[10px] font-bold uppercase text-slate-500 mb-0.5">Diferencia</span>
-                          <div className={`text-lg font-bold flex items-center justify-center gap-1 ${diff === 0 ? 'text-emerald-600' : (diff < 0 ? 'text-red-600' : 'text-blue-600')}`}>
-                             {diff === 0 ? <Check size={18} /> : (diff > 0 ? `+${diff}` : diff)}
-                          </div>
-                       </div>
-
+                  {/* Details */}
+                  <div className="flex-1 min-w-0 text-center sm:text-left">
+                    <h4 className="font-bold text-slate-800 text-lg leading-tight truncate">{item.product.name}</h4>
+                    <div className="flex items-center justify-center sm:justify-start gap-3 mt-1 text-sm">
+                      <span className="text-slate-500 font-mono bg-white/50 px-1.5 rounded">{item.product.barcode || 'NO-CODE'}</span>
+                      {mode === 'ABSOLUTE' && (
+                        <span className="text-slate-400 flex items-center gap-1">
+                          Teórico: <strong>{item.systemStock}</strong>
+                        </span>
+                      )}
                     </div>
-                 );
-              })
-           )}
+                  </div>
+
+                  {/* Counter Control */}
+                  <div className="flex items-center gap-3 bg-white rounded-xl p-1 shadow-sm border border-slate-100">
+                    <button
+                      onClick={() => handleManualCountChange(item.product.id, -1)}
+                      className="w-10 h-10 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-600 flex items-center justify-center active:scale-90 transition-transform"
+                    >
+                      <Minus size={20} />
+                    </button>
+                    <div className="w-16 text-center">
+                      <span className="block text-2xl font-black text-slate-800 leading-none">{item.countedStock}</span>
+                    </div>
+                    <button
+                      onClick={() => handleManualCountChange(item.product.id, 1)}
+                      className="w-10 h-10 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center active:scale-90 transition-transform"
+                    >
+                      <Plus size={20} />
+                    </button>
+                  </div>
+
+                  {/* Difference Indicator (Only for Absolute) */}
+                  {mode === 'ABSOLUTE' && (
+                    <div className={`w-20 text-center shrink-0 ${diff === 0 ? 'opacity-50' : 'opacity-100'}`}>
+                      <span className="block text-[10px] font-bold uppercase text-slate-500 mb-0.5">Diferencia</span>
+                      <div className={`text-lg font-bold flex items-center justify-center gap-1 ${diff === 0 ? 'text-emerald-600' : (diff < 0 ? 'text-red-600' : 'text-blue-600')}`}>
+                        {diff === 0 ? <Check size={18} /> : (diff > 0 ? `+${diff}` : diff)}
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+              );
+            })
+          )}
         </div>
 
         {/* Tip Footer */}
         <div className="p-3 bg-slate-50 text-center text-xs text-slate-400 border-t border-slate-200">
-           Usa tu lector de código de barras o la cámara para añadir items rápidamente.
+          Usa tu lector de código de barras o la cámara para añadir items rápidamente.
         </div>
 
       </div>

@@ -252,7 +252,7 @@ export interface PaymentMethodDefinition {
   integrationConfig?: Record<string, string>;
 }
 
-export type PromotionType = 'DISCOUNT' | 'BOGO' | 'BUNDLE' | 'HAPPY_HOUR';
+export type PromotionType = 'DISCOUNT' | 'BOGO' | 'BUNDLE' | 'HAPPY_HOUR' | 'CONDITIONAL_TARGET';
 export type AttributeType = 'TEXT' | 'COLOR' | 'IMAGE';
 export type PricingStrategyType = 'MANUAL' | 'COST_PLUS' | 'DERIVED';
 export type RoundingRule = 'NONE' | 'ENDING_99' | 'CEILING' | 'ROUND_HALF_UP' | 'ROUND_FLOOR';
@@ -302,6 +302,22 @@ export interface EmailConfig {
   showSocialLinks: boolean;
 }
 
+export interface ScaleLabelConfig {
+  isEnabled: boolean;
+  prefixes: string[];
+  structure: {
+    totalLength: number;
+    prefixLength: number;
+    pluStart: number;
+    pluLength: number;
+    valueStart: number;
+    valueLength: number;
+    checksumLength: number;
+  };
+  valueType: 'WEIGHT' | 'PRICE';
+  decimals: number;
+}
+
 export interface BusinessConfig {
   vertical: VerticalType;
   subVertical: SubVertical;
@@ -324,28 +340,28 @@ export interface BusinessConfig {
   emailConfig?: EmailConfig;
   availablePrinters?: PrinterDevice[];
   scales?: ScaleDevice[];
-  scaleLabelConfig?: {
-    isEnabled: boolean;
-    prefixes: string[];
-    itemDigits: number;
-    valueDigits: number;
-    decimals: number;
-    mode: 'WEIGHT' | 'PRICE';
-  };
+  scaleLabelConfig?: ScaleLabelConfig;
+  promotions?: Promotion[];
+  campaigns?: Campaign[];
+  coupons?: Coupon[];
+  roles?: RoleDefinition[];
+  auditLogs?: AuditLogEntry[];
 }
 
 export interface RoleDefinition {
   id: string;
   name: string;
-  permissions: string[];
-  isSystem: boolean;
+  permissions: Permission[];
+  maxDiscountPercent?: number;
+  isSystem?: boolean;
 }
 
 export interface User {
   id: string;
   name: string;
   pin: string;
-  role: string;
+  role: string; // Legacy role string, keep for compatibility or migrate
+  roleId?: string; // Link to RoleDefinition
   photo?: string;
 }
 
@@ -463,6 +479,7 @@ export interface CartItem extends Product {
   originalPrice?: number;
   salespersonId?: string;
   ncf?: string; // NCF asignado a esta línea o al ticket
+  appliedPromotionId?: string;
 }
 
 export interface Transaction {
@@ -480,6 +497,14 @@ export interface Transaction {
   refundReason?: string;
   ncf?: string; // NCF final del documento
   ncfType?: NCFType;
+  discountAmount?: number;
+  customerSnapshot?: {
+    name: string;
+    taxId?: string;
+    address?: string;
+    phone?: string;
+    email?: string;
+  };
 }
 
 export type ViewState = 'SETUP' | 'WIZARD' | 'LOGIN' | 'POS' | 'SETTINGS' | 'CUSTOMERS' | 'HISTORY' | 'FINANCE' | 'Z_REPORT' | 'SUPPLY_CHAIN' | 'FRANCHISE_DASHBOARD' | 'DEVICE_UNAUTHORIZED';
@@ -547,6 +572,45 @@ export interface StockTransfer {
 export interface Promotion {
   id: string;
   name: string;
+  type: PromotionType;
+  targetType: 'PRODUCT' | 'CATEGORY' | 'SEASON' | 'GROUP' | 'ALL';
+  targetValue: string;
+  benefitValue: number;
+  schedule: {
+    days: string[];
+    startTime: string;
+    endTime: string;
+    isActive: boolean;
+  };
+  terminalIds?: string[];
+  priority?: number;
+
+  // Conditional Promotion Fields
+  trigger?: {
+    type: 'MIN_TICKET_AMOUNT';
+    value: number;
+    excludeCategories?: string[];
+    isRecursive?: boolean;
+  };
+  targetStrategy?: {
+    mode: 'CHEAPEST_ITEM' | 'MOST_EXPENSIVE_ITEM' | 'SLOW_MOVER' | 'CATEGORY_CHEAPEST';
+    filterValue?: string | number; // Category ID or Days threshold
+    tieBreaker?: 'FIRST_ADDED' | 'LAST_ADDED';
+    allowSelfTrigger?: boolean;
+  };
+
+  stats?: {
+    usageCount: number;
+    revenueGenerated: number;
+    conversionRate: number;
+  };
+}
+
+export interface PromotionRecommendation {
+  type: 'TIMING' | 'DISCOUNT_DEPTH' | 'TARGET' | 'TERMINAL';
+  message: string;
+  confidence: number;
+  suggestedAction?: () => void;
 }
 
 export interface CashMovement {
@@ -710,4 +774,67 @@ export interface ScaleDevice {
     itemDigits: number;
     valueDigits: number;
   };
+}
+
+// --- EXTERNAL COUPONS ---
+
+export interface Campaign {
+  id: string;
+  name: string;
+  description?: string;
+  benefitType: 'PERCENT' | 'FIXED_AMOUNT' | 'FREE_ITEM';
+  benefitValue: number;
+  minPurchaseAmount?: number;
+  maxDiscountAmount?: number;
+  activeDays?: string[]; // ['L', 'M', 'X', 'J', 'V', 'S', 'D']
+  activeHours?: { start: string; end: string };
+  startDate: string;
+  endDate: string;
+  totalGenerated: number;
+  createdAt: string;
+}
+
+export interface Coupon {
+  id: string;
+  campaignId: string;
+  code: string;
+  status: 'GENERATED' | 'ASSIGNED' | 'REDEEMED' | 'EXPIRED';
+  assignedTo?: string;
+  redeemedAt?: string;
+  ticketRef?: string;
+  terminalId?: string;
+  createdAt: string;
+}
+
+
+
+// --- SUPERVISOR INTERVENTION ---
+
+export type Permission =
+  | 'SALE'
+  | 'POS_VOID_ITEM'
+  | 'POS_VOID_TICKET'
+  | 'POS_VOID_PAID_TICKET'
+  | 'POS_DISCOUNT'
+  | 'POS_PRICE_OVERRIDE'
+  | 'POS_OPEN_DRAWER'
+  | 'POS_RETURNS'
+  | 'POS_REPRINT_RECEIPT'
+  | 'SETTINGS_ACCESS';
+
+
+
+export interface AuditLogEntry {
+  id: string;
+  timestamp: string;
+  actionType: Permission;
+  cashierId: string;
+  supervisorId: string;
+  terminalId: string;
+  ticketId?: string;
+  itemId?: string;
+  originalValue?: number;
+  newValue?: number;
+  reason?: string;
+  hash: string;
 }

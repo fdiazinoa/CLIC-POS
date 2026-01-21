@@ -110,13 +110,40 @@ export const DEFAULT_TERMINAL_CONFIG = {
 };
 
 export const MOCK_USERS: User[] = [
-  { id: 'u1', name: 'Admin Master', pin: '1234', role: 'ADMIN', photo: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Admin' },
-  { id: 'u2', name: 'Cajero Principal', pin: '0000', role: 'CASHIER', photo: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Cashier' }
+  { id: 'u1', name: 'Admin Master', pin: '1234', role: 'ADMIN', roleId: 'ADMIN', photo: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Admin' },
+  { id: 'u2', name: 'Cajero Principal', pin: '0000', role: 'CASHIER', roleId: 'CASHIER', photo: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Cashier' },
+  { id: 'u3', name: 'Supervisor Turno', pin: '9999', role: 'SUPERVISOR', roleId: 'SUPERVISOR', photo: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Supervisor' }
 ];
 
 export const DEFAULT_ROLES: RoleDefinition[] = [
-  { id: 'ADMIN', name: 'Administrador', permissions: ['ALL'], isSystem: true },
-  { id: 'CASHIER', name: 'Cajero', permissions: ['SALE', 'OPEN_DRAWER'], isSystem: false }
+  {
+    id: 'ADMIN',
+    name: 'Administrador',
+    permissions: [
+      'POS_VOID_ITEM', 'POS_VOID_TICKET', 'POS_DISCOUNT',
+      'POS_PRICE_OVERRIDE', 'POS_OPEN_DRAWER', 'POS_RETURNS',
+      'POS_REPRINT_RECEIPT', 'SETTINGS_ACCESS'
+    ],
+    isSystem: true,
+    maxDiscountPercent: 100
+  },
+  {
+    id: 'SUPERVISOR',
+    name: 'Supervisor',
+    permissions: [
+      'POS_VOID_ITEM', 'POS_DISCOUNT', 'POS_OPEN_DRAWER',
+      'POS_RETURNS', 'POS_REPRINT_RECEIPT'
+    ],
+    isSystem: true,
+    maxDiscountPercent: 20
+  },
+  {
+    id: 'CASHIER',
+    name: 'Cajero',
+    permissions: ['POS_REPRINT_RECEIPT'],
+    isSystem: true,
+    maxDiscountPercent: 0
+  }
 ];
 
 export const MOCK_CUSTOMERS: Customer[] = [
@@ -279,8 +306,13 @@ export const FOOD_PRODUCTS: Product[] = [
 
 export const AVAILABLE_PERMISSIONS = [
   { key: 'SALE', label: 'Realizar Ventas', description: 'Acceso a pantalla de cobro', category: 'SALES' },
+  { key: 'POS_DISCOUNT', label: 'Aplicar Descuentos', description: 'Descuentos manuales en ítems o total', category: 'SALES' },
+  { key: 'POS_PRICE_OVERRIDE', label: 'Modificar Precios', description: 'Cambiar precio unitario de productos', category: 'SALES' },
+  { key: 'POS_VOID_ITEM', label: 'Anular Ítem', description: 'Eliminar productos del carrito', category: 'SALES' },
+  { key: 'POS_VOID_TICKET', label: 'Anular Ticket (En Curso)', description: 'Cancelar venta antes de pago', category: 'SALES' },
+  { key: 'POS_VOID_PAID_TICKET', label: 'Anular Factura Pagada', description: 'Revertir una venta finalizada', category: 'SALES' },
+  { key: 'POS_RETURNS', label: 'Devoluciones', description: 'Procesar notas de crédito', category: 'SALES' },
   { key: 'OPEN_DRAWER', label: 'Abrir Cajón', description: 'Sin venta', category: 'CASH' },
-  { key: 'VOID_TICKET', label: 'Anular Ticket', description: 'Cancelar venta completa', category: 'SALES' },
   { key: 'ALL', label: 'Acceso Total', description: 'Admin', category: 'SYSTEM' }
 ];
 

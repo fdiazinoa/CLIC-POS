@@ -63,7 +63,6 @@ Generado automáticamente por CLIC-POS
 
     const mailtoLink = `mailto:${recipient}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
-    // Open in a new window/tab to avoid disrupting the app flow, 
-    // though mailto usually just opens the client.
-    window.open(mailtoLink, '_blank');
+    // Use window.location.href to trigger the mail client without opening a blank tab
+    window.location.href = mailtoLink;
 };

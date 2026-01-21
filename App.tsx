@@ -72,7 +72,11 @@ const App: React.FC = () => {
       const data = await db.init();
       if (data) {
         // 1. Cargar persistencia
-        setConfig(data.config);
+        setConfig({
+          ...data.config,
+          campaigns: data.campaigns || [],
+          coupons: data.coupons || []
+        });
         setUsers(data.users || []);
         setCustomers(data.customers || []);
         setTransactions(data.transactions || []);
@@ -140,8 +144,31 @@ const App: React.FC = () => {
   };
 
   const handleConfigUpdate = async (newConfig: BusinessConfig) => {
+    console.log("handleConfigUpdate called", newConfig); // Debug log
     setConfig(newConfig);
     await db.save('config', newConfig);
+
+    // REAL SYNC: Push to json-server on the same host
+    const serverUrl = `http://${window.location.hostname}:3001/config`;
+    console.log(`Attempting to sync to: ${serverUrl}`);
+
+    try {
+      const res = await fetch(serverUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConfig)
+      });
+
+      if (res.ok) {
+        console.log("Sync success: Config pushed to server.");
+      } else {
+        console.error("Sync failed:", res.status, res.statusText);
+        alert(`Error al sincronizar: El servidor respondió ${res.status}`);
+      }
+    } catch (e) {
+      console.warn("Could not sync config to local server", e);
+      alert(`Error de conexión con ${serverUrl}. Asegúrate de que 'npm run server' esté corriendo.`);
+    }
   };
 
   const handleTransactionComplete = async (txn: Transaction) => {
@@ -159,11 +186,6 @@ const App: React.FC = () => {
 
     const freshData = await db.init();
     setProducts(freshData.products);
-  };
-
-  const handleUpdateConfig = async (newConfig: BusinessConfig) => {
-    setConfig(newConfig);
-    await db.save('config', newConfig);
   };
 
   const handleRegisterMovement = async (type: 'IN' | 'OUT', amount: number, reason: string) => {
@@ -238,7 +260,7 @@ const App: React.FC = () => {
             onOpenFinance={() => setCurrentView('FINANCE')}
             onTransactionComplete={handleTransactionComplete}
             onAddCustomer={async (c) => { const updated = [...customers, c]; setCustomers(updated); await db.save('customers', updated); }}
-            onUpdateConfig={handleUpdateConfig}
+            onUpdateConfig={handleConfigUpdate}
           />
         );
 
@@ -253,7 +275,7 @@ const App: React.FC = () => {
             warehouses={warehouses}
             transfers={transfers}
             onUpdateTransfers={async (t) => { setTransfers(t); await db.save('transfers', t); }}
-            onUpdateConfig={handleUpdateConfig}
+            onUpdateConfig={handleConfigUpdate}
             onUpdateUsers={async (u) => { setUsers(u); await db.save('users', u); }}
             onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
             onUpdateProducts={async (p) => { setProducts(p); await db.save('products', p); }}
@@ -283,6 +305,10 @@ const App: React.FC = () => {
           <TicketHistory
             transactions={transactions}
             config={config}
+            currentUser={currentUser}
+            users={users}
+            roles={roles}
+            onUpdateConfig={handleConfigUpdate}
             onClose={() => setCurrentView('POS')}
             onRefundTransaction={async (tx, items, reason) => {
               const updatedTxns = transactions.map(t => t.id === tx.id ? { ...t, status: 'REFUNDED' as const, refundReason: reason } : t);
@@ -332,6 +358,18 @@ const App: React.FC = () => {
               for (const item of items) {
                 if (item.quantityReceived > 0) {
                   await db.recordInventoryMovement(whId, item.productId, 'COMPRA', 'OC-REC', item.quantityReceived, item.cost);
+                }
+              }
+              const freshData = await db.init();
+              setProducts(freshData.products);
+            }}
+            onAdjustStock={async (adjustments) => {
+              const whId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
+              for (const adj of adjustments) {
+                if (adj.quantity !== 0) {
+                  const type = adj.quantity > 0 ? 'AJUSTE_ENTRADA' : 'AJUSTE_SALIDA';
+                  // recordInventoryMovement handles adding/subtracting based on signed quantity
+                  await db.recordInventoryMovement(whId, adj.productId, type, 'AUDITORIA', adj.quantity);
                 }
               }
               const freshData = await db.init();

@@ -38,20 +38,37 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, d
     setError(null);
 
     try {
-      // SIMULATION: In a real app, this would be fetch(`http://${masterIp}:3000/api/config`)
       console.log(`Connecting to Master at ${masterIp}...`);
 
-      // Simulate network delay
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // REAL SYNC: Fetch config from Master Node's json-server
+      const response = await fetch(`http://${masterIp}:3001/config`);
+      if (!response.ok) throw new Error("Connection failed");
 
-      // For now, we simulate a successful connection by just proceeding.
-      // In production, we would replace 'config' with the fetched config.
-      // if (onConfigUpdate) onConfigUpdate(fetchedConfig);
+      const fetchedConfig = await response.json();
+
+      // Update local config with Master's config
+      if (onConfigUpdate) {
+        // Ensure "t2" exists in the fetched config if it's not there (auto-provisioning logic)
+        const hasT2 = fetchedConfig.terminals.some((t: any) => t.id === 't2');
+        if (!hasT2) {
+          fetchedConfig.terminals.push({
+            id: 't2',
+            config: {
+              ...fetchedConfig.terminals[0].config,
+              isPrimaryNode: false,
+              currentDeviceId: undefined
+            }
+          });
+        }
+
+        onConfigUpdate(fetchedConfig);
+      }
 
       localStorage.setItem('pos_master_ip', masterIp);
-      setStep('AUTH'); // Proceed to Auth after "syncing"
+      setStep('AUTH');
     } catch (err) {
-      setError('No se pudo conectar a la Maestra. Verifique la IP.');
+      console.error(err);
+      setError('No se pudo conectar a la Maestra. Verifique la IP y que el servidor esté corriendo.');
     } finally {
       setIsConnecting(false);
     }

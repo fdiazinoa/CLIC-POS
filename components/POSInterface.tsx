@@ -9,7 +9,7 @@ import {
    ChevronDown, Check, AlertCircle, Layers,
    ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle,
    MessageSquare, PlayCircle, Download, Lock, ArrowUpRight, Landmark,
-   UserCheck, StickyNote, Inbox, Printer
+   UserCheck, StickyNote, Inbox, Printer, QrCode, Box
 } from 'lucide-react';
 import { Html5Qrcode } from "html5-qrcode";
 import {
@@ -26,6 +26,11 @@ import { db } from '../utils/db';
 import { validateTerminalDocument } from '../utils/validation';
 import { isSessionExpired } from '../utils/session';
 import { FiscalRangeDGII } from '../types';
+import { parseScaleBarcode } from '../utils/barcodeParser';
+import { applyPromotions } from '../utils/promotionEngine';
+import { couponService } from '../utils/couponService';
+import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
+import SupervisorModal from './SupervisorModal';
 
 interface POSInterfaceProps {
    config: BusinessConfig;
@@ -122,12 +127,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [searchTerm, setSearchTerm] = useState('');
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
-   const [globalDiscount, setGlobalDiscount] = useState<{ value: number, type: 'PERCENT' | 'FIXED' }>({ value: 0, type: 'PERCENT' });
 
    const [showPaymentModal, setShowPaymentModal] = useState(false);
    const [showTicketOptions, setShowTicketOptions] = useState(false);
    const [showParkedList, setShowParkedList] = useState(false);
    const [showGlobalDiscount, setShowGlobalDiscount] = useState(false);
+   const [showCouponModal, setShowCouponModal] = useState(false);
+   const [couponCode, setCouponCode] = useState('');
+   const [globalDiscount, setGlobalDiscount] = useState<{ type: 'PERCENT' | 'FIXED', value: number }>({ type: 'PERCENT', value: 0 });
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
    const [selectedProductForVariants, setSelectedProductForVariants] = useState<Product | null>(null);
    const [productForScale, setProductForScale] = useState<Product | null>(null);
@@ -139,6 +146,132 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       type: 'B02', hasNCF: false, localBuffer: null, isUsingPool: false
    });
    const [status, setStatus] = useState<{ isConnected: boolean, currentNCF: string, remaining: number, expiryDate: string, batteryLevel: number } | null>(null);
+
+   // --- SUPERVISOR AUTH ---
+   const { requestApproval, supervisorModalProps } = useSupervisorAuth({
+      config,
+      currentUser,
+      roles,
+      onUpdateConfig
+   });
+
+   const handleRedeemCoupon = () => {
+      if (!couponCode) return;
+
+      const cartSubtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      const result = couponService.redeemCoupon(couponCode, `TICKET-${Date.now()}`, terminalId, config, cartSubtotal);
+
+      if (result.success) {
+         if (result.updatedConfig) {
+            onUpdateConfig(result.updatedConfig);
+         }
+
+         if (result.benefit) {
+            if (result.benefit.type === 'PERCENT') {
+               setGlobalDiscount({ type: 'PERCENT', value: result.benefit.value });
+            } else if (result.benefit.type === 'FIXED_AMOUNT') {
+               setGlobalDiscount({ type: 'FIXED', value: result.benefit.value });
+            }
+            alert(`¡Cupón Canjeado!\n${result.benefit.description}`);
+            setShowCouponModal(false);
+            setCouponCode('');
+         }
+      } else {
+         alert(`Error: ${result.error}`);
+      }
+   };
+
+   // --- BARCODE SCANNER LOGIC ---
+   const [barcodeBuffer, setBarcodeBuffer] = useState('');
+   const lastKeyTime = useRef<number>(0);
+
+   const processBarcode = (code: string) => {
+      // 1. Try Scale Parser
+      if (config.scaleLabelConfig?.isEnabled) {
+         const scaleItem = parseScaleBarcode(code, config.scaleLabelConfig);
+         if (scaleItem) {
+            // Find product by PLU (assuming PLU matches barcode or part of it)
+            // We search for a product whose barcode ENDS with the PLU or equals it.
+            // Or strictly equals. Usually PLU 2001 matches product with barcode 2001.
+            const product = products.find(p => p.barcode === scaleItem.plu || p.id === scaleItem.plu);
+
+            if (product) {
+               if (scaleItem.type === 'WEIGHT') {
+                  addToCart(product, scaleItem.value);
+                  setErrorToast(`⚖️ Peso: ${scaleItem.value.toFixed(3)}kg`);
+               } else {
+                  // Price Type
+                  const unitPrice = getProductPrice(product);
+                  if (unitPrice > 0) {
+                     const weight = scaleItem.value / unitPrice;
+                     addToCart(product, weight);
+                     setErrorToast(`💲 Precio: $${scaleItem.value} (${weight.toFixed(3)}kg)`);
+                  } else {
+                     // Fallback if no unit price (shouldn't happen for weighted items)
+                     addToCart(product, 1, scaleItem.value);
+                  }
+               }
+               setTimeout(() => setErrorToast(null), 3000);
+               return;
+            } else {
+               setErrorToast(`Producto PLU ${scaleItem.plu} no encontrado`);
+               setTimeout(() => setErrorToast(null), 3000);
+               return;
+            }
+         }
+      }
+
+      // 2. Normal Barcode Search
+      const product = products.find(p => p.barcode === code);
+      if (product) {
+         handleProductClick(product);
+         setErrorToast(`Producto agregado: ${product.name}`);
+         setTimeout(() => setErrorToast(null), 1500);
+      } else {
+         setErrorToast(`Código no encontrado: ${code}`);
+         setTimeout(() => setErrorToast(null), 2000);
+      }
+   };
+
+   useEffect(() => {
+      const handleGlobalKeyDown = (e: KeyboardEvent) => {
+         const target = e.target as HTMLElement;
+         const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+
+         // If we are in a specific input (like search), we might want to let it handle it,
+         // UNLESS it's a fast scan which implies a barcode.
+
+         const currentTime = Date.now();
+         const gap = currentTime - lastKeyTime.current;
+         lastKeyTime.current = currentTime;
+
+         if (e.key === 'Enter') {
+            // If buffer has content and was typed relatively fast (or just has content), process it.
+            // We use a threshold for "scanner speed" or just check buffer length.
+            if (barcodeBuffer.length >= 3) {
+               processBarcode(barcodeBuffer);
+               setBarcodeBuffer('');
+               if (isInput) e.preventDefault(); // Prevent form submission
+            } else {
+               setBarcodeBuffer('');
+            }
+            return;
+         }
+
+         if (e.key.length === 1) { // Printable char
+            if (gap > 100) {
+               // Slow typing - reset buffer (assume manual input start)
+               setBarcodeBuffer(e.key);
+            } else {
+               // Fast typing - append to buffer
+               setBarcodeBuffer(prev => prev + e.key);
+            }
+         }
+      };
+
+      window.addEventListener('keydown', handleGlobalKeyDown);
+      return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+   }, [barcodeBuffer, config, products, cart]); // Dependencies
 
 
    useEffect(() => {
@@ -194,13 +327,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const getProductPrice = (p: Product) => p.tariffs.find(t => t.tariffId === activeTariffId)?.price || p.price;
 
-   const cartSubtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+
+   // --- PROMOTION ENGINE INTEGRATION ---
+   const processedCart = useMemo(() => {
+      return applyPromotions(cart, config);
+   }, [cart, config]);
+
+   const cartSubtotal = processedCart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
    const discountAmount = globalDiscount.type === 'PERCENT' ? cartSubtotal * (globalDiscount.value / 100) : Math.min(globalDiscount.value, cartSubtotal);
    const netSubtotal = cartSubtotal - discountAmount;
 
    const taxBreakdown = useMemo(() => {
       const breakdown: Record<string, { name: string, amount: number }> = {};
-      cart.forEach(item => {
+      processedCart.forEach(item => {
          const itemRatio = (item.price * item.quantity) / (cartSubtotal || 1);
          const itemNet = (item.price * item.quantity) - (discountAmount * itemRatio);
 
@@ -247,9 +387,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       });
    };
 
-   const updateCartItem = (updatedItem: CartItem | null, cartIdToDelete?: string) => {
-      if (cartIdToDelete || updatedItem === null) onUpdateCart(prev => prev.filter(i => i.cartId !== (cartIdToDelete || editingItem?.cartId)));
-      else onUpdateCart(prev => prev.map(i => i.cartId === updatedItem.cartId ? updatedItem : i));
+   const updateCartItem = async (updatedItem: CartItem | null, cartIdToDelete?: string) => {
+      if (cartIdToDelete || updatedItem === null) {
+         // Void Line Check
+         const authorized = await requestApproval({
+            permission: 'POS_VOID_ITEM',
+            actionDescription: 'Eliminar artículo del carrito',
+            context: { itemId: cartIdToDelete || editingItem?.cartId }
+         });
+         if (!authorized) return;
+
+         onUpdateCart(prev => prev.filter(i => i.cartId !== (cartIdToDelete || editingItem?.cartId)));
+      } else {
+         // Update Check (Price Override / Discount)
+         const originalItem = cart.find(i => i.cartId === updatedItem.cartId);
+         if (originalItem && updatedItem.price < originalItem.price) {
+            const authorized = await requestApproval({
+               permission: 'POS_PRICE_OVERRIDE',
+               actionDescription: 'Modificar Precio de Ítem',
+               context: {
+                  itemId: updatedItem.cartId,
+                  originalValue: originalItem.price,
+                  newValue: updatedItem.price
+               }
+            });
+            if (!authorized) return;
+         }
+
+         onUpdateCart(prev => prev.map(i => i.cartId === updatedItem.cartId ? updatedItem : i));
+      }
       setEditingItem(null);
    };
 
@@ -272,7 +438,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const txn: Transaction = {
          id: ticketId,
          date: new Date().toISOString(),
-         items: cart,
+         items: processedCart,
          total: cartTotal,
          payments: payments,
          userId: currentUser.id,
@@ -282,7 +448,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
          ncf: finalNcf,
-         ncfType: fiscalStatus.type
+         ncfType: fiscalStatus.type,
+         discountAmount: discountAmount,
+         customerSnapshot: selectedCustomer ? {
+            name: selectedCustomer.name,
+            taxId: selectedCustomer.taxId,
+            address: selectedCustomer.address,
+            phone: selectedCustomer.phone,
+            email: selectedCustomer.email
+         } : undefined
       };
       onTransactionComplete(txn);
       // setShowPaymentModal(false); // Removed: Modal handles closing
@@ -316,6 +490,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       onUpdateParkedTickets(parkedTickets.filter(p => p.id !== parked.id));
       setShowParkedList(false);
       setMobileView('TICKET');
+   };
+
+   const handleOpenDrawer = async () => {
+      const authorized = await requestApproval({
+         permission: 'POS_OPEN_DRAWER',
+         actionDescription: 'Abrir Cajón de Dinero',
+         context: {
+            reason: 'Apertura Manual'
+         }
+      });
+      if (authorized) {
+         alert("Cajón Abierto Exitosamente");
+         // In a real app, this would trigger the hardware command
+      }
    };
 
    return (
@@ -443,6 +631,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <h2 className="font-black text-gray-800 uppercase text-xs tracking-widest">Ticket Actual</h2>
                   </div>
                   <div className="flex gap-1">
+                     <button onClick={handleOpenDrawer} title="Abrir Cajón" className="p-2 hover:bg-emerald-50 rounded-lg text-gray-400 hover:text-emerald-600 transition-colors"><Box size={18} /></button>
                      <button onClick={handleParkCurrentTicket} title="Guardar Ticket" className="p-2 hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Save size={18} /></button>
                      <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="p-2 hover:bg-orange-50 rounded-lg text-gray-400 hover:text-orange-600 transition-colors relative">
                         <Inbox size={18} />
@@ -481,9 +670,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* --- CART ITEMS LIST (DETALLE DE LÍNEA) --- */}
             <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar bg-slate-50/30">
-               {cart.map((item) => {
+               {processedCart.map((item) => {
                   const hasDiscount = item.originalPrice && item.price < item.originalPrice;
                   const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
+                  const promoName = config.promotions?.find(p => p.id === (item as any).appliedPromotionId)?.name;
 
                   const lineNet = item.price * item.quantity;
                   const lineTax = (item.appliedTaxIds || []).reduce((acc, taxId) => {
@@ -506,7 +696,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               {item.quantity.toFixed(item.type === 'SERVICE' ? 3 : 0)}x {baseCurrency.symbol}{item.price.toFixed(2)}
                            </span>
                            {hasDiscount && (
-                              <span className="bg-red-50 text-red-600 px-1.5 py-0.5 rounded text-[9px] font-black border border-red-100">-{discountPct}% DESC.</span>
+                              <div className="flex flex-col items-end">
+                                 <span className="bg-red-50 text-red-600 px-1.5 py-0.5 rounded text-[9px] font-black border border-red-100">-{discountPct}% {promoName ? `(${promoName})` : ''}</span>
+                                 <span className="text-[9px] text-gray-400 line-through decoration-red-400">{baseCurrency.symbol}{item.originalPrice?.toFixed(2)}</span>
+                              </div>
                            )}
                         </div>
 
@@ -557,6 +750,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   >
                      <Percent size={16} />
                      <span className="text-[9px] font-black uppercase mt-1">Descuento</span>
+                  </button>
+                  <button
+                     onClick={() => setShowCouponModal(true)}
+                     className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-white border-gray-100 text-gray-400 hover:border-gray-200 transition-all"
+                  >
+                     <QrCode size={16} />
+                     <span className="text-[9px] font-black uppercase mt-1">Cupón</span>
                   </button>
                   <button
                      onClick={onOpenFinance}
@@ -641,7 +841,61 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr) => { addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
          {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
-         {showGlobalDiscount && <GlobalDiscountModal currentSubtotal={cartSubtotal} currencySymbol={baseCurrency.symbol} initialValue={globalDiscount.value.toString()} initialType={globalDiscount.type} themeColor={config.themeColor} onClose={() => setShowGlobalDiscount(false)} onConfirm={(val, type) => { setGlobalDiscount({ value: parseFloat(val) || 0, type }); setShowGlobalDiscount(false); }} />}
+         {showGlobalDiscount && <GlobalDiscountModal currentSubtotal={cartSubtotal} currencySymbol={baseCurrency.symbol} initialValue={globalDiscount.value.toString()} initialType={globalDiscount.type} themeColor={config.themeColor} onClose={() => setShowGlobalDiscount(false)} onConfirm={async (val, type) => {
+            const numVal = parseFloat(val) || 0;
+            const authorized = await requestApproval({
+               permission: 'POS_DISCOUNT',
+               actionDescription: 'Aplicar Descuento Global',
+               context: { newValue: type === 'PERCENT' ? numVal : undefined, originalValue: cartSubtotal }
+            });
+            if (!authorized) return;
+
+            setGlobalDiscount({ value: numVal, type });
+            setShowGlobalDiscount(false);
+         }} />}
+
+         <SupervisorModal {...supervisorModalProps} users={users} />
+
+         {showCouponModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+               <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+                  <div className="p-6">
+                     <div className="flex justify-between items-center mb-6">
+                        <h3 className="text-xl font-black text-gray-800 flex items-center gap-2">
+                           <QrCode className="text-blue-600" />
+                           Canjear Cupón
+                        </h3>
+                        <button onClick={() => setShowCouponModal(false)} className="p-2 hover:bg-gray-100 rounded-full text-gray-400">
+                           <X size={20} />
+                        </button>
+                     </div>
+
+                     <div className="space-y-4">
+                        <div>
+                           <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Código del Cupón</label>
+                           <input
+                              autoFocus
+                              type="text"
+                              value={couponCode}
+                              onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                              className="w-full text-center text-2xl font-black tracking-widest p-4 bg-gray-50 border-2 border-gray-200 rounded-xl outline-none focus:border-blue-500 focus:bg-white transition-all uppercase placeholder-gray-300"
+                              placeholder="XXXX-XXXX"
+                              onKeyDown={(e) => e.key === 'Enter' && handleRedeemCoupon()}
+                           />
+                        </div>
+
+                        <button
+                           onClick={handleRedeemCoupon}
+                           className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold text-lg shadow-lg hover:bg-blue-700 active:scale-95 transition-all flex items-center justify-center gap-2"
+                        >
+                           <Check size={20} />
+                           Validar y Aplicar
+                        </button>
+                     </div>
+                  </div>
+               </div>
+            </div>
+         )}
 
          {/* List of Parked Tickets */}
          {showParkedList && (

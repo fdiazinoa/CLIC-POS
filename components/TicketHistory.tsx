@@ -3,15 +3,22 @@ import React, { useState, useMemo } from 'react';
 import {
    ArrowLeft, Search, Calendar, ChevronDown, ChevronUp,
    Printer, RotateCcw, AlertCircle, Check, X, FileText,
-   User, DollarSign, Box, Filter, Gift, QrCode, StickyNote
+   User as UserIcon, DollarSign, Box, Filter, Gift, QrCode, StickyNote
 } from 'lucide-react';
-import { Transaction, BusinessConfig, CartItem } from '../types';
+import { Transaction, BusinessConfig, CartItem, RoleDefinition } from '../types';
 import { validateTerminalDocument } from '../utils/validation';
 import { printTicket } from '../utils/printer';
+import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
+import SupervisorModal from './SupervisorModal';
+import { User } from '../types';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
    config: BusinessConfig;
+   currentUser: User | null;
+   onUpdateConfig: (newConfig: BusinessConfig) => void;
+   users: User[];
+   roles: RoleDefinition[];
    onClose: () => void;
    onRefundTransaction: (originalTx: Transaction, refundedItems: CartItem[], reason: string) => void;
 }
@@ -25,7 +32,7 @@ const REASONS: { id: ReturnReason; label: string }[] = [
    { id: 'EXPIRED', label: 'Producto Vencido' },
 ];
 
-const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onClose, onRefundTransaction }) => {
+const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, onRefundTransaction }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -68,6 +75,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
       );
    }, [transactions, searchTerm]);
 
+   // --- SUPERVISOR AUTH ---
+   const { requestApproval, supervisorModalProps } = useSupervisorAuth({ config, currentUser, roles, onUpdateConfig });
+
    // --- HANDLERS ---
    const toggleExpand = (id: string) => {
       if (returnModeId) return; // Disable expand toggle during return mode
@@ -97,7 +107,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
       setSelectedItems(newSet);
    };
 
-   const confirmRefund = (transaction: Transaction) => {
+   const confirmRefund = async (transaction: Transaction) => {
       if (selectedItems.size === 0) return;
 
       // Validation: Check if terminal has REFUND document series assigned
@@ -107,6 +117,17 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
          alert(validation.error);
          return;
       }
+
+      // Supervisor Check for Voiding Paid Ticket
+      const authorized = await requestApproval({
+         permission: 'POS_VOID_PAID_TICKET',
+         actionDescription: 'Anular/Devolver Factura Pagada',
+         context: {
+            ticketId: transaction.id,
+            originalValue: currentRefundTotal
+         }
+      });
+      if (!authorized) return;
 
       if (confirm("¿Confirmar devolución de los artículos seleccionados?")) {
          const itemsToRefund = transaction.items.filter(item => selectedItems.has(item.cartId));
@@ -201,7 +222,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
                                  </div>
                                  <div className="flex items-center gap-3 text-sm text-gray-500 mt-1">
                                     <span className="flex items-center gap-1"><Calendar size={14} /> {new Date(tx.date).toLocaleDateString()}</span>
-                                    <span className="flex items-center gap-1"><User size={14} /> {tx.customerName || 'Cliente General'}</span>
+                                    <span className="flex items-center gap-1"><UserIcon size={14} /> {tx.customerName || 'Cliente General'}</span>
                                  </div>
                               </div>
                            </div>
@@ -326,6 +347,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, onC
                </div>
             </div>
          )}
+
+         {/* Supervisor Modal */}
+         <SupervisorModal {...supervisorModalProps} users={users} />
 
       </div>
    );

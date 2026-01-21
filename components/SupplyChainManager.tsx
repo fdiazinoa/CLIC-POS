@@ -18,9 +18,11 @@ interface SupplyChainManagerProps {
    onCreateOrder: (order: PurchaseOrder) => void;
    onUpdateOrder: (order: PurchaseOrder) => void;
    onReceiveStock: (items: PurchaseOrderItem[]) => void;
+   onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
 }
 
 type Tab = 'ALERTS' | 'CREATE' | 'RECEIVE' | 'INVENTORY';
+type AuditMode = 'ADDITIVE' | 'ABSOLUTE';
 
 const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
    products,
@@ -30,7 +32,8 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
    onClose,
    onCreateOrder,
    onUpdateOrder,
-   onReceiveStock
+   onReceiveStock,
+   onAdjustStock
 }) => {
    const [activeTab, setActiveTab] = useState<Tab>('CREATE');
 
@@ -44,6 +47,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
 
    // Inventory Audit State
    const [isAuditMode, setIsAuditMode] = useState(false);
+   const [auditMode, setAuditMode] = useState<AuditMode | null>(null);
 
    // Low Stock Alert Logic
    const [lowStockProducts, setLowStockProducts] = useState<Product[]>([]);

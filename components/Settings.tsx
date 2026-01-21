@@ -19,11 +19,12 @@ import ReceiptDesigner from './ReceiptDesigner';
 import EmailSettings from './EmailSettings';
 import TipsSettings from './TipsSettings';
 import DataSecurityHub from './DataSecurityHub';
-import ActivityLog from './ActivityLog';
+import AuditLogViewer from './AuditLogViewer';
 import TeamHub from './TeamHub';
 import PaymentSettings from './PaymentSettings';
 import DocumentSettings from './DocumentSettings';
 import PromotionBuilder from './PromotionBuilder';
+import { ImportWizard } from './ImportWizard/ImportWizard';
 
 interface SettingsProps {
   config: BusinessConfig;
@@ -45,59 +46,180 @@ interface SettingsProps {
   onClose: () => void;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT';
 
 const Settings: React.FC<SettingsProps> = (props) => {
   const [currentView, setCurrentView] = useState<SettingsView>('HOME');
 
   const renderContent = () => {
     switch (currentView) {
-      case 'WAREHOUSES':
-        return <WarehouseManager config={props.config} warehouses={props.warehouses} products={props.products} transfers={props.transfers || []} onUpdateTransfers={props.onUpdateTransfers || (() => { })} onUpdateWarehouses={props.onUpdateWarehouses} onUpdateProducts={props.onUpdateProducts} onClose={() => setCurrentView('HOME')} />;
+      // ... (existing cases)
+      case 'IMPORT_EXPORT':
+        return (
+          <ImportWizard
+            config={props.config}
+            products={props.products}
+            customers={props.users.map(u => ({ ...u, creditLimit: 0, currentDebt: 0, points: 0 } as any))} // Hack: users are not customers. We need customers prop in Settings.
+            suppliers={[]} // Hack: suppliers not in Settings props yet
+            warehouses={props.warehouses}
+            onClose={() => setCurrentView('HOME')}
+            onUpdateConfig={props.onUpdateConfig}
+            onUpdateProducts={async (p) => props.onUpdateProducts(p)}
+            onUpdateCustomers={async (c) => { /* Implement customer update in App.tsx first */ }}
+            onUpdateSuppliers={async (s) => { /* Implement supplier update */ }}
+            onUpdateWarehouses={async (w) => props.onUpdateWarehouses(w)}
+          />
+        );
+
       case 'CATALOG':
-        return <CatalogManager products={props.products} warehouses={props.warehouses} config={props.config} transactions={props.transactions} onUpdateProducts={props.onUpdateProducts} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
-      case 'TERMINALS':
-        return <TerminalSettings config={props.config} warehouses={props.warehouses} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
-      case 'HARDWARE':
-        return <HardwareSettings config={props.config} products={props.products} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
-      case 'EXCHANGE':
-        return <CurrencySettings config={props.config} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
+        return (
+          <CatalogManager
+            products={props.products}
+            config={props.config}
+            warehouses={props.warehouses}
+            transactions={props.transactions}
+            onUpdateProducts={props.onUpdateProducts}
+            onUpdateConfig={props.onUpdateConfig}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'WAREHOUSES':
+        return (
+          <WarehouseManager
+            warehouses={props.warehouses}
+            products={props.products}
+            transfers={props.transfers || []}
+            config={props.config}
+            onUpdateWarehouses={props.onUpdateWarehouses}
+            onUpdateProducts={props.onUpdateProducts}
+            onUpdateTransfers={props.onUpdateTransfers || (() => { })}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
       case 'PAYMENTS':
-        return <PaymentSettings config={props.config} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
+        return (
+          <PaymentSettings
+            config={props.config}
+            onUpdateConfig={props.onUpdateConfig}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'EXCHANGE':
+        return (
+          <CurrencySettings
+            config={props.config}
+            onUpdateConfig={props.onUpdateConfig}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'DOCUMENTS':
+        return (
+          <DocumentSettings
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'TERMINALS':
+        return (
+          <TerminalSettings
+            config={props.config}
+            onUpdateConfig={props.onUpdateConfig}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'HARDWARE':
+        return (
+          <HardwareSettings
+            config={props.config}
+            products={props.products}
+            onUpdateConfig={props.onUpdateConfig}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'TIPS':
+        return (
+          <TipsSettings
+            config={props.config}
+            onUpdateConfig={props.onUpdateConfig}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'TEAM':
+        return (
+          <TeamHub
+            users={props.users}
+            roles={props.roles}
+            onUpdateUsers={props.onUpdateUsers}
+            onUpdateRoles={props.onUpdateRoles}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'PROMOTIONS':
+        return (
+          <PromotionBuilder
+            config={props.config}
+            products={props.products}
+            transactions={props.transactions}
+            onUpdateConfig={props.onUpdateConfig}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
       case 'RECEIPT':
         return (
-          <div className="p-8 h-full flex flex-col overflow-hidden">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-black text-slate-800">Diseño de Comprobantes</h2>
-              <button onClick={() => setCurrentView('HOME')} className="text-sm font-bold text-blue-600">Volver</button>
-            </div>
-            <div className="flex-1 overflow-hidden">
-              <ReceiptDesigner config={props.config} onUpdateConfig={props.onUpdateConfig} />
-            </div>
+          <div className="relative h-full">
+            <button
+              onClick={() => setCurrentView('HOME')}
+              className="absolute top-4 right-4 z-50 p-2 bg-white rounded-full shadow-md hover:bg-gray-100"
+            >
+              <X size={24} />
+            </button>
+            <ReceiptDesigner
+              config={props.config}
+              onUpdateConfig={props.onUpdateConfig}
+            />
           </div>
         );
+
       case 'EMAIL':
-        return <EmailSettings config={props.config} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
-      case 'TIPS':
-        return <TipsSettings config={props.config} onUpdateConfig={props.onUpdateConfig} onClose={() => setCurrentView('HOME')} />;
+        return (
+          <EmailSettings
+            config={props.config}
+            onUpdateConfig={props.onUpdateConfig}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
       case 'SECURITY':
         return (
-          <div className="p-8 h-full overflow-y-auto">
-            <div className="flex justify-between items-center mb-8">
-              <h2 className="text-2xl font-black text-slate-800">Seguridad y Respaldo</h2>
-              <button onClick={() => setCurrentView('HOME')} className="text-sm font-bold text-blue-600">Volver</button>
-            </div>
-            <DataSecurityHub onClose={() => setCurrentView('HOME')} />
+          <DataSecurityHub
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'LOGS':
+        return (
+          <div className="relative h-full">
+            <button
+              onClick={() => setCurrentView('HOME')}
+              className="absolute top-4 right-4 z-50 p-2 bg-white rounded-full shadow-md hover:bg-gray-100"
+            >
+              <X size={24} />
+            </button>
+            <AuditLogViewer
+              config={props.config}
+              users={props.users}
+            />
           </div>
         );
-      case 'LOGS':
-        return <ActivityLog onClose={() => setCurrentView('HOME')} />;
-      case 'TEAM':
-        return <TeamHub users={props.users} roles={props.roles} onUpdateUsers={props.onUpdateUsers} onUpdateRoles={props.onUpdateRoles} onClose={() => setCurrentView('HOME')} />;
-      case 'DOCUMENTS':
-        return <DocumentSettings onClose={() => setCurrentView('HOME')} />;
-      case 'PROMOTIONS':
-        return <PromotionBuilder products={props.products} config={props.config} onClose={() => setCurrentView('HOME')} />;
 
       default:
         return (
@@ -118,6 +240,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                   <SettingsCard icon={Package} label="Artículos y Tarifas" description="Catálogo, Precios, Variantes" color="bg-blue-600" onClick={() => setCurrentView('CATALOG')} />
                   <SettingsCard icon={Building2} label="Almacenes" description="Ubicaciones, Traspasos, Stock" color="bg-purple-600" onClick={() => setCurrentView('WAREHOUSES')} />
+                  <SettingsCard icon={Database} label="Importar / Exportar" description="Carga Masiva de Datos" color="bg-cyan-600" onClick={() => setCurrentView('IMPORT_EXPORT')} />
                   <SettingsCard icon={Truck} label="Proveedores" description="Compras y Abastecimiento" color="bg-emerald-500" onClick={props.onOpenSupplyChain} />
                 </div>
               </section>

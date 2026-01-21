@@ -246,12 +246,13 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
    const togglePermission = (roleId: string, permKey: string) => {
       const updatedRoles = roles.map(role => {
          if (role.id === roleId) {
-            const hasPerm = role.permissions.includes(permKey);
+            const permission = permKey as any; // Cast to any first to avoid strict check issues with string
+            const hasPerm = role.permissions.includes(permission);
             const newRole = {
                ...role,
                permissions: hasPerm
-                  ? role.permissions.filter(p => p !== permKey)
-                  : [...role.permissions, permKey]
+                  ? role.permissions.filter(p => p !== permission)
+                  : [...role.permissions, permission]
             };
             // Also update local state
             if (editingRole?.id === roleId) setEditingRole(newRole);
@@ -620,8 +621,8 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
                               key={role.id}
                               onClick={() => setEditingRole(role)}
                               className={`w-full p-4 text-left border-l-4 transition-all hover:bg-gray-50 flex items-center justify-between group ${editingRole?.id === role.id
-                                    ? 'border-purple-500 bg-purple-50 text-purple-900'
-                                    : 'border-transparent text-gray-600'
+                                 ? 'border-purple-500 bg-purple-50 text-purple-900'
+                                 : 'border-transparent text-gray-600'
                                  }`}
                            >
                               <span className="font-bold text-sm truncate pr-2">{role.name}</span>
@@ -691,15 +692,15 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
                                        </h4>
                                        <div className="space-y-4">
                                           {perms.map(perm => {
-                                             const isEnabled = editingRole.permissions.includes(perm.key);
+                                             const isEnabled = editingRole.permissions.includes(perm.key as any);
                                              return (
                                                 <div
                                                    key={perm.key}
-                                                   onClick={() => !editingRole.isSystem && togglePermission(editingRole.id, perm.key)}
+                                                   onClick={() => togglePermission(editingRole.id, perm.key)}
                                                    className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all cursor-pointer ${isEnabled
-                                                         ? 'bg-purple-50 border-purple-500 shadow-sm'
-                                                         : 'bg-white border-gray-100 hover:border-gray-300'
-                                                      } ${editingRole.isSystem ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                      ? 'bg-purple-50 border-purple-500 shadow-sm'
+                                                      : 'bg-white border-gray-100 hover:border-gray-300'
+                                                      }`}
                                                 >
                                                    <div className="flex-1 pr-4">
                                                       <p className={`text-sm font-bold mb-0.5 ${isEnabled ? 'text-purple-900' : 'text-gray-700'}`}>{perm.label}</p>

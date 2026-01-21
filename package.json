@@ -8,15 +8,17 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "server": "json-server --watch server/db.json --port 3001 --delay 200",
+    "server": "json-server --watch server/db.json --port 3001 --host 0.0.0.0 --delay 200",
     "db:seed": "node server/seed.js",
     "db:reset": "node server/seed.js && echo 'Base de datos reiniciada correctamente.'",
     "start:dev": "concurrently \"npm run server\" \"npm run dev\""
   },
   "dependencies": {
     "@google/genai": "^1.35.0",
+    "@types/papaparse": "^5.5.2",
     "html5-qrcode": "2.3.8",
     "lucide-react": "^0.562.0",
+    "papaparse": "^5.5.3",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "sql.js": "^1.13.0"

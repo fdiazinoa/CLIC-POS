@@ -18,6 +18,11 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
         discountTotal += lineDiscount;
     });
 
+    // Add global discount if present
+    if (transaction.discountAmount) {
+        discountTotal += transaction.discountAmount;
+    }
+
     const taxTotal = subtotal * config.taxRate;
     const finalTotal = transaction.total;
     const savings = discountTotal;
@@ -140,9 +145,34 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
             <div class="text-center">
                 <div class="doc-title">${documentTitle}</div>
                 ${transaction.ncf ? `<div class="ncf-row">NCF: ${transaction.ncf}</div>` : ''}
-                <div class="meta-row">Ticket No.: ${transaction.id}</div>
-                <div class="meta-row">${dateStr} ${timeStr}</div>
+                <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+                    <div class="meta-row" style="font-weight: bold;">Ticket: ${transaction.id}</div>
+                    <div class="meta-row">${dateStr} ${timeStr}</div>
+                </div>
             </div>
+
+            <div class="divider"></div>
+
+            <!-- CUSTOMER INFO -->
+            ${(() => {
+            const snapshot = transaction.customerSnapshot;
+            const name = snapshot?.name || transaction.customerName || 'Cliente Mostrador';
+
+            // Always show name
+            let html = `<div class="text-left" style="margin-bottom: 5px;">
+                    <div style="font-weight: bold;">Cliente: ${name}</div>`;
+
+            // Show details if not "Cliente Mostrador" and snapshot exists
+            if (snapshot && !name.toLowerCase().includes('mostrador')) {
+                if (snapshot.taxId) html += `<div class="meta-row">RNC/Ced: ${snapshot.taxId}</div>`;
+                if (snapshot.address) html += `<div class="meta-row">Dir: ${snapshot.address}</div>`;
+                if (snapshot.phone) html += `<div class="meta-row">Tel: ${snapshot.phone}</div>`;
+                if (snapshot.email) html += `<div class="meta-row">Email: ${snapshot.email}</div>`;
+            }
+
+            html += `</div>`;
+            return html;
+        })()}
 
             <div class="divider"></div>
 
@@ -150,11 +180,11 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
             <table class="items-table">
                 <tbody>
                     ${transaction.items.map(item => {
-        const itemTax = (item.price * item.quantity) * config.taxRate;
-        const originalPrice = item.originalPrice || item.price;
-        const hasDiscount = originalPrice > item.price;
+            const itemTax = (item.price * item.quantity) * config.taxRate;
+            const originalPrice = item.originalPrice || item.price;
+            const hasDiscount = originalPrice > item.price;
 
-        return `
+            return `
                         <tr>
                             <td style="width: 70%;">
                                 <span class="item-name">${item.name}</span>

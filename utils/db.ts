@@ -3,7 +3,8 @@ import {
   BusinessConfig, Product, User, Customer, Transaction,
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, Supplier, Watchlist,
-  NCFType, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries
+  NCFType, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
+  Campaign, Coupon
 } from '../types';
 import {
   MOCK_USERS, RETAIL_PRODUCTS, FOOD_PRODUCTS,
@@ -54,7 +55,25 @@ const SEED_DATA = {
     { id: 'fr2', type: 'B02', prefix: 'B02', startNumber: 1, endNumber: 50000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true }
   ] as FiscalRangeDGII[],
   fiscalAllocations: [] as FiscalAllocation[],
-  localFiscalBuffer: [] as LocalFiscalBuffer[]
+  localFiscalBuffer: [] as LocalFiscalBuffer[],
+  campaigns: [
+    {
+      id: 'camp_summer_2024',
+      name: 'Verano 2024 Instagram',
+      description: 'Campaña de redes sociales',
+      benefitType: 'PERCENT',
+      benefitValue: 20,
+      startDate: '2024-01-01T00:00:00Z',
+      endDate: '2026-12-31T23:59:59Z',
+      totalGenerated: 5,
+      createdAt: new Date().toISOString()
+    }
+  ] as Campaign[],
+  coupons: [
+    { id: 'cpn_1', campaignId: 'camp_summer_2024', code: 'VERANO-2024', status: 'GENERATED', createdAt: new Date().toISOString() },
+    { id: 'cpn_2', campaignId: 'camp_summer_2024', code: 'INSTA-PROMO', status: 'GENERATED', createdAt: new Date().toISOString() },
+    { id: 'cpn_3', campaignId: 'camp_summer_2024', code: 'VIP-CLIENT', status: 'GENERATED', createdAt: new Date().toISOString() }
+  ] as Coupon[]
 };
 
 export const db = {
@@ -63,18 +82,25 @@ export const db = {
 
     // Check if seeded
     const existingConfig = await dbAdapter.getCollection('config');
-    if (!existingConfig || Object.keys(existingConfig).length === 0) {
-      // Seed all collections
-      for (const [key, value] of Object.entries(SEED_DATA)) {
+
+    // Migration Logic: Ensure all collections exist even if config exists
+    for (const [key, value] of Object.entries(SEED_DATA)) {
+      const existingCollection = await dbAdapter.getCollection(key);
+
+      // If collection is missing or empty (and it's not the config itself which we checked), seed it
+      if (!existingCollection || (Array.isArray(existingCollection) && existingCollection.length === 0 && key !== 'config')) {
+        console.log(`🌱 Seeding missing collection: ${key}`);
         if (key === 'config') {
-          // Config is a single object, but our adapter expects collections usually. 
-          // For LocalStorageAdapter we treat everything as key-value, but let's standardize.
-          // Special case for config in this specific legacy db structure
-          await dbAdapter.saveCollection(key, value as any);
+          if (!existingConfig || Object.keys(existingConfig).length === 0) {
+            await dbAdapter.saveCollection(key, value as any);
+          }
         } else {
           await dbAdapter.saveCollection(key, value as any[]);
         }
       }
+    }
+
+    if (!existingConfig || Object.keys(existingConfig).length === 0) {
       return SEED_DATA;
     }
 
