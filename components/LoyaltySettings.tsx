@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Save, Award, AlertCircle, HelpCircle } from 'lucide-react';
+import { ArrowLeft, Save, Award, AlertCircle, HelpCircle, Mail } from 'lucide-react';
 import { BusinessConfig, LoyaltyConfig } from '../types';
+import EmailPreviewModal from './EmailPreviewModal';
 
 interface LoyaltySettingsProps {
     config: BusinessConfig;
@@ -15,8 +16,11 @@ const LoyaltySettings: React.FC<LoyaltySettingsProps> = ({ config, onUpdateConfi
         redeemRate: 1.0, // Default: 1 point = $1.00
         minRedemptionPoints: 10,
         expirationMonths: 12,
+        expirationMonths: 12,
         excludedCategories: []
     });
+
+    const [showEmailPreview, setShowEmailPreview] = useState(false);
 
     const handleSave = () => {
         onUpdateConfig({
@@ -168,8 +172,29 @@ const LoyaltySettings: React.FC<LoyaltySettingsProps> = ({ config, onUpdateConfi
                             </div>
                         </div>
 
+                        {/* Email Template Preview */}
+                        <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 flex items-center justify-between">
+                            <div>
+                                <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                                    <Mail className="text-blue-600" size={20} />
+                                    Plantilla de Correo
+                                </h3>
+                                <p className="text-gray-500 text-sm mt-1">
+                                    Vista previa del correo de bienvenida con la tarjeta digital.
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setShowEmailPreview(true)}
+                                className="px-4 py-2 bg-white border border-gray-200 text-gray-700 font-bold rounded-xl hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm"
+                            >
+                                Ver Vista Previa
+                            </button>
+                        </div>
+
                     </div>
                 )}
+
+                {showEmailPreview && <EmailPreviewModal onClose={() => setShowEmailPreview(false)} />}
             </div>
         </div>
     );

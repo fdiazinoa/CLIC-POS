@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="es" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml"
+    xmlns:o="urn:schemas-microsoft-com:office:office">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="x-apple-disable-message-reformatting">
+    <title>¡Bienvenido al Club Clic-POS!</title>
+
+    <style>
+        /* RESET STYLES */
+        html,
+        body {
+            margin: 0 auto !important;
+            padding: 0 !important;
+            height: 100% !important;
+            width: 100% !important;
+            background-color: #f3f4f6;
+        }
+
+        * {
+            -ms-text-size-adjust: 100%;
+            -webkit-text-size-adjust: 100%;
+        }
+
+        div[style*="margin: 16px 0"] {
+            margin: 0 !important;
+        }
+
+        table,
+        td {
+            mso-table-lspace: 0pt !important;
+            mso-table-rspace: 0pt !important;
+        }
+
+        table {
+            border-spacing: 0 !important;
+            border-collapse: collapse !important;
+            table-layout: fixed !important;
+            margin: 0 auto !important;
+        }
+
+        img {
+            -ms-interpolation-mode: bicubic;
+        }
+
+        /* MOBILE STYLES */
+        @media screen and (max-width: 600px) {
+            .email-container {
+                width: 100% !important;
+                max-width: 100% !important;
+            }
+
+            .stack-column,
+            .stack-column-center {
+                display: block !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                direction: ltr !important;
+            }
+
+            .stack-column-center {
+                text-align: center !important;
+            }
+
+            .center-on-mobile {
+                text-align: center !important;
+                display: block !important;
+                margin-left: auto !important;
+                margin-right: auto !important;
+            }
+
+            .mobile-padding {
+                padding-left: 20px !important;
+                padding-right: 20px !important;
+            }
+
+            .hide-on-mobile {
+                display: none !important;
+            }
+        }
+
+        /* DARK MODE SUPPORT */
+        @media (prefers-color-scheme: dark) {
+
+            body,
+            .email-bg {
+                background-color: #111827 !important;
+            }
+
+            .content-bg {
+                background-color: #1f2937 !important;
+            }
+
+            .text-primary {
+                color: #ffffff !important;
+            }
+
+            .text-secondary {
+                color: #9ca3af !important;
+            }
+
+            .border-color {
+                border-color: #374151 !important;
+            }
+        }
+    </style>
+</head>
+
+<body width="100%" style="margin: 0; padding: 0 !important; mso-line-height-rule: exactly; background-color: #f3f4f6;"
+    class="email-bg">
+    <center style="width: 100%; background-color: #f3f4f6;" class="email-bg">
+        <!-- PREHEADER -->
+        <div
+            style="display: none; font-size: 1px; line-height: 1px; max-height: 0px; max-width: 0px; opacity: 0; overflow: hidden; mso-hide: all; font-family: sans-serif;">
+            Descarga tu tarjeta digital y empieza a acumular puntos hoy mismo.
+        </div>
+
+        <!-- MAIN CONTAINER -->
+        <table align="center" role="presentation" cellspacing="0" cellpadding="0" border="0" width="600"
+            style="margin: 0 auto; width: 600px; max-width: 600px;" class="email-container">
+
+            <!-- HEADER / LOGO -->
+            <tr>
+                <td align="center" style="padding: 40px 0; text-align: center;">
+                    <img src="{{logo_url}}" width="120" height="auto" alt="Clic-POS Logo"
+                        style="height: auto; background: #dddddd; font-family: sans-serif; font-size: 15px; line-height: 15px; color: #555555; border-radius: 8px;">
+                </td>
+            </tr>
+
+            <!-- CARD CONTENT -->
+            <tr>
+                <td style="background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);"
+                    class="content-bg">
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+
+                        <!-- HERO IMAGE / BANNER (Optional) -->
+                        <tr>
+                            <td style="background-color: #2563eb; padding: 40px 20px; text-align: center;">
+                                <h1
+                                    style="margin: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 24px; line-height: 30px; color: #ffffff; font-weight: bold;">
+                                    ¡Bienvenido al Club!
+                                </h1>
+                                <p
+                                    style="margin: 10px 0 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 16px; line-height: 24px; color: #e0e7ff;">
+                                    Tu tarjeta digital ya está lista.
+                                </p>
+                            </td>
+                        </tr>
+
+                        <!-- PERSONALIZATION & STATS -->
+                        <tr>
+                            <td style="padding: 40px 30px;" class="mobile-padding">
+                                <p style="margin: 0 0 20px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 18px; line-height: 24px; color: #111827; font-weight: bold;"
+                                    class="text-primary">
+                                    Hola, {{customer_name}}
+                                </p>
+                                <p style="margin: 0 0 30px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 16px; line-height: 24px; color: #4b5563;"
+                                    class="text-secondary">
+                                    Gracias por unirte a nuestro programa de fidelización. Con tu nueva tarjeta digital
+                                    podrás acumular puntos en cada compra y acceder a beneficios exclusivos.
+                                </p>
+
+                                <!-- STATS GRID -->
+                                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                                    <tr>
+                                        <td width="50%"
+                                            style="padding: 15px; background-color: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb; text-align: center;"
+                                            class="content-bg border-color">
+                                            <p
+                                                style="margin: 0; font-family: sans-serif; font-size: 12px; text-transform: uppercase; color: #6b7280; letter-spacing: 1px;">
+                                                Saldo Wallet</p>
+                                            <p
+                                                style="margin: 5px 0 0; font-family: sans-serif; font-size: 24px; font-weight: bold; color: #2563eb;">
+                                                {{wallet_balance}}</p>
+                                        </td>
+                                        <td width="10" style="font-size: 0; line-height: 0;">&nbsp;</td>
+                                        <td width="50%"
+                                            style="padding: 15px; background-color: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb; text-align: center;"
+                                            class="content-bg border-color">
+                                            <p
+                                                style="margin: 0; font-family: sans-serif; font-size: 12px; text-transform: uppercase; color: #6b7280; letter-spacing: 1px;">
+                                                Puntos</p>
+                                            <p
+                                                style="margin: 5px 0 0; font-family: sans-serif; font-size: 24px; font-weight: bold; color: #2563eb;">
+                                                {{loyalty_points}}</p>
+                                        </td>
+                                    </tr>
+                                </table>
+
+                            </td>
+                        </tr>
+
+                        <!-- CTA BUTTONS (SMART DEVICE LOGIC) -->
+                        <tr>
+                            <td style="padding: 0 30px 40px; text-align: center;" class="mobile-padding">
+                                <p style="margin: 0 0 20px; font-family: sans-serif; font-size: 14px; color: #6b7280;"
+                                    class="text-secondary">
+                                    Guárdala en tu celular para tenerla siempre a mano:
+                                </p>
+
+                                <!-- BUTTONS WRAPPER -->
+                                <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center">
+                                    <tr>
+                                        <!-- APPLE WALLET -->
+                                        <td style="padding: 5px;" align="center">
+                                            <a href="{{link_ios}}" target="_blank">
+                                                <img src="https://developer.apple.com/wallet/images/badge/add-to-apple-wallet-lrg.svg"
+                                                    alt="Add to Apple Wallet" width="160" height="50"
+                                                    style="display: block; border: 0; height: 50px; width: auto;">
+                                            </a>
+                                        </td>
+                                        <!-- GOOGLE WALLET -->
+                                        <td style="padding: 5px;" align="center">
+                                            <a href="{{link_android}}" target="_blank">
+                                                <img src="https://developers.google.com/static/wallet/images/en/badge.svg"
+                                                    alt="Add to Google Wallet" width="160" height="50"
+                                                    style="display: block; border: 0; height: 50px; width: auto;">
+                                            </a>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+
+                        <!-- DESKTOP QR CODE (Visible mainly on desktop via media queries logic if supported, or just always shown as fallback) -->
+                        <tr>
+                            <td style="padding: 0 30px 40px; text-align: center; border-top: 1px dashed #e5e7eb;"
+                                class="border-color mobile-padding">
+                                <p style="margin: 20px 0 15px; font-family: sans-serif; font-size: 14px; color: #6b7280;"
+                                    class="text-secondary">
+                                    ¿Estás en una computadora? Escanea este código:
+                                </p>
+                                <center>
+                                    <img src="{{qr_image_url}}" width="150" height="150" alt="QR Code"
+                                        style="display: block; border: 4px solid #ffffff; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                                </center>
+                            </td>
+                        </tr>
+
+                    </table>
+                </td>
+            </tr>
+
+            <!-- FOOTER -->
+            <tr>
+                <td style="padding: 40px 0; text-align: center;">
+                    <p style="margin: 0 0 10px; font-family: sans-serif; font-size: 12px; color: #9ca3af;">
+                        © 2024 Clic-POS Retail. Todos los derechos reservados.
+                    </p>
+                    <p style="margin: 0; font-family: sans-serif; font-size: 12px; color: #9ca3af;">
+                        <a href="#" style="color: #6b7280; text-decoration: underline;">Términos y Condiciones</a>
+                        &nbsp;|&nbsp;
+                        <a href="#" style="color: #6b7280; text-decoration: underline;">Darse de baja</a>
+                    </p>
+                </td>
+            </tr>
+
+        </table>
+    </center>
+</body>
+
+</html>
