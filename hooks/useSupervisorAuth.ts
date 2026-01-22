@@ -34,7 +34,7 @@ export const useSupervisorAuth = ({ config, currentUser, roles, onUpdateConfig }
                 roles?.find(r => r.id === currentUser?.role);
 
             if (userRole) {
-                const hasPermission = (userRole.permissions as string[]).includes('ALL') || userRole.permissions.includes(params.permission);
+                const hasPermission = userRole.permissions.includes('ALL') || userRole.permissions.includes(params.permission);
 
                 // Check limits (e.g., max discount)
                 let withinLimits = true;

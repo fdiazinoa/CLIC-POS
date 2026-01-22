@@ -221,6 +221,10 @@ export interface TerminalConfig {
     gridDensity: 'COMFORTABLE' | 'COMPACT';
     showProductImages: boolean;
     quickKeysLayout: 'A' | 'B';
+    viewMode: 'VISUAL' | 'RETAIL';
+  };
+  catalog?: {
+    allowedCategories: string[];
   };
   inventoryScope?: {
     defaultSalesWarehouseId: string;
@@ -237,7 +241,7 @@ export interface CurrencyConfig {
   isBase?: boolean;
 }
 
-export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'OTHER';
+export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'OTHER';
 
 export interface PaymentMethodDefinition {
   id: string;
@@ -252,7 +256,7 @@ export interface PaymentMethodDefinition {
   integrationConfig?: Record<string, string>;
 }
 
-export type PromotionType = 'DISCOUNT' | 'BOGO' | 'BUNDLE' | 'HAPPY_HOUR' | 'CONDITIONAL_TARGET';
+
 export type AttributeType = 'TEXT' | 'COLOR' | 'IMAGE';
 export type PricingStrategyType = 'MANUAL' | 'COST_PLUS' | 'DERIVED';
 export type RoundingRule = 'NONE' | 'ENDING_99' | 'CEILING' | 'ROUND_HALF_UP' | 'ROUND_FLOOR';
@@ -318,6 +322,17 @@ export interface ScaleLabelConfig {
   decimals: number;
 }
 
+
+
+export interface LoyaltyConfig {
+  isEnabled: boolean;
+  earnRate: number; // Points per 1 unit of currency (e.g., 0.1 for 1 point per $10)
+  redeemRate: number; // Value of 1 point (e.g., 0.10)
+  minRedemptionPoints: number;
+  expirationMonths: number;
+  excludedCategories: string[];
+}
+
 export interface BusinessConfig {
   vertical: VerticalType;
   subVertical: SubVertical;
@@ -328,6 +343,7 @@ export interface BusinessConfig {
   features: {
     stockTracking: boolean;
   };
+  loyalty?: LoyaltyConfig;
   companyInfo: CompanyInfo;
   currencies: CurrencyConfig[];
   paymentMethods: PaymentMethodDefinition[];
@@ -404,6 +420,9 @@ export interface Customer {
   addresses?: CustomerAddress[];
   creditDays?: number;
   defaultNcfType?: NCFType;
+  wallet?: Wallet;
+  cards?: LoyaltyCard[];
+  loyalty?: LoyaltyCard; // Deprecated, kept for backward compatibility during migration
 }
 
 export interface ProductAttribute {
@@ -439,6 +458,7 @@ export interface ProductOperationalFlags {
   ageRestricted: boolean;
   allowNegativeStock: boolean;
   excludeFromPromotions: boolean;
+  excludeFromLoyalty: boolean;
 }
 
 export interface Product {
@@ -505,6 +525,7 @@ export interface Transaction {
     phone?: string;
     email?: string;
   };
+  isTaxIncluded?: boolean;
 }
 
 export type ViewState = 'SETUP' | 'WIZARD' | 'LOGIN' | 'POS' | 'SETTINGS' | 'CUSTOMERS' | 'HISTORY' | 'FINANCE' | 'Z_REPORT' | 'SUPPLY_CHAIN' | 'FRANCHISE_DASHBOARD' | 'DEVICE_UNAUTHORIZED';
@@ -569,35 +590,54 @@ export interface StockTransfer {
   createdBy?: string;
 }
 
+export type PromotionType = 'DISCOUNT' | 'BOGO' | 'HAPPY_HOUR' | 'CONDITIONAL_TARGET';
+export type PromotionTargetType = 'ALL' | 'PRODUCT' | 'CATEGORY' | 'GROUP' | 'SEASON';
+export type PromotionBenefitType = 'DISCOUNT_PERCENT' | 'FIXED_PRICE' | 'CASHBACK' | 'POINTS_MULTIPLIER';
+
+export interface PromotionCondition {
+  type: 'HAS_WALLET' | 'CUSTOMER_TIER' | 'HAS_POINTS_MIN';
+  value: string; // "GOLD", "100", "TRUE"
+}
+
 export interface Promotion {
   id: string;
   name: string;
   type: PromotionType;
-  targetType: 'PRODUCT' | 'CATEGORY' | 'SEASON' | 'GROUP' | 'ALL';
-  targetValue: string;
-  benefitValue: number;
-  schedule: {
-    days: string[];
-    startTime: string;
-    endTime: string;
-    isActive: boolean;
-  };
-  terminalIds?: string[];
-  priority?: number;
+  priority: number;
 
-  // Conditional Promotion Fields
+  // Trigger
   trigger?: {
-    type: 'MIN_TICKET_AMOUNT';
+    type: 'TOTAL_SPEND' | 'ITEM_QTY' | 'MIN_TICKET_AMOUNT';
     value: number;
     excludeCategories?: string[];
     isRecursive?: boolean;
   };
+
+  // Conditions (New)
+  conditions?: PromotionCondition[];
+
+  // Target
+  targetType: PromotionTargetType;
+  targetValue?: string; // ID of Product, Category, Group, Season
   targetStrategy?: {
     mode: 'CHEAPEST_ITEM' | 'MOST_EXPENSIVE_ITEM' | 'SLOW_MOVER' | 'CATEGORY_CHEAPEST';
     filterValue?: string | number; // Category ID or Days threshold
     tieBreaker?: 'FIRST_ADDED' | 'LAST_ADDED';
     allowSelfTrigger?: boolean;
   };
+
+  // Benefit
+  benefitType?: PromotionBenefitType; // Optional for backward compatibility, defaults to DISCOUNT implied by type
+  benefitValue: number; // % or Fixed Amount or Multiplier
+
+  // Schedule & Scope
+  schedule: {
+    days: string[]; // L, M, X, J, V, S, D
+    startTime: string;
+    endTime: string;
+    isActive: boolean;
+  };
+  terminalIds?: string[];
 
   stats?: {
     usageCount: number;
@@ -811,6 +851,8 @@ export interface Coupon {
 // --- SUPERVISOR INTERVENTION ---
 
 export type Permission =
+  | 'ALL'
+  // --- POS CORE ---
   | 'SALE'
   | 'POS_VOID_ITEM'
   | 'POS_VOID_TICKET'
@@ -820,7 +862,40 @@ export type Permission =
   | 'POS_OPEN_DRAWER'
   | 'POS_RETURNS'
   | 'POS_REPRINT_RECEIPT'
-  | 'SETTINGS_ACCESS';
+  | 'POS_CLOSE_Z'
+  | 'POS_VIEW_ACTIVE_CASH'
+  | 'POS_MANAGE_PARKED'
+
+  // --- CATALOG ---
+  | 'CATALOG_VIEW'
+  | 'CATALOG_MANAGE'
+  | 'CATALOG_VIEW_COST'
+  | 'TARIFF_MANAGE'
+
+  // --- INVENTORY ---
+  | 'INVENTORY_VIEW'
+  | 'INVENTORY_ADJUST'
+  | 'INVENTORY_TRANSFER'
+  | 'SUPPLY_CHAIN_ORDER'
+  | 'SUPPLY_CHAIN_RECEIVE'
+
+  // --- CUSTOMERS ---
+  | 'CUSTOMER_VIEW'
+  | 'CUSTOMER_MANAGE'
+  | 'CUSTOMER_CREDIT_LIMIT'
+  | 'CUSTOMER_VIEW_DEBT'
+
+  // --- FINANCE & REPORTS ---
+  | 'REPORTS_VIEW_SALES'
+  | 'REPORTS_VIEW_FINANCIAL'
+  | 'EXPENSE_MANAGE'
+
+  // --- ADMIN & SETTINGS ---
+  | 'SETTINGS_ACCESS'
+  | 'SETTINGS_HARDWARE'
+  | 'SETTINGS_USERS'
+  | 'SETTINGS_TAXES'
+  | 'AUDIT_LOG_VIEW';
 
 
 
@@ -837,4 +912,49 @@ export interface AuditLogEntry {
   newValue?: number;
   reason?: string;
   hash: string;
+}
+
+// --- LOYALTY & WALLET TYPES ---
+
+export type WalletTransactionType = 'DEPOSIT' | 'PAYMENT' | 'REFUND' | 'CASHBACK';
+
+export interface WalletTransaction {
+  id: string;
+  walletId: string;
+  type: WalletTransactionType;
+  amount: number;
+  referenceId?: string; // Ticket ID or External Ref
+  timestamp: string;
+}
+
+export interface Wallet {
+  id: string;
+  customerId: string;
+  balance: number;
+  currency: string;
+  status: 'ACTIVE' | 'BLOCKED';
+  lastActivity: string;
+  transactions: WalletTransaction[];
+}
+
+export type LoyaltyTransactionType = 'EARN' | 'REDEEM' | 'ADJUSTMENT';
+
+export interface LoyaltyTransaction {
+  id: string;
+  cardId: string;
+  type: LoyaltyTransactionType;
+  points: number;
+  referenceId?: string;
+  timestamp: string;
+}
+
+export interface LoyaltyCard {
+  id: string;
+  customerId: string;
+  type: 'LOYALTY' | 'GIFT';
+  cardNumber: string; // Barcode/QR
+  pointsBalance: number;
+  status: 'ACTIVE' | 'LOST';
+  issuedAt: string;
+  history: LoyaltyTransaction[];
 }

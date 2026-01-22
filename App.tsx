@@ -269,6 +269,7 @@ const App: React.FC = () => {
           <Settings
             config={config}
             users={users}
+            currentUser={currentUser}
             roles={roles}
             transactions={transactions}
             products={products}

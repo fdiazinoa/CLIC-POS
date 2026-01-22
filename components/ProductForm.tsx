@@ -8,7 +8,7 @@ import {
   ShieldAlert, AlertCircle, Check, LayoutTemplate, ClipboardList, ListTree,
   Truck, ArrowDownToLine, Building2, Search, Filter, AlertTriangle,
   Scale, Ban, ShieldCheck, Zap, History, MapPin, ChevronRight, Settings,
-  Keyboard, BookOpen, ArrowUpRight, ArrowDownLeft, Calendar
+  Keyboard, BookOpen, ArrowUpRight, ArrowDownLeft, Calendar, Award
 } from 'lucide-react';
 import {
   Product, ProductAttribute, ProductVariant, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse, ProductOperationalFlags, InventoryLedgerEntry
@@ -22,6 +22,8 @@ interface ProductFormProps {
   availableTariffs: Tariff[];
   warehouses?: Warehouse[];
   hasHistory?: boolean;
+  currentUser?: any;
+  roles?: any[];
   onSave: (product: Product) => void;
   onClose: () => void;
 }
@@ -36,7 +38,8 @@ const DEFAULT_OPERATIONAL_FLAGS: ProductOperationalFlags = {
   integersOnly: false,
   ageRestricted: false,
   allowNegativeStock: false,
-  excludeFromPromotions: false
+  excludeFromPromotions: false,
+  excludeFromLoyalty: false
 };
 
 const VARIANT_TEMPLATES = [
@@ -46,7 +49,7 @@ const VARIANT_TEMPLATES = [
   { name: 'Capacidad', attr: 'Memoria', opts: ['64GB', '128GB', '256GB'] }
 ];
 
-const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], hasHistory = false, onSave, onClose }) => {
+const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], hasHistory = false, currentUser, roles = [], onSave, onClose }) => {
   const [activeTab, setActiveTab] = useState<ProductTab>('GENERAL');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -100,6 +103,16 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     };
     loadLedger();
   }, [formData.id, kardexWarehouse]);
+
+  const hasPermission = (permission: string): boolean => {
+    if (!currentUser) return false;
+    const userRole = roles.find(r => r.id === currentUser.role);
+    if (!userRole) return false;
+    if (userRole.permissions.includes('ALL')) return true;
+    return userRole.permissions.includes(permission);
+  };
+
+  const canViewCost = hasPermission('CATALOG_VIEW_COST') || hasPermission('CATALOG_MANAGE');
 
   // --- LOGIC: Variants & Attributes ---
   const addAttribute = () => {
@@ -317,8 +330,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       <th className="p-4 text-center">Entrada</th>
                       <th className="p-4 text-center">Salida</th>
                       <th className="p-4 text-center">Saldo</th>
-                      <th className="p-4 text-right">Costo Unit.</th>
-                      <th className="p-4 text-right">Valorizado</th>
+                      {canViewCost && <th className="p-4 text-right">Costo Unit.</th>}
+                      {canViewCost && <th className="p-4 text-right">Valorizado</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -345,20 +358,24 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                         <td className="p-4 text-center">
                           <span className="px-2 py-1 bg-gray-100 rounded-lg font-black text-gray-700">{entry.balanceQty}</span>
                         </td>
-                        <td className="p-4 text-right font-mono text-gray-600">
-                          {config.currencySymbol}{entry.unitCost.toFixed(2)}
-                        </td>
-                        <td className="p-4 text-right">
-                          <div className="flex flex-col items-end">
-                            <span className="font-black text-gray-800">{config.currencySymbol}{(entry.balanceQty * entry.balanceAvgCost).toFixed(2)}</span>
-                            <span className="text-[9px] text-gray-400 uppercase">CPP: {entry.balanceAvgCost.toFixed(2)}</span>
-                          </div>
-                        </td>
+                        {canViewCost && (
+                          <td className="p-4 text-right font-mono text-gray-600">
+                            {config.currencySymbol}{entry.unitCost.toFixed(2)}
+                          </td>
+                        )}
+                        {canViewCost && (
+                          <td className="p-4 text-right">
+                            <div className="flex flex-col items-end">
+                              <span className="font-black text-gray-800">{config.currencySymbol}{(entry.balanceQty * entry.balanceAvgCost).toFixed(2)}</span>
+                              <span className="text-[9px] text-gray-400 uppercase">CPP: {entry.balanceAvgCost.toFixed(2)}</span>
+                            </div>
+                          </td>
+                        )}
                       </tr>
                     ))}
                     {productLedger.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="p-12 text-center">
+                        <td colSpan={canViewCost ? 7 : 5} className="p-12 text-center">
                           <div className="flex flex-col items-center opacity-30">
                             <History size={48} className="mb-2" />
                             <p className="font-bold">No hay movimientos registrados para este criterio.</p>
@@ -371,14 +388,18 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col items-center">
-                  <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Costo Promedio (CPP)</p>
-                  <p className="text-3xl font-black text-blue-600">{config.currencySymbol}{formData.cost?.toFixed(2)}</p>
-                </div>
-                <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col items-center text-center">
-                  <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Inversión Total</p>
-                  <p className="text-3xl font-black text-gray-800">{config.currencySymbol}{((formData.stock || 0) * (formData.cost || 0)).toFixed(2)}</p>
-                </div>
+                {canViewCost && (
+                  <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col items-center">
+                    <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Costo Promedio (CPP)</p>
+                    <p className="text-3xl font-black text-blue-600">{config.currencySymbol}{formData.cost?.toFixed(2)}</p>
+                  </div>
+                )}
+                {canViewCost && (
+                  <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col items-center text-center">
+                    <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Inversión Total</p>
+                    <p className="text-3xl font-black text-gray-800">{config.currencySymbol}{((formData.stock || 0) * (formData.cost || 0)).toFixed(2)}</p>
+                  </div>
+                )}
                 <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col items-center">
                   <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Unidades en Red</p>
                   <p className="text-3xl font-black text-emerald-600">{formData.stock || 0}</p>
@@ -393,9 +414,50 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
               <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                 <div className="md:col-span-1 space-y-4">
                   <label className="block text-[10px] font-black text-gray-500 uppercase ml-1">Imagen Principal</label>
-                  <div onClick={() => fileInputRef.current?.click()} className="aspect-square bg-white rounded-[2rem] border-4 border-dashed border-gray-200 flex flex-col items-center justify-center relative overflow-hidden group cursor-pointer hover:border-blue-400 transition-all">
-                    {formData.image ? <img src={formData.image} className="w-full h-full object-cover" /> : <ImageIcon size={48} className="text-gray-300" />}
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    onPaste={(e) => {
+                      const items = e.clipboardData.items;
+                      for (let i = 0; i < items.length; i++) {
+                        if (items[i].type.indexOf("image") !== -1) {
+                          const blob = items[i].getAsFile();
+                          if (blob) {
+                            const reader = new FileReader();
+                            reader.onload = (event) => {
+                              setFormData(prev => ({ ...prev, image: event.target?.result as string }));
+                            };
+                            reader.readAsDataURL(blob);
+                            e.preventDefault(); // Prevent default paste behavior
+                            e.stopPropagation();
+                          }
+                        }
+                      }
+                    }}
+                    tabIndex={0} // Make div focusable to receive paste events
+                    className="aspect-square bg-white rounded-[2rem] border-4 border-dashed border-gray-200 flex flex-col items-center justify-center relative overflow-hidden group cursor-pointer hover:border-blue-400 transition-all outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-50"
+                  >
+                    {formData.image ? <img src={formData.image} className="w-full h-full object-cover" /> : (
+                      <div className="flex flex-col items-center gap-2 text-gray-300">
+                        <ImageIcon size={48} />
+                        <span className="text-[10px] font-bold uppercase">Click o Pegar (Ctrl+V)</span>
+                      </div>
+                    )}
                     <input ref={fileInputRef} type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
+
+                    {/* Web Search Button Overlay */}
+                    <div className="absolute bottom-4 right-4 flex gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation(); // Prevent file input trigger
+                          const term = encodeURIComponent(formData.name || formData.category || 'producto');
+                          window.open(`https://www.google.com/search?tbm=isch&q=${term}`, '_blank');
+                        }}
+                        className="p-3 bg-white text-blue-600 rounded-xl shadow-lg hover:scale-110 active:scale-95 transition-all border border-gray-100"
+                        title="Buscar en Google Imágenes"
+                      >
+                        <Search size={20} />
+                      </button>
+                    </div>
                   </div>
                 </div>
                 <div className="md:col-span-2 space-y-6">
@@ -411,7 +473,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       </div>
                       <div>
                         <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Costo Unitario (CPP)</label>
-                        <input disabled type="number" value={formData.cost || 0} className="w-full p-3 bg-gray-100 border-2 border-transparent rounded-xl font-bold text-gray-500 cursor-not-allowed" />
+                        <div className="relative">
+                          <input disabled type={canViewCost ? "number" : "password"} value={canViewCost ? (formData.cost || 0) : '******'} className="w-full p-3 bg-gray-100 border-2 border-transparent rounded-xl font-bold text-gray-500 cursor-not-allowed" />
+                          {!canViewCost && <div className="absolute inset-0 flex items-center justify-center"><span className="text-xs text-gray-400 font-bold bg-gray-100 px-2 rounded">Oculto</span></div>}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -656,10 +721,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     <h3 className="text-xl font-bold text-gray-800">Tarifas y Márgenes</h3>
                     <p className="text-sm text-gray-500">Configura precios específicos para cada lista de precios.</p>
                   </div>
-                  <div className="text-right">
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Costo Actual (CPP)</p>
-                    <p className="text-2xl font-black text-blue-600">{config.currencySymbol}{formData.cost?.toFixed(2)}</p>
-                  </div>
+                  {canViewCost && (
+                    <div className="text-right">
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Costo Actual (CPP)</p>
+                      <p className="text-2xl font-black text-blue-600">{config.currencySymbol}{formData.cost?.toFixed(2)}</p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-4">
@@ -685,12 +752,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
                           {isEnabled && (
                             <div className="flex items-center gap-6">
-                              <div className="text-center">
-                                <p className="text-[10px] font-bold text-gray-400 uppercase">Margen Neto</p>
-                                <p className={`font-black text-sm ${tariffData.margin! > 20 ? 'text-emerald-600' : 'text-orange-500'}`}>
-                                  {tariffData.margin?.toFixed(1)}%
-                                </p>
-                              </div>
+                              {canViewCost && (
+                                <div className="text-center">
+                                  <p className="text-[10px] font-bold text-gray-400 uppercase">Margen Neto</p>
+                                  <p className={`font-black text-sm ${tariffData.margin! > 20 ? 'text-emerald-600' : 'text-orange-500'}`}>
+                                    {tariffData.margin?.toFixed(1)}%
+                                  </p>
+                                </div>
+                              )}
                               <div className="relative">
                                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">{config.currencySymbol}</span>
                                 <input
@@ -706,13 +775,15 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                   className="w-32 pl-8 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl font-black text-purple-700 outline-none focus:ring-2 focus:ring-purple-200"
                                 />
                               </div>
-                              <button
-                                onClick={() => setShowProfitCalc(tariff.id)}
-                                className="p-2 bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100"
-                                title="Abrir Calculadora"
-                              >
-                                <Calculator size={20} />
-                              </button>
+                              {canViewCost && (
+                                <button
+                                  onClick={() => setShowProfitCalc(tariff.id)}
+                                  className="p-2 bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100"
+                                  title="Abrir Calculadora"
+                                >
+                                  <Calculator size={20} />
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -740,6 +811,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                 <OperationalSwitch label="Verificación Edad (+18)" description="Validación obligatoria de cédula." checked={formData.operationalFlags?.ageRestricted} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, ageRestricted: v } })} icon={ShieldCheck} />
                 <OperationalSwitch label="Permitir Venta Negativa" description="Vende aunque no haya stock." checked={formData.operationalFlags?.allowNegativeStock} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, allowNegativeStock: v } })} icon={AlertCircle} />
                 <OperationalSwitch label="Excluir de Promociones" description="Ignora cupones y descuentos globales." checked={formData.operationalFlags?.excludeFromPromotions} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, excludeFromPromotions: v } })} icon={Tag} />
+                <OperationalSwitch label="Excluir de Puntos" description="Este producto no genera puntos de lealtad." checked={formData.operationalFlags?.excludeFromLoyalty} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, excludeFromLoyalty: v } })} icon={Award} />
               </div>
             </div>
           )}

@@ -105,7 +105,11 @@ export const DEFAULT_TERMINAL_CONFIG = {
     theme: 'LIGHT' as const,
     gridDensity: 'COMFORTABLE' as const,
     showProductImages: true,
-    quickKeysLayout: 'A' as const
+    quickKeysLayout: 'A' as const,
+    viewMode: 'VISUAL' as const
+  },
+  catalog: {
+    allowedCategories: []
   }
 };
 
@@ -120,6 +124,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
     id: 'ADMIN',
     name: 'Administrador',
     permissions: [
+      'ALL',
       'POS_VOID_ITEM', 'POS_VOID_TICKET', 'POS_DISCOUNT',
       'POS_PRICE_OVERRIDE', 'POS_OPEN_DRAWER', 'POS_RETURNS',
       'POS_REPRINT_RECEIPT', 'SETTINGS_ACCESS'
@@ -305,6 +310,7 @@ export const FOOD_PRODUCTS: Product[] = [
 ];
 
 export const AVAILABLE_PERMISSIONS = [
+  // --- POS CORE ---
   { key: 'SALE', label: 'Realizar Ventas', description: 'Acceso a pantalla de cobro', category: 'SALES' },
   { key: 'POS_DISCOUNT', label: 'Aplicar Descuentos', description: 'Descuentos manuales en ítems o total', category: 'SALES' },
   { key: 'POS_PRICE_OVERRIDE', label: 'Modificar Precios', description: 'Cambiar precio unitario de productos', category: 'SALES' },
@@ -312,8 +318,41 @@ export const AVAILABLE_PERMISSIONS = [
   { key: 'POS_VOID_TICKET', label: 'Anular Ticket (En Curso)', description: 'Cancelar venta antes de pago', category: 'SALES' },
   { key: 'POS_VOID_PAID_TICKET', label: 'Anular Factura Pagada', description: 'Revertir una venta finalizada', category: 'SALES' },
   { key: 'POS_RETURNS', label: 'Devoluciones', description: 'Procesar notas de crédito', category: 'SALES' },
-  { key: 'OPEN_DRAWER', label: 'Abrir Cajón', description: 'Sin venta', category: 'CASH' },
-  { key: 'ALL', label: 'Acceso Total', description: 'Admin', category: 'SYSTEM' }
+  { key: 'POS_MANAGE_PARKED', label: 'Gestionar Cuentas', description: 'Ver y recuperar cuentas de otros', category: 'SALES' },
+
+  // --- CASH & FINANCE ---
+  { key: 'POS_OPEN_DRAWER', label: 'Abrir Cajón', description: 'Sin venta', category: 'CASH' },
+  { key: 'POS_CLOSE_Z', label: 'Cierre Z (Corte)', description: 'Realizar cierre de caja', category: 'CASH' },
+  { key: 'POS_VIEW_ACTIVE_CASH', label: 'Ver Efectivo Actual', description: 'Auditoría de caja en tiempo real', category: 'CASH' },
+  { key: 'EXPENSE_MANAGE', label: 'Gastos de Caja', description: 'Registrar salidas de efectivo', category: 'CASH' },
+  { key: 'REPORTS_VIEW_SALES', label: 'Ver Ventas', description: 'Reportes básicos de venta', category: 'FINANCE' },
+  { key: 'REPORTS_VIEW_FINANCIAL', label: 'Reportes Financieros', description: 'Ver costos, márgenes e impuestos', category: 'FINANCE' },
+
+  // --- CATALOG ---
+  { key: 'CATALOG_VIEW', label: 'Ver Catálogo', description: 'Acceso a lista de productos', category: 'CATALOG' },
+  { key: 'CATALOG_MANAGE', label: 'Gestionar Productos', description: 'Crear, editar y eliminar productos', category: 'CATALOG' },
+  { key: 'CATALOG_VIEW_COST', label: 'Ver Costos', description: 'Ver CPP y márgenes de ganancia', category: 'CATALOG' },
+  { key: 'TARIFF_MANAGE', label: 'Gestionar Tarifas', description: 'Editar listas de precios', category: 'CATALOG' },
+
+  // --- INVENTORY ---
+  { key: 'INVENTORY_VIEW', label: 'Ver Existencias', description: 'Consultar stock actual', category: 'INVENTORY' },
+  { key: 'INVENTORY_ADJUST', label: 'Ajustes de Stock', description: 'Entrada/Salida manual', category: 'INVENTORY' },
+  { key: 'INVENTORY_TRANSFER', label: 'Traspasos', description: 'Mover mercancía entre almacenes', category: 'INVENTORY' },
+  { key: 'SUPPLY_CHAIN_ORDER', label: 'Compras', description: 'Crear órdenes a proveedores', category: 'INVENTORY' },
+  { key: 'SUPPLY_CHAIN_RECEIVE', label: 'Recepción', description: 'Recibir mercancía de compras', category: 'INVENTORY' },
+
+  // --- CUSTOMERS ---
+  { key: 'CUSTOMER_VIEW', label: 'Ver Clientes', description: 'Acceso a directorio', category: 'CUSTOMERS' },
+  { key: 'CUSTOMER_MANAGE', label: 'Gestionar Clientes', description: 'Crear y editar clientes', category: 'CUSTOMERS' },
+  { key: 'CUSTOMER_CREDIT_LIMIT', label: 'Límite de Crédito', description: 'Modificar cupo de crédito', category: 'CUSTOMERS' },
+  { key: 'CUSTOMER_VIEW_DEBT', label: 'Ver Deudas', description: 'Acceso a estados de cuenta', category: 'CUSTOMERS' },
+
+  // --- ADMIN ---
+  { key: 'SETTINGS_ACCESS', label: 'Acceso Configuración', description: 'Entrar al panel de ajustes', category: 'ADMIN' },
+  { key: 'SETTINGS_HARDWARE', label: 'Config. Hardware', description: 'Impresoras y periféricos', category: 'ADMIN' },
+  { key: 'SETTINGS_USERS', label: 'Gestión Usuarios', description: 'Crear usuarios y roles', category: 'ADMIN' },
+  { key: 'SETTINGS_TAXES', label: 'Config. Fiscal', description: 'Impuestos y NCF', category: 'ADMIN' },
+  { key: 'AUDIT_LOG_VIEW', label: 'Ver Auditoría', description: 'Registro de actividades', category: 'ADMIN' }
 ];
 
 export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {

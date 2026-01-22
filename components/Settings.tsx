@@ -5,7 +5,7 @@ import {
   Monitor, Users, Truck, ShieldCheck, FileText,
   Globe, Database, Activity, Mail, Coins,
   Cpu, HardDrive, Smartphone, Cloud, Lock, Package, Building2,
-  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent
+  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award
 } from 'lucide-react';
 import { BusinessConfig, User, RoleDefinition, Transaction, Product, Warehouse, StockTransfer } from '../types';
 
@@ -25,10 +25,12 @@ import PaymentSettings from './PaymentSettings';
 import DocumentSettings from './DocumentSettings';
 import PromotionBuilder from './PromotionBuilder';
 import { ImportWizard } from './ImportWizard/ImportWizard';
+import LoyaltySettings from './LoyaltySettings';
 
 interface SettingsProps {
   config: BusinessConfig;
   users: User[];
+  currentUser: User | null;
   roles: RoleDefinition[];
   transactions: Transaction[];
   products: Product[];
@@ -46,10 +48,19 @@ interface SettingsProps {
   onClose: () => void;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY';
 
 const Settings: React.FC<SettingsProps> = (props) => {
   const [currentView, setCurrentView] = useState<SettingsView>('HOME');
+
+  const hasPermission = (permission: string): boolean => {
+    if (!props.currentUser) return false;
+    const userRole = props.roles.find(r => r.id === props.currentUser?.role);
+    if (!userRole) return false;
+    // Admin always has access? Or explicit 'ALL' permission?
+    if (userRole.permissions.includes('ALL')) return true;
+    return userRole.permissions.includes(permission as any);
+  };
 
   const renderContent = () => {
     switch (currentView) {
@@ -78,6 +89,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
             config={props.config}
             warehouses={props.warehouses}
             transactions={props.transactions}
+            currentUser={props.currentUser}
+            roles={props.roles}
             onUpdateProducts={props.onUpdateProducts}
             onUpdateConfig={props.onUpdateConfig}
             onClose={() => setCurrentView('HOME')}
@@ -129,6 +142,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
             config={props.config}
             onUpdateConfig={props.onUpdateConfig}
             onClose={() => setCurrentView('HOME')}
+            products={props.products}
           />
         );
 
@@ -168,6 +182,15 @@ const Settings: React.FC<SettingsProps> = (props) => {
             config={props.config}
             products={props.products}
             transactions={props.transactions}
+            onUpdateConfig={props.onUpdateConfig}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'LOYALTY':
+        return (
+          <LoyaltySettings
+            config={props.config}
             onUpdateConfig={props.onUpdateConfig}
             onClose={() => setCurrentView('HOME')}
           />
@@ -238,47 +261,76 @@ const Settings: React.FC<SettingsProps> = (props) => {
               <section>
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Inventario y Catálogo</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <SettingsCard icon={Package} label="Artículos y Tarifas" description="Catálogo, Precios, Variantes" color="bg-blue-600" onClick={() => setCurrentView('CATALOG')} />
-                  <SettingsCard icon={Building2} label="Almacenes" description="Ubicaciones, Traspasos, Stock" color="bg-purple-600" onClick={() => setCurrentView('WAREHOUSES')} />
-                  <SettingsCard icon={Database} label="Importar / Exportar" description="Carga Masiva de Datos" color="bg-cyan-600" onClick={() => setCurrentView('IMPORT_EXPORT')} />
-                  <SettingsCard icon={Truck} label="Proveedores" description="Compras y Abastecimiento" color="bg-emerald-500" onClick={props.onOpenSupplyChain} />
+                  <SettingsCard
+                    icon={Package}
+                    label="Artículos y Tarifas"
+                    description="Catálogo, Precios, Variantes"
+                    color="bg-blue-600"
+                    onClick={() => setCurrentView('CATALOG')}
+                    locked={!hasPermission('CATALOG_VIEW') && !hasPermission('CATALOG_MANAGE')}
+                  />
+                  <SettingsCard
+                    icon={Building2}
+                    label="Almacenes"
+                    description="Ubicaciones, Traspasos, Stock"
+                    color="bg-purple-600"
+                    onClick={() => setCurrentView('WAREHOUSES')}
+                    locked={!hasPermission('INVENTORY_VIEW') && !hasPermission('INVENTORY_TRANSFER')}
+                  />
+                  <SettingsCard
+                    icon={Database}
+                    label="Importar / Exportar"
+                    description="Carga Masiva de Datos"
+                    color="bg-cyan-600"
+                    onClick={() => setCurrentView('IMPORT_EXPORT')}
+                    locked={!hasPermission('CATALOG_MANAGE')}
+                  />
+                  <SettingsCard
+                    icon={Truck}
+                    label="Proveedores"
+                    description="Compras y Abastecimiento"
+                    color="bg-emerald-500"
+                    onClick={props.onOpenSupplyChain}
+                    locked={!hasPermission('SUPPLY_CHAIN_ORDER')}
+                  />
                 </div>
               </section>
 
               <section>
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Finanzas y Legal</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <SettingsCard icon={CreditCard} label="Métodos de Pago" description="Pasarelas, Tarjetas, QR" color="bg-indigo-500" onClick={() => setCurrentView('PAYMENTS')} />
-                  <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} />
-                  <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} />
-                  <SettingsCard icon={FileText} label="Documentos" description="Series, NCF, Prefijos" color="bg-blue-400" onClick={() => setCurrentView('DOCUMENTS')} />
+                  <SettingsCard icon={CreditCard} label="Métodos de Pago" description="Pasarelas, Tarjetas, QR" color="bg-indigo-500" onClick={() => setCurrentView('PAYMENTS')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} locked={!hasPermission('POS_CLOSE_Z')} />
+                  <SettingsCard icon={FileText} label="Documentos" description="Series, NCF, Prefijos" color="bg-blue-400" onClick={() => setCurrentView('DOCUMENTS')} locked={!hasPermission('SETTINGS_TAXES')} />
                 </div>
               </section>
 
               <section>
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Configuración Local</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <SettingsCard icon={Monitor} label="Terminales POS" description="Perfiles de Caja, Inventario" color="bg-blue-500" onClick={() => setCurrentView('TERMINALS')} />
-                  <SettingsCard icon={Printer} label="Hardware" description="Impresoras, Balanzas, VFD" color="bg-gray-700" onClick={() => setCurrentView('HARDWARE')} />
-                  <SettingsCard icon={Coins} label="Propinas" description="Cargos por Servicio y Tips" color="bg-yellow-500" onClick={() => setCurrentView('TIPS')} />
+                  <SettingsCard icon={Monitor} label="Terminales POS" description="Perfiles de Caja, Inventario" color="bg-blue-500" onClick={() => setCurrentView('TERMINALS')} locked={!hasPermission('SETTINGS_HARDWARE')} />
+                  <SettingsCard icon={Printer} label="Hardware" description="Impresoras, Balanzas, VFD" color="bg-gray-700" onClick={() => setCurrentView('HARDWARE')} locked={!hasPermission('SETTINGS_HARDWARE')} />
+                  <SettingsCard icon={Coins} label="Propinas" description="Cargos por Servicio y Tips" color="bg-yellow-500" onClick={() => setCurrentView('TIPS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                 </div>
               </section>
 
               <section>
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Equipo y Marketing</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <SettingsCard icon={Users} label="Equipo y Roles" description="Usuarios, Turnos, Permisos" color="bg-pink-500" onClick={() => setCurrentView('TEAM')} />
-                  <SettingsCard icon={Percent} label="Promociones" description="Descuentos, 2x1 y Temporadas" color="bg-rose-500" onClick={() => setCurrentView('PROMOTIONS')} />
-                  <SettingsCard icon={Receipt} label="Diseño de Ticket" description="Logo, Cabecera y Pie" color="bg-rose-600" onClick={() => setCurrentView('RECEIPT')} />
-                  <SettingsCard icon={Mail} label="E-mail" description="Factura Digital" color="bg-sky-500" onClick={() => setCurrentView('EMAIL')} />
+                  <SettingsCard icon={Users} label="Equipo y Roles" description="Usuarios, Turnos, Permisos" color="bg-pink-500" onClick={() => setCurrentView('TEAM')} locked={!hasPermission('SETTINGS_USERS')} />
+                  <SettingsCard icon={Award} label="Programa de Lealtad" description="Puntos, Canjes y Reglas" color="bg-purple-500" onClick={() => setCurrentView('LOYALTY')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={Percent} label="Promociones" description="Descuentos, 2x1 y Temporadas" color="bg-rose-500" onClick={() => setCurrentView('PROMOTIONS')} locked={!hasPermission('CATALOG_MANAGE')} />
+                  <SettingsCard icon={Receipt} label="Diseño de Ticket" description="Logo, Cabecera y Pie" color="bg-rose-600" onClick={() => setCurrentView('RECEIPT')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={Mail} label="E-mail" description="Factura Digital" color="bg-sky-500" onClick={() => setCurrentView('EMAIL')} locked={!hasPermission('SETTINGS_ACCESS')} />
                 </div>
               </section>
 
               <section>
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Sistema y Auditoría</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} />
-                  <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} />
+                  <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} locked={!hasPermission('AUDIT_LOG_VIEW')} />
                 </div>
               </section>
             </div>
@@ -294,8 +346,16 @@ const Settings: React.FC<SettingsProps> = (props) => {
   );
 };
 
-const SettingsCard: React.FC<{ icon: any; label: string; description: string; color: string; onClick: () => void }> = ({ icon: Icon, label, description, color, onClick }) => (
-  <button onClick={onClick} className="flex flex-col items-start p-6 bg-white rounded-3xl shadow-sm border border-slate-100 hover:shadow-xl hover:border-blue-200 hover:-translate-y-1 transition-all text-left group active:scale-95 h-full">
+const SettingsCard: React.FC<{ icon: any; label: string; description: string; color: string; onClick: () => void; locked?: boolean }> = ({ icon: Icon, label, description, color, onClick, locked }) => (
+  <button
+    onClick={locked ? undefined : onClick}
+    className={`flex flex-col items-start p-6 bg-white rounded-3xl shadow-sm border border-slate-100 transition-all text-left group h-full relative overflow-hidden ${locked ? 'opacity-60 cursor-not-allowed grayscale' : 'hover:shadow-xl hover:border-blue-200 hover:-translate-y-1 active:scale-95'}`}
+  >
+    {locked && (
+      <div className="absolute inset-0 bg-gray-50/50 z-10 flex items-center justify-center">
+        <Lock size={32} className="text-gray-400" />
+      </div>
+    )}
     <div className={`p-4 rounded-2xl text-white mb-5 shadow-lg transition-transform group-hover:scale-110 ${color}`}>
       <Icon size={26} strokeWidth={2.5} />
     </div>

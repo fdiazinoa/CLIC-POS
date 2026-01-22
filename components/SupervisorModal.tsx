@@ -64,7 +64,7 @@ const SupervisorModal: React.FC<SupervisorModalProps> = ({
         }
 
         // Check if role has the required permission or is Admin (ALL)
-        const hasPermission = (effectiveRole.permissions as string[]).includes('ALL') || effectiveRole.permissions.includes(requiredPermission);
+        const hasPermission = effectiveRole.permissions.includes('ALL') || effectiveRole.permissions.includes(requiredPermission);
 
         if (hasPermission) {
             onAuthorize(user);

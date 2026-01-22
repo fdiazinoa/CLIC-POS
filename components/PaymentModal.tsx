@@ -2,10 +2,10 @@
 import React, { useState, useEffect } from 'react';
 import {
    X, CreditCard, Banknote, QrCode, CheckCircle2,
-   Trash2, Plus, Wallet, Printer, Mail,
+   Trash2, Plus, Wallet, Printer, Mail, ShieldAlert,
    ArrowRight, Repeat, ChevronDown, ArrowRightLeft
 } from 'lucide-react';
-import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem, Transaction } from '../types';
+import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem, Transaction, Customer } from '../types';
 import { printTicket } from '../utils/printer';
 
 interface PaymentModalProps {
@@ -16,9 +16,10 @@ interface PaymentModalProps {
    onClose: () => void;
    onConfirm: (payments: PaymentEntry[]) => Promise<Transaction | null>;
    themeColor: string;
+   customer?: Customer | null;
 }
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, currencySymbol, config, onClose, onConfirm, themeColor }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, currencySymbol, config, onClose, onConfirm, themeColor, customer }) => {
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethod, setActiveMethod] = useState<PaymentMethod>('CASH');
    const [inputAmount, setInputAmount] = useState<string>('');
@@ -215,7 +216,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                   {[
                      { id: 'CASH', label: 'Efectivo', icon: Banknote },
                      { id: 'CARD', label: 'Tarjeta', icon: CreditCard },
-                     { id: 'QR', label: 'Digital', icon: QrCode }
+                     { id: 'QR', label: 'Digital', icon: QrCode },
+                     { id: 'WALLET', label: 'Wallet', icon: Wallet }
                   ].map(m => (
                      <button key={m.id} onClick={() => setActiveMethod(m.id as PaymentMethod)} className={`flex-1 min-w-[80px] md:min-w-[100px] py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center gap-1 md:gap-2 transition-all ${activeMethod === m.id ? `border-current ${themeTextClass} bg-gray-50 shadow-sm` : 'border-transparent text-gray-400 hover:bg-gray-50'}`}>
                         <m.icon size={24} className="md:w-8 md:h-8" /><span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{m.label}</span>
@@ -247,6 +249,20 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                               {selectedCurrency.symbol}{d}
                            </button>
                         ))}
+                     </div>
+                  )}
+
+                  {activeMethod === 'WALLET' && customer?.wallet && (
+                     <div className="mt-4 p-4 bg-purple-50 rounded-2xl border border-purple-100">
+                        <div className="flex justify-between items-center mb-2">
+                           <span className="text-xs font-bold text-purple-600 uppercase tracking-wider">Saldo Disponible</span>
+                           <span className="text-xl font-black text-purple-700">{currencySymbol}{customer.wallet.balance.toFixed(2)}</span>
+                        </div>
+                        {customer.wallet.balance < parseFloat(inputAmount || '0') && (
+                           <div className="text-[10px] font-bold text-red-500 flex items-center gap-1">
+                              <ShieldAlert size={12} /> Saldo insuficiente
+                           </div>
+                        )}
                      </div>
                   )}
                </div>

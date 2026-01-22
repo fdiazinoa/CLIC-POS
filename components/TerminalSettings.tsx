@@ -13,9 +13,9 @@ import {
    ToggleLeft, ToggleRight, Radio, Power, Scale, Tv, Mail, ShoppingBag, Truck,
    Package, Layers, Crown, ListOrdered, Link2, Sparkles, Palette, MousePointer2, Banknote, ListChecks,
    // Added Sun to fix "Cannot find name 'Sun'" error
-   Sun
+   Sun, ScanBarcode, Layout
 } from 'lucide-react';
-import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice } from '../types';
+import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice, Product } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG } from '../constants';
 import { db } from '../utils/db';
 
@@ -24,6 +24,7 @@ interface TerminalSettingsProps {
    onUpdateConfig: (newConfig: BusinessConfig) => void;
    onClose: () => void;
    warehouses?: Warehouse[];
+   products?: Product[];
 }
 
 const PRINTER_ROLES = [
@@ -39,9 +40,10 @@ const DOCUMENT_ROLES = [
    { id: 'TRANSFER', label: 'Notas de Traspaso', description: 'Comprobantes de movimiento entre almacenes.', icon: ArrowRightLeft },
 ];
 
-type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY' | 'LAN_BINDING';
+type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY' | 'LAN_BINDING' | 'CATALOG';
 
-const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [] }) => {
+const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [] }) => {
+   // ... existing state ...
    const [terminals, setTerminals] = useState(config.terminals || []);
    const [selectedTerminalId, setSelectedTerminalId] = useState<string>(terminals[0]?.id || '');
    const [activeTab, setActiveTab] = useState<TerminalTab>('OPERATIONAL');
@@ -62,6 +64,10 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    const activeTerminal = useMemo(() =>
       terminals.find(t => t.id === selectedTerminalId),
       [terminals, selectedTerminalId]);
+
+   const allCategories = useMemo(() => {
+      return Array.from(new Set(products.map(p => p.category))).sort();
+   }, [products]);
 
    const handleUpdateActiveConfig = (sectionPath: string, key: string, value: any) => {
       if (!activeTerminal) return;
@@ -90,6 +96,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       }));
    };
 
+   // ... existing handlers ...
    const handleAssignSequence = (roleId: string, sequenceId: string) => {
       if (!activeTerminal) return;
       const currentAssignments = activeTerminal.config.documentAssignments || {};
@@ -234,6 +241,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                {[
                   { id: 'OPERATIONAL', label: 'Operativa', icon: Database },
                   { id: 'FISCAL', label: 'Lotes Fiscales', icon: Landmark },
+                  { id: 'CATALOG', label: 'Catálogo', icon: ShoppingBag },
                   { id: 'DOCUMENTS', label: 'Series / Documentos', icon: Link2 },
                   { id: 'INVENTORY', label: 'Almacenes', icon: Box },
                   { id: 'SECURITY', label: 'Seguridad', icon: ShieldAlert },
@@ -255,6 +263,50 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
             <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50 custom-scrollbar">
                {activeTerminal ? (
                   <div className="max-w-4xl mx-auto space-y-8 animate-in slide-in-from-right-4">
+
+                     {/* CATALOG SECTION */}
+                     {activeTab === 'CATALOG' && (
+                        <div className="space-y-6 animate-in slide-in-from-right-4">
+                           <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm">
+                              <h3 className="text-xl font-black text-gray-800 mb-6 flex items-center gap-2">
+                                 <ShoppingBag size={24} className="text-blue-600" /> Visibilidad de Catálogo
+                              </h3>
+                              <p className="text-sm text-gray-500 mb-8">Selecciona qué categorías de productos estarán disponibles para la venta en esta terminal. Si no seleccionas ninguna, se mostrarán todas.</p>
+
+                              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                                 {allCategories.map(cat => {
+                                    const isSelected = activeTerminal.config.catalog?.allowedCategories?.includes(cat);
+                                    return (
+                                       <button
+                                          key={cat}
+                                          onClick={() => {
+                                             const current = activeTerminal.config.catalog?.allowedCategories || [];
+                                             const updated = isSelected
+                                                ? current.filter(c => c !== cat)
+                                                : [...current, cat];
+                                             handleUpdateActiveConfig('catalog', 'allowedCategories', updated);
+                                          }}
+                                          className={`p-4 rounded-2xl border-2 text-left transition-all ${isSelected ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'}`}
+                                       >
+                                          <div className={`w-6 h-6 rounded-full flex items-center justify-center mb-3 ${isSelected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-300'}`}>
+                                             {isSelected ? <Check size={14} strokeWidth={3} /> : <div className="w-2 h-2 bg-gray-300 rounded-full" />}
+                                          </div>
+                                          <span className={`font-bold text-sm block truncate ${isSelected ? 'text-blue-900' : 'text-gray-600'}`}>{cat}</span>
+                                       </button>
+                                    );
+                                 })}
+                              </div>
+
+                              <div className="mt-8 p-4 bg-blue-50 rounded-xl border border-blue-100 flex items-start gap-3">
+                                 <Info size={20} className="text-blue-600 shrink-0 mt-0.5" />
+                                 <div>
+                                    <h4 className="font-bold text-blue-900 text-sm">Nota sobre el alcance</h4>
+                                    <p className="text-xs text-blue-700 mt-1">Esta configuración solo afecta la visibilidad en la pantalla de ventas (POS). No impide que un administrador vea estos productos en el inventario o reportes.</p>
+                                 </div>
+                              </div>
+                           </div>
+                        </div>
+                     )}
 
                      {/* LAN BINDING SECTION */}
                      {activeTab === 'LAN_BINDING' && (
@@ -432,7 +484,30 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        </div>
                                     </div>
                                  </div>
+
                                  <div className="space-y-4">
+                                    <div>
+                                       <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Modo de Visualización</label>
+                                       <div className="flex bg-slate-100 p-1 rounded-2xl">
+                                          <button
+                                             onClick={() => handleUpdateActiveConfig('ux', 'viewMode', 'VISUAL')}
+                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.viewMode === 'VISUAL' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'}`}
+                                          >
+                                             <LayoutGrid size={14} /> Visual / Touch
+                                          </button>
+                                          <button
+                                             onClick={() => handleUpdateActiveConfig('ux', 'viewMode', 'RETAIL')}
+                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.viewMode === 'RETAIL' ? 'bg-white text-purple-600 shadow-sm' : 'text-slate-400'}`}
+                                          >
+                                             <ScanBarcode size={14} /> Retail / Scanner
+                                          </button>
+                                       </div>
+                                       <p className="text-[10px] text-gray-400 mt-2 ml-1">
+                                          {activeTerminal.config.ux.viewMode === 'RETAIL'
+                                             ? "Optimizado para supermercados. Oculta la grilla de productos y prioriza el escaneo."
+                                             : "Diseño clásico con grilla de productos y categorías visuales."}
+                                       </p>
+                                    </div>
                                     <div>
                                        <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Tema Visual</label>
                                        <div className="flex bg-slate-100 p-1 rounded-2xl">
@@ -966,34 +1041,36 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
          </div>
 
          {/* MODAL DE CONFLICTO DE JERARQUIA */}
-         {showConflictModal && (
-            <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in">
-               <div className="bg-white rounded-[2.5rem] w-full max-w-md shadow-2xl p-10 overflow-hidden text-center animate-in zoom-in-95">
-                  <div className="w-20 h-20 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-6">
-                     <ShieldAlert size={40} />
-                  </div>
-                  <h3 className="text-2xl font-black text-slate-800 mb-2">Conflicto de Jerarquía</h3>
-                  <p className="text-slate-500 mb-8 leading-relaxed">
-                     La terminal <span className="font-black text-blue-600">'{showConflictModal}'</span> ya está configurada como la Principal. ¿Desea transferir el rol de mando a esta terminal?
-                  </p>
-                  <div className="flex flex-col gap-3">
-                     <button
-                        onClick={confirmMasterTransfer}
-                        className="w-full py-4 bg-orange-600 text-white rounded-2xl font-black shadow-lg shadow-orange-200 hover:bg-orange-700 active:scale-95 transition-all"
-                     >
-                        Transferir Rol Master
-                     </button>
-                     <button
-                        onClick={() => setShowConflictModal(null)}
-                        className="w-full py-4 bg-slate-100 text-slate-500 rounded-2xl font-bold hover:bg-slate-200 transition-all"
-                     >
-                        Cancelar
-                     </button>
+         {
+            showConflictModal && (
+               <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in">
+                  <div className="bg-white rounded-[2.5rem] w-full max-w-md shadow-2xl p-10 overflow-hidden text-center animate-in zoom-in-95">
+                     <div className="w-20 h-20 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                        <ShieldAlert size={40} />
+                     </div>
+                     <h3 className="text-2xl font-black text-slate-800 mb-2">Conflicto de Jerarquía</h3>
+                     <p className="text-slate-500 mb-8 leading-relaxed">
+                        La terminal <span className="font-black text-blue-600">'{showConflictModal}'</span> ya está configurada como la Principal. ¿Desea transferir el rol de mando a esta terminal?
+                     </p>
+                     <div className="flex flex-col gap-3">
+                        <button
+                           onClick={confirmMasterTransfer}
+                           className="w-full py-4 bg-orange-600 text-white rounded-2xl font-black shadow-lg shadow-orange-200 hover:bg-orange-700 active:scale-95 transition-all"
+                        >
+                           Transferir Rol Master
+                        </button>
+                        <button
+                           onClick={() => setShowConflictModal(null)}
+                           className="w-full py-4 bg-slate-100 text-slate-500 rounded-2xl font-bold hover:bg-slate-200 transition-all"
+                        >
+                           Cancelar
+                        </button>
+                     </div>
                   </div>
                </div>
-            </div>
-         )}
-      </div>
+            )
+         }
+      </div >
    );
 };
 

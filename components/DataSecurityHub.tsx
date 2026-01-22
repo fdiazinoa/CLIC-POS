@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import {
    Download, FileSpreadsheet, FileText, Calendar,
    Lock, ShieldAlert, CheckCircle2, ChevronRight,
-   Database, FileJson, HardDrive, LogOut, KeyRound, Delete, RefreshCw
+   Database, FileJson, HardDrive, LogOut, KeyRound, Delete, RefreshCw, ArrowLeft
 } from 'lucide-react';
 import { db } from '../utils/db'; // Import DB to call reset
 import { dbAdapter } from '../services/db';
@@ -143,6 +143,9 @@ const DataSecurityHub: React.FC<DataSecurityHubProps> = ({ onClose }) => {
          <section>
             <div className="flex flex-col md:flex-row md:items-end justify-between mb-6 gap-4">
                <div>
+                  <button onClick={onClose} className="mb-2 flex items-center gap-2 text-gray-400 hover:text-gray-700 transition-colors font-bold text-sm">
+                     <ArrowLeft size={18} /> Volver
+                  </button>
                   <h2 className="text-2xl font-black text-gray-800 flex items-center gap-3">
                      <Database className="text-blue-600" /> Centro de Datos
                   </h2>

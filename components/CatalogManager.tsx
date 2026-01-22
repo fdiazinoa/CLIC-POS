@@ -22,6 +22,8 @@ interface CatalogManagerProps {
    config: BusinessConfig;
    warehouses: Warehouse[];
    transactions: Transaction[];
+   currentUser: any; // Using any to avoid circular dependency or import issues if User type isn't imported
+   roles: any[];
    onUpdateProducts: (products: Product[]) => void;
    onUpdateConfig: (config: BusinessConfig) => void;
    onClose: () => void;
@@ -173,7 +175,7 @@ const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Pro
 
 // --- MAIN CATALOG COMPONENT ---
 const CatalogManager: React.FC<CatalogManagerProps> = ({
-   products, config, warehouses, transactions, onUpdateProducts, onUpdateConfig, onClose
+   products, config, warehouses, transactions, currentUser, roles, onUpdateProducts, onUpdateConfig, onClose
 }) => {
    const [viewMode, setViewMode] = useState<ViewMode>('PRODUCTS');
    const [searchTerm, setSearchTerm] = useState('');
@@ -186,6 +188,16 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
    // Watchlists State
    const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
+
+   const hasPermission = (permission: string): boolean => {
+      if (!currentUser) return false;
+      const userRole = roles.find(r => r.id === currentUser.role);
+      if (!userRole) return false;
+      if (userRole.permissions.includes('ALL')) return true;
+      return userRole.permissions.includes(permission);
+   };
+
+   const canManage = hasPermission('CATALOG_MANAGE');
 
    useEffect(() => {
       const loadWatchlists = async () => {
@@ -267,7 +279,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    };
 
    if (viewMode === 'VARIANTS') return <VariantManager onClose={() => setViewMode('PRODUCTS')} />;
-   if (editingProduct) return <ProductForm initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={warehouses} availableTariffs={tariffs} hasHistory={transactions.some(t => t.items.some(item => item.id === (editingProduct as any).id))} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} />;
+   if (editingProduct) return <ProductForm initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={warehouses} availableTariffs={tariffs} hasHistory={transactions.some(t => t.items.some(item => item.id === (editingProduct as any).id))} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} />;
    if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={products} config={config} availableTariffs={tariffs} onSave={handleSaveTariff} onClose={() => setEditingTariff(null)} />;
    if (editingGroup) return <GroupForm initialData={editingGroup === 'NEW' ? null : editingGroup} products={products} onSave={handleSaveGroup} onClose={() => setEditingGroup(null)} />;
    if (editingSeason) return <SeasonForm initialData={editingSeason === 'NEW' ? null : editingSeason} products={products} onSave={handleSaveSeason} onClose={() => setEditingSeason(null)} />;
@@ -310,12 +322,14 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                      <span className="text-sm font-bold uppercase tracking-widest text-slate-300">Seleccionados</span>
                   </div>
                   <div className="flex gap-4">
-                     <button
-                        onClick={() => setShowBulkModal(true)}
-                        className="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-2"
-                     >
-                        <Settings2 size={16} /> Editar Propiedades
-                     </button>
+                     {canManage && (
+                        <button
+                           onClick={() => setShowBulkModal(true)}
+                           className="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-2"
+                        >
+                           <Settings2 size={16} /> Editar Propiedades
+                        </button>
+                     )}
                      <button
                         onClick={() => setSelectedIds(new Set())}
                         className="px-4 py-2 hover:bg-white/10 rounded-xl font-bold text-xs uppercase tracking-wider text-slate-400 transition-all"
@@ -335,12 +349,14 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                      <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition-colors"><ArrowLeft size={24} /></button>
                      <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2"><Package className="text-blue-600" /> Gestión de Catálogo</h1>
                   </div>
-                  <button onClick={() => { if (viewMode === 'PRODUCTS') setEditingProduct('NEW'); else if (viewMode === 'TARIFFS') setEditingTariff('NEW'); else if (viewMode === 'GROUPS') setEditingGroup('NEW'); else if (viewMode === 'SEASONS') setEditingSeason('NEW'); }} className={`px-6 py-3 text-white rounded-xl font-bold shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 ${['STOCKS', 'BI_MONITOR'].includes(viewMode) ? 'opacity-0 pointer-events-none' : 'bg-blue-600'}`}><Plus size={20} /> {viewMode === 'GROUPS' ? 'Nuevo Grupo' : viewMode === 'TARIFFS' ? 'Nueva Tarifa' : viewMode === 'SEASONS' ? 'Nueva Temporada' : 'Nuevo Artículo'}</button>
+                  {canManage && (
+                     <button onClick={() => { if (viewMode === 'PRODUCTS') setEditingProduct('NEW'); else if (viewMode === 'TARIFFS') setEditingTariff('NEW'); else if (viewMode === 'GROUPS') setEditingGroup('NEW'); else if (viewMode === 'SEASONS') setEditingSeason('NEW'); }} className={`px-6 py-3 text-white rounded-xl font-bold shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 ${['STOCKS', 'BI_MONITOR'].includes(viewMode) ? 'opacity-0 pointer-events-none' : 'bg-blue-600'}`}><Plus size={20} /> {viewMode === 'GROUPS' ? 'Nuevo Grupo' : viewMode === 'TARIFFS' ? 'Nueva Tarifa' : viewMode === 'SEASONS' ? 'Nueva Temporada' : 'Nuevo Artículo'}</button>
+                  )}
                </div>
                <div className="flex gap-8 mt-2 overflow-x-auto no-scrollbar">
                   <button onClick={() => setViewMode('PRODUCTS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'PRODUCTS' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400'}`}><Package size={18} /> Productos</button>
                   <button onClick={() => setViewMode('BI_MONITOR')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'BI_MONITOR' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400'}`}><Activity size={18} /> Monitor BI</button>
-                  <button onClick={() => setViewMode('VARIANTS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap border-transparent text-gray-400`}><Layers size={18} /> Variantes y Atributos</button>
+                  {canManage && <button onClick={() => setViewMode('VARIANTS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'VARIANTS' ? 'border-transparent text-gray-400' : 'border-transparent text-gray-400'}`}><Layers size={18} /> Variantes y Atributos</button>}
                   <button onClick={() => setViewMode('GROUPS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'GROUPS' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400'}`}><Grid size={18} /> Grupos</button>
                   <button onClick={() => setViewMode('SEASONS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'SEASONS' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-gray-400'}`}><Sun size={18} /> Temporadas</button>
                   <button onClick={() => setViewMode('STOCKS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'STOCKS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-400'}`}><ClipboardList size={18} /> Stocks</button>
@@ -390,9 +406,11 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
                                  <div className="h-32 bg-gray-50 rounded-xl mb-4 relative overflow-hidden flex items-center justify-center">
                                     {product.image ? <img src={product.image} alt={product.name} className="w-full h-full object-cover" /> : <ImageIcon className="text-gray-300" size={32} />}
-                                    <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                       <button onClick={(e) => { e.stopPropagation(); setEditingProduct(product); }} className="p-2 bg-white/90 backdrop-blur rounded-lg shadow-sm hover:text-blue-600"><Edit2 size={16} /></button>
-                                    </div>
+                                    {canManage && (
+                                       <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                          <button onClick={(e) => { e.stopPropagation(); setEditingProduct(product); }} className="p-2 bg-white/90 backdrop-blur rounded-lg shadow-sm hover:text-blue-600"><Edit2 size={16} /></button>
+                                       </div>
+                                    )}
                                  </div>
                                  <div className="flex-1 flex flex-col">
                                     <span className="text-[10px] font-bold uppercase text-blue-600 bg-blue-50 px-2 py-0.5 rounded w-fit mb-1">{product.category}</span>

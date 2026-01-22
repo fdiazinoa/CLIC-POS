@@ -1,6 +1,6 @@
-import { CartItem, BusinessConfig, Promotion } from '../types';
+import { CartItem, BusinessConfig, Promotion, Customer } from '../types';
 
-export const applyPromotions = (cart: CartItem[], config: BusinessConfig): CartItem[] => {
+export const applyPromotions = (cart: CartItem[], config: BusinessConfig, customer?: Customer): CartItem[] => {
     const activePromotions = config.promotions?.filter(p => {
         // 1. Check Active Status
         if (!p.schedule.isActive) return false;
@@ -20,11 +20,25 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig): CartI
         if (now < start || now > end) return false;
 
         // 4. Check Terminal Scope
-        // Assuming we have access to the current terminal ID via config or passed argument.
-        // For now, we'll assume if terminalIds is present, we check against the active terminal in config.
         const currentTerminalId = config.terminals?.[0]?.id; // Simplified for prototype
         if (p.terminalIds && p.terminalIds.length > 0 && currentTerminalId) {
             if (!p.terminalIds.includes(currentTerminalId)) return false;
+        }
+
+        // 5. Check Loyalty Conditions (NEW)
+        if (p.conditions && p.conditions.length > 0) {
+            for (const condition of p.conditions) {
+                if (condition.type === 'HAS_WALLET') {
+                    if (!customer || !customer.wallet || customer.wallet.status !== 'ACTIVE') return false;
+                }
+                if (condition.type === 'CUSTOMER_TIER') {
+                    if (!customer || customer.tier !== condition.value) return false;
+                }
+                if (condition.type === 'HAS_POINTS_MIN') {
+                    const minPoints = parseInt(condition.value, 10);
+                    if (!customer || (customer.loyaltyPoints || 0) < minPoints) return false;
+                }
+            }
         }
 
         return true;

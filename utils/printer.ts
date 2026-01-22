@@ -8,22 +8,78 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
     // Calculate totals and savings
     let subtotal = 0;
     let discountTotal = 0;
+    let taxTotal = 0;
+    const isTaxIncluded = transaction.isTaxIncluded || false;
+
+    // 1. Calculate Raw Totals (Pre-Global Discount)
+    let rawNetTotal = 0;
+    let rawTaxTotal = 0;
+    let rawGrossTotal = 0;
 
     transaction.items.forEach(item => {
         const originalPrice = item.originalPrice || item.price;
-        const lineTotal = item.price * item.quantity;
+        const lineVal = item.price * item.quantity;
         const lineDiscount = (originalPrice - item.price) * item.quantity;
 
-        subtotal += lineTotal;
         discountTotal += lineDiscount;
+        rawGrossTotal += lineVal;
+
+        // Determine Tax Rate for this item
+        let itemTaxRate = 0;
+        if (item.appliedTaxIds && item.appliedTaxIds.length > 0) {
+            item.appliedTaxIds.forEach(id => {
+                const t = config.taxes.find(tax => tax.id === id);
+                if (t) itemTaxRate += t.rate;
+            });
+        } else {
+            itemTaxRate = config.taxRate; // Fallback
+        }
+
+        let lineNet = 0;
+        let lineTax = 0;
+
+        if (isTaxIncluded) {
+            lineNet = lineVal / (1 + itemTaxRate);
+            lineTax = lineVal - lineNet;
+        } else {
+            lineNet = lineVal;
+            lineTax = lineNet * itemTaxRate;
+        }
+
+        rawNetTotal += lineNet;
+        rawTaxTotal += lineTax;
     });
 
-    // Add global discount if present
+    // 2. Apply Global Discount
     if (transaction.discountAmount) {
         discountTotal += transaction.discountAmount;
+
+        // Discount reduces the base. We need to scale down Net and Tax.
+        // If Tax Included: Discount is on Gross.
+        // If Tax Excluded: Discount is on Net.
+
+        if (isTaxIncluded) {
+            // Discount is removed from Gross Total
+            // New Gross = Old Gross - Discount
+            // Ratio = New Gross / Old Gross
+            const ratio = (rawGrossTotal - transaction.discountAmount) / (rawGrossTotal || 1);
+            subtotal = rawNetTotal * ratio;
+            taxTotal = rawTaxTotal * ratio;
+        } else {
+            // Discount is removed from Net Total
+            // New Net = Old Net - Discount
+            subtotal = rawNetTotal - transaction.discountAmount;
+            // Tax is recalculated on new Net? 
+            // Usually yes, tax is on the discounted amount.
+            // Ratio = New Net / Old Net
+            const ratio = subtotal / (rawNetTotal || 1);
+            taxTotal = rawTaxTotal * ratio;
+        }
+    } else {
+        subtotal = rawNetTotal;
+        taxTotal = rawTaxTotal;
     }
 
-    const taxTotal = subtotal * config.taxRate;
     const finalTotal = transaction.total;
     const savings = discountTotal;
 
@@ -241,6 +297,35 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
                 <div style="font-size: 16px;">${currencySymbol}${savings.toFixed(2)}</div>
             </div>
             ` : ''}
+
+            <!-- PAYMENT BREAKDOWN -->
+            ${(() => {
+            const payments = transaction.payments || [];
+            const totalPaid = payments.reduce((acc: number, p: any) => acc + (p.amount || 0), 0);
+            const change = Math.max(0, totalPaid - finalTotal);
+
+            if (payments.length === 0) return '';
+
+            return `
+                <div class="divider"></div>
+                <div class="totals-section">
+                    <div style="font-weight: bold; margin-bottom: 4px; font-size: 10px;">FORMAS DE PAGO</div>
+                    ${payments.map((p: any) => `
+                    <div class="total-row">
+                        <span>${p.method === 'CASH' ? 'EFECTIVO' : p.method === 'CARD' ? 'TARJETA' : p.method}</span>
+                        <span>${currencySymbol}${(p.amount || 0).toFixed(2)}</span>
+                    </div>
+                    `).join('')}
+                    
+                    ${change > 0 ? `
+                    <div class="total-row" style="margin-top: 4px; font-weight: bold;">
+                        <span>CAMBIO</span>
+                        <span>${currencySymbol}${change.toFixed(2)}</span>
+                    </div>
+                    ` : ''}
+                </div>
+                `;
+        })()}
 
             <!-- FOOTER -->
             <div class="footer">

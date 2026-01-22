@@ -680,15 +680,23 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
                            </div>
 
                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                              {['SALES', 'CASH', 'ADMIN', 'SYSTEM'].map(category => {
+                              {[
+                                 { id: 'SALES', label: 'Punto de Venta' },
+                                 { id: 'CASH', label: 'Caja y Efectivo' },
+                                 { id: 'CATALOG', label: 'Catálogo y Precios' },
+                                 { id: 'INVENTORY', label: 'Inventario y Compras' },
+                                 { id: 'CUSTOMERS', label: 'Clientes y Créditos' },
+                                 { id: 'FINANCE', label: 'Finanzas y Reportes' },
+                                 { id: 'ADMIN', label: 'Administración' }
+                              ].map(cat => {
                                  // Filter logic matches AVAILABLE_PERMISSIONS categories
-                                 const perms = AVAILABLE_PERMISSIONS.filter(p => p.category === category);
+                                 const perms = AVAILABLE_PERMISSIONS.filter(p => p.category === cat.id);
                                  if (perms.length === 0) return null;
 
                                  return (
-                                    <div key={category} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-200">
+                                    <div key={cat.id} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-200">
                                        <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-6 flex items-center gap-2 pb-2 border-b border-gray-100">
-                                          {category === 'SALES' ? 'Punto de Venta' : category === 'CASH' ? 'Caja y Dinero' : 'Administración'}
+                                          {cat.label}
                                        </h4>
                                        <div className="space-y-4">
                                           {perms.map(perm => {
