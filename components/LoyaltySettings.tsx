@@ -16,7 +16,6 @@ const LoyaltySettings: React.FC<LoyaltySettingsProps> = ({ config, onUpdateConfi
         redeemRate: 1.0, // Default: 1 point = $1.00
         minRedemptionPoints: 10,
         expirationMonths: 12,
-        expirationMonths: 12,
         excludedCategories: []
     });
 

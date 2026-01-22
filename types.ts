@@ -590,7 +590,7 @@ export interface StockTransfer {
   createdBy?: string;
 }
 
-export type PromotionType = 'DISCOUNT' | 'BOGO' | 'HAPPY_HOUR' | 'CONDITIONAL_TARGET';
+export type PromotionType = 'DISCOUNT' | 'BOGO' | 'HAPPY_HOUR' | 'CONDITIONAL_TARGET' | 'BUNDLE';
 export type PromotionTargetType = 'ALL' | 'PRODUCT' | 'CATEGORY' | 'GROUP' | 'SEASON';
 export type PromotionBenefitType = 'DISCOUNT_PERCENT' | 'FIXED_PRICE' | 'CASHBACK' | 'POINTS_MULTIPLIER';
 

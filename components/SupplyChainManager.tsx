@@ -612,7 +612,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
    // --- RENDER MAIN ---
 
    if (isAuditMode) {
-      return <InventoryAudit products={products} onClose={() => setIsAuditMode(false)} onCommit={handleAuditCommit} />;
+      return <InventoryAudit products={products} mode="ABSOLUTE" onClose={() => setIsAuditMode(false)} onCommit={handleAuditCommit} />;
    }
 
    return (
