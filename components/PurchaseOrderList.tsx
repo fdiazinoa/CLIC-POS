@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Plus, FileText, Calendar, ArrowRight, Mail, Clock } from 'lucide-react';
+import { Search, Plus, FileText, Calendar, ArrowRight, Mail, Clock, Check } from 'lucide-react';
 import { PurchaseOrder, Supplier, BusinessConfig } from '../types';
+import { formatSafeDate } from '../utils/dateUtils';
 
 interface PurchaseOrderListProps {
     purchaseOrders: PurchaseOrder[];
@@ -96,9 +97,16 @@ const PurchaseOrderList: React.FC<PurchaseOrderListProps> = ({
                         return (
                             <div
                                 key={po.id}
-                                onClick={() => onViewDetail(po.id)}
-                                className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-all cursor-pointer group"
+                                onClick={() => po.status !== 'COMPLETED' && onViewDetail(po.id)}
+                                className={`bg-white p-5 rounded-2xl border border-gray-200 shadow-sm transition-all relative group ${po.status === 'COMPLETED' ? 'opacity-75 cursor-default' : 'hover:shadow-md cursor-pointer'}`}
                             >
+                                {po.status === 'COMPLETED' && (
+                                    <div className="absolute top-2 right-2 z-10">
+                                        <div className="bg-green-500 text-white p-1 rounded-full shadow-lg">
+                                            <Check size={16} />
+                                        </div>
+                                    </div>
+                                )}
                                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                                     <div className="flex items-center gap-4">
                                         <div className="w-12 h-12 bg-purple-50 text-purple-600 rounded-xl flex items-center justify-center shrink-0">
@@ -115,7 +123,7 @@ const PurchaseOrderList: React.FC<PurchaseOrderListProps> = ({
                                             <p className="text-[10px] uppercase text-gray-400 font-bold mb-1">Fecha</p>
                                             <div className="flex items-center gap-1 text-gray-700 font-bold text-sm">
                                                 <Calendar size={14} />
-                                                {new Date(po.date).toLocaleDateString()}
+                                                {formatSafeDate(po.date)}
                                             </div>
                                         </div>
 

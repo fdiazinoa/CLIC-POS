@@ -3,7 +3,7 @@ import {
     X, Package, Tag, DollarSign, StickyNote,
     Save, AlertCircle, Check, Store
 } from 'lucide-react';
-import { Product, Warehouse, ProductStock, User } from '../types';
+import { Product, Warehouse, ProductStock, User, BusinessConfig } from '../types';
 import { db } from '../utils/db';
 import { hasProductPromotion } from '../utils/promotionEngine';
 
@@ -15,6 +15,7 @@ interface ProductActionModalProps {
     currentWarehouseId: string;
     warehouses: Warehouse[];
     currentUser: User;
+    config: BusinessConfig;
     existingCartItem?: { price: number; note?: string };
 }
 
@@ -28,6 +29,7 @@ const ProductActionModal: React.FC<ProductActionModalProps> = ({
     currentWarehouseId,
     warehouses,
     currentUser,
+    config,
     existingCartItem
 }) => {
     const [activeTab, setActiveTab] = useState<Tab>('STOCK');
@@ -71,7 +73,7 @@ const ProductActionModal: React.FC<ProductActionModalProps> = ({
 
     if (!isOpen || !product) return null;
 
-    const hasPromo = hasProductPromotion(product);
+    const hasPromo = hasProductPromotion(product, config);
     const canChangePrice = product.operationalFlags?.promptPrice ||
         currentUser.role === 'ADMIN' ||
         currentUser.role === 'MANAGER'; // Simplified role check
@@ -251,8 +253,8 @@ const TabButton = ({ active, onClick, icon, label }: { active: boolean, onClick:
     <button
         onClick={onClick}
         className={`flex-1 py-3 flex flex-col items-center gap-1 text-sm font-medium transition-colors border-b-2 ${active
-                ? 'border-blue-600 text-blue-600 bg-blue-50/50'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            ? 'border-blue-600 text-blue-600 bg-blue-50/50'
+            : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
             }`}
     >
         {icon}

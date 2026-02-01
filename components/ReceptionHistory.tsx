@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Search, Package, Calendar, User, ArrowRight, Clock, X, Hash, Box } from 'lucide-react';
 import { Reception, BusinessConfig } from '../types';
+import { formatSafeDate, formatSafeTime } from '../utils/dateUtils';
 
 interface ReceptionHistoryProps {
     receptions: Reception[];
@@ -19,7 +20,11 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config 
                     (r.purchaseOrderId || '').toLowerCase().includes(searchLower) ||
                     (r.receivedByUserName || '').toLowerCase().includes(searchLower);
             })
-            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            .sort((a, b) => {
+                const dateA = new Date(a.date).getTime() || (a.id?.split('-')[1] ? parseInt(a.id.split('-')[1]) : 0);
+                const dateB = new Date(b.date).getTime() || (b.id?.split('-')[1] ? parseInt(b.id.split('-')[1]) : 0);
+                return dateB - dateA;
+            });
     }, [receptions, search]);
 
     return (
@@ -65,11 +70,11 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config 
                                         <div className="flex items-center gap-3 mt-1">
                                             <div className="flex items-center gap-1 text-xs text-gray-500">
                                                 <Calendar size={12} />
-                                                {new Date(r.date).toLocaleDateString()}
+                                                {formatSafeDate(r.date)}
                                             </div>
                                             <div className="flex items-center gap-1 text-xs text-gray-500">
                                                 <Clock size={12} />
-                                                {new Date(r.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                {formatSafeTime(r.date)}
                                             </div>
                                         </div>
                                     </div>
@@ -121,7 +126,7 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config 
                             <div>
                                 <p className="text-[10px] uppercase text-gray-400 font-bold mb-1">Fecha y Hora</p>
                                 <p className="text-sm font-bold text-gray-700">
-                                    {new Date(selectedReception.date).toLocaleString()}
+                                    {formatSafeDate(selectedReception.date, true)}
                                 </p>
                             </div>
                             <div>

@@ -317,6 +317,17 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       const oldProduct = products.find(p => p.id === savedProduct.id);
       const exists = !!oldProduct;
 
+      // 1. Persist the product fields (image, name, etc.) to the database first
+      // This is crucial because recordInventoryMovement only updates stock/cost
+      const currentProducts = (await db.get('products') || []) as Product[];
+      let updatedProductsList;
+      if (exists) {
+         updatedProductsList = currentProducts.map(p => p.id === savedProduct.id ? { ...p, ...savedProduct } : p);
+      } else {
+         updatedProductsList = [...currentProducts, savedProduct];
+      }
+      await db.save('products', updatedProductsList);
+
       // Detect stock changes and record movements
       if (exists) {
          const whIds = Array.from(new Set([
@@ -341,8 +352,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             }
          }
 
-         // CRITICAL: Don't update products directly - recordInventoryMovement already did it
-         // Reload from DB to get the correct stock values after movement recording
+         // Reload from DB to get the correct stock values after movement recording (which updates products again)
          const freshData = await db.init();
          onUpdateProducts(freshData.products || products);
       } else {

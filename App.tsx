@@ -50,6 +50,8 @@ import VerticalSelector from './components/VerticalSelector';
 import SetupWizard from './components/SetupWizard';
 import FranchiseDashboard from './components/FranchiseDashboard';
 import TerminalBindingScreen from './components/TerminalBindingScreen';
+import CustomerVisor from './components/CustomerVisor';
+import { visorSync } from './utils/visorSync';
 
 // Layout imports
 import StandardPOSLayout from './components/layouts/StandardPOSLayout';
@@ -98,10 +100,10 @@ const App: React.FC = () => {
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [parkedTickets, setParkedTickets] = useState<ParkedTicket[]>([]);
+  const [cart, setCart] = useState<CartItem[]>([]);
   const [transfers, setTransfers] = useState<StockTransfer[]>([]);
   const [receptions, setReceptions] = useState<Reception[]>([]);
   const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
-  const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [isAdminMode, setIsAdminMode] = useState(false); // Temporary admin elevation
 
@@ -135,6 +137,19 @@ const App: React.FC = () => {
       }
     }
   };
+
+  // --- VISOR SYNC (MOVED TO POSINTERFACE FOR ACCURACY) ---
+  useEffect(() => {
+    // No longer handled here to preserve accurate tax/discount calculations
+  }, []);
+
+  // Handle Visor view from URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('view') === 'VISOR') {
+      setCurrentView('VISOR' as any);
+    }
+  }, []);
 
   // Update currentUser in terminal router when it changes
   useEffect(() => {
@@ -173,7 +188,7 @@ const App: React.FC = () => {
           }
 
           // RECOVERY: If we have Master IP but no local config (e.g. after DB nuke), fetch it!
-          const localConfig = await db.get('config');
+          const localConfig = await db.get('config') as any;
           const hasTerminals = localConfig && localConfig.terminals && localConfig.terminals.length > 0;
 
           if (!hasTerminals) {
@@ -271,7 +286,7 @@ const App: React.FC = () => {
           setCashMovements(data.cashMovements || []);
           setPurchaseOrders(data.purchaseOrders || []);
           setSuppliers(data.suppliers || []);
-          setParkedTickets(data.parkedTickets || []);
+          setParkedTickets(Array.isArray(data.parkedTickets) ? data.parkedTickets : []);
           setTransfers(data.transfers || []);
           setReceptions(data.receptions || []);
           setProductStocks(data.productStocks || []);
@@ -821,7 +836,11 @@ const App: React.FC = () => {
             selectedCustomer={selectedCustomer}
             onSelectCustomer={setSelectedCustomer}
             parkedTickets={parkedTickets}
-            onUpdateParkedTickets={async (pt) => { setParkedTickets(pt); await db.save('parkedTickets', pt); }}
+            onUpdateParkedTickets={async (pt) => {
+              const validArray = Array.isArray(pt) ? pt : [];
+              setParkedTickets(validArray);
+              await db.save('parkedTickets', validArray);
+            }}
             onLogout={() => { setCurrentUser(null); setCurrentView('LOGIN'); }}
             onOpenSettings={() => setCurrentView('SETTINGS')}
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
@@ -1268,6 +1287,9 @@ const App: React.FC = () => {
             onCancel={() => handleViewChange('INVENTORY_HOME')}
           />
         );
+
+      case 'VISOR' as any:
+        return <CustomerVisor />;
 
       default:
         return <div className="h-screen flex items-center justify-center">Vista no implementada.</div>;

@@ -229,6 +229,16 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                         <div className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-all shadow-sm ${displayConfig.isEnabled ? 'left-8' : 'left-1'}`} />
                      </button>
                   </div>
+                  {displayConfig.isEnabled && (
+                     <div className="mt-6 pt-6 border-t border-slate-50">
+                        <button
+                           onClick={() => window.open('/?view=VISOR', 'clic_pos_visor', 'width=1024,height=768')}
+                           className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-sm uppercase tracking-widest flex items-center justify-center gap-3 hover:bg-slate-800 transition-all shadow-xl active:scale-95 shadow-slate-200"
+                        >
+                           <MonitorPlay size={20} /> Lanzar Visor HDMI
+                        </button>
+                     </div>
+                  )}
                </div>
 
                <div className={`bg-white p-8 rounded-3xl shadow-sm border border-gray-200 space-y-6 transition-all ${displayConfig.isEnabled ? 'opacity-100' : 'opacity-60 grayscale cursor-not-allowed'}`}>

@@ -12,6 +12,7 @@ import SupplierSelector from './SupplierSelector';
 import PurchaseOrderList from './PurchaseOrderList';
 import ReceptionHistory from './ReceptionHistory';
 import ErrorBoundary from './ErrorBoundary';
+import { formatSafeDate } from '../utils/dateUtils';
 
 interface SupplyChainManagerProps {
    products: Product[];
@@ -61,6 +62,40 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
 
    // Receive Order State
    const [receivingOrderId, setReceivingOrderId] = useState<string | null>(null);
+   const [receptionSearch, setReceptionSearch] = useState('');
+   const [receptionCategory, setReceptionCategory] = useState('Todas');
+
+   // Filter State
+   const [selectedCategory, setSelectedCategory] = useState<string>('Todas');
+
+   // Unique Categories Memo
+   const categories = useMemo(() => {
+      const cats = new Set(safeProducts.map(p => p.category).filter(Boolean));
+      return ['Todas', ...Array.from(cats)].sort();
+   }, [safeProducts]);
+
+   // Active Reception Categories Memo
+   const activeReceptionCategories = useMemo(() => {
+      if (!receivingOrderId) return ['Todas'];
+      const order = safeOrders.find(o => o.id === receivingOrderId);
+      if (!order) return ['Todas'];
+      const cats = new Set((order.items || []).map(item => {
+         const p = safeProducts.find(prod => prod.id === item.productId);
+         return p?.category;
+      }).filter(Boolean));
+      return ['Todas', ...Array.from(cats)].sort();
+   }, [receivingOrderId, safeOrders, safeProducts]);
+
+   // Reset filters when changing view or order
+   useEffect(() => {
+      setSelectedCategory('Todas');
+      setProductSearch('');
+   }, [activeTab, isCreatingOrder]);
+
+   useEffect(() => {
+      setReceptionSearch('');
+      setReceptionCategory('Todas');
+   }, [receivingOrderId, isReceivingOrder]);
 
    // Inventory Audit State
    const [isAuditMode, setIsAuditMode] = useState(false);
@@ -90,11 +125,13 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
 
    // --- DERIVED DATA ---
    const filteredProducts = useMemo(() => {
-      return safeProducts.filter(p =>
-         (p.name || '').toLowerCase().includes(productSearch.toLowerCase()) ||
-         (p.barcode || '').includes(productSearch)
-      );
-   }, [safeProducts, productSearch]);
+      return safeProducts.filter(p => {
+         const matchesSearch = (p.name || '').toLowerCase().includes(productSearch.toLowerCase()) ||
+            (p.barcode || '').includes(productSearch);
+         const matchesCategory = selectedCategory === 'Todas' || p.category === selectedCategory;
+         return matchesSearch && matchesCategory;
+      });
+   }, [safeProducts, productSearch, selectedCategory]);
 
    const activeOrders = useMemo(() => {
       return safeOrders.filter(po => po.status === 'ORDERED' || po.status === 'PARTIAL');
@@ -316,6 +353,22 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                      className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20"
                   />
                </div>
+
+               {/* Inventory Category chips */}
+               <div className="flex gap-2 p-3 overflow-x-auto no-scrollbar border-t border-gray-100">
+                  {categories.map(cat => (
+                     <button
+                        key={cat}
+                        onClick={() => setSelectedCategory(cat)}
+                        className={`px-3 py-1 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${selectedCategory === cat
+                           ? 'bg-blue-600 text-white shadow-sm'
+                           : 'bg-white text-gray-500 border border-gray-100 h-8 flex items-center'
+                           }`}
+                     >
+                        {cat}
+                     </button>
+                  ))}
+               </div>
             </div>
 
             <div className="flex-1 overflow-y-auto">
@@ -396,6 +449,22 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                         className="w-full pl-12 pr-4 py-4 bg-white border border-gray-200 rounded-2xl text-lg outline-none focus:ring-2 focus:ring-indigo-500/20"
                      />
                   </div>
+               </div>
+
+               {/* Category Chips for Pedido */}
+               <div className="px-4 py-2 border-b border-gray-100 flex gap-2 overflow-x-auto no-scrollbar bg-gray-50/30">
+                  {categories.map(cat => (
+                     <button
+                        key={cat}
+                        onClick={() => setSelectedCategory(cat)}
+                        className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all ${selectedCategory === cat
+                           ? 'bg-indigo-600 text-white shadow-sm'
+                           : 'bg-white text-gray-500 border border-gray-200 hover:border-indigo-300 h-7 flex items-center'
+                           }`}
+                     >
+                        {cat}
+                     </button>
+                  ))}
                </div>
                <div className="flex-1 overflow-y-auto p-4 space-y-3">
                   {(filteredProducts || []).map((p, idx) => (
@@ -499,6 +568,26 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
          const order = (safeOrders || []).find(o => o.id === receivingOrderId);
          if (!order) return <div>Error: Orden no encontrada</div>;
 
+         if (order.status === 'COMPLETED') {
+            return (
+               <div className="h-full flex flex-col items-center justify-center bg-white rounded-[3rem] border border-gray-200 p-12 text-center animate-in zoom-in-95">
+                  <div className="w-24 h-24 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-6">
+                     <Check size={48} />
+                  </div>
+                  <h3 className="text-3xl font-black text-gray-800 mb-2">Orden Finalizada</h3>
+                  <p className="text-gray-500 max-w-md mx-auto mb-8 font-medium">
+                     Esta orden ya ha sido recibida completamente y no permite más modificaciones.
+                  </p>
+                  <button
+                     onClick={() => setReceivingOrderId(null)}
+                     className="px-8 py-4 bg-gray-900 text-white rounded-2xl font-bold flex items-center gap-2 hover:scale-105 transition-all"
+                  >
+                     <ArrowLeft size={20} /> Volver al Historial
+                  </button>
+               </div>
+            );
+         }
+
          const updateItemReceived = (itemId: string, newVal: number) => {
             onUpdateOrder({
                ...order,
@@ -565,13 +654,46 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   </button>
                   <div>
                      <h3 className="text-xl font-bold text-gray-800">Recibiendo Orden #{order.id}</h3>
-                     <p className="text-sm text-gray-500">{new Date(order.date).toLocaleDateString()}</p>
+                     <p className="text-sm text-gray-500">{formatSafeDate(order.date)}</p>
+                  </div>
+               </div>
+
+               {/* Reception Filter bar */}
+               <div className="flex flex-col md:flex-row gap-3 p-4 bg-white rounded-2xl border border-gray-200 shadow-sm mb-4">
+                  <div className="relative flex-1">
+                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                     <input
+                        type="text"
+                        placeholder="Buscar en esta orden..."
+                        value={receptionSearch}
+                        onChange={(e) => setReceptionSearch(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-100 rounded-xl text-sm outline-none focus:ring-2 focus:ring-green-500/20"
+                     />
+                  </div>
+                  <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                     {activeReceptionCategories.map(cat => (
+                        <button
+                           key={cat}
+                           onClick={() => setReceptionCategory(cat)}
+                           className={`px-4 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${receptionCategory === cat
+                              ? 'bg-green-600 text-white shadow-sm'
+                              : 'bg-gray-100 text-gray-500 hover:bg-gray-200 h-8 flex items-center'
+                              }`}
+                        >
+                           {cat}
+                        </button>
+                     ))}
                   </div>
                </div>
 
                {/* List */}
                <div className="flex-1 overflow-y-auto space-y-3 pb-20">
-                  {(order.items || []).map((item, idx) => {
+                  {((order.items || []).filter(item => {
+                     const p = safeProducts.find(prod => prod.id === item.productId);
+                     const matchesSearch = item.productName.toLowerCase().includes(receptionSearch.toLowerCase());
+                     const matchesCategory = receptionCategory === 'Todas' || p?.category === receptionCategory;
+                     return matchesSearch && matchesCategory;
+                  })).map((item, idx) => {
                      const isComplete = item.quantityReceived >= item.quantityOrdered;
 
                      return (
@@ -671,7 +793,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                                     <p className="text-gray-500 font-medium">{supplier?.name}</p>
                                  </div>
                                  <div className="bg-blue-50 text-blue-700 px-3 py-1 rounded-lg font-bold text-sm">
-                                    {new Date(po.date).toLocaleDateString()}
+                                    {formatSafeDate(po.date)}
                                  </div>
                               </div>
 

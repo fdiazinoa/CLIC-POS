@@ -43,6 +43,7 @@ import ReturnModal from './ReturnModal';
 import PromoBottomSheet from './PromoBottomSheet';
 import { backgroundSyncManager, SyncState } from '../services/sync/BackgroundSyncManager';
 import BarcodeScannerModal from './BarcodeScannerModal';
+import { visorSync } from '../utils/visorSync';
 
 interface POSInterfaceProps {
    config: BusinessConfig;
@@ -504,6 +505,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const primaryLoyaltyCard = selectedCustomer ? getPrimaryLoyaltyCard(selectedCustomer) : undefined;
    const currentPoints = primaryLoyaltyCard?.pointsBalance || 0;
 
+   // --- VISOR SYNC ---
+   useEffect(() => {
+      const displayConfig = activeTerminalConfig?.hardware?.customerDisplay;
+      // Always push state to visor if it's listening - the visor will only display if opened
+      visorSync.pushState({
+         cart: processedCart,
+         subtotal: cartSubtotal,
+         tax: cartTax,
+         discountAmount: discountAmount,
+         total: cartTotal,
+         welcomeMessage: displayConfig?.welcomeMessage || '¡Bienvenidos!',
+         ads: displayConfig?.ads || [],
+         currencySymbol: baseCurrency.symbol
+      });
+   }, [processedCart, cartSubtotal, cartTax, discountAmount, cartTotal, activeTerminalConfig, baseCurrency]);
+
    useEffect(() => {
       if (cart.length > 0) {
          cartEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -643,13 +660,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (cart.length === 0) return;
       const newParked: ParkedTicket = {
          id: `P-${Date.now()}`,
-         name: selectedCustomer ? selectedCustomer.name : `Ticket #${parkedTickets.length + 1}`,
+         name: selectedCustomer ? selectedCustomer.name : `Ticket #${(Array.isArray(parkedTickets) ? parkedTickets : []).length + 1}`,
          items: [...cart],
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
          timestamp: new Date().toISOString()
       };
-      onUpdateParkedTickets([...parkedTickets, newParked]);
+      onUpdateParkedTickets([...(Array.isArray(parkedTickets) ? parkedTickets : []), newParked]);
       onUpdateCart([]); onSelectCustomer(null);
       setErrorToast("Ticket Guardado");
       setTimeout(() => setErrorToast(null), 2000);
@@ -969,7 +986,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </button>
                      <button onClick={() => setShowParkedList(!showParkedList)} className="p-2 text-gray-400 hover:text-orange-600 relative" title="Recuperar Ticket">
                         <Inbox size={20} />
-                        {parkedTickets.length > 0 && (
+                        {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && (
                            <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white"></span>
                         )}
                      </button>
@@ -1068,7 +1085,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <button onClick={handleParkCurrentTicket} title="Guardar Ticket" className="p-2 hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Save size={18} /></button>
                            <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="p-2 hover:bg-orange-50 rounded-lg text-gray-400 hover:text-orange-600 transition-colors relative">
                               <Inbox size={18} />
-                              {parkedTickets.length > 0 && <span className="absolute top-0 right-0 w-3 h-3 bg-orange-500 rounded-full border-2 border-white"></span>}
+                              {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-0 right-0 w-3 h-3 bg-orange-500 rounded-full border-2 border-white"></span>}
                            </button>
                            <button onClick={onOpenHistory} title="Historial" className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><History size={18} /></button>
                         </>
@@ -1127,9 +1144,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     <h4 className="font-bold text-gray-800 text-sm leading-tight line-clamp-1">{item.name}</h4>
                                     <button onClick={() => updateCartItem(null, item.cartId)} className="p-1 text-gray-300 hover:text-red-500"><Trash2 size={16} /></button>
                                  </div>
-                                 <div className="flex items-center gap-2 mt-0.5">
-                                    <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toFixed(2)}</span>
-                                    {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toFixed(2)}</span>}
+                                 <div className="flex flex-col mt-0.5">
+                                    <div className="flex items-center gap-2">
+                                       <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toFixed(2)}</span>
+                                       {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toFixed(2)}</span>}
+                                    </div>
+                                    <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">
+                                       ITBIS: {baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)}
+                                    </span>
                                  </div>
                                  {item.salespersonId && (
                                     <p className="text-[10px] text-blue-500 font-bold uppercase mt-1">
@@ -1164,10 +1186,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </div>
                            <span className={`font-black text-gray-900 shrink-0 ${isRetailMode ? 'text-lg' : 'text-sm'}`}>{baseCurrency.symbol}{(lineNet).toFixed(2)}</span>
                         </div>
-                        <div className="flex items-center gap-2 mt-1">
-                           <span className={`bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-black uppercase tracking-tighter ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>
-                              {(item.quantity || 0).toFixed(item.type === 'SERVICE' ? 3 : 0)}x {baseCurrency.symbol}{(item.price || 0).toFixed(2)}
-                           </span>
+                        <div className="flex items-center gap-3 mt-1">
+                           <div className="flex flex-col">
+                              <span className={`bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-black uppercase tracking-tighter ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>
+                                 {(item.quantity || 0).toFixed(item.type === 'SERVICE' ? 3 : 0)}x {baseCurrency.symbol}{(item.price || 0).toFixed(2)}
+                              </span>
+                              <span className={`text-gray-400 font-bold uppercase tracking-tighter ml-1 ${isRetailMode ? 'text-[10px]' : 'text-[8px]'}`}>
+                                 ITBIS: {baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)}
+                              </span>
+                           </div>
                            {hasDiscount && (
                               <div className="flex flex-col items-end">
                                  <span className={`bg-red-50 text-red-600 px-1.5 py-0.5 rounded font-black border border-red-100 ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>-{discountPct}%</span>
@@ -1277,7 +1304,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-orange-50 border-orange-100 text-orange-600 hover:bg-orange-100 transition-all min-w-[60px] relative">
                            <Inbox size={18} />
                            <span className="text-[9px] font-black uppercase mt-1">Espera</span>
-                           {parkedTickets.length > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white"></span>}
+                           {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white"></span>}
                         </button>
                         <button onClick={onOpenHistory} title="Historial" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-purple-50 border-purple-100 text-purple-600 hover:bg-purple-100 transition-all min-w-[60px]">
                            <History size={18} />
@@ -1368,6 +1395,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <LogOut size={16} />
                            <span className="text-[9px] font-black uppercase mt-1">Salir</span>
                         </button>
+                        <button
+                           onClick={handleParkCurrentTicket}
+                           className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 hover:border-blue-200 transition-all"
+                        >
+                           <Save size={16} />
+                           <span className="text-[9px] font-black uppercase mt-1">Guardar</span>
+                        </button>
+                        <button
+                           onClick={() => setShowParkedList(!showParkedList)}
+                           className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-orange-50 border-orange-100 text-orange-600 hover:bg-orange-100 hover:border-orange-200 transition-all relative"
+                        >
+                           <Inbox size={16} />
+                           <span className="text-[9px] font-black uppercase mt-1">Espera</span>
+                           {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-1 right-2 w-2 h-2 bg-orange-500 rounded-full border border-white"></span>}
+                        </button>
                      </div>
 
                      {/* --- BLOQUE DE TOTALES --- */}
@@ -1440,6 +1482,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <button onClick={() => setShowCouponModal(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-cyan-500">
                            <QrCode size={18} />
                            <span className="text-[9px] font-bold uppercase">Cupón</span>
+                        </button>
+                        <button onClick={handleParkCurrentTicket} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
+                           <Save size={18} />
+                           <span className="text-[9px] font-bold uppercase">Grd.</span>
+                        </button>
+                        <button onClick={() => setShowParkedList(!showParkedList)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-500 relative">
+                           <Inbox size={18} />
+                           <span className="text-[9px] font-bold uppercase">Esp.</span>
+                           {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
                         </button>
                      </div>
                      <div className="text-right">
@@ -1552,7 +1603,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <button onClick={() => setShowParkedList(false)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20} /></button>
                      </div>
                      <div className="p-4 overflow-y-auto max-h-[60vh] space-y-3">
-                        {parkedTickets.map((pt, idx) => (
+                        {(Array.isArray(parkedTickets) ? parkedTickets : []).map((pt, idx) => (
                            <div key={pt.id || `parked-${idx}`} onClick={() => handleRestoreTicket(pt)} className="p-4 bg-white border border-gray-100 rounded-2xl hover:border-orange-400 hover:bg-orange-50 cursor-pointer group transition-all">
                               <div className="flex justify-between items-start mb-2">
                                  <span className="font-bold text-gray-800">{pt.name}</span>
@@ -1564,7 +1615,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               </div>
                            </div>
                         ))}
-                        {parkedTickets.length === 0 && <div className="py-10 text-center text-gray-400 italic">No hay tickets guardados</div>}
+                        {(Array.isArray(parkedTickets) ? parkedTickets : []).length === 0 && <div className="py-10 text-center text-gray-400 italic">No hay tickets guardados</div>}
                      </div>
                   </div>
                </div>
