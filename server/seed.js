@@ -18,37 +18,37 @@ const COMPANIES = [
 ];
 
 const WAREHOUSES = [
-  { 
-    id: "wh_central", 
-    code: "CEN", 
-    name: "Bodega Central", 
-    type: "PHYSICAL", 
-    address: "Calle Industria #45", 
-    allowPosSale: true, 
-    allowNegativeStock: false, 
-    isMain: true, 
+  {
+    id: "wh_central",
+    code: "CEN",
+    name: "Bodega Central",
+    type: "PHYSICAL",
+    address: "Calle Industria #45",
+    allowPosSale: true,
+    allowNegativeStock: false,
+    isMain: true,
     storeId: "S1" // Tienda Centro
   },
-  { 
-    id: "wh_norte", 
-    code: "NTE", 
-    name: "Piso de Venta Norte", 
-    type: "PHYSICAL", 
-    address: "Plaza Norte, Local 10", 
-    allowPosSale: true, 
-    allowNegativeStock: false, 
-    isMain: false, 
+  {
+    id: "wh_norte",
+    code: "NTE",
+    name: "Piso de Venta Norte",
+    type: "PHYSICAL",
+    address: "Plaza Norte, Local 10",
+    allowPosSale: true,
+    allowNegativeStock: false,
+    isMain: false,
     storeId: "S2" // Tienda Norte
   },
-  { 
-    id: "wh_mermas", 
-    code: "MER", 
-    name: "Mermas & Dañados", 
-    type: "VIRTUAL", 
-    address: "N/A", 
-    allowPosSale: false, 
-    allowNegativeStock: false, 
-    isMain: false, 
+  {
+    id: "wh_mermas",
+    code: "MER",
+    name: "Mermas & Dañados",
+    type: "VIRTUAL",
+    address: "N/A",
+    allowPosSale: false,
+    allowNegativeStock: false,
+    isMain: false,
     storeId: "S1"
   }
 ];
@@ -77,7 +77,7 @@ const TERMINALS = [
     config: {
       // T2: Configuración ERRÓNEA (Sin almacén asignado -> Debe mostrar pantalla de bloqueo)
       inventoryScope: {
-        defaultSalesWarehouseId: null, 
+        defaultSalesWarehouseId: null,
         visibleWarehouseIds: []
       },
       security: { requirePinForVoid: false },
@@ -101,7 +101,8 @@ const PRODUCTS = [
     activeInWarehouses: ["wh_central"],
     stockBalances: {
       "wh_central": 100, // Stock físico real
-      "wh_norte": 0      // No debería aparecer en T2 (si tuviera config)
+      "wh_norte": 0,      // No debería aparecer en T2 (si tuviera config)
+      "wh_mermas": 0
     },
     variants: [],
     tariffs: [{ tariffId: "trf-gen", price: 35.00 }],
@@ -140,16 +141,16 @@ const USERS = [
 ];
 
 const TARIFFS = [
-  { 
-    id: 'trf-gen', 
-    name: 'General (PVP)', 
-    active: true, 
-    currency: 'DOP', 
-    taxIncluded: true, 
-    strategy: { type: 'MANUAL', rounding: 'NONE' }, 
-    scope: { storeIds: ['ALL'], priority: 0 }, 
-    schedule: { daysOfWeek: [0,1,2,3,4,5,6], timeStart: '00:00', timeEnd: '23:59' }, 
-    items: {} 
+  {
+    id: 'trf-gen',
+    name: 'General (PVP)',
+    active: true,
+    currency: 'DOP',
+    taxIncluded: true,
+    strategy: { type: 'MANUAL', rounding: 'NONE' },
+    scope: { storeIds: ['ALL'], priority: 0 },
+    schedule: { daysOfWeek: [0, 1, 2, 3, 4, 5, 6], timeStart: '00:00', timeEnd: '23:59' },
+    items: {}
   }
 ];
 
@@ -167,6 +168,13 @@ const db = {
     taxes: [
       { id: 'tax-18', name: 'ITBIS 18%', rate: 0.18, type: 'VAT' },
       { id: 'tax-exempt', name: 'Exento 0%', rate: 0, type: 'EXEMPT' }
+    ],
+    currencies: [
+      { code: 'DOP', name: 'Peso Dominicano', symbol: 'RD$', rate: 1, isEnabled: true, isBase: true }
+    ],
+    paymentMethods: [
+      { id: 'cash', name: 'Efectivo', type: 'CASH', isEnabled: true, icon: 'Banknote', color: 'bg-green-500', opensDrawer: true, requiresSignature: false, integration: 'NONE' },
+      { id: 'card', name: 'Tarjeta', type: 'CARD', isEnabled: true, icon: 'CreditCard', color: 'bg-blue-500', opensDrawer: false, requiresSignature: false, integration: 'NONE' }
     ]
   },
   products: PRODUCTS,
@@ -174,7 +182,15 @@ const db = {
   users: USERS,
   customers: [],
   transactions: [],
-  transfers: [] // Historial de traspasos vacío
+  transfers: [],
+  parkedTickets: [],
+  receptions: [],
+  productStocks: [],
+  cashMovements: [],
+  purchaseOrders: [],
+  suppliers: [],
+  internalSequences: [],
+  inventoryLedger: []
 };
 
 const outputPath = path.join(__dirname, 'db.json');

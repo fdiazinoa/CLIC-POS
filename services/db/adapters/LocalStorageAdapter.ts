@@ -69,4 +69,11 @@ export class LocalStorageAdapter implements DatabaseAdapter {
         const collection = (this.dbCache[collectionName] as any[]) || [];
         return collection.find(d => d.id === id) || null;
     }
+
+    async deleteDocument(collectionName: string, id: string): Promise<void> {
+        if (!this.dbCache) this.loadFromStorage();
+        const collection = (this.dbCache[collectionName] as any[]) || [];
+        this.dbCache[collectionName] = collection.filter(d => d.id !== id);
+        this.saveToStorage();
+    }
 }

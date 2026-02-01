@@ -98,10 +98,101 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    const themeBgClass = { blue: 'bg-blue-600', orange: 'bg-orange-600', gray: 'bg-gray-800' }[themeColor] || 'bg-indigo-600';
    const themeTextClass = { blue: 'text-blue-600', orange: 'text-orange-600', gray: 'text-gray-800' }[themeColor] || 'text-indigo-600';
 
+   const [showEmailInput, setShowEmailInput] = useState(false);
+   const [emailInput, setEmailInput] = useState('');
+   const [isSendingEmail, setIsSendingEmail] = useState(false);
+
+   const handleSendEmail = async () => {
+      if (!completedTransaction) return;
+
+      // 1. Check if customer has email
+      const customerEmail = completedTransaction.customerSnapshot?.email || customer?.email;
+
+      if (customerEmail) {
+         await sendReceiptEmail(customerEmail);
+      } else {
+         // 2. Show input if no email
+         setShowEmailInput(true);
+      }
+   };
+
+   const sendReceiptEmail = async (email: string) => {
+      setIsSendingEmail(true);
+      console.log('Sending Receipt Email. Transaction:', completedTransaction);
+      try {
+         const response = await fetch('/api/email/receipt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+               email,
+               cart: completedTransaction?.items || [],
+               total: completedTransaction?.total || 0,
+               paymentMethod: completedTransaction?.payments?.[0]?.method || 'CASH',
+               // New fields for thermal ticket design
+               transactionId: completedTransaction?.displayId || completedTransaction?.id || 'PENDING-ID',
+               ncf: completedTransaction?.ncf,
+               date: completedTransaction?.date,
+               customerName: completedTransaction?.customerSnapshot?.name || completedTransaction?.customerName,
+               companyInfo: config?.companyInfo,
+               currencySymbol: currencySymbol,
+               subtotal: (completedTransaction?.netAmount || 0) + (completedTransaction?.taxAmount || 0), // Approx if not stored directly
+               tax: completedTransaction?.taxAmount,
+               discount: completedTransaction?.discountAmount
+            })
+         });
+
+         const data = await response.json();
+         if (data.success) {
+            alert(`Ticket enviado a ${email}`);
+            setShowEmailInput(false);
+         } else {
+            alert('Error al enviar: ' + data.message);
+         }
+      } catch (error) {
+         console.error('Error sending email:', error);
+         alert('Error de conexión al enviar el correo');
+      } finally {
+         setIsSendingEmail(false);
+      }
+   };
+
    if (isSuccessScreen) {
       return (
          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/90 backdrop-blur-md p-4">
-            <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl flex flex-col items-center text-center">
+            <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl flex flex-col items-center text-center relative">
+
+               {/* Email Input Modal Overlay */}
+               {showEmailInput && (
+                  <div className="absolute inset-0 z-10 bg-white/95 backdrop-blur-sm rounded-[2.5rem] flex flex-col items-center justify-center p-8 animate-in fade-in">
+                     <h3 className="text-xl font-black text-gray-800 mb-4">Enviar Ticket por Correo</h3>
+                     <input
+                        autoFocus
+                        type="email"
+                        placeholder="cliente@ejemplo.com"
+                        value={emailInput}
+                        onChange={(e) => setEmailInput(e.target.value)}
+                        className="w-full p-4 bg-gray-100 rounded-xl border-2 border-transparent focus:border-blue-500 focus:bg-white outline-none transition-all mb-4 text-center font-bold text-lg"
+                        onKeyDown={(e) => e.key === 'Enter' && sendReceiptEmail(emailInput)}
+                     />
+                     <div className="flex gap-3 w-full">
+                        <button
+                           onClick={() => setShowEmailInput(false)}
+                           className="flex-1 py-3 rounded-xl bg-gray-200 font-bold text-gray-600 hover:bg-gray-300"
+                        >
+                           Cancelar
+                        </button>
+                        <button
+                           onClick={() => sendReceiptEmail(emailInput)}
+                           disabled={!emailInput || isSendingEmail}
+                           className="flex-1 py-3 rounded-xl bg-blue-600 font-bold text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                           {isSendingEmail ? 'Enviando...' : 'Enviar'}
+                           <Mail size={18} />
+                        </button>
+                     </div>
+                  </div>
+               )}
+
                <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6">
                   <CheckCircle2 size={40} className="text-green-600" />
                </div>
@@ -115,8 +206,16 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                      <button onClick={() => {
                         if (!config || !completedTransaction) return;
                         printTicket(completedTransaction, config);
-                     }} className="flex-1 py-3 rounded-xl bg-gray-100 font-bold text-gray-700 flex items-center justify-center gap-2"><Printer size={18} /> Ticket</button>
-                     <button onClick={() => alert("Enviando...")} className="flex-1 py-3 rounded-xl bg-gray-100 font-bold text-gray-700 flex items-center justify-center gap-2"><Mail size={18} /> Email</button>
+                     }} className="flex-1 py-3 rounded-xl bg-gray-100 font-bold text-gray-700 flex items-center justify-center gap-2 hover:bg-gray-200 transition-colors"><Printer size={18} /> Ticket</button>
+
+                     <button
+                        onClick={handleSendEmail}
+                        disabled={isSendingEmail}
+                        className="flex-1 py-3 rounded-xl bg-gray-100 font-bold text-gray-700 flex items-center justify-center gap-2 hover:bg-gray-200 transition-colors"
+                     >
+                        {isSendingEmail ? 'Enviando...' : 'Email'}
+                        <Mail size={18} />
+                     </button>
                   </div>
                   <button onClick={onClose} className={`w-full py-4 rounded-xl font-bold text-white shadow-xl flex items-center justify-center gap-2 ${themeBgClass}`}><Repeat size={20} /> Nueva Venta</button>
                </div>
@@ -188,14 +287,15 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
                <div className="p-3 md:p-4 bg-white border-t border-gray-200 rounded-xl md:rounded-2xl mt-4 shadow-inner shrink-0">
                   <div className="flex justify-between items-end mb-3 md:mb-4">
-                     <div>
-                        <p className="text-[9px] md:text-[10px] font-bold text-gray-400 uppercase tracking-widest">Restante</p>
-                        <p className={`text-xl md:text-3xl font-black ${remaining > 0 ? 'text-red-500' : 'text-green-500'}`}>{currencySymbol}{remaining.toFixed(2)}</p>
-                     </div>
-                     {change > 0 && (
-                        <div className="text-right">
+                     {change > 0 ? (
+                        <div className="w-full text-right">
                            <p className="text-[9px] md:text-[10px] font-bold text-green-600 uppercase tracking-widest">Cambio</p>
                            <p className="text-xl md:text-3xl font-black text-green-600">{currencySymbol}{change.toFixed(2)}</p>
+                        </div>
+                     ) : (
+                        <div>
+                           <p className="text-[9px] md:text-[10px] font-bold text-gray-400 uppercase tracking-widest">Restante</p>
+                           <p className={`text-xl md:text-3xl font-black ${remaining > 0 ? 'text-red-500' : 'text-green-500'}`}>{currencySymbol}{remaining.toFixed(2)}</p>
                         </div>
                      )}
                   </div>

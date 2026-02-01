@@ -1,14 +1,68 @@
 
+
 export type VerticalType = 'RETAIL' | 'RESTAURANT';
 
-export enum SubVertical {
-  SUPERMARKET = 'Supermercado',
-  CLOTHING = 'Tienda Ropa',
-  PHARMACY = 'Farmacia',
-  SERVICES = 'Servicios',
-  RESTAURANT = 'Restaurante',
-  FAST_FOOD = 'Fast Food',
-  BAR = 'Discoteca/Bar'
+export const SubVertical = {
+  SUPERMARKET: 'Supermercado',
+  CLOTHING: 'Tienda Ropa',
+  PHARMACY: 'Farmacia',
+  SERVICES: 'Servicios',
+  RESTAURANT: 'Restaurante',
+  FAST_FOOD: 'Fast Food',
+  BAR: 'Discoteca/Bar'
+} as const;
+
+export type SubVertical = typeof SubVertical[keyof typeof SubVertical];
+
+// --- SYNC CONFIGURATION TYPES ---
+export type SyncMode = 'MASTER' | 'SLAVE';
+export type SyncStatus = 'PENDING' | 'SYNCING' | 'COMPLETED' | 'ERROR';
+
+export interface SyncConfig {
+  mode: SyncMode;
+  masterUrl?: string; // Required for SLAVE terminals (e.g., "https://192.168.1.100:3001")
+  authToken?: string;
+  autoSyncIntervalMs: number;
+  isEnabled: boolean;
+}
+
+
+// --- DEVICE ROLE TYPES ---
+export enum DeviceRole {
+  STANDARD_POS = 'STANDARD_POS',
+  SELF_CHECKOUT = 'SELF_CHECKOUT',
+  PRICE_CHECKER = 'PRICE_CHECKER',
+  HANDHELD_INVENTORY = 'HANDHELD_INVENTORY',
+  KITCHEN_DISPLAY = 'KITCHEN_DISPLAY'
+}
+
+export enum AuthLevel {
+  USER_REQUIRED = 'USER_REQUIRED',    // Level A: Requiere login de empleado
+  HEADLESS = 'HEADLESS'                // Level B: Autenticación automática vía API Token
+}
+
+export interface DeviceRoleConfig {
+  role: DeviceRole;
+  authLevel: AuthLevel;
+  apiToken?: string;              // Para autenticación headless
+  defaultRoute?: string;          // Ruta inicial después de auth
+  allowedModules: string[];       // Módulos permitidos
+  uiSettings: {
+    fullscreenForced?: boolean;
+    touchTargetSize?: number;    // En px (>60px recomendado para kiosco)
+    navigationLocked?: boolean;   // Prevenir navegación hacia atrás
+    escapeHatch?: {
+      enabled: boolean;
+      gesture: string;            // ej: "logo-press-5s"
+      requirePin: boolean;
+      adminPin?: string;
+    };
+  };
+  hardwareConfig?: {
+    disablePrinter?: boolean;
+    disableCashDrawer?: boolean;
+    disableScanner?: boolean;
+  };
 }
 
 // --- HARDWARE TYPES ---
@@ -48,6 +102,7 @@ export interface FiscalAllocation {
 }
 
 export interface LocalFiscalBuffer {
+  id: string;
   type: NCFType;
   prefix: string;
   currentNumber: number; // El que se usará en la próxima factura
@@ -56,7 +111,7 @@ export interface LocalFiscalBuffer {
 }
 
 // --- KARDEX TYPES ---
-export type LedgerConcept = 'COMPRA' | 'VENTA' | 'AJUSTE_ENTRADA' | 'AJUSTE_SALIDA' | 'TRASPASO_ENTRADA' | 'TRASPASO_SALIDA' | 'INICIAL';
+export type LedgerConcept = 'COMPRA' | 'VENTA' | 'AJUSTE_ENTRADA' | 'AJUSTE_SALIDA' | 'TRASPASO_ENTRADA' | 'TRASPASO_SALIDA' | 'INICIAL' | 'DEVOLUCION';
 
 export interface InventoryLedgerEntry {
   id: string;
@@ -70,6 +125,9 @@ export interface InventoryLedgerEntry {
   unitCost: number;
   balanceQty: number;
   balanceAvgCost: number;
+  terminalId?: string; // Terminal ID or Series
+  syncStatus?: SyncStatus;
+  syncError?: string;
 }
 
 // --- WATCHLIST & BI TYPES ---
@@ -129,8 +187,39 @@ export interface ReceiptConfig {
   showForeignCurrencyTotals?: boolean;
 }
 
+// Document Types for all transaction categories
+export type DocumentType =
+  // Sales
+  | 'TICKET'           // Regular sale
+  | 'REFUND'           // Refund/Return
+  | 'VOID'             // Voided transaction
+
+  // Inventory
+  | 'TRANSFER'         // Transfer between warehouses
+  | 'ADJUSTMENT_IN'    // Positive inventory adjustment
+  | 'ADJUSTMENT_OUT'   // Negative inventory adjustment
+  | 'PURCHASE'         // Purchase from supplier
+  | 'PRODUCTION'       // Production/Assembly
+
+  // Cash
+  | 'CASH_IN'          // Cash in
+  | 'CASH_OUT'         // Cash out
+  | 'CASH_DEPOSIT'     // Bank deposit
+  | 'CASH_WITHDRAWAL'  // Cash withdrawal
+
+  // Closures
+  | 'Z_REPORT'         // Cash register closure
+  | 'X_REPORT'         // Partial report
+
+  // Accounts
+  | 'RECEIVABLE'       // Accounts receivable
+  | 'PAYABLE'          // Accounts payable
+  | 'PAYMENT_IN'       // Payment received
+  | 'PAYMENT_OUT';     // Payment made
+
 export interface DocumentSeries {
   id: string;
+  documentType: DocumentType;  // Functional type
   name: string;
   description: string;
   prefix: string;
@@ -138,6 +227,7 @@ export interface DocumentSeries {
   padding: number;
   icon: string;
   color: string;
+  businessUnit?: string;  // Optional: "Tienda Norte", "Caja Express"
 }
 
 export interface NCFConfig {
@@ -152,6 +242,8 @@ export interface TerminalConfig {
   isBlocked?: boolean;
   deviceBindingToken: string;
   isPrimaryNode?: boolean; // Rol jerárquico de la terminal
+  governedByMaster?: boolean; // NEW: If true, this terminal follows the configuration defined by the Master
+  deviceRole?: DeviceRoleConfig; // NEW: Configuración de rol de dispositivo
 
   fiscal: {
     batchSize: number; // Deprecated but kept for compatibility
@@ -230,6 +322,23 @@ export interface TerminalConfig {
     defaultSalesWarehouseId: string;
     visibleWarehouseIds: string[];
   };
+  wallet?: WalletConfig;
+  syncConfig?: SyncConfig;
+}
+
+export interface WalletConfig {
+  apple: {
+    teamId: string;
+    passTypeIdentifier: string;
+    p12Cert: string; // Base64 (Encrypted in storage)
+    p12Password: string; // (Encrypted in storage)
+    isConfigured: boolean;
+  };
+  google: {
+    issuerId: string;
+    serviceAccountJson: string; // JSON String (Encrypted in storage)
+    isConfigured: boolean;
+  };
 }
 
 export interface CurrencyConfig {
@@ -298,12 +407,24 @@ export interface TipConfiguration {
   };
 }
 
+export interface N8nConfig {
+  webhookUrl: string;
+  events: {
+    onSale: boolean;
+    onZReport: boolean;
+  };
+}
+
 export interface EmailConfig {
-  subjectTemplate: string;
-  accentColor: string;
-  bannerImage: string;
-  customFooter: string;
-  showSocialLinks: boolean;
+  provider: 'resend';
+  apiKey: string;
+  from: string;
+  defaultRecipient?: string; // Fallback recipient for system emails
+  subjectTemplate?: string;
+  accentColor?: string;
+  bannerImage?: string;
+  customFooter?: string;
+  showSocialLinks?: boolean;
 }
 
 export interface ScaleLabelConfig {
@@ -332,6 +453,8 @@ export interface LoyaltyConfig {
   expirationMonths: number;
   excludedCategories: string[];
 }
+
+
 
 export interface BusinessConfig {
   vertical: VerticalType;
@@ -362,6 +485,7 @@ export interface BusinessConfig {
   coupons?: Coupon[];
   roles?: RoleDefinition[];
   auditLogs?: AuditLogEntry[];
+  n8nConfig?: N8nConfig;
 }
 
 export interface RoleDefinition {
@@ -370,6 +494,9 @@ export interface RoleDefinition {
   permissions: Permission[];
   maxDiscountPercent?: number;
   isSystem?: boolean;
+  zReportConfig?: {
+    hiddenModules: ZReportModule[];
+  };
 }
 
 export interface User {
@@ -489,35 +616,76 @@ export interface Product {
   brandId?: string;
   operationalFlags?: ProductOperationalFlags;
   createdAt?: string;
+  updatedAt?: string;
+  hasActivePromotion?: boolean; // UI Flag for badges
 }
 
+export interface ProductStock {
+  id: string; // generateId(productId, warehouseId)
+  productId: string;
+  warehouseId: string;
+  quantity: number;
+  updatedAt: string;
+}
+
+/**
+ * Cart Item
+ * 
+ * IMPORTANT - PRICE SNAPSHOT PROTECTION:
+ * When a product is added to cart, its `price` field becomes a SNAPSHOT
+ * and is FROZEN for the duration of that sale. Subsequent catalog updates
+ * (price changes, bulk updates, etc.) WILL NOT affect items already in cart.
+ * 
+ * This prevents the following scenario:
+ * - Customer adds item @ $2.50
+ * - Admin changes price to $3.00 on master terminal
+ * - Catalog syncs to slave
+ * - Customer would suddenly owe $3.00 instead of $2.50
+ * 
+ * With snapshot protection:
+ * - Price at time of adding to cart is preserved
+ * - Customer pays what they saw when they added item
+ * - Next sale will use new price
+ */
 export interface CartItem extends Product {
   quantity: number;
   cartId: string;
   modifiers?: string[];
   note?: string;
-  originalPrice?: number;
+  originalPrice?: number; // Optional: track original product price for auditing
   salespersonId?: string;
   ncf?: string; // NCF asignado a esta línea o al ticket
   appliedPromotionId?: string;
 }
 
 export interface Transaction {
+  // Identifiers
   id: string;
+  globalSequence?: number;          // Global unique sequence number
+  displayId?: string;               // User-visible ID (e.g., "TCK01-000123")
+
+  // Document Classification
+  documentType?: DocumentType;      // Type of transaction
+  seriesId?: string;                // Reference to DocumentSeries
+  seriesNumber?: number;            // Number within the series
+
+  // Transaction Data
   date: string;
   items: CartItem[];
   total: number;
   payments: any[];
+
+  // User & Terminal
   userId: string;
   userName: string;
-  terminalId?: string; // Nuevo: Para auditoría por caja
+  terminalId?: string;
+
+  // Status
   status: 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND';
+
+  // Customer
   customerId?: string;
   customerName?: string;
-  refundReason?: string;
-  ncf?: string; // NCF final del documento
-  ncfType?: NCFType;
-  discountAmount?: number;
   customerSnapshot?: {
     name: string;
     taxId?: string;
@@ -525,10 +693,55 @@ export interface Transaction {
     phone?: string;
     email?: string;
   };
+
+  // Accounting
+  taxAmount?: number;               // Total tax amount
+  netAmount?: number;               // Net amount (before tax)
+  discountAmount?: number;
   isTaxIncluded?: boolean;
+
+  // Fiscal
+  ncf?: string;                     // NCF final del documento
+  ncfType?: NCFType;
+
+  // Relationships
+  relatedTransactions?: string[];   // Related transaction IDs
+  originalTransactionId?: string;   // For refunds/voids
+  refundReason?: string;
+  syncStatus?: SyncStatus;
+  syncError?: string;
+  zReportId?: string; // ID of the Z-Report that closed this transaction
 }
 
-export type ViewState = 'SETUP' | 'WIZARD' | 'LOGIN' | 'POS' | 'SETTINGS' | 'CUSTOMERS' | 'HISTORY' | 'FINANCE' | 'Z_REPORT' | 'SUPPLY_CHAIN' | 'FRANCHISE_DASHBOARD' | 'DEVICE_UNAUTHORIZED';
+export type ViewState =
+  // Standard views
+  | 'SETUP'
+  | 'WIZARD'
+  | 'LOGIN'
+  | 'POS'
+  | 'SETTINGS'
+  | 'SETTINGS_SYNC'
+  | 'CUSTOMERS'
+  | 'HISTORY'
+  | 'FINANCE'
+  | 'Z_REPORT'
+  | 'SUPPLY_CHAIN'
+  | 'FRANCHISE_DASHBOARD'
+  | 'DEVICE_UNAUTHORIZED'
+  // Kiosk / Self-Checkout views
+  | 'KIOSK_WELCOME'
+  | 'KIOSK_BROWSER'
+  | 'KIOSK_CART'
+  | 'KIOSK_PAYMENT'
+  // Price Checker views
+  | 'CHECKER_SCAN'
+  // Handheld Inventory views
+  | 'INVENTORY_HOME'
+  | 'INVENTORY_COUNT'
+  | 'INVENTORY_RECEPTION'
+  | 'INVENTORY_LABELS'
+  // Kitchen Display views
+  | 'KITCHEN_ORDERS';
 
 export interface TariffPriceOverride {
   productId: string;
@@ -661,14 +874,20 @@ export interface CashMovement {
   timestamp: string;
   userId: string;
   userName: string;
+  currencyCode?: string; // For multi-currency support, defaults to base currency
+  syncStatus?: SyncStatus;
+  syncError?: string;
 }
 
 export interface Supplier {
   id: string;
   name: string;
-  contactName: string;
-  phone: string;
+  taxId: string; // RNC o Cédula
   email: string;
+  phone: string;
+  contactPerson: string;
+  paymentTermDays: number;
+  isActive: boolean;
 }
 
 export interface PurchaseOrderItem {
@@ -683,9 +902,22 @@ export interface PurchaseOrder {
   id: string;
   supplierId: string;
   date: string;
+  dueDate?: string; // Derived from supplier.paymentTermDays
   status: 'ORDERED' | 'PARTIAL' | 'COMPLETED';
   items: PurchaseOrderItem[];
   totalCost: number;
+  sentAt?: string; // For email tracking
+}
+
+export interface Reception {
+  id: string;
+  purchaseOrderId: string;
+  date: string;
+  receivedBy: string;
+  receivedByUserName: string;
+  items: PurchaseOrderItem[];
+  terminalId?: string;
+  syncStatus?: SyncStatus;
 }
 
 export interface ParkedTicket {
@@ -935,6 +1167,7 @@ export interface Wallet {
   status: 'ACTIVE' | 'BLOCKED';
   lastActivity: string;
   transactions: WalletTransaction[];
+  pushToken?: string;
 }
 
 export type LoyaltyTransactionType = 'EARN' | 'REDEEM' | 'ADJUSTMENT';
@@ -957,4 +1190,53 @@ export interface LoyaltyCard {
   status: 'ACTIVE' | 'LOST';
   issuedAt: string;
   history: LoyaltyTransaction[];
+}
+// --- Z-REPORT HISTORY ---
+export interface ZReportStats {
+  averageTicket: number;
+  itemsPerSale: number;
+  peakHour: string; // e.g., "14:00 - 15:00"
+  topProduct: {
+    name: string;
+    quantity: number;
+    total: number;
+  } | null;
+  returnsCount: number;
+  returnsTotal: number;
+  discountsTotal: number; // New: Total discounts given
+}
+
+export type ZReportModule = 'FINANCIAL' | 'PAYMENTS' | 'CASH_DETAILS' | 'KPIS' | 'AUDIT';
+
+export interface ZReport {
+  id: string;
+  terminalId: string;
+  sequenceNumber: string; // e.g., Z-0001
+  openedAt: string; // Timestamp of first transaction/movement since last Z
+  closedAt: string;
+  closedByUserId: string;
+  closedByUserName: string;
+
+  // Financials
+  baseCurrency: string;
+  totalsByMethod: Record<string, number>; // CASH, CARD, etc.
+
+  // Cash Details (Multi-currency)
+  cashExpected: Record<string, number>;
+  cashCounted: Record<string, number>;
+  cashDiscrepancy: Record<string, number>;
+
+  // Movements
+  cashSales: number;
+  cashIn: number;
+  cashOut: number;
+
+  // Metadata
+  transactionCount: number;
+  notes: string;
+
+  // Analytics
+  stats?: ZReportStats;
+  syncStatus?: SyncStatus;
+  syncError?: string;
 }

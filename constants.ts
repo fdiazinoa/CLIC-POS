@@ -2,9 +2,9 @@
 import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff, TaxDefinition } from './types';
 
 export const DEFAULT_DOCUMENT_SERIES: DocumentSeries[] = [
-  { id: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar para todas las ventas.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
-  { id: 'REFUND', name: 'Devolución / Abono', description: 'Notas de crédito por devoluciones.', prefix: 'NC', nextNumber: 1, padding: 6, icon: 'RotateCcw', color: 'orange' },
-  { id: 'TRANSFER', name: 'Nota de Traspaso', description: 'Movimiento de inventario entre almacenes.', prefix: 'TR', nextNumber: 1, padding: 6, icon: 'ArrowRightLeft', color: 'purple' },
+  { id: 'TICKET', documentType: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar para todas las ventas.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
+  { id: 'REFUND', documentType: 'REFUND', name: 'Devolución / Abono', description: 'Notas de crédito por devoluciones.', prefix: 'NC', nextNumber: 1, padding: 6, icon: 'RotateCcw', color: 'orange' },
+  { id: 'TRANSFER', documentType: 'TRANSFER', name: 'Nota de Traspaso', description: 'Movimiento de inventario entre almacenes.', prefix: 'TR', nextNumber: 1, padding: 6, icon: 'ArrowRightLeft', color: 'purple' },
 ];
 
 export const INITIAL_TAXES: TaxDefinition[] = [
@@ -323,7 +323,9 @@ export const AVAILABLE_PERMISSIONS = [
   // --- CASH & FINANCE ---
   { key: 'POS_OPEN_DRAWER', label: 'Abrir Cajón', description: 'Sin venta', category: 'CASH' },
   { key: 'POS_CLOSE_Z', label: 'Cierre Z (Corte)', description: 'Realizar cierre de caja', category: 'CASH' },
+  { key: 'POS_VIEW_X_REPORT', label: 'Ver Reporte X', description: 'Consultar ventas en Monitor (Reporte X)', category: 'CASH' },
   { key: 'POS_VIEW_ACTIVE_CASH', label: 'Ver Efectivo Actual', description: 'Auditoría de caja en tiempo real', category: 'CASH' },
+  { key: 'CASH_IN_OUT', label: 'Entrada/Salida Efectivo', description: 'Registrar entradas y salidas de caja', category: 'CASH' },
   { key: 'EXPENSE_MANAGE', label: 'Gastos de Caja', description: 'Registrar salidas de efectivo', category: 'CASH' },
   { key: 'REPORTS_VIEW_SALES', label: 'Ver Ventas', description: 'Reportes básicos de venta', category: 'FINANCE' },
   { key: 'REPORTS_VIEW_FINANCIAL', label: 'Reportes Financieros', description: 'Ver costos, márgenes e impuestos', category: 'FINANCE' },
@@ -356,7 +358,7 @@ export const AVAILABLE_PERMISSIONS = [
 ];
 
 export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
-  const isFood = [SubVertical.RESTAURANT, SubVertical.FAST_FOOD, SubVertical.BAR].includes(subVertical);
+  const isFood = ([SubVertical.RESTAURANT, SubVertical.FAST_FOOD, SubVertical.BAR] as string[]).includes(subVertical);
 
   return {
     vertical: isFood ? 'RESTAURANT' : 'RETAIL',

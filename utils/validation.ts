@@ -5,7 +5,7 @@ export const validateTerminalDocument = (
     terminalId: string,
     role: 'TICKET' | 'REFUND' | 'TRANSFER'
 ): { isValid: boolean; error?: string } => {
-    const terminal = config.terminals.find(t => t.id === terminalId) || config.terminals[0];
+    const terminal = (config.terminals || []).find(t => t.id === terminalId) || (config.terminals || [])[0];
 
     if (!terminal) {
         return { isValid: false, error: 'Terminal no encontrada.' };

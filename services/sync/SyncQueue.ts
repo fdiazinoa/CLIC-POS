@@ -2,7 +2,7 @@ import { dbAdapter } from '../db';
 
 export interface SyncItem {
     id: string;
-    type: 'TRANSACTION' | 'INVENTORY_ADJUSTMENT' | 'CUSTOMER_UPDATE';
+    type: 'TRANSACTION' | 'INVENTORY_ADJUSTMENT' | 'CUSTOMER_UPDATE' | 'DOCUMENT_SERIES';
     payload: any;
     status: 'PENDING' | 'SYNCED' | 'ERROR';
     retryCount: number;
@@ -80,12 +80,21 @@ class SyncQueueService {
         console.log(`🔄 Syncing item ${item.id} (${item.type})...`);
 
         try {
-            // MOCK API CALL
-            // In a real app, this would be: await api.post('/sync', item);
-            await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate network latency
+            const payload = typeof item.payload === 'string' ? JSON.parse(item.payload) : item.payload;
 
-            // Simulate random failure for testing (10% chance)
-            // if (Math.random() < 0.1) throw new Error("Network simulation error");
+            // Handle different sync types
+            if (item.type === 'TRANSACTION') {
+                // Use TransactionSyncService for real transaction sync
+                const { transactionSyncService } = await import('./TransactionSyncService');
+                await transactionSyncService.pushTransaction(payload);
+            } else if (item.type === 'INVENTORY_ADJUSTMENT') {
+                // Use ApiSyncAdapter for inventory movements
+                const { apiSyncAdapter } = await import('./ApiSyncAdapter');
+                await apiSyncAdapter.pushInventoryMovement(payload);
+            } else {
+                // For other types, use mock sync for now
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
 
             // Update status to SYNCED
             await dbAdapter.executeSQL(
@@ -96,6 +105,14 @@ class SyncQueueService {
 
         } catch (error: any) {
             console.error(`❌ Failed to sync item ${item.id}:`, error);
+
+            // Report error to Master
+            try {
+                const { apiSyncAdapter } = await import('./ApiSyncAdapter');
+                await apiSyncAdapter.reportError(error.message, item.type, item.id);
+            } catch (reportError) {
+                console.warn('Could not report sync error to Master:', reportError);
+            }
 
             // Update retry count and error
             await dbAdapter.executeSQL(

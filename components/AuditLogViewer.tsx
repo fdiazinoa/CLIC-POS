@@ -17,9 +17,9 @@ const AuditLogViewer: React.FC<AuditLogViewerProps> = ({ config, users }) => {
         const searchLower = searchTerm.toLowerCase();
 
         return (
-            log.actionType.toLowerCase().includes(searchLower) ||
-            cashierName.toLowerCase().includes(searchLower) ||
-            supervisorName.toLowerCase().includes(searchLower) ||
+            (log.actionType || '').toLowerCase().includes(searchLower) ||
+            (cashierName || '').toLowerCase().includes(searchLower) ||
+            (supervisorName || '').toLowerCase().includes(searchLower) ||
             log.reason?.toLowerCase().includes(searchLower)
         );
     }).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
@@ -74,8 +74,8 @@ const AuditLogViewer: React.FC<AuditLogViewerProps> = ({ config, users }) => {
                                         </td>
                                         <td className="p-4">
                                             <span className={`px-2 py-1 rounded-md text-[10px] font-black uppercase ${log.actionType.includes('VOID') ? 'bg-red-100 text-red-600' :
-                                                    log.actionType.includes('DISCOUNT') ? 'bg-orange-100 text-orange-600' :
-                                                        'bg-blue-100 text-blue-600'
+                                                log.actionType.includes('DISCOUNT') ? 'bg-orange-100 text-orange-600' :
+                                                    'bg-blue-100 text-blue-600'
                                                 }`}>
                                                 {log.actionType.replace('POS_', '').replace('_', ' ')}
                                             </span>

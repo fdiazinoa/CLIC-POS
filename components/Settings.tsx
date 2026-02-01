@@ -5,7 +5,7 @@ import {
   Monitor, Users, Truck, ShieldCheck, FileText,
   Globe, Database, Activity, Mail, Coins,
   Cpu, HardDrive, Smartphone, Cloud, Lock, Package, Building2,
-  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award
+  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw
 } from 'lucide-react';
 import { BusinessConfig, User, RoleDefinition, Transaction, Product, Warehouse, StockTransfer } from '../types';
 
@@ -26,6 +26,8 @@ import DocumentSettings from './DocumentSettings';
 import PromotionBuilder from './PromotionBuilder';
 import { ImportWizard } from './ImportWizard/ImportWizard';
 import LoyaltySettings from './LoyaltySettings';
+import WalletIntegrations from './WalletIntegrations';
+import SyncSettings from './SyncSettings';
 
 interface SettingsProps {
   config: BusinessConfig;
@@ -46,14 +48,21 @@ interface SettingsProps {
   onOpenSupplyChain: () => void;
   onOpenFranchise: () => void;
   onClose: () => void;
+  isAdminMode?: boolean;
+  currentDeviceId?: string;
+  terminalId?: string;
+  initialView?: SettingsView;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC';
 
 const Settings: React.FC<SettingsProps> = (props) => {
-  const [currentView, setCurrentView] = useState<SettingsView>('HOME');
+  const [currentView, setCurrentView] = useState<SettingsView>(props.initialView || 'HOME');
 
   const hasPermission = (permission: string): boolean => {
+    // ADMIN MODE OVERRIDE
+    if (props.isAdminMode) return true;
+
     if (!props.currentUser) return false;
     const userRole = props.roles.find(r => r.id === props.currentUser?.role);
     if (!userRole) return false;
@@ -64,7 +73,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
   const renderContent = () => {
     switch (currentView) {
-      // ... (existing cases)
       case 'IMPORT_EXPORT':
         return (
           <ImportWizard
@@ -82,6 +90,14 @@ const Settings: React.FC<SettingsProps> = (props) => {
           />
         );
 
+      case 'WALLET_KEYS':
+        return (
+          <WalletIntegrations
+            config={props.config}
+            onUpdateConfig={(newConfig) => props.onUpdateConfig(newConfig)}
+          />
+        );
+
       case 'CATALOG':
         return (
           <CatalogManager
@@ -94,6 +110,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
             onUpdateProducts={props.onUpdateProducts}
             onUpdateConfig={props.onUpdateConfig}
             onClose={() => setCurrentView('HOME')}
+            isAdminMode={props.isAdminMode}
+            terminalId={props.terminalId}
           />
         );
 
@@ -143,6 +161,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
             onUpdateConfig={props.onUpdateConfig}
             onClose={() => setCurrentView('HOME')}
             products={props.products}
+            warehouses={props.warehouses}
+            isAdminMode={props.isAdminMode}
+            currentDeviceId={props.currentDeviceId}
           />
         );
 
@@ -214,16 +235,27 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
       case 'EMAIL':
         return (
-          <EmailSettings
-            config={props.config}
-            onUpdateConfig={props.onUpdateConfig}
-            onClose={() => setCurrentView('HOME')}
-          />
+          <div className="relative h-full">
+            <EmailSettings
+              onSave={(emailConfig) => console.log('Email config saved locally', emailConfig)}
+              onBack={() => setCurrentView('HOME')}
+            />
+          </div>
         );
 
       case 'SECURITY':
         return (
           <DataSecurityHub
+            onClose={() => setCurrentView('HOME')}
+            terminalId={props.terminalId || 'LOCAL'}
+            config={props.config}
+          />
+        );
+
+      case 'SYNC':
+        return (
+          <SyncSettings
+            config={props.config}
             onClose={() => setCurrentView('HOME')}
           />
         );
@@ -247,6 +279,17 @@ const Settings: React.FC<SettingsProps> = (props) => {
       default:
         return (
           <div className="flex-1 overflow-y-auto p-8 max-w-7xl mx-auto w-full animate-in fade-in">
+            {/* ADMIN MODE BANNER */}
+            {props.isAdminMode && (
+              <div className="mb-6 p-4 bg-red-100 border border-red-200 rounded-xl flex items-center gap-3 animate-pulse shadow-sm">
+                <ShieldCheck size={24} className="text-red-600" />
+                <div>
+                  <h3 className="text-red-800 font-black text-lg">MODO ADMINISTRADOR ACTIVO</h3>
+                  <p className="text-red-700 text-sm">Se han desbloqueado todas las opciones temporalmente.</p>
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-between items-center mb-8">
               <div>
                 <h1 className="text-3xl font-black text-gray-800">Configuración</h1>
@@ -323,12 +366,14 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={Percent} label="Promociones" description="Descuentos, 2x1 y Temporadas" color="bg-rose-500" onClick={() => setCurrentView('PROMOTIONS')} locked={!hasPermission('CATALOG_MANAGE')} />
                   <SettingsCard icon={Receipt} label="Diseño de Ticket" description="Logo, Cabecera y Pie" color="bg-rose-600" onClick={() => setCurrentView('RECEIPT')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Mail} label="E-mail" description="Factura Digital" color="bg-sky-500" onClick={() => setCurrentView('EMAIL')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={Wallet} label="Wallet Keys" description="Apple & Google Pay" color="bg-slate-800" onClick={() => setCurrentView('WALLET_KEYS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                 </div>
               </section>
 
               <section>
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Sistema y Auditoría</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <SettingsCard icon={RefreshCw} label="Sincronización" description="Estado de Red y Réplicas" color="bg-indigo-600" onClick={() => setCurrentView('SYNC')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} locked={!hasPermission('AUDIT_LOG_VIEW')} />
                 </div>

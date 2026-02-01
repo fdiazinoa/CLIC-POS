@@ -28,7 +28,7 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
         let itemTaxRate = 0;
         if (item.appliedTaxIds && item.appliedTaxIds.length > 0) {
             item.appliedTaxIds.forEach(id => {
-                const t = config.taxes.find(tax => tax.id === id);
+                const t = (config.taxes || []).find(tax => tax.id === id);
                 if (t) itemTaxRate += t.rate;
             });
         } else {
@@ -106,19 +106,19 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Ticket #${transaction.id}</title>
+            <title>Ticket #${transaction.displayId || transaction.id}</title>
             <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
             <style>
-                @page { margin: 0; }
+                @page { size: 80mm auto; margin: 0; }
                 body {
-                    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-                    width: 80mm;
+                    font-family: 'Courier New', Courier, monospace; /* Monospace is better for alignment on thermal */
+                    width: 72mm; /* 80mm - margins */
                     margin: 0 auto;
-                    padding: 10px;
-                    font-size: 12px;
-                    line-height: 1.3;
+                    padding: 4mm;
+                    font-size: 14px; /* Increased from 12px */
+                    line-height: 1.2;
                     color: #000;
-                    -webkit-font-smoothing: antialiased;
+                    background: #fff;
                 }
                 .text-center { text-align: center; }
                 .text-right { text-align: right; }
@@ -128,57 +128,57 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
                 
                 .header-logo {
                     display: block;
-                    margin: 0 auto 10px auto;
-                    max-width: 60%;
+                    margin: 0 auto 5px auto;
+                    max-width: 100%;
                     height: auto;
                     object-fit: contain;
+                    filter: grayscale(100%) contrast(150%); /* Optimize for B&W thermal */
                 }
                 
-                .company-name { font-size: 16px; font-weight: 900; margin-bottom: 4px; text-transform: uppercase; }
-                .company-info { font-size: 10px; color: #333; }
+                .company-name { font-size: 18px; font-weight: 900; margin-bottom: 2px; text-transform: uppercase; }
+                .company-info { font-size: 12px; color: #000; }
                 
-                .divider { border-top: 1px dashed #000; margin: 10px 0; }
-                .divider-solid { border-top: 2px solid #000; margin: 10px 0; }
+                .divider { border-top: 1px dashed #000; margin: 8px 0; }
+                .divider-solid { border-top: 2px solid #000; margin: 8px 0; }
                 
-                .doc-title { font-size: 14px; font-weight: 900; text-transform: uppercase; margin-bottom: 4px; }
-                .ncf-row { font-size: 13px; font-weight: 700; margin-bottom: 2px; }
-                .meta-row { font-size: 10px; color: #555; }
+                .doc-title { font-size: 16px; font-weight: 900; text-transform: uppercase; margin-bottom: 2px; }
+                .ncf-row { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
+                .meta-row { font-size: 12px; color: #000; }
 
-                .items-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-                .items-table th { text-align: left; font-size: 10px; border-bottom: 1px solid #000; padding-bottom: 4px; }
-                .items-table td { padding: 6px 0; vertical-align: top; border-bottom: 1px dotted #ccc; }
-                .items-table tr:last-child td { border-bottom: none; }
+                .items-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
+                .items-table th { text-align: left; font-size: 12px; border-bottom: 1px solid #000; padding-bottom: 2px; }
+                .items-table td { padding: 4px 0; vertical-align: top; border-bottom: none; }
                 
-                .item-name { font-weight: 700; font-size: 12px; display: block; }
-                .item-meta { font-size: 10px; color: #555; display: block; line-height: 1.4; }
-                .item-price { text-align: right; font-weight: 700; font-size: 12px; }
+                .item-name { font-weight: 700; font-size: 14px; display: block; }
+                .item-meta { font-size: 12px; color: #000; display: block; line-height: 1.1; margin-left: 5px; }
+                .item-price { text-align: right; font-weight: 700; font-size: 14px; white-space: nowrap; }
 
-                .totals-section { margin-top: 10px; }
-                .total-row { display: flex; justify-content: space-between; margin-bottom: 2px; font-size: 11px; }
-                .total-final { font-size: 20px; font-weight: 900; margin-top: 8px; border-top: 2px solid #000; padding-top: 8px; }
+                .totals-section { margin-top: 5px; }
+                .total-row { display: flex; justify-content: space-between; margin-bottom: 2px; font-size: 14px; }
+                .total-final { font-size: 20px; font-weight: 900; margin-top: 5px; border-top: 2px solid #000; padding-top: 5px; }
                 
                 .savings-box {
-                    border: 2px dashed #000;
-                    padding: 8px;
-                    margin: 15px 0;
+                    border: 2px solid #000;
+                    padding: 5px;
+                    margin: 10px 0;
                     text-align: center;
                     font-weight: 700;
-                    font-size: 12px;
+                    font-size: 14px;
                 }
                 
-                .footer { margin-top: 20px; text-align: center; font-size: 10px; }
+                .footer { margin-top: 15px; text-align: center; font-size: 11px; }
                 
                 #qrcode {
-                    width: 100px;
-                    height: 100px;
-                    margin: 15px auto;
+                    width: 80px;
+                    height: 80px;
+                    margin: 10px auto;
                 }
                 #qrcode img { margin: 0 auto; }
                 
                 .currency-section {
-                    margin-top: 10px;
-                    padding-top: 5px;
-                    border-top: 1px dotted #000;
+                    margin-top: 5px;
+                    padding-top: 2px;
+                    border-top: 1px dashed #000;
                     text-align: center;
                 }
             </style>
@@ -202,7 +202,7 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
                 <div class="doc-title">${documentTitle}</div>
                 ${transaction.ncf ? `<div class="ncf-row">NCF: ${transaction.ncf}</div>` : ''}
                 <div style="display: flex; justify-content: space-between; margin-top: 5px;">
-                    <div class="meta-row" style="font-weight: bold;">Ticket: ${transaction.id}</div>
+                    <div class="meta-row" style="font-weight: bold;">Ticket: ${transaction.displayId || transaction.id}</div>
                     <div class="meta-row">${dateStr} ${timeStr}</div>
                 </div>
             </div>
@@ -344,8 +344,13 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
                     // Generate QR Code
                     ${receiptConfig?.showQr ? `
                     try {
+                        const qrData = JSON.stringify({
+                            type: 'INVOICE_RETURN',
+                            id: "${transaction.id}",
+                            sec: "${transaction.id.substring(0, 8)}"
+                        });
                         new QRCode(document.getElementById("qrcode"), {
-                            text: "${transaction.ncf || transaction.id}",
+                            text: qrData,
                             width: 100,
                             height: 100,
                             colorDark : "#000000",

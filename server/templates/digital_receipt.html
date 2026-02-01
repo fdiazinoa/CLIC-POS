@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tu Recibo de Compra - {{companyName}}</title>
+</head>
+
+<body
+    style="margin: 0; padding: 0; background-color: #F4F6F8; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
+    <table width="100%" border="0" cellspacing="0" cellpadding="0"
+        style="background-color: #F4F6F8; padding: 40px 20px;">
+        <tr>
+            <td align="center">
+                <!-- Main Card -->
+                <table width="100%" border="0" cellspacing="0" cellpadding="0"
+                    style="max-width: 600px; background-color: #FFFFFF; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                    <!-- Header -->
+                    <tr>
+                        <td style="padding: 40px 40px 20px 40px; text-align: center;">
+                            <div style="margin-bottom: 20px;">
+                                <img src="{{logoUrl}}" alt="{{companyName}}" width="120"
+                                    style="display: block; margin: 0 auto; border: 0;">
+                            </div>
+                            <h2
+                                style="margin: 0; font-size: 16px; color: #64748B; font-weight: 500; letter-spacing: 0.5px;">
+                                ¡Gracias por tu compra!</h2>
+                            <h1
+                                style="margin: 10px 0; font-size: 42px; font-weight: 800; color: #3B82F6; letter-spacing: -1px;">
+                                {{currencySymbol}}{{total}}</h1>
+
+                            <!-- Header Details Table -->
+                            <table width="100%" border="0" cellspacing="0" cellpadding="0"
+                                style="margin-top: 20px; text-align: left;">
+                                <tr>
+                                    <td width="60%" valign="top"
+                                        style="font-size: 13px; color: #1E293B; line-height: 1.6;">
+                                        <div><strong>Fecha:</strong> {{date}}</div>
+                                        <div><strong>Ticket:</strong> #{{transactionId}}</div>
+                                        {{ncfRow}}
+                                    </td>
+                                    <td width="40%" valign="top" align="right"
+                                        style="font-size: 13px; color: #1E293B; line-height: 1.6;">
+                                        <div><strong>Cajero:</strong> {{cashierName}}</div>
+                                        <div><strong>Cliente:</strong> {{customerName}}</div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Items List -->
+                    <tr>
+                        <td style="padding: 20px 40px;">
+                            <table width="100%" border="0" cellspacing="0" cellpadding="0"
+                                style="border-top: 1px solid #F1F5F9;">
+                                {{itemsHtml}}
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Totals & Payment Section -->
+                    <tr>
+                        <td style="padding: 20px 40px 40px 40px;">
+                            <table width="100%" border="0" cellspacing="0" cellpadding="0"
+                                style="border-top: 2px solid #F1F5F9; padding-top: 20px;">
+                                <tr>
+                                    <!-- Left Column: Payment Method -->
+                                    <td width="50%" valign="bottom" style="padding-bottom: 5px;">
+                                        <div
+                                            style="font-size: 10px; font-weight: 800; color: #94A3B8; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 4px;">
+                                            MÉTODO DE PAGO</div>
+                                        <div style="font-size: 16px; font-weight: 700; color: #1E293B;">
+                                            {{paymentMethod}}</div>
+                                    </td>
+                                    <!-- Right Column: Totals Breakdown -->
+                                    <td width="50%" align="right">
+                                        <table border="0" cellspacing="0" cellpadding="0"
+                                            style="width: 100%; max-width: 200px;">
+                                            <tr>
+                                                <td style="font-size: 14px; color: #64748B; padding: 4px 0;">Subtotal
+                                                </td>
+                                                <td align="right"
+                                                    style="font-size: 14px; color: #1E293B; font-weight: 600; padding: 4px 0;">
+                                                    {{currencySymbol}}{{subtotal}}</td>
+                                            </tr>
+                                            {{globalDiscountRow}}
+                                            <tr>
+                                                <td style="font-size: 14px; color: #64748B; padding: 4px 0;">Impuestos
+                                                </td>
+                                                <td align="right"
+                                                    style="font-size: 14px; color: #1E293B; font-weight: 600; padding: 4px 0;">
+                                                    {{currencySymbol}}{{tax}}</td>
+                                            </tr>
+                                            <tr>
+                                                <td
+                                                    style="font-size: 20px; font-weight: 800; color: #0F172A; padding-top: 12px;">
+                                                    TOTAL</td>
+                                                <td align="right"
+                                                    style="font-size: 20px; font-weight: 800; color: #3B82F6; padding-top: 12px;">
+                                                    {{currencySymbol}}{{total}}</td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Footer / QR -->
+                    <tr>
+                        <td align="center"
+                            style="padding: 0 40px 40px 40px; background-color: #FAFBFC; border-top: 1px solid #F1F5F9;">
+                            <div style="margin: 40px 0 20px 0;">
+                                <img src="{{qrUrl}}" alt="Código QR de Devolución" width="140" height="140"
+                                    style="display: block; border-radius: 8px; border: 1px solid #E2E8F0;">
+                            </div>
+                            <div style="font-size: 14px; font-weight: 700; color: #1E293B; margin-bottom: 4px;">
+                                {{companyName}}</div>
+                            <div style="font-size: 12px; color: #64748B; margin-bottom: 2px;">{{companyAddress}}</div>
+                            <div
+                                style="font-size: 11px; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.5px;">
+                                RNC: {{companyRnc}} &bull; Tel: {{companyPhone}}
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+
+                <!-- Bottom Legal -->
+                <table width="100%" border="0" cellspacing="0" cellpadding="0"
+                    style="max-width: 600px; margin-top: 20px;">
+                    <tr>
+                        <td align="center" style="font-size: 11px; color: #94A3B8; line-height: 1.6; padding: 0 20px;">
+                            Este documento es un comprobante de venta digital. Para cambios o devoluciones, por favor
+                            presente este ticket o escanee el código QR en el establecimiento.
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+
+</html>

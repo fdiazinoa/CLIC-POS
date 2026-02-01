@@ -6,7 +6,7 @@ import {
    Trash2, AlertCircle, LogIn, LogOut, Plus,
    FileBarChart, AlertOctagon, Download, Edit2, User as UserIcon
 } from 'lucide-react';
-import { User, RoleDefinition, Shift, TimeRecord } from '../types';
+import { User, RoleDefinition, Shift, TimeRecord, ZReportModule } from '../types';
 import { AVAILABLE_PERMISSIONS } from '../constants';
 
 interface TeamHubProps {
@@ -726,6 +726,64 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
                                     </div>
                                  );
                               })}
+                           </div>
+
+                           {/* Z-Report Customization */}
+                           <div className="mt-8 bg-white p-6 rounded-3xl shadow-sm border border-gray-200">
+                              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-6 flex items-center gap-2 pb-2 border-b border-gray-100">
+                                 Personalización de Reportes (Cierre Z)
+                              </h4>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                 {[
+                                    { id: 'FINANCIAL', label: 'Resumen Financiero', desc: 'Ventas totales y conteo de transacciones' },
+                                    { id: 'PAYMENTS', label: 'Desglose por Pagos', desc: 'Totales por método (Efectivo, Tarjeta, etc.)' },
+                                    { id: 'CASH_DETAILS', label: 'Arqueo de Caja', desc: 'Conteo de efectivo, esperado vs real y diferencias' },
+                                    { id: 'KPIS', label: 'KPIs y Estadísticas', desc: 'Ticket promedio, productos top, horas pico' },
+                                    { id: 'AUDIT', label: 'Auditoría y Seguridad', desc: 'Devoluciones, descuentos y anulaciones' }
+                                 ].map(module => {
+                                    const moduleId = module.id as ZReportModule;
+                                    const isHidden = editingRole.zReportConfig?.hiddenModules?.includes(moduleId);
+                                    const isVisible = !isHidden;
+
+                                    return (
+                                       <div
+                                          key={moduleId}
+                                          onClick={() => {
+                                             const currentHidden = editingRole.zReportConfig?.hiddenModules || [];
+                                             let newHidden;
+                                             if (isHidden) {
+                                                newHidden = currentHidden.filter(m => m !== moduleId);
+                                             } else {
+                                                newHidden = [...currentHidden, moduleId];
+                                             }
+                                             const newRole = {
+                                                ...editingRole,
+                                                zReportConfig: {
+                                                   ...editingRole.zReportConfig,
+                                                   hiddenModules: newHidden
+                                                }
+                                             };
+                                             setEditingRole(newRole);
+                                             onUpdateRoles(roles.map(r => r.id === newRole.id ? newRole : r));
+                                          }}
+                                          className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all cursor-pointer ${isVisible
+                                             ? 'bg-blue-50 border-blue-500 shadow-sm'
+                                             : 'bg-white border-gray-100 hover:border-gray-300 opacity-60'
+                                             }`}
+                                       >
+                                          <div className="flex-1 pr-4">
+                                             <p className={`text-sm font-bold mb-0.5 ${isVisible ? 'text-blue-900' : 'text-gray-500'}`}>{module.label}</p>
+                                             <p className="text-[10px] text-gray-400 leading-tight">{module.desc}</p>
+                                          </div>
+
+                                          {/* Toggle Switch Visual */}
+                                          <div className={`w-10 h-6 rounded-full relative transition-colors duration-300 shrink-0 ${isVisible ? 'bg-blue-600' : 'bg-gray-300'}`}>
+                                             <div className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm transition-all duration-300 ${isVisible ? 'left-5' : 'left-1'}`} />
+                                          </div>
+                                       </div>
+                                    );
+                                 })}
+                              </div>
                            </div>
                         </div>
                      ) : (

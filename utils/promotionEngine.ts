@@ -191,3 +191,49 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, custom
 
     return processedCart;
 };
+
+/**
+ * Checks if a product has any active promotion applicable.
+ * Used for UI badges.
+ */
+export const hasProductPromotion = (product: any, config: BusinessConfig): boolean => {
+    if (!config.promotions) return false;
+
+    // 1. Filter Active Promotions (Same logic as above)
+    const activePromotions = config.promotions.filter(p => {
+        if (!p.schedule.isActive) return false;
+
+        const today = new Date();
+        const daysMap = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
+        const currentDayKey = daysMap[today.getDay()];
+        if (!p.schedule.days.includes(currentDayKey)) return false;
+
+        const now = today.getHours() * 60 + today.getMinutes();
+        const [startH, startM] = p.schedule.startTime.split(':').map(Number);
+        const [endH, endM] = p.schedule.endTime.split(':').map(Number);
+        const start = startH * 60 + startM;
+        const end = endH * 60 + endM;
+        if (now < start || now > end) return false;
+
+        return true;
+    });
+
+    // 2. Check if any active promotion targets this product
+    return activePromotions.some(p => {
+        if (p.targetType === 'ALL') return true;
+        if (p.targetType === 'PRODUCT' && p.targetValue === product.id) return true;
+        if (p.targetType === 'CATEGORY' && p.targetValue === product.category) return true;
+
+        if (p.targetType === 'GROUP') {
+            const group = config.productGroups?.find(g => g.id === p.targetValue);
+            if (group && group.productIds.includes(product.id)) return true;
+        }
+
+        if (p.targetType === 'SEASON') {
+            const season = config.seasons?.find(s => s.id === p.targetValue);
+            if (season && season.productIds.includes(product.id)) return true;
+        }
+
+        return false;
+    });
+};

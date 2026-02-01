@@ -118,6 +118,16 @@ export class SQLiteWASMAdapter implements DatabaseAdapter {
         return null;
     }
 
+    async deleteDocument(collectionName: string, id: string): Promise<void> {
+        let collection = await this.getCollection<any[]>(collectionName);
+        if (collection && Array.isArray(collection)) {
+            const filtered = collection.filter(doc => doc.id !== id);
+            if (filtered.length !== collection.length) {
+                await this.saveCollection(collectionName, filtered);
+            }
+        }
+    }
+
     async executeSQL(query: string, params: any[] = []): Promise<any> {
         if (!this.db) throw new Error("Database not initialized");
         return this.db.exec(query, params);

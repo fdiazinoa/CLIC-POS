@@ -1,4 +1,4 @@
-import { Customer } from '../../types';
+import { Customer } from '../../types.js';
 
 // Placeholder for 'passkit-generator' or '@walletpass/pass-js'
 // In a real implementation, you would import the library here.

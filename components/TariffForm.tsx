@@ -13,13 +13,14 @@ interface TariffFormProps {
    config: BusinessConfig;
    availableTariffs?: Tariff[];
    onSave: (tariff: Tariff) => void;
+   onUpdateProducts?: (products: Product[]) => void;
    onClose: () => void;
 }
 
 type TabType = 'GENERAL' | 'RULES' | 'ITEMS';
 
 const TariffForm: React.FC<TariffFormProps> = ({
-   initialData, products, config, availableTariffs = [], onSave, onClose
+   initialData, products, config, availableTariffs = [], onSave, onUpdateProducts, onClose
 }) => {
    const [activeTab, setActiveTab] = useState<TabType>('GENERAL');
    const [formData, setFormData] = useState<Tariff>({
@@ -63,7 +64,7 @@ const TariffForm: React.FC<TariffFormProps> = ({
    // --- HELPERS ---
    const filteredProducts = useMemo(() => {
       return products.filter(p => {
-         const matchSearch = p.name.toLowerCase().includes(itemsSearch.toLowerCase()) || p.barcode?.includes(itemsSearch);
+         const matchSearch = (p.name || '').toLowerCase().includes(itemsSearch.toLowerCase()) || p.barcode?.includes(itemsSearch);
          const matchCat = itemsCategory === 'ALL' || p.category === itemsCategory;
          return matchSearch && matchCat;
       });
@@ -109,20 +110,42 @@ const TariffForm: React.FC<TariffFormProps> = ({
       if (!val || val === 0) return;
 
       const newItems = { ...formData.items };
+      const updatedProducts: Product[] = [];
+
       filteredProducts.forEach(p => {
          // Base logic: If no existing override, use product price. If exists, use it.
          // But usually bulk edit means "Base Price + X%"
          const base = p.price;
          const newPrice = base * (1 + val / 100);
+
+         // Update tariff override price
          newItems[p.id] = {
             productId: p.id,
             price: parseFloat(newPrice.toFixed(2)),
             lockPrice: true
          };
+
+         // Also update base product price
+         updatedProducts.push({
+            ...p,
+            price: parseFloat(newPrice.toFixed(2)),
+            updatedAt: new Date().toISOString()
+         });
       });
 
       setFormData(prev => ({ ...prev, items: newItems }));
-      alert(`Aplicado ${val > 0 ? '+' : ''}${val}% a ${filteredProducts.length} productos.`);
+
+      // Update base prices if callback provided
+      if (onUpdateProducts && updatedProducts.length > 0) {
+         // Merge with non-filtered products
+         const updatedProductsMap = new Map(updatedProducts.map(p => [p.id, p]));
+         const allUpdatedProducts = products.map(p =>
+            updatedProductsMap.has(p.id) ? updatedProductsMap.get(p.id)! : p
+         );
+         onUpdateProducts(allUpdatedProducts);
+      }
+
+      alert(`Aplicado ${val > 0 ? '+' : ''}${val}% a ${filteredProducts.length} productos (Precio Base y Tarifa).`);
       setBulkAdjustment('');
    };
 
@@ -136,6 +159,14 @@ const TariffForm: React.FC<TariffFormProps> = ({
             [productId]: { productId, price, lockPrice: true }
          }
       }));
+
+      // If this is the general tariff, also update the base product price to keep them in sync
+      if (formData.id === 'trf-gen' && onUpdateProducts) {
+         const updatedProducts = products.map(p =>
+            p.id === productId ? { ...p, price, updatedAt: new Date().toISOString() } : p
+         );
+         onUpdateProducts(updatedProducts);
+      }
    };
 
    // --- ADD ITEMS MODAL LOGIC ---
@@ -173,7 +204,7 @@ const TariffForm: React.FC<TariffFormProps> = ({
    const filteredAddProducts = useMemo(() => {
       return products.filter(p =>
          !formData.items[p.id] && // Only show items NOT already manually in list
-         (p.name.toLowerCase().includes(addModalSearch.toLowerCase()) ||
+         ((p.name || '').toLowerCase().includes(addModalSearch.toLowerCase()) ||
             p.barcode?.includes(addModalSearch))
       );
    }, [products, addModalSearch, formData.items]);
@@ -282,8 +313,8 @@ const TariffForm: React.FC<TariffFormProps> = ({
                                  key={s.id}
                                  onClick={() => setFormData(prev => ({ ...prev, strategy: { ...prev.strategy, type: s.id as any } }))}
                                  className={`p-6 rounded-2xl border-2 text-left transition-all flex flex-col gap-3 ${formData.strategy.type === s.id
-                                       ? 'border-purple-500 bg-white ring-4 ring-purple-50 shadow-xl'
-                                       : 'border-gray-200 bg-white hover:border-gray-300'
+                                    ? 'border-purple-500 bg-white ring-4 ring-purple-50 shadow-xl'
+                                    : 'border-gray-200 bg-white hover:border-gray-300'
                                     }`}
                               >
                                  <div className={`w-10 h-10 rounded-full flex items-center justify-center ${formData.strategy.type === s.id ? 'bg-purple-100 text-purple-600' : 'bg-gray-100 text-gray-400'}`}>
@@ -321,7 +352,10 @@ const TariffForm: React.FC<TariffFormProps> = ({
                                  <input
                                     type="number"
                                     value={formData.strategy.factor || 0}
-                                    onChange={(e) => setFormData(prev => ({ ...prev, strategy: { ...prev.strategy, factor: parseFloat(e.target.value) } }))}
+                                    onChange={(e) => {
+                                       const val = parseFloat(e.target.value);
+                                       setFormData(prev => ({ ...prev, strategy: { ...prev.strategy, factor: isNaN(val) ? 0 : val } }));
+                                    }}
                                     className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none font-bold text-lg"
                                  />
                               </div>
@@ -339,8 +373,8 @@ const TariffForm: React.FC<TariffFormProps> = ({
                                     key={day}
                                     onClick={() => handleDayToggle(idx)}
                                     className={`w-10 h-10 rounded-lg text-xs font-bold transition-all ${formData.schedule.daysOfWeek.includes(idx)
-                                          ? 'bg-purple-600 text-white shadow-md'
-                                          : 'text-gray-400 hover:bg-gray-200'
+                                       ? 'bg-purple-600 text-white shadow-md'
+                                       : 'text-gray-400 hover:bg-gray-200'
                                        }`}
                                  >
                                     {day}
@@ -414,8 +448,8 @@ const TariffForm: React.FC<TariffFormProps> = ({
                                     key={r.id}
                                     onClick={() => setFormData(prev => ({ ...prev, strategy: { ...prev.strategy, rounding: r.id as RoundingRule } }))}
                                     className={`w-full p-3 text-left rounded-xl text-sm font-medium transition-all ${formData.strategy.rounding === r.id
-                                          ? 'bg-purple-50 text-purple-700 border border-purple-200'
-                                          : 'hover:bg-gray-50 border border-transparent'
+                                       ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                                       : 'hover:bg-gray-50 border border-transparent'
                                        }`}
                                  >
                                     {r.label}
@@ -498,7 +532,7 @@ const TariffForm: React.FC<TariffFormProps> = ({
                                     <div className="flex items-end justify-between">
                                        <div>
                                           <p className="text-[10px] text-gray-400 uppercase">Base / Costo</p>
-                                          <p className="text-xs font-mono text-gray-600">${product.price.toFixed(2)} / ${product.cost?.toFixed(2)}</p>
+                                          <p className="text-xs font-mono text-gray-600">${(product.price || 0).toFixed(2)} / ${product.cost?.toFixed(2)}</p>
                                        </div>
                                        <div className="text-right">
                                           <div className="flex items-center justify-end gap-1 mb-1">
@@ -511,7 +545,7 @@ const TariffForm: React.FC<TariffFormProps> = ({
                                              />
                                           </div>
                                           <p className={`text-[10px] font-bold ${margin >= 30 ? 'text-green-500' : margin > 0 ? 'text-orange-500' : 'text-red-500'}`}>
-                                             Margen: {margin.toFixed(1)}%
+                                             Margen: {(margin || 0).toFixed(1)}%
                                           </p>
                                        </div>
                                     </div>
@@ -581,8 +615,8 @@ const TariffForm: React.FC<TariffFormProps> = ({
                                  key={p.id}
                                  onClick={() => handleToggleSelectToAdd(p.id)}
                                  className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex items-center gap-4 ${isSelected
-                                       ? 'border-purple-500 bg-purple-50 shadow-md'
-                                       : 'border-gray-200 bg-white hover:border-purple-200'
+                                    ? 'border-purple-500 bg-purple-50 shadow-md'
+                                    : 'border-gray-200 bg-white hover:border-purple-200'
                                     }`}
                               >
                                  <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-colors ${isSelected ? 'bg-purple-600 border-purple-600' : 'border-gray-300 bg-white'
@@ -591,7 +625,7 @@ const TariffForm: React.FC<TariffFormProps> = ({
                                  </div>
                                  <div className="flex-1">
                                     <h4 className={`font-bold text-sm ${isSelected ? 'text-purple-900' : 'text-gray-800'}`}>{p.name}</h4>
-                                    <p className="text-xs text-gray-500">${p.price.toFixed(2)}</p>
+                                    <p className="text-xs text-gray-500">${(p.price || 0).toFixed(2)}</p>
                                  </div>
                               </div>
                            );

@@ -40,15 +40,29 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, d
     try {
       console.log(`Connecting to Master at ${masterIp}...`);
 
-      // REAL SYNC: Fetch config from Master Node's json-server
-      const response = await fetch(`http://${masterIp}:3001/config`);
+      // REAL SYNC: Fetch config from Master Node's proxy (port 3000) to avoid Mixed Content
+      // We assume the Master is also running the frontend on port 3000 which proxies /api to 3001
+      const protocol = window.location.protocol; // http: or https:
+      const port = window.location.port || (protocol === 'https:' ? '443' : '80');
+
+      // If we are on the same network, we should try to hit the Master's IP on the frontend port
+      // The frontend (Vite) proxies /api -> localhost:3001
+      // So we fetch: protocol//masterIp:3000/api/config
+      // NOTE: This requires the Master to be running the frontend dev server.
+
+      const targetUrl = `${protocol}//${masterIp}:${port}/api/config`;
+      console.log(`Fetching config from: ${targetUrl}`);
+
+      const response = await fetch(targetUrl);
       if (!response.ok) throw new Error("Connection failed");
 
       const fetchedConfig = await response.json();
 
       // Update local config with Master's config
-      if (onConfigUpdate) {
+      if (onConfigUpdate && fetchedConfig && fetchedConfig.terminals) {
         // Ensure "t2" exists in the fetched config if it's not there (auto-provisioning logic)
+        // DISABLED: User requested manual creation only.
+        /*
         const hasT2 = fetchedConfig.terminals.some((t: any) => t.id === 't2');
         if (!hasT2) {
           fetchedConfig.terminals.push({
@@ -60,6 +74,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, d
             }
           });
         }
+        */
 
         onConfigUpdate(fetchedConfig);
       }
@@ -68,7 +83,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, d
       setStep('AUTH');
     } catch (err) {
       console.error(err);
-      setError('No se pudo conectar a la Maestra. Verifique la IP y que el servidor esté corriendo.');
+      setError(`No se pudo conectar a la Maestra (${masterIp}).\nError: ${(err as Error).message}`);
     } finally {
       setIsConnecting(false);
     }
@@ -76,18 +91,27 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, d
 
   // AUTH LOGIC
   const handleAuth = () => {
-    const admin = adminUsers.find(u => u.pin === adminPin && u.role === 'ADMIN');
+    // FALLBACK: Allow '1234' if no admin users loaded (Safety net for setup)
+    if (adminPin === '1234' && (!adminUsers || adminUsers.length === 0)) {
+      console.warn("⚠️ Using Fallback Admin PIN (1234) because no admin users loaded.");
+      setStep('SELECT');
+      setError(null);
+      return;
+    }
+
+    const admin = (adminUsers || []).find(u => u.pin === adminPin && u.role === 'ADMIN');
     if (admin) {
       setStep('SELECT');
       setError(null);
     } else {
-      setError('PIN de Administrador inválido');
+      setError(`PIN de Administrador inválido (Loaded: ${adminUsers?.length || 0})`);
       setAdminPin('');
     }
   };
 
+
   const handleSelectTerminal = (tId: string) => {
-    const terminal = config.terminals.find(t => t.id === tId);
+    const terminal = (config.terminals || []).find(t => t.id === tId);
     if (terminal?.config.currentDeviceId && terminal.config.currentDeviceId !== deviceId) {
       setSelectedTerminalId(tId);
       setStep('CONFLICT');
@@ -223,7 +247,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, d
           <div className="space-y-4 animate-in fade-in">
             <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Selecciona una posición:</p>
             <div className="space-y-3">
-              {config.terminals.map(t => (
+              {(config.terminals || []).map(t => (
                 <button
                   key={t.id}
                   onClick={() => handleSelectTerminal(t.id)}

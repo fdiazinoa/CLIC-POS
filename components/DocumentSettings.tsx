@@ -4,12 +4,14 @@ import { BusinessConfig, DocumentSeries, FiscalRangeDGII, Transaction } from '..
 import {
    FileText, Receipt, RotateCcw, FileSpreadsheet,
    Edit2, Check, X, AlertTriangle, ShieldAlert,
-   ArrowRight, Hash, Type, Landmark, Calendar,
+   ArrowRight, ArrowRightLeft, ArrowUpRight, Hash, Type, Landmark, Calendar,
    ShieldCheck, AlertOctagon, Plus, Trash2, ChevronRight,
-   Save, AlignLeft, BarChart3, Activity, PieChart
+   Save, AlignLeft, BarChart3, Activity, PieChart, ShoppingBag, Box
 } from 'lucide-react';
 import { db } from '../utils/db';
 import { NCFType } from '../types';
+import { seriesSyncService } from '../services/sync/SeriesSyncService';
+import { syncManager } from '../services/sync/SyncManager';
 
 interface DocumentSettingsProps {
    onClose: () => void;
@@ -30,14 +32,30 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
 
    useEffect(() => {
       const loadData = async () => {
-         const config = (await db.get('config') || {}) as BusinessConfig;
-         const terminals = config.terminals || [];
-         setSeriesList(terminals[0]?.config?.documentSeries || []);
+         console.log('📖 DocumentSettings: Loading series data...');
+         const seqs = (await db.get('internalSequences') || []) as DocumentSeries[];
+         console.log(`📖 DocumentSettings: Loaded ${seqs.length} series from DB:`, seqs);
+         setSeriesList(seqs);
 
          setFiscalRanges((await db.get('fiscalRanges') || []) as FiscalRangeDGII[]);
          setTransactions((await db.get('transactions') as Transaction[]) || []);
       };
       loadData();
+
+      // Listen for series updates from other terminals
+      const handleSeriesUpdate = () => {
+         console.log('🔔 DocumentSettings: Received series update event, reloading...');
+         loadData();
+         console.log('📥 Series list refreshed from sync');
+      };
+
+      window.addEventListener('seriesUpdated', handleSeriesUpdate);
+      window.addEventListener('internalSequencesUpdated', handleSeriesUpdate);
+
+      return () => {
+         window.removeEventListener('seriesUpdated', handleSeriesUpdate);
+         window.removeEventListener('internalSequencesUpdated', handleSeriesUpdate);
+      };
    }, []);
 
    const [isAddingRange, setIsAddingRange] = useState(false);
@@ -61,6 +79,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
    const handleAddNewSeries = () => {
       setEditingSeries({
          id: `DOC_${Date.now()}`,
+         documentType: 'TICKET',
          name: '',
          description: 'Documento interno personalizado.',
          prefix: 'DOC',
@@ -84,12 +103,16 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
       }
 
       setSeriesList(updated);
+      await db.save('internalSequences', updated);
 
-      const config = (await db.get('config')) as unknown as BusinessConfig;
-      if (config && config.terminals && config.terminals[0]) {
-         config.terminals[0].config.documentSeries = updated;
-         await db.save('config', config);
-      }
+      // Broadcast change to other terminals via SeriesSyncService (Instant)
+      await seriesSyncService.broadcastChange(
+         exists ? 'UPDATE' : 'CREATE',
+         editingSeries
+      );
+
+      // Push to SyncManager (Persistent/Manual Sync)
+      await syncManager.pushCatalog('internalSequences');
 
       setEditingSeries(null);
    };
@@ -99,12 +122,13 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
 
       const updated = seriesList.filter(s => s.id !== id);
       setSeriesList(updated);
+      await db.save('internalSequences', updated);
 
-      const config = (await db.get('config')) as unknown as BusinessConfig;
-      if (config && config.terminals && config.terminals[0]) {
-         config.terminals[0].config.documentSeries = updated;
-         await db.save('config', config);
-      }
+      // Broadcast deletion to other terminals
+      await seriesSyncService.broadcastChange('DELETE', id);
+
+      // Push to SyncManager (Persistent/Manual Sync)
+      await syncManager.pushCatalog('internalSequences');
    };
 
    const handleSaveRange = async () => {
@@ -154,47 +178,108 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                {activeSubTab === 'SERIES' && (
                   <div className="space-y-6 animate-in slide-in-from-bottom-4">
                      <div className="flex justify-between items-center px-2">
-                        <h2 className="text-lg font-bold text-gray-800 uppercase tracking-widest text-xs opacity-50">Listado de Secuencias</h2>
+                        <h2 className="text-lg font-bold text-gray-800 uppercase tracking-widest text-xs opacity-50">Secuencias por Tipo</h2>
                         <button
                            onClick={handleAddNewSeries}
                            className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 flex items-center gap-2 active:scale-95 transition-all"
                         >
-                           <Plus size={20} /> Nuevo Tipo
+                           <Plus size={20} /> Nueva Serie
                         </button>
                      </div>
 
-                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
-                        {seriesList.map((series) => (
-                           <div key={series.id} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm hover:shadow-md transition-all flex justify-between items-center group">
-                              <div className="flex items-center gap-4">
-                                 <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center font-bold uppercase">{series.prefix.substring(0, 2)}</div>
-                                 <div>
-                                    <h3 className="font-bold text-gray-800">{series.name}</h3>
-                                    <p className="text-xs text-gray-400">Próximo: <span className="font-mono font-bold text-blue-600">{series.prefix}{series.nextNumber.toString().padStart(series.padding || 1, '0')}</span></p>
+
+                     {/* Group by Document Type */}
+                     {([
+                        'TICKET', 'REFUND', 'VOID',
+                        'TRANSFER', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'PURCHASE', 'PRODUCTION',
+                        'CASH_IN', 'CASH_OUT', 'CASH_DEPOSIT', 'CASH_WITHDRAWAL',
+                        'Z_REPORT', 'X_REPORT',
+                        'RECEIVABLE', 'PAYABLE', 'PAYMENT_IN', 'PAYMENT_OUT'
+                     ] as const).map(docType => {
+                        const typeSeries = seriesList.filter(s => s.documentType === docType);
+
+                        // Skip if no series for this type
+                        if (typeSeries.length === 0) return null;
+
+                        const typeConfig: Record<string, { label: string; icon: any; color: string }> = {
+                           // Ventas
+                           TICKET: { label: 'Tickets de Venta', icon: Receipt, color: 'blue' },
+                           REFUND: { label: 'Devoluciones / Abonos', icon: RotateCcw, color: 'orange' },
+                           VOID: { label: 'Anulaciones', icon: X, color: 'red' },
+
+                           // Inventario
+                           TRANSFER: { label: 'Traspasos', icon: ArrowRightLeft, color: 'purple' },
+                           ADJUSTMENT_IN: { label: 'Ajustes Positivos', icon: Plus, color: 'green' },
+                           ADJUSTMENT_OUT: { label: 'Ajustes Negativos', icon: Trash2, color: 'red' },
+                           PURCHASE: { label: 'Compras', icon: ShoppingBag, color: 'indigo' },
+                           PRODUCTION: { label: 'Producción', icon: Box, color: 'cyan' },
+
+                           // Efectivo
+                           CASH_IN: { label: 'Entradas de Efectivo', icon: ArrowRight, color: 'emerald' },
+                           CASH_OUT: { label: 'Salidas de Efectivo', icon: ArrowRight, color: 'rose' },
+                           CASH_DEPOSIT: { label: 'Depósitos Bancarios', icon: Landmark, color: 'teal' },
+                           CASH_WITHDRAWAL: { label: 'Retiros', icon: Landmark, color: 'amber' },
+
+                           // Cierres
+                           Z_REPORT: { label: 'Cierres de Caja (Z)', icon: Save, color: 'slate' },
+                           X_REPORT: { label: 'Cortes Parciales (X)', icon: FileText, color: 'gray' },
+
+                           // Cuentas
+                           RECEIVABLE: { label: 'Cuentas por Cobrar', icon: ArrowUpRight, color: 'sky' },
+                           PAYABLE: { label: 'Cuentas por Pagar', icon: ArrowUpRight, color: 'violet' },
+                           PAYMENT_IN: { label: 'Cobros Recibidos', icon: Check, color: 'lime' },
+                           PAYMENT_OUT: { label: 'Pagos Realizados', icon: Check, color: 'fuchsia' }
+                        };
+
+                        const config = typeConfig[docType];
+                        if (!config) return null;
+
+                        const Icon = config.icon;
+
+
+                        return (
+                           <div key={docType} className="space-y-4">
+                              <div className="flex items-center gap-3 px-2">
+                                 <div className={`p-2 rounded-lg bg-${config.color}-50 text-${config.color}-600`}>
+                                    <Icon size={20} />
                                  </div>
+                                 <h3 className="font-bold text-gray-700">{config.label}</h3>
+                                 <span className="text-xs text-gray-400">({typeSeries.length} serie{typeSeries.length !== 1 ? 's' : ''})</span>
                               </div>
-                              <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                                 <button
-                                    onClick={() => setEditingSeries({ ...series })}
-                                    className="p-3 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl"
-                                 >
-                                    <Edit2 size={18} />
-                                 </button>
-                                 {series.id !== 'TICKET' && series.id !== 'REFUND' && (
-                                    <button
-                                       onClick={() => handleDeleteSeries(series.id)}
-                                       className="p-3 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl"
-                                    >
-                                       <Trash2 size={18} />
-                                    </button>
+
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                 {typeSeries.map((series) => (
+                                    <div key={series.id} className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-all flex justify-between items-center group">
+                                       <div className="flex items-center gap-3">
+                                          <div className={`w-10 h-10 bg-${config.color}-50 text-${config.color}-600 rounded-lg flex items-center justify-center font-bold text-xs`}>{series.prefix}</div>
+                                          <div>
+                                             <h4 className="font-bold text-gray-800 text-sm">{series.name}</h4>
+                                             <p className="text-xs text-gray-400">Próximo: <span className="font-mono font-bold text-blue-600">{series.prefix}{series.nextNumber.toString().padStart(series.padding || 1, '0')}</span></p>
+                                          </div>
+                                       </div>
+                                       <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                                          <button
+                                             onClick={() => setEditingSeries({ ...series })}
+                                             className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"
+                                          >
+                                             <Edit2 size={16} />
+                                          </button>
+                                          <button
+                                             onClick={() => handleDeleteSeries(series.id)}
+                                             className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg"
+                                          >
+                                             <Trash2 size={16} />
+                                          </button>
+                                       </div>
+                                    </div>
+                                 ))}
+                                 {typeSeries.length === 0 && (
+                                    <div className="col-span-full py-8 text-center text-gray-400 text-sm italic">No hay series configuradas para este tipo</div>
                                  )}
                               </div>
                            </div>
-                        ))}
-                        {seriesList.length === 0 && (
-                           <div className="col-span-full py-20 text-center text-gray-400 italic">No hay series internas configuradas.</div>
-                        )}
-                     </div>
+                        );
+                     })}
                   </div>
                )}
 
@@ -343,12 +428,49 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                   </div>
                   <div className="p-8 space-y-6">
                      <div>
-                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nombre del Documento</label>
+                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Tipo de Documento</label>
+                        <select
+                           value={editingSeries.documentType}
+                           onChange={e => setEditingSeries({ ...editingSeries, documentType: e.target.value as any })}
+                           className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl font-bold"
+                        >
+                           <optgroup label="Ventas">
+                              <option value="TICKET">Ticket de Venta</option>
+                              <option value="REFUND">Devolución / Abono</option>
+                              <option value="VOID">Anulación</option>
+                           </optgroup>
+                           <optgroup label="Inventario">
+                              <option value="TRANSFER">Traspaso entre Almacenes</option>
+                              <option value="ADJUSTMENT_IN">Ajuste Positivo</option>
+                              <option value="ADJUSTMENT_OUT">Ajuste Negativo</option>
+                              <option value="PURCHASE">Compra a Proveedor</option>
+                              <option value="PRODUCTION">Producción/Ensamblaje</option>
+                           </optgroup>
+                           <optgroup label="Efectivo">
+                              <option value="CASH_IN">Entrada de Efectivo</option>
+                              <option value="CASH_OUT">Salida de Efectivo</option>
+                              <option value="CASH_DEPOSIT">Depósito Bancario</option>
+                              <option value="CASH_WITHDRAWAL">Retiro de Caja</option>
+                           </optgroup>
+                           <optgroup label="Cierres">
+                              <option value="Z_REPORT">Cierre de Caja (Z)</option>
+                              <option value="X_REPORT">Corte Parcial (X)</option>
+                           </optgroup>
+                           <optgroup label="Cuentas">
+                              <option value="RECEIVABLE">Cuenta por Cobrar</option>
+                              <option value="PAYABLE">Cuenta por Pagar</option>
+                              <option value="PAYMENT_IN">Cobro Recibido</option>
+                              <option value="PAYMENT_OUT">Pago Realizado</option>
+                           </optgroup>
+                        </select>
+                     </div>
+                     <div>
+                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nombre de la Serie</label>
                         <input
                            type="text"
                            value={editingSeries.name}
                            onChange={e => setEditingSeries({ ...editingSeries, name: e.target.value })}
-                           placeholder="Ej. Nota de Entrega"
+                           placeholder="Ej. Ticket Caja 1"
                            className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl font-bold"
                         />
                      </div>
@@ -359,7 +481,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                               type="text"
                               value={editingSeries.prefix}
                               onChange={e => setEditingSeries({ ...editingSeries, prefix: e.target.value.toUpperCase() })}
-                              placeholder="Ej. NE"
+                              placeholder="Ej. TCK01"
                               className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono font-bold"
                            />
                         </div>
@@ -372,6 +494,16 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                               className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono font-bold text-blue-600"
                            />
                         </div>
+                     </div>
+                     <div>
+                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Unidad de Negocio (Opcional)</label>
+                        <input
+                           type="text"
+                           value={editingSeries.businessUnit || ''}
+                           onChange={e => setEditingSeries({ ...editingSeries, businessUnit: e.target.value })}
+                           placeholder="Ej. Tienda Norte, Caja Express"
+                           className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl font-bold"
+                        />
                      </div>
                      <div>
                         <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Relleno de ceros (Padding)</label>

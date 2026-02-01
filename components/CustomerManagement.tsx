@@ -55,7 +55,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
    const filteredCustomers = useMemo(() => {
       return customers.filter(c => {
-         const matchesSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+         const matchesSearch = (c.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
             c.phone?.includes(searchTerm) ||
             c.taxId?.includes(searchTerm);
          const matchesTag = filterTag === 'ALL' || c.tags?.includes(filterTag);
@@ -130,6 +130,42 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    };
 
    // --- ADDRESS LOGIC ---
+   const handleCreateWallet = () => {
+      if (!selectedCustomer) return;
+      onUpdateCustomer({
+         ...selectedCustomer,
+         wallet: {
+            id: `w_${Date.now()}`,
+            customerId: selectedCustomer.id,
+            balance: 0,
+            currency: config.currencies.find(c => c.isBase)?.code || 'DOP',
+            status: 'ACTIVE',
+            lastActivity: new Date().toISOString(),
+            transactions: []
+         }
+      });
+   };
+
+   const handleSendWalletEmail = async () => {
+      if (!selectedCustomer) return;
+      try {
+         const response = await fetch('/api/wallet/send-welcome-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ customerId: selectedCustomer.id })
+         });
+         const data = await response.json();
+         if (data.success) {
+            alert('Email enviado correctamente');
+         } else {
+            alert('Error al enviar email: ' + data.message);
+         }
+      } catch (error) {
+         console.error('Error sending wallet email:', error);
+         alert('Error de conexión al enviar email');
+      }
+   };
+
    const handleAddAddress = () => {
       setEditingAddress({
          id: Math.random().toString(36).substr(2, 9),
@@ -187,19 +223,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       window.open(`https://wa.me/${selectedCustomer.phone.replace(/[^0-9]/g, '')}`, '_blank');
    };
 
-   const handleCreateWallet = () => {
-      if (!selectedCustomer) return;
-      const newWallet: Wallet = {
-         id: `w_${Math.random().toString(36).substr(2, 9)}`,
-         customerId: selectedCustomer.id,
-         balance: 0,
-         currency: config.currencies.find(c => c.isBase)?.code || 'DOP',
-         status: 'ACTIVE',
-         lastActivity: new Date().toISOString(),
-         transactions: []
-      };
-      onUpdateCustomer({ ...selectedCustomer, wallet: newWallet });
-   };
+
 
    const handleLinkCard = () => {
       if (!selectedCustomer) return;
@@ -335,9 +359,9 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
                {/* List */}
                <div className="flex-1 overflow-y-auto">
-                  {filteredCustomers.map(customer => (
+                  {filteredCustomers.map((customer, idx) => (
                      <div
-                        key={customer.id}
+                        key={customer.id || `cust-${idx}`}
                         onClick={() => setSelectedCustomerId(customer.id)}
                         className={`p-4 border-b border-gray-50 cursor-pointer transition-colors hover:bg-blue-50/50 flex items-center gap-3 ${selectedCustomerId === customer.id ? 'bg-blue-50 border-l-4 border-l-blue-500' : 'border-l-4 border-l-transparent'
                            }`}
@@ -553,6 +577,15 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                                 <WalletIcon size={18} /> Activar Wallet
                                              </button>
                                           )}
+
+                                          {selectedCustomer.wallet && (
+                                             <button
+                                                onClick={handleSendWalletEmail}
+                                                className="w-full mt-3 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-bold shadow-lg transition-colors flex items-center justify-center gap-2"
+                                             >
+                                                <Mail size={18} /> Enviar Pase por Email
+                                             </button>
+                                          )}
                                        </div>
                                     </div>
                                  </div>
@@ -622,8 +655,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
                                     <div className="space-y-3">
                                        {(selectedCustomer.cards || []).length > 0 ? (
-                                          (selectedCustomer.cards || []).map(card => (
-                                             <div key={card.id} className="p-4 bg-gray-50 rounded-xl border border-gray-200 flex items-center justify-between group">
+                                          (selectedCustomer.cards || []).map((card, idx) => (
+                                             <div key={card.id || `card-${idx}`} className="p-4 bg-gray-50 rounded-xl border border-gray-200 flex items-center justify-between group">
                                                 <div className="flex items-center gap-3">
                                                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center border ${card.type === 'GIFT' ? 'bg-pink-50 border-pink-200 text-pink-500' : 'bg-purple-50 border-purple-200 text-purple-500'}`}>
                                                       {card.type === 'GIFT' ? <Gift size={20} /> : <Award size={20} />}

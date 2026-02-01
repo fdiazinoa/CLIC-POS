@@ -235,7 +235,7 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
    const filteredProducts = useMemo(() => {
       if (!itemSearch) return [];
       return products.filter(p =>
-         p.name.toLowerCase().includes(itemSearch.toLowerCase()) ||
+         (p.name || '').toLowerCase().includes(itemSearch.toLowerCase()) ||
          p.barcode?.includes(itemSearch)
       );
    }, [products, itemSearch]);

@@ -11,10 +11,12 @@ import {
   Keyboard, BookOpen, ArrowUpRight, ArrowDownLeft, Calendar, Award
 } from 'lucide-react';
 import {
-  Product, ProductAttribute, ProductVariant, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse, ProductOperationalFlags, InventoryLedgerEntry
+  Product, ProductAttribute, ProductVariant, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse, ProductOperationalFlags, InventoryLedgerEntry, ProductStock
 } from '../types';
 import ProfitCalculator from './ProfitCalculator';
 import { db } from '../utils/db';
+import { permissionService } from '../services/sync/PermissionService';
+import { inventorySyncService } from '../services/sync/InventorySyncService';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -60,6 +62,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
   // Kardex Filter State
   const [kardexWarehouse, setKardexWarehouse] = useState<string>('ALL');
+  const [kardexTerminal, setKardexTerminal] = useState<string>('ALL');
 
   const [formData, setFormData] = useState<Product>(() => {
     const base = initialData || {
@@ -92,17 +95,70 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
   // Kardex Ledger Data (Fetched from DB)
   const [productLedger, setProductLedger] = useState<InventoryLedgerEntry[]>([]);
+  const [detailedStocks, setDetailedStocks] = useState<ProductStock[]>([]);
+
+  // --- SYNC STATE WITH PROPS (For Real-time Sync Updates) ---
+  useEffect(() => {
+    if (initialData) {
+      console.log(`🔄 ProductForm: Syncing internal state with updated initialData for ${initialData.id}`);
+      setFormData(prev => ({
+        ...initialData,
+        // Preserve some local UI state if needed, but for stock we want the prop value
+        tariffs: initialData.tariffs || [],
+        attributes: initialData.attributes || [],
+        variants: initialData.variants || [],
+        stockBalances: initialData.stockBalances || {}
+      }));
+      setWarehouseSettings(initialData.warehouseSettings || {});
+    }
+  }, [initialData]);
 
   useEffect(() => {
     const loadLedger = async () => {
-      const allEntries = (await db.get('inventoryLedger') || []) as InventoryLedgerEntry[];
+      let allEntries: InventoryLedgerEntry[] = [];
+
+      if (permissionService.isMasterTerminal()) {
+        // Master loads from local DB
+        allEntries = (await db.get('inventoryLedger') || []) as InventoryLedgerEntry[];
+      } else {
+        // Slave loads on-demand from Master
+        allEntries = await inventorySyncService.fetchKardexOnDemand(formData.id);
+      }
+
       const filtered = allEntries.filter(e => e.productId === formData.id)
         .filter(e => kardexWarehouse === 'ALL' || e.warehouseId === kardexWarehouse)
+        .filter(e => kardexTerminal === 'ALL' || (e.terminalId || 'LOCAL') === kardexTerminal)
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setProductLedger(filtered);
     };
     loadLedger();
-  }, [formData.id, kardexWarehouse]);
+
+    // Listen for sync events to refresh Kardex in real-time
+    const handleSync = () => {
+      console.log('🔄 Kardex: Refreshing due to sync event...');
+      loadLedger();
+    };
+    window.addEventListener('ledgerSynced', handleSync);
+    window.addEventListener('transactionSynced', handleSync);
+
+    // Listen for productStocks updates
+    const handleStockSync = async () => {
+      console.log('🔄 ProductForm: Refreshing detailed stocks...');
+      const allStocks = await db.get('productStocks') as ProductStock[] || [];
+      const myStocks = allStocks.filter(s => s.productId === formData.id);
+      setDetailedStocks(myStocks);
+    };
+    window.addEventListener('productStocksUpdated', handleStockSync);
+
+    // Initial fetch of detailed stocks
+    handleStockSync();
+
+    return () => {
+      window.removeEventListener('ledgerSynced', handleSync);
+      window.removeEventListener('transactionSynced', handleSync);
+      window.removeEventListener('productStocksUpdated', handleStockSync);
+    };
+  }, [formData.id, kardexWarehouse, kardexTerminal]);
 
   const hasPermission = (permission: string): boolean => {
     if (!currentUser) return false;
@@ -171,7 +227,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
           return { ...a, options: newOpts, optionCodes: newCodes };
         }
         return a;
-      })
+      }),
+      updatedAt: new Date().toISOString()
     }));
   };
 
@@ -233,7 +290,15 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
   const handleFinalSave = () => {
     if (!formData.name.trim()) return alert("Debe asignar un nombre al artículo.");
-    onSave({ ...formData, warehouseSettings });
+
+    // Ensure updatedAt is set for Delta Sync
+    const updatedProduct = {
+      ...formData,
+      warehouseSettings,
+      updatedAt: new Date().toISOString()
+    };
+
+    onSave(updatedProduct);
   };
 
   const OperationalSwitch = ({ label, description, checked, onChange, icon: Icon }: any) => (
@@ -305,6 +370,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                 <div>
                   <h3 className="text-xl font-bold text-gray-800">Libro Mayor de Inventario</h3>
                   <p className="text-sm text-gray-500">Historial transaccional y valoración CPP.</p>
+                  {permissionService.isSlaveTerminal() && (
+                    <div className="mt-2 flex items-center gap-2 text-[10px] font-bold text-blue-600 bg-blue-50 px-3 py-1 rounded-full w-fit">
+                      <Info size={12} />
+                      MODO CONSULTA: El Kardex local es parcial. El saldo se sincroniza del Master.
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-4">
                   <div className="relative">
@@ -318,6 +389,18 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
                     </select>
                   </div>
+                  <div className="relative">
+                    <label className="block text-[10px] font-black text-gray-400 uppercase mb-1 ml-1">Filtrar Terminal</label>
+                    <select
+                      value={kardexTerminal}
+                      onChange={(e) => setKardexTerminal(e.target.value)}
+                      className="p-2.5 bg-gray-100 border-none rounded-xl text-xs font-bold text-gray-700 outline-none focus:ring-2 focus:ring-blue-200"
+                    >
+                      <option value="ALL">Todas las terminales</option>
+                      {config.terminals.map(t => <option key={t.id} value={t.id}>{t.id}</option>)}
+                      <option value="LOCAL">Local (Legacy)</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -326,6 +409,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   <thead className="bg-gray-50 text-gray-400 font-bold uppercase text-[10px] tracking-widest">
                     <tr>
                       <th className="p-4">Fecha / Hora</th>
+                      <th className="p-4">Origen</th>
                       <th className="p-4">Concepto / Ref</th>
                       <th className="p-4 text-center">Entrada</th>
                       <th className="p-4 text-center">Salida</th>
@@ -344,6 +428,11 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                           </div>
                         </td>
                         <td className="p-4">
+                          <span className="px-2 py-1 bg-gray-100 rounded-lg text-[10px] font-bold text-gray-500 uppercase tracking-wide">
+                            {entry.terminalId || 'LOCAL'}
+                          </span>
+                        </td>
+                        <td className="p-4">
                           <div className="flex flex-col">
                             <span className={`font-black text-[10px] uppercase ${entry.qtyIn > 0 ? 'text-emerald-600' : 'text-orange-600'}`}>{entry.concept}</span>
                             <span className="text-[11px] font-mono text-gray-500">{entry.documentRef}</span>
@@ -360,14 +449,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                         </td>
                         {canViewCost && (
                           <td className="p-4 text-right font-mono text-gray-600">
-                            {config.currencySymbol}{entry.unitCost.toFixed(2)}
+                            {config.currencySymbol}{(entry.unitCost || 0).toFixed(2)}
                           </td>
                         )}
                         {canViewCost && (
                           <td className="p-4 text-right">
                             <div className="flex flex-col items-end">
-                              <span className="font-black text-gray-800">{config.currencySymbol}{(entry.balanceQty * entry.balanceAvgCost).toFixed(2)}</span>
-                              <span className="text-[9px] text-gray-400 uppercase">CPP: {entry.balanceAvgCost.toFixed(2)}</span>
+                              <span className="font-black text-gray-800">{config.currencySymbol}{((entry.balanceQty || 0) * (entry.balanceAvgCost || 0)).toFixed(2)}</span>
+                              <span className="text-[9px] text-gray-400 uppercase">CPP: {(entry.balanceAvgCost || 0).toFixed(2)}</span>
                             </div>
                           </td>
                         )}
@@ -400,7 +489,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     <p className="text-3xl font-black text-gray-800">{config.currencySymbol}{((formData.stock || 0) * (formData.cost || 0)).toFixed(2)}</p>
                   </div>
                 )}
-                <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col items-center">
+                <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col items-center relative overflow-hidden">
+                  {permissionService.isSlaveTerminal() && (
+                    <div className="absolute top-0 right-0 bg-blue-600 text-white text-[8px] font-black px-2 py-0.5 rounded-bl-lg uppercase">Sincronizado</div>
+                  )}
                   <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Unidades en Red</p>
                   <p className="text-3xl font-black text-emerald-600">{formData.stock || 0}</p>
                 </div>
@@ -464,12 +556,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-4">
                     <div>
                       <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Nombre Comercial</label>
-                      <input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl text-lg font-bold text-gray-800 focus:bg-white focus:border-blue-200 transition-all" />
+                      <input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} onPaste={(e) => e.stopPropagation()} className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl text-lg font-bold text-gray-800 focus:bg-white focus:border-blue-200 transition-all select-text" />
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Código Barra / SKU</label>
-                        <input type="text" value={formData.barcode || ''} onChange={e => setFormData({ ...formData, barcode: e.target.value })} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm" />
+                        <input type="text" value={formData.barcode || ''} onChange={e => setFormData({ ...formData, barcode: e.target.value })} onPaste={(e) => e.stopPropagation()} className="w-full p-3 bg-white border-2 border-gray-100 rounded-xl font-mono text-sm select-text" />
                       </div>
                       <div>
                         <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Costo Unitario (CPP)</label>
@@ -662,7 +754,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
                 <div className="grid grid-cols-1 gap-4">
                   {warehouses.map(wh => {
-                    const stock = formData.stockBalances?.[wh.id] || 0;
+                    // Try to get stock from detailed collection first, fallback to product embedded balances
+                    const detailedStock = detailedStocks.find(s => s.warehouseId === wh.id);
+
+                    // DEBUG: Log what the UI sees
+                    console.log(`UI Rendering Stocks for: ${formData.id} in ${wh.id}`, {
+                      detailedStock,
+                      allDetailedStocks: detailedStocks,
+                      fallback: formData.stockBalances?.[wh.id]
+                    });
+
+                    const stock = detailedStock ? detailedStock.quantity : (formData.stockBalances?.[wh.id] || 0);
                     const isActive = formData.activeInWarehouses?.includes(wh.id);
 
                     return (
@@ -767,8 +869,11 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                   value={tariffData.price}
                                   onChange={(e) => {
                                     const newPrice = parseFloat(e.target.value) || 0;
+                                    const isGeneralTariff = tariff.id === 'trf-gen';
+
                                     setFormData({
                                       ...formData,
+                                      price: isGeneralTariff ? newPrice : formData.price,
                                       tariffs: formData.tariffs.map(t => t.tariffId === tariff.id ? { ...t, price: newPrice } : t)
                                     });
                                   }}
@@ -949,7 +1054,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                           </div>
                           <div><p className="font-bold text-gray-800">{tax.name}</p></div>
                         </div>
-                        <span className="font-black text-lg text-gray-700">{(tax.rate * 100).toFixed(2)}%</span>
+                        <span className="font-black text-lg text-gray-700">{((tax.rate || 0) * 100).toFixed(2)}%</span>
                       </div>
                     );
                   })}

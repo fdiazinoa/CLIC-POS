@@ -13,11 +13,12 @@ import {
    ToggleLeft, ToggleRight, Radio, Power, Scale, Tv, Mail, ShoppingBag, Truck,
    Package, Layers, Crown, ListOrdered, Link2, Sparkles, Palette, MousePointer2, Banknote, ListChecks,
    // Added Sun to fix "Cannot find name 'Sun'" error
-   Sun, ScanBarcode, Layout
+   Sun, ScanBarcode, Layout, Minus, ArrowDownCircle, ArrowUpCircle, Wallet, UserCheck, User, CreditCard
 } from 'lucide-react';
-import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice, Product } from '../types';
+import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice, Product, DeviceRole, AuthLevel } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG } from '../constants';
 import { db } from '../utils/db';
+import { getDefaultRoleConfig, getRoleDisplayInfo, getAllModules } from '../utils/deviceRoleHelpers';
 
 interface TerminalSettingsProps {
    config: BusinessConfig;
@@ -25,6 +26,8 @@ interface TerminalSettingsProps {
    onClose: () => void;
    warehouses?: Warehouse[];
    products?: Product[];
+   isAdminMode?: boolean;
+   currentDeviceId?: string;
 }
 
 const PRINTER_ROLES = [
@@ -35,23 +38,58 @@ const PRINTER_ROLES = [
 ];
 
 const DOCUMENT_ROLES = [
-   { id: 'TICKET', label: 'Ticket de Venta (POS)', description: 'Secuencia principal para cobros estándar.', icon: Receipt },
-   { id: 'REFUND', label: 'Notas de Crédito (Devoluciones)', description: 'Documento legal para abonos y retornos.', icon: RotateCcw },
-   { id: 'TRANSFER', label: 'Notas de Traspaso', description: 'Comprobantes de movimiento entre almacenes.', icon: ArrowRightLeft },
+   // Ventas
+   { id: 'TICKET', label: 'Ticket de Venta (POS)', description: 'Secuencia principal para cobros estándar.', icon: Receipt, category: 'Ventas' },
+   { id: 'REFUND', label: 'Notas de Crédito (Devoluciones)', description: 'Documento legal para abonos y retornos.', icon: RotateCcw, category: 'Ventas' },
+   { id: 'VOID', label: 'Anulación', description: 'Anulación de transacciones', icon: X, category: 'Ventas' },
+
+   // Inventario
+   { id: 'TRANSFER', label: 'Notas de Traspaso', description: 'Comprobantes de movimiento entre almacenes.', icon: ArrowRightLeft, category: 'Inventario' },
+   { id: 'ADJUSTMENT_IN', label: 'Ajuste Positivo', description: 'Incremento de inventario', icon: Plus, category: 'Inventario' },
+   { id: 'ADJUSTMENT_OUT', label: 'Ajuste Negativo', description: 'Reducción de inventario', icon: Minus, category: 'Inventario' },
+   { id: 'PURCHASE', label: 'Compra a Proveedor', description: 'Entrada de mercancía', icon: ShoppingBag, category: 'Inventario' },
+   { id: 'PRODUCTION', label: 'Producción/Ensamblaje', description: 'Productos manufacturados', icon: Box, category: 'Inventario' },
+
+   // Efectivo
+   { id: 'CASH_IN', label: 'Entrada de Efectivo', description: 'Ingreso de dinero a caja', icon: ArrowDownCircle, category: 'Efectivo' },
+   { id: 'CASH_OUT', label: 'Salida de Efectivo', description: 'Egreso de dinero de caja', icon: ArrowUpCircle, category: 'Efectivo' },
+   { id: 'CASH_DEPOSIT', label: 'Depósito Bancario', description: 'Depósito en banco', icon: Landmark, category: 'Efectivo' },
+   { id: 'CASH_WITHDRAWAL', label: 'Retiro de Caja', description: 'Retiro para gastos', icon: Wallet, category: 'Efectivo' },
+
+   // Cierres
+   { id: 'Z_REPORT', label: 'Cierre de Caja (Z)', description: 'Cierre fiscal diario', icon: Lock, category: 'Cierres' },
+   { id: 'X_REPORT', label: 'Corte Parcial (X)', description: 'Reporte intermedio', icon: FileText, category: 'Cierres' },
+
+   // Cuentas
+   { id: 'RECEIVABLE', label: 'Cuenta por Cobrar', description: 'Venta a crédito', icon: UserCheck, category: 'Cuentas' },
+   { id: 'PAYABLE', label: 'Cuenta por Pagar', description: 'Compra a crédito', icon: User, category: 'Cuentas' },
+   { id: 'PAYMENT_IN', label: 'Cobro Recibido', description: 'Pago de cliente', icon: DollarSign, category: 'Cuentas' },
+   { id: 'PAYMENT_OUT', label: 'Pago Realizado', description: 'Pago a proveedor', icon: CreditCard, category: 'Cuentas' }
 ];
 
-type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY' | 'LAN_BINDING' | 'CATALOG';
+type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY' | 'LAN_BINDING' | 'CATALOG' | 'DEVICE_ROLE';
 
-const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [] }) => {
+const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [], isAdminMode = false, currentDeviceId }) => {
    // ... existing state ...
    const [terminals, setTerminals] = useState(config.terminals || []);
-   const [selectedTerminalId, setSelectedTerminalId] = useState<string>(terminals[0]?.id || '');
+
+   // Auto-select current terminal if available
+   const [selectedTerminalId, setSelectedTerminalId] = useState<string>(() => {
+      if (currentDeviceId) {
+         const current = terminals.find(t => t.config.currentDeviceId === currentDeviceId);
+         if (current) return current.id;
+      }
+      return terminals[0]?.id || '';
+   });
+
    const [activeTab, setActiveTab] = useState<TerminalTab>('OPERATIONAL');
    const [showConflictModal, setShowConflictModal] = useState<string | null>(null);
    const [editingSequence, setEditingSequence] = useState<any>(null);
 
    // Cargar secuencias maestras  // Master Sequences (from DB)
    const [masterSequences, setMasterSequences] = useState<DocumentSeries[]>([]);
+   const [isSyncing, setIsSyncing] = useState(false);
+   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
 
    useEffect(() => {
       const loadSequences = async () => {
@@ -59,15 +97,49 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
          setMasterSequences(seqs);
       };
       loadSequences();
+
+      // Listen for series updates from other terminals
+      const handleSeriesUpdate = () => {
+         loadSequences();
+         console.log('📥 Terminal settings - Series refreshed from sync');
+      };
+
+      window.addEventListener('seriesUpdated', handleSeriesUpdate);
+
+      return () => {
+         window.removeEventListener('seriesUpdated', handleSeriesUpdate);
+      };
    }, []);
 
    const activeTerminal = useMemo(() =>
       terminals.find(t => t.id === selectedTerminalId),
       [terminals, selectedTerminalId]);
 
+   const isReadOnly = useMemo(() => {
+      if (!activeTerminal) return false;
+      // Si la terminal está gobernada por la maestra Y estamos físicamente en esa terminal Y no es la maestra
+      return activeTerminal.config.governedByMaster &&
+         activeTerminal.config.currentDeviceId === currentDeviceId &&
+         !activeTerminal.config.isPrimaryNode;
+   }, [activeTerminal, currentDeviceId]);
+
    const allCategories = useMemo(() => {
       return Array.from(new Set(products.map(p => p.category))).sort();
    }, [products]);
+
+   const handleSyncSeries = async () => {
+      setIsSyncing(true);
+      try {
+         const seqs = (await db.get('internalSequences') || []) as DocumentSeries[];
+         setMasterSequences(seqs);
+         setLastSyncTime(new Date());
+         console.log(`✅ Sincronizadas ${seqs.length} series de documentos`);
+      } catch (error) {
+         console.error('Error syncing series:', error);
+      } finally {
+         setIsSyncing(false);
+      }
+   };
 
    const handleUpdateActiveConfig = (sectionPath: string, key: string, value: any) => {
       if (!activeTerminal) return;
@@ -172,10 +244,10 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       onClose();
    };
 
-   const Toggle = ({ label, description, checked, onChange, danger = false, icon: Icon }: any) => (
+   const Toggle = ({ label, description, checked, onChange, danger = false, icon: Icon, disabled = false }: any) => (
       <div
-         onClick={() => onChange(!checked)}
-         className={`p-5 rounded-2xl border-2 cursor-pointer flex justify-between items-center transition-all group ${checked ? (danger ? 'bg-red-50 border-red-500 shadow-sm' : 'bg-blue-50 border-blue-500 shadow-sm') : 'bg-white border-gray-100 hover:border-gray-300'}`}
+         onClick={() => !disabled && onChange(!checked)}
+         className={`p-5 rounded-2xl border-2 flex justify-between items-center transition-all group ${disabled ? 'opacity-60 cursor-not-allowed bg-gray-50 border-gray-100' : 'cursor-pointer'} ${checked ? (danger ? 'bg-red-50 border-red-500 shadow-sm' : 'bg-blue-50 border-blue-500 shadow-sm') : 'bg-white border-gray-100 hover:border-gray-300'}`}
       >
          <div className="flex items-start gap-4 flex-1 pr-4">
             {Icon && <div className={`p-2 rounded-lg shrink-0 ${checked ? (danger ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600') : 'bg-gray-100 text-gray-400'}`}><Icon size={20} /></div>}
@@ -192,6 +264,14 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
 
    return (
       <div className="flex h-full bg-gray-50 animate-in fade-in overflow-hidden relative">
+         {/* ADMIN MODE BANNER */}
+         {isAdminMode && (
+            <div className="absolute top-0 left-0 right-0 bg-red-600 text-white text-center py-2 text-sm font-bold z-50 shadow-md flex items-center justify-center gap-2 animate-pulse">
+               <ShieldCheck size={16} />
+               MODO ADMINISTRADOR ACTIVO - ACCESO TOTAL
+            </div>
+         )}
+
          {/* SIDEBAR */}
          <aside className="w-80 bg-white border-r border-gray-200 flex flex-col shrink-0 z-20 shadow-sm">
             <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
@@ -242,6 +322,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                   { id: 'OPERATIONAL', label: 'Operativa', icon: Database },
                   { id: 'FISCAL', label: 'Lotes Fiscales', icon: Landmark },
                   { id: 'CATALOG', label: 'Catálogo', icon: ShoppingBag },
+                  { id: 'DEVICE_ROLE', label: 'Tipo de Terminal', icon: Smartphone },
                   { id: 'DOCUMENTS', label: 'Series / Documentos', icon: Link2 },
                   { id: 'INVENTORY', label: 'Almacenes', icon: Box },
                   { id: 'SECURITY', label: 'Seguridad', icon: ShieldAlert },
@@ -286,7 +367,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                 : [...current, cat];
                                              handleUpdateActiveConfig('catalog', 'allowedCategories', updated);
                                           }}
-                                          className={`p-4 rounded-2xl border-2 text-left transition-all ${isSelected ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'}`}
+                                          className={`p-4 rounded-2xl border-2 text-left transition-all ${isSelected ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                          disabled={isReadOnly}
                                        >
                                           <div className={`w-6 h-6 rounded-full flex items-center justify-center mb-3 ${isSelected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-300'}`}>
                                              {isSelected ? <Check size={14} strokeWidth={3} /> : <div className="w-2 h-2 bg-gray-300 rounded-full" />}
@@ -302,6 +384,180 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  <div>
                                     <h4 className="font-bold text-blue-900 text-sm">Nota sobre el alcance</h4>
                                     <p className="text-xs text-blue-700 mt-1">Esta configuración solo afecta la visibilidad en la pantalla de ventas (POS). No impide que un administrador vea estos productos en el inventario o reportes.</p>
+                                 </div>
+                              </div>
+                           </div>
+                        </div>
+                     )}
+
+                     {/* DEVICE_ROLE SECTION */}
+                     {activeTab === 'DEVICE_ROLE' && (
+                        <div className="space-y-6 animate-in slide-in-from-right-4">
+                           <div className="bg-gradient-to-br from-blue-50 to-indigo-50 p-8 rounded-3xl border-2 border-blue-200 shadow-sm">
+                              <h3 className="text-2xl font-black text-gray-800 mb-2 flex items-center gap-2">
+                                 <Smartphone size={28} className="text-blue-600" /> Tipo de Terminal
+                              </h3>
+                              <p className="text-sm text-gray-600 mb-8">Configura el rol de esta terminal para adaptar la interfaz y funcionalidades según su propósito.</p>
+
+                              {/* Role Selector */}
+                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+                                 {[DeviceRole.STANDARD_POS, DeviceRole.SELF_CHECKOUT, DeviceRole.PRICE_CHECKER, DeviceRole.HANDHELD_INVENTORY, DeviceRole.KITCHEN_DISPLAY].map(role => {
+                                    const currentRole = activeTerminal.config.deviceRole?.role || DeviceRole.STANDARD_POS;
+                                    const isSelected = currentRole === role;
+                                    const info = getRoleDisplayInfo(role);
+
+                                    return (
+                                       <button
+                                          key={role}
+                                          onClick={() => {
+                                             const defaultConfig = getDefaultRoleConfig(role);
+                                             // Save the entire DeviceRoleConfig object to deviceRole key
+                                             handleUpdateActiveConfig('', 'deviceRole', defaultConfig);
+                                          }}
+                                          className={`p-6 rounded-2xl border-2 text-left transition-all ${isSelected
+                                             ? 'bg-blue-600 border-blue-600 shadow-lg scale-105'
+                                             : 'bg-white border-gray-200 hover:border-blue-300 hover:shadow-md'
+                                             } ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                          disabled={isReadOnly}
+                                       >
+                                          <div className="flex items-start justify-between mb-3">
+                                             <span className="text-4xl">{info.icon}</span>
+                                             {isSelected && (
+                                                <div className="bg-white/20 backdrop-blur-sm p-2 rounded-full">
+                                                   <Check size={16} className="text-white" strokeWidth={3} />
+                                                </div>
+                                             )}
+                                          </div>
+                                          <h4 className={`font-black text-base mb-1 ${isSelected ? 'text-white' : 'text-gray-800'}`}>
+                                             {info.label}
+                                          </h4>
+                                          <p className={`text-xs ${isSelected ? 'text-blue-100' : 'text-gray-500'}`}>
+                                             {info.description}
+                                          </p>
+                                       </button>
+                                    );
+                                 })}
+                              </div>
+
+                              {/* Configuration Details */}
+                              {activeTerminal.config.deviceRole && (
+                                 <div className="space-y-6 bg-white p-6 rounded-2xl border border-gray-200">
+                                    {/* Auth Level Display */}
+                                    <div>
+                                       <label className="block text-xs font-black text-gray-500 uppercase tracking-widest mb-3">
+                                          Nivel de Autenticación
+                                       </label>
+                                       <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm ${activeTerminal.config.deviceRole.authLevel === AuthLevel.HEADLESS
+                                          ? 'bg-green-100 text-green-700'
+                                          : 'bg-orange-100 text-orange-700'
+                                          }`}>
+                                          {activeTerminal.config.deviceRole.authLevel === AuthLevel.HEADLESS ? '🤖 Automático (Sin Login)' : '👤 Requiere Usuario'}
+                                       </div>
+                                    </div>
+
+                                    {/* Allowed Modules */}
+                                    <div>
+                                       <label className="block text-xs font-black text-gray-500 uppercase tracking-widest mb-3">
+                                          Módulos Permitidos
+                                       </label>
+                                       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                                          {getAllModules().map(module => {
+                                             const isAllowed = activeTerminal.config.deviceRole!.allowedModules.includes(module.value) ||
+                                                activeTerminal.config.deviceRole!.allowedModules.includes('*');
+                                             return (
+                                                <div
+                                                   key={module.value}
+                                                   className={`p-3 rounded-xl border text-sm ${isAllowed
+                                                      ? 'bg-blue-50 border-blue-200 text-blue-700'
+                                                      : 'bg-gray-50 border-gray-200 text-gray-400'
+                                                      }`}
+                                                >
+                                                   <div className="flex items-center gap-2">
+                                                      {isAllowed ? <Check size={14} strokeWidth={3} /> : <Minus size={14} />}
+                                                      <span className="font-bold text-xs">{module.label}</span>
+                                                   </div>
+                                                </div>
+                                             );
+                                          })}
+                                       </div>
+                                    </div>
+
+                                    {/* Escape Hatch Config (for kiosk modes) */}
+                                    {activeTerminal.config.deviceRole.uiSettings.escapeHatch?.enabled && (
+                                       <div className="bg-orange-50 p-6 rounded-2xl border border-orange-200">
+                                          <h4 className="font-black text-gray-800 mb-4 flex items-center gap-2">
+                                             <Lock size={20} className="text-orange-600" />
+                                             Escape Hatch (Acceso Admin)
+                                          </h4>
+                                          <div className="space-y-4">
+                                             <div>
+                                                <label className="block text-xs font-bold text-gray-600 mb-2">
+                                                   PIN de Administrador
+                                                </label>
+                                                <input
+                                                   type="password"
+                                                   maxLength={6}
+                                                   value={activeTerminal.config.deviceRole.uiSettings.escapeHatch.adminPin || ''}
+                                                   onChange={(e) => {
+                                                      const currentEscape = activeTerminal.config.deviceRole!.uiSettings.escapeHatch!;
+                                                      handleUpdateActiveConfig('deviceRole', 'uiSettings', {
+                                                         ...activeTerminal.config.deviceRole!.uiSettings,
+                                                         escapeHatch: {
+                                                            ...currentEscape,
+                                                            adminPin: e.target.value
+                                                         }
+                                                      });
+                                                   }}
+                                                   placeholder="Ej: 1234"
+                                                   className={`w-full px-4 py-3 bg-white border border-gray-200 rounded-xl font-mono font-bold text-gray-700 outline-none focus:ring-2 focus:ring-orange-500 ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                   disabled={isReadOnly}
+                                                />
+                                                <p className="text-xs text-gray-500 mt-2">
+                                                   Para salir del modo kiosco, mantén presionado el logo por 5 segundos e ingresa este PIN
+                                                </p>
+                                             </div>
+                                          </div>
+                                       </div>
+                                    )}
+
+                                    {/* UI Settings Info */}
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                       <div className="p-4 bg-gray-50 rounded-xl">
+                                          <div className="text-xs font-bold text-gray-500 mb-1">Pantalla Completa</div>
+                                          <div className="text-lg font-black text-gray-800">
+                                             {activeTerminal.config.deviceRole.uiSettings.fullscreenForced ? '✅ Sí' : '❌ No'}
+                                          </div>
+                                       </div>
+                                       <div className="p-4 bg-gray-50 rounded-xl">
+                                          <div className="text-xs font-bold text-gray-500 mb-1">Touch Target</div>
+                                          <div className="text-lg font-black text-gray-800">
+                                             {activeTerminal.config.deviceRole.uiSettings.touchTargetSize}px
+                                          </div>
+                                       </div>
+                                       <div className="p-4 bg-gray-50 rounded-xl">
+                                          <div className="text-xs font-bold text-gray-500 mb-1">Nav Bloqueada</div>
+                                          <div className="text-lg font-black text-gray-800">
+                                             {activeTerminal.config.deviceRole.uiSettings.navigationLocked ? '🔒 Sí' : '🔓 No'}
+                                          </div>
+                                       </div>
+                                       <div className="p-4 bg-gray-50 rounded-xl">
+                                          <div className="text-xs font-bold text-gray-500 mb-1">Impresora</div>
+                                          <div className="text-lg font-black text-gray-800">
+                                             {activeTerminal.config.deviceRole.hardwareConfig?.disablePrinter ? '❌ No' : '✅ Sí'}
+                                          </div>
+                                       </div>
+                                    </div>
+                                 </div>
+                              )}
+
+                              {/* Info Alert */}
+                              <div className="mt-6 p-4 bg-blue-50 rounded-xl border border-blue-100 flex items-start gap-3">
+                                 <Info size={20} className="text-blue-600 shrink-0 mt-0.5" />
+                                 <div>
+                                    <h4 className="font-bold text-blue-900 text-sm">Reinicio Requerido</h4>
+                                    <p className="text-xs text-blue-700 mt-1">
+                                       Los cambios en el tipo de terminal se aplicarán después de recargar la página. Las terminales headless (Auto-Pago, Verificador de Precios, Cocina) no requieren login de usuario.
+                                    </p>
                                  </div>
                               </div>
                            </div>
@@ -383,15 +639,28 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                      {/* 1. OPERATIONAL SECTION */}
                      {activeTab === 'OPERATIONAL' && (
                         <div className="space-y-6">
-                           <div className="bg-indigo-50 border-2 border-indigo-200 p-6 rounded-3xl shadow-sm">
+                           <div className="bg-indigo-50 border-2 border-indigo-200 p-6 rounded-3xl shadow-sm space-y-4">
                               <Toggle
                                  label="Es Terminal Principal / Servidor Local"
                                  description="Esta terminal consolidará los cierres y transacciones de la tienda."
                                  checked={activeTerminal.config.isPrimaryNode}
                                  onChange={handleToggleMasterNode}
                                  icon={Crown}
+                                 disabled={activeTerminal.config.governedByMaster || isReadOnly}
                               />
-                              <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mt-4 ml-2">
+
+                              {!activeTerminal.config.isPrimaryNode && (
+                                 <Toggle
+                                    label="Gobernado por Maestra"
+                                    description="Esta terminal seguirá estrictamente la configuración definida por la Maestra."
+                                    checked={activeTerminal.config.governedByMaster}
+                                    onChange={(v: boolean) => handleUpdateActiveConfig('', 'governedByMaster', v)}
+                                    icon={ShieldCheck}
+                                    disabled={isReadOnly}
+                                 />
+                              )}
+
+                              <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest ml-2">
                                  Nota: Solo puede haber una terminal principal por establecimiento.
                               </p>
                            </div>
@@ -404,7 +673,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     <select
                                        value={activeTerminal.config.pricing.defaultTariffId}
                                        onChange={(e) => handleUpdateActiveConfig('pricing', 'defaultTariffId', e.target.value)}
-                                       className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-100 transition-all"
+                                       disabled={isReadOnly}
+                                       className={`w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-100 transition-all ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                     >
                                        {config.tariffs.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                                     </select>
@@ -422,7 +692,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                    const updated = isAllowed ? current.filter(id => id !== t.id) : [...current, t.id];
                                                    handleUpdateActiveConfig('pricing', 'allowedTariffIds', updated);
                                                 }}
-                                                className={`px-3 py-2 rounded-xl text-xs font-bold border-2 transition-all ${isAllowed ? 'bg-purple-600 border-purple-600 text-white shadow-md' : 'bg-white border-slate-100 text-slate-400'}`}
+                                                className={`px-3 py-2 rounded-xl text-xs font-bold border-2 transition-all ${isAllowed ? 'bg-purple-600 border-purple-600 text-white shadow-md' : 'bg-white border-slate-100 text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                disabled={isReadOnly}
                                              >
                                                 {t.name}
                                              </button>
@@ -465,19 +736,22 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        checked={activeTerminal.config.ux.showProductImages}
                                        onChange={(v: boolean) => handleUpdateActiveConfig('ux', 'showProductImages', v)}
                                        icon={ImageIcon}
+                                       disabled={isReadOnly}
                                     />
                                     <div>
                                        <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Densidad de Grilla</label>
                                        <div className="flex bg-slate-100 p-1 rounded-2xl">
                                           <button
                                              onClick={() => handleUpdateActiveConfig('ux', 'gridDensity', 'COMFORTABLE')}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.gridDensity === 'COMFORTABLE' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'}`}
+                                             disabled={isReadOnly}
+                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.gridDensity === 'COMFORTABLE' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                           >
                                              Cómoda
                                           </button>
                                           <button
                                              onClick={() => handleUpdateActiveConfig('ux', 'gridDensity', 'COMPACT')}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.gridDensity === 'COMPACT' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'}`}
+                                             disabled={isReadOnly}
+                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.gridDensity === 'COMPACT' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                           >
                                              Compacta
                                           </button>
@@ -491,13 +765,15 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        <div className="flex bg-slate-100 p-1 rounded-2xl">
                                           <button
                                              onClick={() => handleUpdateActiveConfig('ux', 'viewMode', 'VISUAL')}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.viewMode === 'VISUAL' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'}`}
+                                             disabled={isReadOnly}
+                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.viewMode === 'VISUAL' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                           >
                                              <LayoutGrid size={14} /> Visual / Touch
                                           </button>
                                           <button
                                              onClick={() => handleUpdateActiveConfig('ux', 'viewMode', 'RETAIL')}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.viewMode === 'RETAIL' ? 'bg-white text-purple-600 shadow-sm' : 'text-slate-400'}`}
+                                             disabled={isReadOnly}
+                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.viewMode === 'RETAIL' ? 'bg-white text-purple-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                           >
                                              <ScanBarcode size={14} /> Retail / Scanner
                                           </button>
@@ -513,13 +789,15 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        <div className="flex bg-slate-100 p-1 rounded-2xl">
                                           <button
                                              onClick={() => handleUpdateActiveConfig('ux', 'theme', 'LIGHT')}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.theme === 'LIGHT' ? 'bg-white text-orange-500 shadow-sm' : 'text-slate-400'}`}
+                                             disabled={isReadOnly}
+                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.theme === 'LIGHT' ? 'bg-white text-orange-500 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                           >
                                              <Sun size={14} /> Claro
                                           </button>
                                           <button
                                              onClick={() => handleUpdateActiveConfig('ux', 'theme', 'DARK')}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.theme === 'DARK' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}
+                                             disabled={isReadOnly}
+                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.theme === 'DARK' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                           >
                                              <RefreshCw size={14} /> Oscuro
                                           </button>
@@ -530,13 +808,15 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        <div className="flex bg-slate-100 p-1 rounded-2xl">
                                           <button
                                              onClick={() => handleUpdateActiveConfig('ux', 'quickKeysLayout', 'A')}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.quickKeysLayout === 'A' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'}`}
+                                             disabled={isReadOnly}
+                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.quickKeysLayout === 'A' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                           >
                                              Modelo A
                                           </button>
                                           <button
                                              onClick={() => handleUpdateActiveConfig('ux', 'quickKeysLayout', 'B')}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.quickKeysLayout === 'B' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'}`}
+                                             disabled={isReadOnly}
+                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.quickKeysLayout === 'B' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                           >
                                              Modelo B
                                           </button>
@@ -556,6 +836,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        checked={activeTerminal.config.financial.taxInclusivePrices}
                                        onChange={(v: boolean) => handleUpdateActiveConfig('financial', 'taxInclusivePrices', v)}
                                        icon={Percent}
+                                       disabled={isReadOnly}
                                     />
                                     <Toggle
                                        label="Desglose de Impuestos en Ticket"
@@ -563,6 +844,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        checked={activeTerminal.config.financial.printTaxBreakdown}
                                        onChange={(v: boolean) => handleUpdateActiveConfig('financial', 'printTaxBreakdown', v)}
                                        icon={FileText}
+                                       disabled={isReadOnly}
                                     />
                                  </div>
                                  <div>
@@ -570,7 +852,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     <select
                                        value={activeTerminal.config.financial.roundingMethod}
                                        onChange={(e) => handleUpdateActiveConfig('financial', 'roundingMethod', e.target.value)}
-                                       className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-100 transition-all"
+                                       disabled={isReadOnly}
+                                       className={`w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-100 transition-all ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                     >
                                        <option value="ROUND_HALF_UP">Matemático Estándar (0.5+)</option>
                                        <option value="ROUND_FLOOR">Truncar Centavos</option>
@@ -587,10 +870,41 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                      {activeTab === 'DOCUMENTS' && (
                         <div className="space-y-6 animate-in slide-in-from-right-4">
                            <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm">
-                              <h3 className="text-xl font-black text-gray-800 mb-6 flex items-center gap-2">
-                                 <Link2 size={24} className="text-blue-600" /> Vinculación de Secuencias Internas
-                              </h3>
+                              <div className="flex items-center justify-between mb-6">
+                                 <div>
+                                    <h3 className="text-xl font-black text-gray-800 flex items-center gap-2">
+                                       <Link2 size={24} className="text-blue-600" /> Vinculación de Secuencias Internas
+                                    </h3>
+                                 </div>
+                                 <div className="flex items-center gap-3">
+                                    {lastSyncTime && (
+                                       <span className="text-xs text-gray-400 font-medium">
+                                          Última sync: {lastSyncTime.toLocaleTimeString()}
+                                       </span>
+                                    )}
+                                    <button
+                                       onClick={handleSyncSeries}
+                                       disabled={isSyncing || isReadOnly}
+                                       className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md font-bold text-sm"
+                                    >
+                                       <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
+                                       {isSyncing ? 'Sincronizando...' : 'Sincronizar'}
+                                    </button>
+                                 </div>
+                              </div>
                               <p className="text-sm text-gray-500 mb-8">Asigna qué secuencia del **Document Center** utilizará cada función operativa de esta caja.</p>
+
+                              {activeTerminal.config.governedByMaster && (
+                                 <div className="mb-8 p-4 bg-amber-50 rounded-2xl border border-amber-200 flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
+                                    <ShieldCheck size={20} className="text-amber-600 shrink-0 mt-0.5" />
+                                    <div>
+                                       <h4 className="font-bold text-amber-900 text-sm">Configuración Gobernada por Maestra</h4>
+                                       <p className="text-xs text-amber-700 mt-1">
+                                          Esta terminal está bajo el mando de la Maestra. Las asignaciones de secuencias se sincronizan automáticamente y no pueden modificarse localmente.
+                                       </p>
+                                    </div>
+                                 </div>
+                              )}
 
                               <div className="space-y-4">
                                  {DOCUMENT_ROLES.map((role) => {
@@ -615,12 +929,15 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                 <select
                                                    value={assignedId}
                                                    onChange={(e) => handleAssignSequence(role.id, e.target.value)}
-                                                   className="w-full p-3 bg-gray-50 border border-slate-200 rounded-xl font-bold text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-100 transition-all"
+                                                   disabled={activeTerminal.config.governedByMaster}
+                                                   className={`w-full p-3 bg-gray-50 border border-slate-200 rounded-xl font-bold text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-100 transition-all ${activeTerminal.config.governedByMaster ? 'opacity-50 cursor-not-allowed' : ''}`}
                                                 >
                                                    <option value="">-- Sin Vincular --</option>
-                                                   {masterSequences.map(s => (
-                                                      <option key={s.id} value={s.id}>{s.name} ({s.prefix})</option>
-                                                   ))}
+                                                   {masterSequences
+                                                      .filter(s => s.documentType === role.id)
+                                                      .map(s => (
+                                                         <option key={s.id} value={s.id}>{s.name} ({s.prefix})</option>
+                                                      ))}
                                                 </select>
                                              </div>
                                           </div>
@@ -663,6 +980,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  checked={activeTerminal.config.security.requirePinForVoid}
                                  onChange={(v: boolean) => handleUpdateActiveConfig('security', 'requirePinForVoid', v)}
                                  icon={ShieldAlert}
+                                 disabled={isReadOnly}
                               />
                               <Toggle
                                  label="PIN para Descuentos"
@@ -670,6 +988,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  checked={activeTerminal.config.security.requirePinForDiscount}
                                  onChange={(v: boolean) => handleUpdateActiveConfig('security', 'requirePinForDiscount', v)}
                                  icon={Percent}
+                                 disabled={isReadOnly}
                               />
                               <Toggle
                                  label="Gerente para Reembolsos"
@@ -677,6 +996,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  checked={activeTerminal.config.security.requireManagerForRefunds}
                                  onChange={(v: boolean) => handleUpdateActiveConfig('security', 'requireManagerForRefunds', v)}
                                  icon={ShieldCheck}
+                                 disabled={isReadOnly}
                               />
                            </div>
 
@@ -698,7 +1018,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  min="0" max="60" step="5"
                                  value={activeTerminal.config.security.autoLogoutMinutes}
                                  onChange={(e) => handleUpdateActiveConfig('security', 'autoLogoutMinutes', parseInt(e.target.value))}
-                                 className="w-full h-3 bg-gray-100 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                                 disabled={isReadOnly}
+                                 className={`w-full h-3 bg-gray-100 rounded-lg appearance-none cursor-pointer accent-orange-500 ${isReadOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
                               />
                            </div>
                         </div>
@@ -717,6 +1038,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  checked={activeTerminal.config.workflow.session.checkOpenOrders}
                                  onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'checkOpenOrders', v)}
                                  icon={ListChecks}
+                                 disabled={isReadOnly}
                               />
                            </div>
 
@@ -732,6 +1054,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     checked={activeTerminal.config.workflow.session.blindClose}
                                     onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'blindClose', v)}
                                     icon={ShieldQuestion}
+                                    disabled={isReadOnly}
                                  />
                                  <Toggle
                                     label="Exigir Conteo por Denominación"
@@ -739,6 +1062,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     checked={activeTerminal.config.workflow.session.forceDenominationCount}
                                     onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'forceDenominationCount', v)}
                                     icon={Banknote}
+                                    disabled={isReadOnly}
                                  />
                               </div>
 
@@ -759,7 +1083,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                           type="number"
                                           value={activeTerminal.config.workflow.session.maxCashInDrawer}
                                           onChange={(e) => handleUpdateActiveConfig('workflow.session', 'maxCashInDrawer', parseFloat(e.target.value) || 0)}
-                                          className="w-full pl-12 pr-4 py-4 bg-gray-50 border-2 border-transparent rounded-2xl text-2xl font-black text-gray-800 focus:bg-white focus:border-indigo-400 outline-none transition-all"
+                                          disabled={isReadOnly}
+                                          className={`w-full pl-12 pr-4 py-4 bg-gray-50 border-2 border-transparent rounded-2xl text-2xl font-black text-gray-800 focus:bg-white focus:border-indigo-400 outline-none transition-all ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                        />
                                     </div>
                                  </div>
@@ -780,7 +1105,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                           type="number"
                                           value={activeTerminal.config.workflow.session.cashVarianceThreshold || 0}
                                           onChange={(e) => handleUpdateActiveConfig('workflow.session', 'cashVarianceThreshold', parseFloat(e.target.value) || 0)}
-                                          className="w-full pl-12 pr-4 py-4 bg-gray-50 border-2 border-transparent rounded-2xl text-2xl font-black text-gray-800 focus:bg-white focus:border-red-400 outline-none transition-all"
+                                          disabled={isReadOnly}
+                                          className={`w-full pl-12 pr-4 py-4 bg-gray-50 border-2 border-transparent rounded-2xl text-2xl font-black text-gray-800 focus:bg-white focus:border-red-400 outline-none transition-all ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                        />
                                     </div>
                                  </div>
@@ -800,6 +1126,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'forceZChange', v)}
                                     icon={Lock}
                                     danger
+                                    disabled={isReadOnly}
                                  />
 
                                  {activeTerminal.config.workflow.session.forceZChange && (
@@ -811,7 +1138,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                              min="0" max="23"
                                              value={activeTerminal.config.workflow.session.businessStartHour}
                                              onChange={(e) => handleUpdateActiveConfig('workflow.session', 'businessStartHour', parseInt(e.target.value) || 0)}
-                                             className="w-full pl-4 pr-4 py-4 bg-slate-50 border border-slate-100 rounded-2xl text-xl font-black text-slate-700 outline-none focus:ring-2 focus:ring-purple-100 transition-all"
+                                             disabled={isReadOnly}
+                                             className={`w-full pl-4 pr-4 py-4 bg-slate-50 border border-slate-100 rounded-2xl text-xl font-black text-slate-700 outline-none focus:ring-2 focus:ring-purple-100 transition-all ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                           />
                                           <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-gray-400">HRS</span>
                                        </div>
@@ -835,6 +1163,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     checked={activeTerminal.config.workflow.session.autoPrintZReport}
                                     onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'autoPrintZReport', v)}
                                     icon={Printer}
+                                    disabled={isReadOnly}
                                  />
                                  <Toggle
                                     label="Enviar Reporte Z por Email"
@@ -842,6 +1171,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     checked={activeTerminal.config.workflow.session.emailZReport}
                                     onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'emailZReport', v)}
                                     icon={Mail}
+                                    disabled={isReadOnly}
                                  />
                               </div>
 
@@ -853,7 +1183,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                        placeholder="admin@empresa.com, gerente@empresa.com"
                                        value={activeTerminal.config.workflow.session.zReportEmails || ''}
                                        onChange={(e) => handleUpdateActiveConfig('workflow.session', 'zReportEmails', e.target.value)}
-                                       className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-sky-100 transition-all"
+                                       disabled={isReadOnly}
+                                       className={`w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-sky-100 transition-all ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                     />
                                     <p className="text-[10px] text-gray-400 mt-2 ml-1 flex items-center gap-1">
                                        <Cloud size={10} /> El envío se encolará si no hay conexión a internet.
@@ -871,6 +1202,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'allowSalesWithOpenZ', v)}
                                  icon={Zap}
                                  danger
+                                 disabled={isReadOnly}
                               />
                            </div>
                         </div>
@@ -892,11 +1224,12 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                           <div
                                              key={wh.id}
                                              onClick={() => {
+                                                if (isReadOnly) return;
                                                 const current = activeTerminal.config.inventoryScope?.visibleWarehouseIds || [];
                                                 const updated = isVisible ? current.filter(id => id !== wh.id) : [...current, wh.id];
                                                 handleUpdateActiveConfig('inventoryScope', 'visibleWarehouseIds', updated);
                                              }}
-                                             className={`p-4 rounded-2xl border-2 flex items-center justify-between cursor-pointer transition-all ${isVisible ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-300'}`}
+                                             className={`p-4 rounded-2xl border-2 flex items-center justify-between transition-all ${isVisible ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-300'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
                                           >
                                              <div className="flex items-center gap-3">
                                                 <div className={`p-2 rounded-lg ${isVisible ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
@@ -912,9 +1245,11 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                    <button
                                                       onClick={(e) => {
                                                          e.stopPropagation();
+                                                         if (isReadOnly) return;
                                                          handleUpdateActiveConfig('inventoryScope', 'defaultSalesWarehouseId', wh.id);
                                                       }}
-                                                      className={`px-2 py-1 rounded-md text-[9px] font-black uppercase transition-all ${isDefault ? 'bg-emerald-600 text-white shadow-sm' : 'bg-white text-gray-400 border border-gray-200 hover:text-emerald-600'}`}
+                                                      disabled={isReadOnly}
+                                                      className={`px-2 py-1 rounded-md text-[9px] font-black uppercase transition-all ${isDefault ? 'bg-emerald-600 text-white shadow-sm' : 'bg-white text-gray-400 border border-gray-200 hover:text-emerald-600'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                                    >
                                                       {isDefault ? 'Despacho OK' : 'Fijar Defecto'}
                                                    </button>
@@ -945,8 +1280,9 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                     ].map(mode => (
                                        <button
                                           key={mode.id}
-                                          onClick={() => handleUpdateActiveConfig('workflow.offline', 'mode', mode.id)}
-                                          className={`p-4 rounded-2xl border-2 text-left transition-all ${activeTerminal.config.workflow.offline.mode === mode.id ? 'border-blue-500 bg-blue-50 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-300'}`}
+                                          onClick={() => !isReadOnly && handleUpdateActiveConfig('workflow.offline', 'mode', mode.id)}
+                                          className={`p-4 rounded-2xl border-2 text-left transition-all ${activeTerminal.config.workflow.offline.mode === mode.id ? 'border-blue-500 bg-blue-50 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-300'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                          disabled={isReadOnly}
                                        >
                                           <div className="flex items-center gap-2 mb-2">
                                              <div className={`w-2 h-2 rounded-full ${mode.color}`} />
@@ -965,7 +1301,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                           type="number"
                                           value={activeTerminal.config.workflow.offline.maxOfflineTransactionLimit}
                                           onChange={(e) => handleUpdateActiveConfig('workflow.offline', 'maxOfflineTransactionLimit', parseInt(e.target.value) || 0)}
-                                          className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl text-2xl font-black text-gray-800 focus:bg-white focus:border-blue-400 outline-none transition-all"
+                                          className={`w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl text-2xl font-black text-gray-800 focus:bg-white focus:border-blue-400 outline-none transition-all ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                          disabled={isReadOnly}
                                        />
                                        <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400 uppercase">Docs</span>
                                     </div>
@@ -983,6 +1320,18 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  <Landmark size={24} className="text-indigo-600" /> Gestión de Lotes DGII
                               </h3>
                               <p className="text-sm text-gray-500 mb-6">Configura el tamaño del lote de NCF que esta terminal descarga automáticamente del pool central.</p>
+
+                              {activeTerminal.config.governedByMaster && (
+                                 <div className="mb-8 p-4 bg-amber-50 rounded-2xl border border-amber-200 flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
+                                    <ShieldCheck size={20} className="text-amber-600 shrink-0 mt-0.5" />
+                                    <div>
+                                       <h4 className="font-bold text-amber-900 text-sm">Configuración Gobernada por Maestra</h4>
+                                       <p className="text-xs text-amber-700 mt-1">
+                                          El tamaño de los lotes fiscales está controlado por la Maestra para esta terminal.
+                                       </p>
+                                    </div>
+                                 </div>
+                              )}
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                  {['B01', 'B02'].map((type) => {
                                     const typeConfig = activeTerminal.config.fiscal?.typeConfigs?.[type as NCFType] || { batchSize: 100, lowBatchThreshold: 20, lowBatchThresholdPct: 20 };
@@ -1003,7 +1352,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                       const current = activeTerminal.config.fiscal?.typeConfigs || {};
                                                       handleUpdateActiveConfig('fiscal.typeConfigs', type, { ...typeConfig, batchSize: parseInt(e.target.value) || 0 });
                                                    }}
-                                                   className="w-full p-3 bg-white border rounded-xl font-bold text-indigo-600 outline-none focus:ring-2 focus:ring-indigo-100"
+                                                   disabled={isReadOnly}
+                                                   className={`w-full p-3 bg-white border rounded-xl font-bold text-indigo-600 outline-none focus:ring-2 focus:ring-indigo-100 ${isReadOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
                                                 />
                                              </div>
 
@@ -1018,7 +1368,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                          const current = activeTerminal.config.fiscal?.typeConfigs || {};
                                                          handleUpdateActiveConfig('fiscal.typeConfigs', type, { ...typeConfig, lowBatchThresholdPct: parseInt(e.target.value) || 0 });
                                                       }}
-                                                      className="w-full p-3 pr-10 bg-white border rounded-xl font-bold text-orange-600 outline-none focus:ring-2 focus:ring-orange-100"
+                                                      disabled={isReadOnly}
+                                                      className={`w-full p-3 pr-10 bg-white border rounded-xl font-bold text-orange-600 outline-none focus:ring-2 focus:ring-orange-100 ${isReadOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
                                                    />
                                                    <span className="absolute right-4 top-1/2 -translate-y-1/2 font-black text-orange-400 text-xs">%</span>
                                                 </div>

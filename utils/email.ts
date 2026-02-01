@@ -6,9 +6,12 @@ interface ZReportEmailData {
     config: BusinessConfig;
     userName: string;
     cashCounted: number;
+    cashCountedByCurrency?: Record<string, number>;
     notes: string;
     expectedCash: number;
+    expectedCashByCurrency?: Record<string, number>;
     discrepancy: number;
+    cashDiscrepancyByCurrency?: Record<string, number>;
     cashSalesTotal: number;
     cashIn: number;
     cashOut: number;
@@ -19,9 +22,12 @@ export const sendZReportEmail = (recipient: string, data: ZReportEmailData) => {
         config,
         userName,
         cashCounted,
+        cashCountedByCurrency,
         notes,
         expectedCash,
+        expectedCashByCurrency,
         discrepancy,
+        cashDiscrepancyByCurrency,
         cashSalesTotal,
         cashIn,
         cashOut
@@ -32,6 +38,27 @@ export const sendZReportEmail = (recipient: string, data: ZReportEmailData) => {
     const currency = config.currencySymbol;
 
     const subject = `Reporte Z - ${config.companyInfo.name} - ${dateStr}`;
+
+    // Build multi-currency section if available
+    let multiCurrencySection = '';
+    if (cashCountedByCurrency && expectedCashByCurrency && cashDiscrepancyByCurrency) {
+        const currencies = Object.keys(expectedCashByCurrency);
+        if (currencies.length > 1 || (currencies.length === 1 && currencies[0] !== (config.currencies?.find(c => c.isBase)?.code || 'DOP'))) {
+            multiCurrencySection = '\n\nDETALLE POR MONEDA\n================================\n';
+            currencies.forEach(currCode => {
+                const currInfo = config.currencies?.find(c => c.code === currCode);
+                const sym = currInfo?.symbol || currCode;
+                const expected = expectedCashByCurrency[currCode] || 0;
+                const counted = cashCountedByCurrency[currCode] || 0;
+                const disc = cashDiscrepancyByCurrency[currCode] || 0;
+
+                multiCurrencySection += `\n${currCode}:\n`;
+                multiCurrencySection += `  Esperado:  ${sym}${expected.toFixed(2)}\n`;
+                multiCurrencySection += `  Contado:   ${sym}${counted.toFixed(2)}\n`;
+                multiCurrencySection += `  Diferencia: ${sym}${disc > 0 ? '+' : ''}${disc.toFixed(2)}\n`;
+            });
+        }
+    }
 
     const body = `
 REPORTE DE CIERRE DE CAJA (Z)
@@ -51,7 +78,7 @@ Total Esperado:     ${currency}${expectedCash.toFixed(2)}
 Conteo Físico:      ${currency}${cashCounted.toFixed(2)}
 --------------------------------
 DIFERENCIA:         ${currency}${discrepancy > 0 ? '+' : ''}${discrepancy.toFixed(2)}
-${discrepancy === 0 ? '(Cuadre Perfecto)' : '(DESCUADRE DETECTADO)'}
+${discrepancy === 0 ? '(Cuadre Perfecto)' : '(DESCUADRE DETECTADO)'}${multiCurrencySection}
 
 NOTAS DEL CIERRE
 --------------------------------
@@ -66,3 +93,4 @@ Generado automáticamente por CLIC-POS
     // Use window.location.href to trigger the mail client without opening a blank tab
     window.location.href = mailtoLink;
 };
+

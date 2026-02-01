@@ -1,4 +1,4 @@
-import { Customer } from '../../types';
+import { Customer } from '../../types.js';
 
 // Placeholder for 'google-auth-library'
 // import { GoogleAuth } from 'google-auth-library';

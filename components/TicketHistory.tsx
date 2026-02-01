@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
    ArrowLeft, Search, Calendar, ChevronDown, ChevronUp,
    Printer, RotateCcw, AlertCircle, Check, X, FileText,
@@ -44,9 +44,40 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    // Gift Receipt State
    const [giftReceiptTx, setGiftReceiptTx] = useState<Transaction | null>(null);
 
+   const [historyTransactions, setHistoryTransactions] = useState<Transaction[]>([]);
+
+   // Load History on Mount
+   useEffect(() => {
+      const loadHistory = async () => {
+         try {
+            // We use the db utility directly to fetch the history collection
+            // Note: We need to import 'db' from utils/db if not available, but we can use a dynamic import or assume it's available.
+            // Since TicketHistory is a component, we should probably pass 'db' or import it.
+            // Let's import it at the top of the file.
+            const { db } = await import('../utils/db');
+            const history = await db.get('transactionHistory') as Transaction[];
+            if (history && Array.isArray(history)) {
+               // Mark all loaded history as archived so they are highlighted even if missing zReportId
+               const markedHistory = history.map(h => ({ ...h, _isArchived: true }));
+               setHistoryTransactions(markedHistory);
+            }
+         } catch (e) {
+            console.error("Failed to load transaction history:", e);
+         }
+      };
+      loadHistory();
+   }, []);
+
    // --- SMART SEARCH LOGIC ---
    const filteredTransactions = useMemo(() => {
-      let data = [...transactions].reverse(); // Newest first
+      // Merge current transactions (props) with history
+      // Deduplicate by ID just in case
+      const allTransactions = [...transactions, ...historyTransactions];
+      const uniqueMap = new Map();
+      allTransactions.forEach(t => uniqueMap.set(t.id, t));
+      const merged = Array.from(uniqueMap.values());
+
+      let data = merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()); // Newest first
       const lowerTerm = searchTerm.toLowerCase().trim();
 
       if (!lowerTerm) return data;
@@ -64,16 +95,17 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       }
 
       if (lowerTerm.startsWith('#')) {
-         return data.filter(t => t.id.toLowerCase().includes(lowerTerm.replace('#', '')));
+         return data.filter(t => (t.id || '').toLowerCase().includes(lowerTerm.replace('#', '')));
       }
 
       return data.filter(t =>
          t.customerName?.toLowerCase().includes(lowerTerm) ||
-         t.userName.toLowerCase().includes(lowerTerm) ||
-         t.id.toLowerCase().includes(lowerTerm) ||
+         (t.userName || '').toLowerCase().includes(lowerTerm) ||
+         (t.id || '').toLowerCase().includes(lowerTerm) ||
+         t.displayId?.toLowerCase().includes(lowerTerm) ||
          t.total.toString().includes(lowerTerm)
       );
-   }, [transactions, searchTerm]);
+   }, [transactions, historyTransactions, searchTerm]);
 
    // --- SUPERVISOR AUTH ---
    const { requestApproval, supervisorModalProps } = useSupervisorAuth({ config, currentUser, roles, onUpdateConfig });
@@ -195,16 +227,17 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                   <p className="text-gray-500 font-medium">No se encontraron tickets</p>
                </div>
             ) : (
-               filteredTransactions.map((tx) => {
+               filteredTransactions.map((tx, idx) => {
                   const isExpanded = expandedId === tx.id;
                   const isReturnActive = returnModeId === tx.id;
                   const isRefunded = tx.status === 'REFUNDED' || tx.status === 'PARTIAL_REFUND';
+                  const isClosed = !!tx.zReportId || !!(tx as any)._isArchived;
 
                   return (
                      <div
-                        key={tx.id}
+                        key={tx.id || `tx-${idx}`}
                         className={`bg-white rounded-2xl shadow-sm border transition-all duration-300 overflow-hidden ${isReturnActive ? 'ring-2 ring-red-400 border-red-200 shadow-xl scale-[1.01] z-10' : 'border-gray-100 hover:shadow-md'
-                           }`}
+                           } ${isClosed ? 'bg-gray-100 border-gray-300' : ''}`}
                      >
                         {/* Card Header */}
                         <div
@@ -212,13 +245,14 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                            className="p-5 flex items-center justify-between cursor-pointer active:bg-gray-50"
                         >
                            <div className="flex items-center gap-4">
-                              <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-white shadow-sm ${isRefunded ? 'bg-red-500' : themeBg}`}>
-                                 {isRefunded ? <RotateCcw size={20} /> : <Check size={24} strokeWidth={3} />}
+                              <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-white shadow-sm ${isRefunded ? 'bg-red-500' : isClosed ? 'bg-gray-500' : themeBg}`}>
+                                 {isRefunded ? <RotateCcw size={20} /> : isClosed ? <Check size={24} strokeWidth={3} className="opacity-75" /> : <Check size={24} strokeWidth={3} />}
                               </div>
                               <div>
                                  <div className="flex items-center gap-2">
-                                    <h3 className="font-bold text-gray-900 text-lg">Ticket #{tx.id}</h3>
+                                    <h3 className={`font-bold text-lg ${isClosed ? 'text-gray-600' : 'text-gray-900'}`}>Ticket #{tx.displayId || tx.id}</h3>
                                     {isRefunded && <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[10px] font-bold uppercase rounded-md">Reembolsado</span>}
+                                    {isClosed && <span className="px-2 py-0.5 bg-gray-200 text-gray-600 text-[10px] font-bold uppercase rounded-md border border-gray-300">Cerrado</span>}
                                  </div>
                                  <div className="flex items-center gap-3 text-sm text-gray-500 mt-1">
                                     <span className="flex items-center gap-1"><Calendar size={14} /> {new Date(tx.date).toLocaleDateString()}</span>
@@ -240,7 +274,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                               <div className="p-3 space-y-1">
                                  {tx.items.map((item, idx) => (
                                     <div
-                                       key={idx}
+                                       key={item.cartId || `item-${idx}`}
                                        onClick={() => isReturnActive && toggleItemSelection(item.cartId)}
                                        className={`p-3 rounded-xl transition-all ${isReturnActive ? 'cursor-pointer hover:bg-white border border-transparent' : ''
                                           } ${selectedItems.has(item.cartId) ? 'bg-red-50 border-red-200 shadow-sm' : ''}`}
@@ -253,11 +287,22 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                                                    {selectedItems.has(item.cartId) && <Check size={12} strokeWidth={3} />}
                                                 </div>
                                              )}
-                                             <span className={`font-bold bg-white w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 text-xs`}>
-                                                {item.quantity}x
-                                             </span>
                                              <div>
                                                 <p className="font-bold text-gray-800 text-sm leading-tight">{item.name}</p>
+                                                <p className="text-[10px] text-gray-500 font-bold uppercase mt-1">
+                                                   {item.quantity}x {config.currencySymbol}{item.price.toFixed(2)}
+                                                </p>
+                                                {item.salespersonId && (
+                                                   <p className="text-[10px] text-blue-500 font-bold uppercase mt-0.5">
+                                                      Vendedor: {users.find(u => u.id === item.salespersonId)?.name || 'Desconocido'}
+                                                   </p>
+                                                )}
+                                                {item.note && (
+                                                   <div className="mt-1 flex items-start gap-1 text-[10px] text-yellow-700 font-medium italic">
+                                                      <StickyNote size={10} className="mt-0.5" />
+                                                      <span>Nota: {item.note}</span>
+                                                   </div>
+                                                )}
                                                 {/* Properties visiblity in history */}
                                                 {item.modifiers && item.modifiers.length > 0 && (
                                                    <div className="flex gap-1 mt-1">
@@ -270,12 +315,6 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                                           </div>
                                           <span className="font-bold text-gray-700 text-sm">{config.currencySymbol}{(item.price * item.quantity).toFixed(2)}</span>
                                        </div>
-                                       {item.note && (
-                                          <div className="ml-11 mt-1.5 flex items-start gap-1 text-[10px] text-yellow-700 font-medium">
-                                             <StickyNote size={10} className="mt-0.5" />
-                                             <span>Nota: {item.note}</span>
-                                          </div>
-                                       )}
                                     </div>
                                  ))}
                               </div>
@@ -327,7 +366,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                   </div>
                   <div className="p-6 bg-white overflow-y-auto max-h-[60vh] font-mono text-sm leading-relaxed text-gray-700">
                      <div className="text-center mb-6"><h2 className="font-bold text-lg uppercase">{config.companyInfo.name}</h2><p className="text-xs">{config.companyInfo.address}</p><p className="text-xs mt-2 font-bold">*** TICKET DE REGALO ***</p></div>
-                     <div className="border-b-2 border-dashed border-gray-300 pb-2 mb-2 text-xs"><p>Fecha: {new Date(giftReceiptTx.date).toLocaleString()}</p><p>Ref: {giftReceiptTx.id}</p></div>
+                     <div className="border-b-2 border-dashed border-gray-300 pb-2 mb-2 text-xs"><p>Fecha: {new Date(giftReceiptTx.date).toLocaleString()}</p><p>Ref: {giftReceiptTx.displayId || giftReceiptTx.id}</p></div>
                      <table className="w-full text-xs mb-4">
                         <thead><tr className="border-b border-gray-800"><th className="text-left py-1">Cant</th><th className="text-left py-1">Descripción</th></tr></thead>
                         <tbody>
@@ -338,7 +377,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                      </table>
                      <div className="border-t-2 border-dashed border-gray-300 pt-4 text-center space-y-4">
                         <p className="text-xs">Válido para cambios por 30 días.</p>
-                        <div className="flex flex-col items-center"><QrCode size={64} className="text-gray-800" /><span className="text-[10px] mt-1">{giftReceiptTx.id}</span></div>
+                        <div className="flex flex-col items-center"><QrCode size={64} className="text-gray-800" /><span className="text-[10px] mt-1">{giftReceiptTx.displayId || giftReceiptTx.id}</span></div>
                      </div>
                   </div>
                   <div className="p-4 bg-gray-50 border-t border-gray-200">

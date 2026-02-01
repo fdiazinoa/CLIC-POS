@@ -10,6 +10,7 @@ export interface DatabaseAdapter {
     // Document operations (simulated in LocalStorage, real in SQLite)
     saveDocument<T extends { id: string }>(collectionName: string, doc: T): Promise<void>;
     getDocument<T>(collectionName: string, id: string): Promise<T | null>;
+    deleteDocument(collectionName: string, id: string): Promise<void>;
 
     // Raw Query (for SQLite specific optimizations later)
     executeSQL?(query: string, params?: any[]): Promise<any>;

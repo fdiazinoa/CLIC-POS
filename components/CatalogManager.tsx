@@ -7,7 +7,7 @@ import {
    ChevronDown, ChevronRight, Box, AlertCircle, MapPin, Grid, Sun,
    CheckSquare, Square, MoreHorizontal, Settings2, Activity
 } from 'lucide-react';
-import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season, Watchlist } from '../types';
+import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season, Watchlist, ProductStock } from '../types';
 import ProductForm from './ProductForm';
 import TariffForm from './TariffForm';
 import VariantManager from './VariantManager';
@@ -16,6 +16,8 @@ import SeasonForm from './SeasonForm';
 import BulkEditModal from './BulkEditModal';
 import WatchlistMonitor from './WatchlistMonitor';
 import { db } from '../utils/db';
+import { syncManager } from '../services/sync/SyncManager';
+import { permissionService } from '../services/sync/PermissionService';
 
 interface CatalogManagerProps {
    products: Product[];
@@ -27,15 +29,20 @@ interface CatalogManagerProps {
    onUpdateProducts: (products: Product[]) => void;
    onUpdateConfig: (config: BusinessConfig) => void;
    onClose: () => void;
+   isAdminMode?: boolean;
+   terminalId?: string;
 }
 
 type ViewMode = 'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS' | 'GROUPS' | 'SEASONS' | 'BI_MONITOR';
 
 // --- SUB-COMPONENT: STOCK ROW ---
-const StockRow: React.FC<{ product: Product; warehouseId: string }> = ({ product, warehouseId }) => {
+const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks: ProductStock[] }> = ({ product, warehouseId, productStocks }) => {
    const [isExpanded, setIsExpanded] = useState(false);
    const hasVariants = product.variants && product.variants.length > 0;
-   const warehouseStock = product.stockBalances?.[warehouseId] || 0;
+
+   // Get stock from detailed collection
+   const detailedStock = productStocks.find(s => s.productId === product.id && s.warehouseId === warehouseId);
+   const warehouseStock = detailedStock ? detailedStock.quantity : (product.stockBalances?.[warehouseId] || 0);
 
    const getStatusBadge = (qty: number) => {
       if (qty > 10) return <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full"><CheckCircle2 size={12} /> Disponible</span>;
@@ -120,10 +127,15 @@ const StockRow: React.FC<{ product: Product; warehouseId: string }> = ({ product
 };
 
 // --- WAREHOUSE CARD CONTAINER ---
-const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Product[] }> = ({ warehouse, filteredProducts }) => {
+const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Product[]; productStocks: ProductStock[] }> = ({ warehouse, filteredProducts, productStocks }) => {
    const [isCardExpanded, setIsCardExpanded] = useState(false);
    const warehouseProducts = filteredProducts.filter(p => p.activeInWarehouses?.includes(warehouse.id));
-   const totalValue = warehouseProducts.reduce((acc, p) => acc + ((p.stockBalances?.[warehouse.id] || 0) * (p.cost || 0)), 0);
+
+   const totalValue = warehouseProducts.reduce((acc, p) => {
+      const detailedStock = productStocks.find(s => s.productId === p.id && s.warehouseId === warehouse.id);
+      const qty = detailedStock ? detailedStock.quantity : (p.stockBalances?.[warehouse.id] || 0);
+      return acc + (qty * (p.cost || 0));
+   }, 0);
    const itemCount = warehouseProducts.length;
 
    return (
@@ -163,7 +175,7 @@ const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Pro
                         <tr><th className="p-4 w-[40%]">Artículo</th><th className="p-4">Variante / Atributo</th><th className="p-4 text-center">Stock Físico</th><th className="p-4 text-right">Estado</th></tr>
                      </thead>
                      <tbody className="divide-y divide-gray-100">
-                        {warehouseProducts.map(product => <StockRow key={product.id} product={product} warehouseId={warehouse.id} />)}
+                        {warehouseProducts.map(product => <StockRow key={product.id} product={product} warehouseId={warehouse.id} productStocks={productStocks} />)}
                      </tbody>
                   </table>
                </div>
@@ -175,12 +187,16 @@ const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Pro
 
 // --- MAIN CATALOG COMPONENT ---
 const CatalogManager: React.FC<CatalogManagerProps> = ({
-   products, config, warehouses, transactions, currentUser, roles, onUpdateProducts, onUpdateConfig, onClose
+   products, config, warehouses, transactions, currentUser, roles, onUpdateProducts, onUpdateConfig,
+   onClose,
+   isAdminMode,
+   terminalId
 }) => {
    const [viewMode, setViewMode] = useState<ViewMode>('PRODUCTS');
    const [searchTerm, setSearchTerm] = useState('');
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    const [editingProduct, setEditingProduct] = useState<Product | null | 'NEW'>(null);
+   const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
 
    // SELECTION & BULK STATE
    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -204,7 +220,19 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          const lists = (await db.get('watchlists') || []) as Watchlist[];
          setWatchlists(lists);
       };
+      const loadStocks = async () => {
+         const stocks = (await db.get('productStocks') || []) as ProductStock[];
+         setProductStocks(stocks);
+      };
       loadWatchlists();
+      loadStocks();
+
+      const handleStockUpdate = async () => {
+         const stocks = (await db.get('productStocks') || []) as ProductStock[];
+         setProductStocks(stocks);
+      };
+      window.addEventListener('productStocksUpdated', handleStockUpdate);
+      return () => window.removeEventListener('productStocksUpdated', handleStockUpdate);
    }, []);
 
    const tariffs = config.tariffs || [];
@@ -215,7 +243,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const categories = useMemo(() => ['ALL', ...Array.from(new Set(products.map(p => p.category)))], [products]);
    const filteredProducts = useMemo(() => {
       return products.filter(p => {
-         const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
+         const matchesSearch = (p.name || '').toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
          const matchesCategory = categoryFilter === 'ALL' || p.category === categoryFilter;
          return matchesSearch && matchesCategory;
       });
@@ -262,6 +290,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          if (changes.classification?.categoryId) newP.category = changes.classification.categoryId;
 
+         newP.updatedAt = new Date().toISOString();
          return newP;
       });
 
@@ -280,14 +309,66 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
    if (viewMode === 'VARIANTS') return <VariantManager onClose={() => setViewMode('PRODUCTS')} />;
    if (editingProduct) return <ProductForm initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={warehouses} availableTariffs={tariffs} hasHistory={transactions.some(t => t.items.some(item => item.id === (editingProduct as any).id))} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} />;
-   if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={products} config={config} availableTariffs={tariffs} onSave={handleSaveTariff} onClose={() => setEditingTariff(null)} />;
+   if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={products} config={config} availableTariffs={tariffs} onSave={handleSaveTariff} onUpdateProducts={onUpdateProducts} onClose={() => setEditingTariff(null)} />;
    if (editingGroup) return <GroupForm initialData={editingGroup === 'NEW' ? null : editingGroup} products={products} onSave={handleSaveGroup} onClose={() => setEditingGroup(null)} />;
    if (editingSeason) return <SeasonForm initialData={editingSeason === 'NEW' ? null : editingSeason} products={products} onSave={handleSaveSeason} onClose={() => setEditingSeason(null)} />;
 
-   function handleSaveProduct(savedProduct: Product) {
-      const exists = products.some(p => p.id === savedProduct.id);
-      onUpdateProducts(exists ? products.map(p => p.id === savedProduct.id ? savedProduct : p) : [...products, savedProduct]);
+   async function handleSaveProduct(savedProduct: Product) {
+      const oldProduct = products.find(p => p.id === savedProduct.id);
+      const exists = !!oldProduct;
+
+      // Detect stock changes and record movements
+      if (exists) {
+         const whIds = Array.from(new Set([
+            ...Object.keys(oldProduct.stockBalances || {}),
+            ...Object.keys(savedProduct.stockBalances || {})
+         ]));
+
+         for (const whId of whIds) {
+            const oldQty = oldProduct.stockBalances?.[whId] || 0;
+            const newQty = savedProduct.stockBalances?.[whId] || 0;
+            if (oldQty !== newQty) {
+               const diff = newQty - oldQty;
+               await db.recordInventoryMovement(
+                  whId,
+                  savedProduct.id,
+                  diff > 0 ? 'AJUSTE_ENTRADA' : 'AJUSTE_SALIDA',
+                  'AJUSTE MANUAL',
+                  diff,
+                  savedProduct.cost,
+                  terminalId || 'LOCAL'
+               );
+            }
+         }
+
+         // CRITICAL: Don't update products directly - recordInventoryMovement already did it
+         // Reload from DB to get the correct stock values after movement recording
+         const freshData = await db.init();
+         onUpdateProducts(freshData.products || products);
+      } else {
+         // New product with initial stock
+         for (const [whId, qty] of Object.entries(savedProduct.stockBalances || {})) {
+            if (qty !== 0) {
+               await db.recordInventoryMovement(
+                  whId,
+                  savedProduct.id,
+                  'INICIAL',
+                  'CARGA INICIAL',
+                  qty as number,
+                  savedProduct.cost,
+                  terminalId || 'LOCAL'
+               );
+            }
+         }
+
+         // For new products, reload to get accurate stock after movement recording
+         const freshData = await db.init();
+         onUpdateProducts(freshData.products || products);
+      }
       setEditingProduct(null);
+
+      // Broadcast change to other terminals (if master)
+      syncManager.broadcastChange('products', savedProduct, exists ? 'UPDATE' : 'CREATE').catch(console.error);
    }
 
    function handleSaveTariff(savedTariff: Tariff) {
@@ -346,7 +427,14 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             <div className="flex flex-col gap-4 w-full">
                <div className="flex justify-between items-center w-full">
                   <div className="flex items-center gap-4">
-                     <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition-colors"><ArrowLeft size={24} /></button>
+                     <button
+                        onClick={onClose}
+                        className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-full text-gray-600 font-bold transition-all active:scale-95 z-50"
+                        title="Volver al Menú Principal"
+                     >
+                        <ArrowLeft size={20} />
+                        <span className="hidden md:inline">Volver</span>
+                     </button>
                      <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2"><Package className="text-blue-600" /> Gestión de Catálogo</h1>
                   </div>
                   {canManage && (
@@ -417,7 +505,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                     <h3 className="font-bold text-gray-800 leading-tight mb-1 line-clamp-2">{product.name}</h3>
                                     <div className="mt-auto pt-3 border-t border-gray-100 flex justify-between items-end">
                                        <span className="text-[10px] text-gray-400 font-mono">{product.barcode || '---'}</span>
-                                       <span className="text-lg font-black text-gray-900">{config.currencySymbol}{product.price.toFixed(2)}</span>
+                                       <span className="text-lg font-black text-gray-900">{config.currencySymbol}{(product.price || 0).toFixed(2)}</span>
                                     </div>
                                  </div>
                               </div>
@@ -451,7 +539,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                      <span className="text-xs bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full font-bold border border-emerald-100 flex items-center gap-1"><CheckCircle2 size={12} /> Tiempo Real</span>
                   </div>
                   <div className="flex-1 overflow-y-auto pb-20 space-y-4">
-                     {warehouses.map(warehouse => <WarehouseStockCard key={warehouse.id} warehouse={warehouse} filteredProducts={filteredProducts} />)}
+                     {warehouses.map(warehouse => <WarehouseStockCard key={warehouse.id} warehouse={warehouse} filteredProducts={filteredProducts} productStocks={productStocks} />)}
                   </div>
                </div>
             )}
