@@ -42,7 +42,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                 ]);
 
                 const mergedTerminals = Array.from(allTerminalIds)
-                    .filter(tid => tid === 't1' || tid === 't2')
+                    .filter(tid => /^t\d+$/i.test(tid)) // Only show "real" terminals (t1, t2, t3...)
                     .map(tid => {
                         const connectedInfo = terminals.find(t => t.terminalId === tid);
                         const opInfo = opStatus?.terminals?.find((t: any) => t.terminalId === tid);

@@ -680,19 +680,67 @@ const App: React.FC = () => {
     txn.terminalId = terminalId;
 
     for (const item of txn.items) {
-      const entry = await db.recordInventoryMovement(
-        defaultWarehouseId,
-        item.id, // CartItem extends Product, so item.id is the productId
-        'VENTA',
-        txn.displayId || txn.id,
-        -item.quantity, // Negative for sales
-        item.price, // Use price as cost proxy if cost not available, or fetch product cost
-        terminalId
-      );
+      // 1. Traceability Status Update (Mark as SOLD)
+      if (item.trackingData && item.trackingData.length > 0) {
+        const allTracking = await db.get('inventoryTracking') as any[] || [];
+        const updatedTracking = allTracking.map(t => {
+          if (item.trackingData?.some((sel: any) => sel.id === t.id)) {
+            return { ...t, status: 'SOLD', saleId: txn.id };
+          }
+          return t;
+        });
+        await db.save('inventoryTracking', updatedTracking);
+      }
 
-      if (entry) {
-        // No need to push individually anymore, BackgroundSyncManager handles it
-        // await syncManager.pushInventoryMovement(entry);
+      // 2. Record Inventory Ledger Entry
+      if (item.trackingData && item.trackingData.length > 0) {
+        // Batch movements for LOTS vs SERIALS
+        if (item.trackingData.length === 1 && item.quantity > 1) {
+          // LOT
+          await db.recordInventoryMovement(
+            defaultWarehouseId,
+            item.id,
+            'VENTA',
+            txn.displayId || txn.id,
+            -item.quantity,
+            item.price,
+            terminalId,
+            item.variantSku,
+            item.variantInfo,
+            item.trackingData[0].id,
+            item.trackingData[0].trackingCode
+          );
+        } else {
+          // SERIALS or single tracked item
+          for (const track of item.trackingData) {
+            await db.recordInventoryMovement(
+              defaultWarehouseId,
+              item.id,
+              'VENTA',
+              txn.displayId || txn.id,
+              -1,
+              item.price,
+              terminalId,
+              item.variantSku,
+              item.variantInfo,
+              track.id,
+              track.trackingCode
+            );
+          }
+        }
+      } else {
+        // NORMAL ITEM
+        await db.recordInventoryMovement(
+          defaultWarehouseId,
+          item.id,
+          'VENTA',
+          txn.displayId || txn.id,
+          -item.quantity,
+          item.price,
+          terminalId,
+          item.variantSku,
+          item.variantInfo
+        );
       }
     }
 
@@ -832,6 +880,7 @@ const App: React.FC = () => {
       case 'LOGIN':
         return (
           <LoginScreen
+            config={(config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.config || config.terminals?.[0]?.config as any}
             availableUsers={users}
             subVertical={config.subVertical}
             onLogin={(u) => {
@@ -1110,18 +1159,25 @@ const App: React.FC = () => {
         );
 
       case 'FINANCE':
-        return (
-          <FinanceDashboard
-            transactions={transactions}
-            cashMovements={cashMovements}
-            config={config}
-            currentUser={currentUser}
-            roles={roles}
-            onRegisterMovement={handleRegisterMovement}
-            onOpenZReport={() => setCurrentView('Z_REPORT')}
-            onClose={() => setCurrentView('POS')}
-          />
-        );
+        {
+          // Filter for current terminal ONLY (Fix for X-Report showing other terminals' data)
+          const currentTerminalId = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
+          const terminalTransactions = transactions.filter(t => t.terminalId === currentTerminalId && !t.zReportId);
+          const terminalMovements = cashMovements.filter(m => m.terminalId === currentTerminalId);
+
+          return (
+            <FinanceDashboard
+              transactions={terminalTransactions}
+              cashMovements={terminalMovements}
+              config={config}
+              currentUser={currentUser}
+              roles={roles}
+              onRegisterMovement={handleRegisterMovement}
+              onOpenZReport={() => setCurrentView('Z_REPORT')}
+              onClose={() => setCurrentView('POS')}
+            />
+          );
+        }
 
       case 'Z_REPORT':
         return (
@@ -1165,19 +1221,61 @@ const App: React.FC = () => {
               const whId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
 
               // 1. Record Inventory Movements (Batch)
-              const movements = items
-                .filter(item => item.quantityReceived > 0)
-                .map(item => ({
-                  warehouseId: whId,
-                  productId: item.productId,
-                  concept: 'COMPRA' as LedgerConcept,
-                  documentRef: orderId || 'OC-REC',
-                  qty: item.quantityReceived,
-                  movementCost: item.cost,
-                  terminalId: terminalId || 'LOCAL',
-                  variantId: item.variantSku, // NEW: Variant SKU as ID
-                  variantName: item.variantInfo // NEW: Variant Name "Size 42"
-                }));
+              const movements: any[] = [];
+              for (const item of items) {
+                if (item.quantityReceived <= 0) continue;
+
+                if (item.trackingData && item.trackingData.length > 0) {
+                  // For tracked items, we record movements per tracking unit (Serial) or per Lot
+                  // If there are multiple entries, it's likely serials (qty 1 each)
+                  // If there's 1 entry and qty > 1, it's a lot.
+                  if (item.trackingData.length === 1 && item.quantityReceived > 1) {
+                    // LOT
+                    movements.push({
+                      warehouseId: whId,
+                      productId: item.productId,
+                      concept: 'COMPRA' as LedgerConcept,
+                      documentRef: orderId || 'OC-REC',
+                      qty: item.quantityReceived,
+                      movementCost: item.cost,
+                      terminalId,
+                      variantId: item.variantSku,
+                      variantName: item.variantInfo,
+                      trackingId: item.trackingData[0].id,
+                      trackingCode: item.trackingData[0].trackingCode
+                    });
+                  } else {
+                    // SERIALS (or 1 item with tracing)
+                    for (const track of item.trackingData) {
+                      movements.push({
+                        warehouseId: whId,
+                        productId: item.productId,
+                        concept: 'COMPRA' as LedgerConcept,
+                        documentRef: orderId || 'OC-REC',
+                        qty: 1, // Individual serial
+                        movementCost: item.cost,
+                        terminalId,
+                        variantId: item.variantSku,
+                        variantName: item.variantInfo,
+                        trackingId: track.id,
+                        trackingCode: track.trackingCode
+                      });
+                    }
+                  }
+                } else {
+                  movements.push({
+                    warehouseId: whId,
+                    productId: item.productId,
+                    concept: 'COMPRA' as LedgerConcept,
+                    documentRef: orderId || 'OC-REC',
+                    qty: item.quantityReceived,
+                    movementCost: item.cost,
+                    terminalId,
+                    variantId: item.variantSku,
+                    variantName: item.variantInfo
+                  });
+                }
+              }
 
               console.log("📦 APP: Calculated movements:", movements.length, movements);
 

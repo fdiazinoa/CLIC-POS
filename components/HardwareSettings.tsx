@@ -232,7 +232,45 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                   {displayConfig.isEnabled && (
                      <div className="mt-6 pt-6 border-t border-slate-50">
                         <button
-                           onClick={() => window.open('/?view=VISOR', 'clic_pos_visor', 'width=1024,height=768')}
+                           onClick={async () => {
+                              try {
+                                 let left = window.screen.width; // Default heuristic: Move to the right
+                                 let top = 0;
+                                 let width = 1024;
+                                 let height = 768;
+
+                                 // Advanced API: Multi-Screen Window Placement
+                                 if ('getScreenDetails' in window) {
+                                    try {
+                                       const screenDetails = await (window as any).getScreenDetails();
+                                       const screens = screenDetails.screens;
+
+                                       // Find a screen that is NOT the current one (Primary usually)
+                                       // ideally we look for an external one or just the second one
+                                       const externalScreen = screens.find((s: any) => s !== screenDetails.currentScreen);
+
+                                       if (externalScreen) {
+                                          left = externalScreen.left;
+                                          top = externalScreen.top;
+                                          width = externalScreen.width;
+                                          height = externalScreen.height;
+                                          console.log("Found external screen:", externalScreen);
+                                       }
+                                    } catch (err) {
+                                       console.warn("Permission denied or API error for screen details:", err);
+                                    }
+                                 }
+
+                                 // Launch the window
+                                 const features = `left=${left},top=${top},width=${width},height=${height},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=no`;
+                                 window.open('/?view=VISOR', 'clic_pos_visor', features);
+
+                              } catch (e) {
+                                 console.error("Error launching visor:", e);
+                                 // Fallback simple launch
+                                 window.open('/?view=VISOR', 'clic_pos_visor', 'width=1024,height=768');
+                              }
+                           }}
                            className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-sm uppercase tracking-widest flex items-center justify-center gap-3 hover:bg-slate-800 transition-all shadow-xl active:scale-95 shadow-slate-200"
                         >
                            <MonitorPlay size={20} /> Lanzar Visor HDMI

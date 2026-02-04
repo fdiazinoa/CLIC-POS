@@ -157,12 +157,40 @@ export class NetworkAdapter implements DatabaseAdapter {
         if (Array.isArray(data)) {
             if (data.length === 0) {
                 console.log(`🗑️ NetworkAdapter: Clearing collection ${collectionName}...`);
-                const url = this.getUrl(collectionName);
-                await fetch(url, {
-                    method: 'DELETE',
-                    mode: 'cors',
-                    headers: { 'Connection': 'keep-alive' }
-                });
+                try {
+                    // Method 1: Try standard DELETE on collection (Fastest, but often unsupported)
+                    const url = this.getUrl(collectionName);
+                    const res = await fetch(url, {
+                        method: 'DELETE',
+                        mode: 'cors',
+                        headers: { 'Connection': 'keep-alive' }
+                    });
+
+                    if (!res.ok) {
+                        throw new Error('Bulk DELETE not supported');
+                    }
+                } catch (e) {
+                    console.warn(`⚠️ Bulk DELETE failed for ${collectionName}, falling back to iterative delete.`);
+                    // Fallback: Fetch all and delete one by one
+                    try {
+                        const items = await this.getCollection<any>(collectionName);
+                        if (Array.isArray(items) && items.length > 0) {
+                            console.log(`Iteratively deleting ${items.length} items from ${collectionName}...`);
+                            // Limit concurrency
+                            const chunks = [];
+                            const chunkSize = 10;
+                            for (let i = 0; i < items.length; i += chunkSize) {
+                                chunks.push(items.slice(i, i + chunkSize));
+                            }
+
+                            for (const chunk of chunks) {
+                                await Promise.all(chunk.map(item => this.deleteDocument(collectionName, item.id)));
+                            }
+                        }
+                    } catch (err) {
+                        console.error(`❌ Iterative delete failed for ${collectionName}:`, err);
+                    }
+                }
                 return;
             }
 

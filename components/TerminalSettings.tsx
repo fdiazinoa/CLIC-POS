@@ -13,7 +13,7 @@ import {
    ToggleLeft, ToggleRight, Radio, Power, Scale, Tv, Mail, ShoppingBag, Truck,
    Package, Layers, Crown, ListOrdered, Link2, Sparkles, Palette, MousePointer2, Banknote, ListChecks,
    // Added Sun to fix "Cannot find name 'Sun'" error
-   Sun, ScanBarcode, Layout, Minus, ArrowDownCircle, ArrowUpCircle, Wallet, UserCheck, User, CreditCard
+   Sun, ScanBarcode, Layout, Minus, ArrowDownCircle, ArrowUpCircle, Wallet, UserCheck, User, CreditCard, Fingerprint
 } from 'lucide-react';
 import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice, Product, DeviceRole, AuthLevel } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG } from '../constants';
@@ -1033,11 +1033,21 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  disabled={isReadOnly}
                               />
                               <Toggle
-                                 label="Gerente para Reembolsos"
-                                 description="Solo usuarios con rol Manager pueden procesar devoluciones."
+                                 label="Reembolsos Requieren Gerente"
+                                 description="Bloquea la opción de devolución para cajeros estándar."
                                  checked={activeTerminal.config.security.requireManagerForRefunds}
                                  onChange={(v: boolean) => handleUpdateActiveConfig('security', 'requireManagerForRefunds', v)}
-                                 icon={ShieldCheck}
+                                 icon={RotateCcw}
+                                 disabled={isReadOnly}
+                              />
+
+                              {/* NEW: Biometric Switch */}
+                              <Toggle
+                                 label="Habilitar inicio de sesión biométrico"
+                                 description="Permite usar TouchID/FaceID para ingresar a la terminal."
+                                 checked={activeTerminal.config.security.allowBiometrics || false}
+                                 onChange={(v: boolean) => handleUpdateActiveConfig('security', 'allowBiometrics', v)}
+                                 icon={Fingerprint}
                                  disabled={isReadOnly}
                               />
                            </div>

@@ -3,7 +3,7 @@ import {
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, Supplier, Watchlist,
   NCFType, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
-  Campaign, Coupon, ZReport, Reception, ProductStock
+  Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking
 } from '../types';
 import {
   MOCK_USERS, RETAIL_PRODUCTS, FOOD_PRODUCTS,
@@ -81,9 +81,8 @@ const SEED_DATA = {
   zReports: [] as ZReport[],
   receptions: [] as Reception[],
   productStocks: [] as ProductStock[],
-  wallets: [] as any[],
-  walletTransactions: [] as any[],
-  supplierProductPrices: [] as any[]
+  supplierProductPrices: [] as any[],
+  inventoryTracking: [] as InventoryTracking[]
 };
 
 export const db = {
@@ -257,6 +256,11 @@ export const db = {
             await dbAdapter.saveCollection('inventoryLedger', []);
             console.log('✅ Inventory ledger cleared');
           }
+          break;
+
+        case 'inventory_tracking':
+          await dbAdapter.saveCollection('inventoryTracking', []);
+          console.log('✅ Inventory tracking cleared');
           break;
 
         case 'accounts_receivable':
@@ -449,7 +453,19 @@ export const db = {
     return nextId;
   },
 
-  recordInventoryMovement: async (warehouseId: string, productId: string, concept: LedgerConcept, documentRef: string, qty: number, movementCost?: number, terminalId?: string): Promise<InventoryLedgerEntry | undefined> => {
+  recordInventoryMovement: async (
+    warehouseId: string,
+    productId: string,
+    concept: LedgerConcept,
+    documentRef: string,
+    qty: number,
+    movementCost?: number,
+    terminalId?: string,
+    variantId?: string,
+    variantName?: string,
+    trackingId?: string,
+    trackingCode?: string
+  ): Promise<InventoryLedgerEntry | undefined> => {
     // 1. Create Ledger Entry (Temporary balance, will be recalculated)
     const qtyIn = qty > 0 ? qty : 0;
     const qtyOut = qty < 0 ? Math.abs(qty) : 0;
@@ -467,6 +483,10 @@ export const db = {
       balanceQty: 0, // Will be recalculated
       balanceAvgCost: 0, // Will be recalculated
       terminalId: terminalId || 'LOCAL',
+      variantId,
+      variantName,
+      trackingId,
+      trackingCode,
       syncStatus: 'PENDING'
     };
 
@@ -485,7 +505,19 @@ export const db = {
     return newEntry;
   },
 
-  recordInventoryMovements: async (movements: { warehouseId: string, productId: string, concept: LedgerConcept, documentRef: string, qty: number, movementCost?: number, terminalId?: string }[]): Promise<InventoryLedgerEntry[]> => {
+  recordInventoryMovements: async (movements: {
+    warehouseId: string,
+    productId: string,
+    concept: LedgerConcept,
+    documentRef: string,
+    qty: number,
+    movementCost?: number,
+    terminalId?: string,
+    variantId?: string,
+    variantName?: string,
+    trackingId?: string,
+    trackingCode?: string
+  }[]): Promise<InventoryLedgerEntry[]> => {
     const newEntries: InventoryLedgerEntry[] = [];
 
     for (const move of movements) {
@@ -505,6 +537,10 @@ export const db = {
         balanceQty: 0,
         balanceAvgCost: 0,
         terminalId: move.terminalId || 'LOCAL',
+        variantId: move.variantId,
+        variantName: move.variantName,
+        trackingId: move.trackingId,
+        trackingCode: move.trackingCode,
         syncStatus: 'PENDING'
       };
 

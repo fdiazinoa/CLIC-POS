@@ -282,6 +282,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                                  <div className="flex items-center gap-3 text-sm text-gray-500 mt-1">
                                     <span className="flex items-center gap-1"><Calendar size={14} /> {new Date(tx.date).toLocaleDateString()}</span>
                                     <span className="flex items-center gap-1"><UserIcon size={14} /> {tx.customerName || 'Cliente General'}</span>
+                                    <span className="flex items-center gap-1 bg-gray-100 px-1.5 rounded text-[10px] uppercase font-bold text-gray-500 border border-gray-200">
+                                       Terminal {tx.terminalId || 'N/A'}
+                                    </span>
                                  </div>
                               </div>
                            </div>

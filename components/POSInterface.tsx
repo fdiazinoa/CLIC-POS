@@ -26,6 +26,7 @@ import ProductVariantSelector from './ProductVariantSelector';
 import ScaleModal from './ScaleModal';
 import GlobalDiscountModal from './GlobalDiscountModal';
 import LoyaltyScanModal from './LoyaltyScanModal';
+import TrackingSelectionModal from './TrackingSelectionModal';
 import { db } from '../utils/db';
 import { validateTerminalDocument } from '../utils/validation';
 import { isSessionExpired } from '../utils/session';
@@ -47,6 +48,7 @@ import BarcodeScannerModal from './BarcodeScannerModal';
 import { visorSync } from '../utils/visorSync';
 import ProductQuickActions from './ProductQuickActions';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
+import SupervisorAuthModal from './SupervisorAuthModal';
 
 interface POSInterfaceProps {
    config: BusinessConfig;
@@ -188,15 +190,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const scannerRef = useRef<Html5Qrcode | null>(null);
    const searchInputRef = useRef<HTMLInputElement>(null);
 
-   const [fiscalStatus, setFiscalStatus] = useState<{ type: NCFType, hasNCF: boolean, localBuffer: any, isUsingPool: boolean }>({
+   const [fiscalStatus, setFiscalStatus] = useState<{
+      type: NCFType;
+      number?: string;
+      rangeExpiry?: string;
+      hasNCF: boolean;
+      localBuffer: any;
+      isUsingPool: boolean;
+   }>({
       type: 'B02', hasNCF: false, localBuffer: null, isUsingPool: false
    });
+
+   const [showSupervisorAuth, setShowSupervisorAuth] = useState(false);
+   const [refundAuthorizedBy, setRefundAuthorizedBy] = useState<{ id: string, name: string } | null>(null);
    const [status, setStatus] = useState<{ isConnected: boolean, currentNCF: string, remaining: number, expiryDate: string, batteryLevel: number } | null>(null);
 
    // --- MOBILE ADAPTATION ---
    const isMobile = useIsMobile();
    const [showMobileConfigModal, setShowMobileConfigModal] = useState(false);
    const [pendingProductToAdd, setPendingProductToAdd] = useState<Product | null>(null);
+   const [pendingTrackingProduct, setPendingTrackingProduct] = useState<{ product: Product, quantity: number, price?: number, modifiers?: string[] } | null>(null);
 
    // --- SMART QR RETURNS ---
    const [showReturnModal, setShowReturnModal] = useState(false);
@@ -293,8 +306,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return true;
    }, [defaultSalesWarehouseId, warehouses, config.features.stockTracking, activeTerminalConfig, cart]);
 
-   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[]) => {
+   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[]) => {
       if (!canAddItemToCart(product, quantity)) return;
+
+      // TRACEABILITY INTERCEPTION
+      const usesLots = product.operationalFlags?.usesLots;
+      const usesSerial = product.operationalFlags?.usesSerial;
+      if ((usesLots || usesSerial) && !trackingData) {
+         setPendingTrackingProduct({ product, quantity, price: priceOverride, modifiers });
+         return;
+      }
+
       const finalPrice = priceOverride || getProductPrice(product);
       onUpdateCart(prev => {
          const modifiersString = modifiers ? modifiers.sort().join('|') : '';
@@ -302,8 +324,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const iMods = i.modifiers ? i.modifiers.sort().join('|') : '';
             return i.id === product.id && iMods === modifiersString && i.price === finalPrice;
          });
-         if (existing) return prev.map(i => i.cartId === existing.cartId ? { ...i, quantity: i.quantity + quantity } : i);
-         return [...prev, { ...product, cartId: Math.random().toString(36).substr(2, 9), quantity, price: finalPrice, modifiers, originalPrice: getProductPrice(product) }];
+
+         const newItem = {
+            ...product,
+            cartId: Math.random().toString(36).substr(2, 9),
+            quantity,
+            price: finalPrice,
+            modifiers,
+            originalPrice: getProductPrice(product),
+            trackingData // Added tracking data to cart item
+         };
+
+         if (existing && !usesSerial) {
+            // For series, we never collapse because each unit has a unique ID
+            return prev.map(i => i.cartId === existing.cartId ? { ...i, quantity: i.quantity + quantity } : i);
+         }
+         return [...prev, newItem];
       });
    }, [canAddItemToCart, getProductPrice, onUpdateCart]);
 
@@ -378,29 +414,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    // --- BARCODE SCANNER LOGIC ---
    const processBarcode = useCallback((code: string) => {
+      const trimmed = code.trim();
+
       // 0. Try Smart QR (JSON)
       try {
-         if (code.trim().startsWith('{') && code.trim().endsWith('}')) {
-            const data = JSON.parse(code);
+         if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            const data = JSON.parse(trimmed);
             if (data.type === 'INVOICE_RETURN' && data.id) {
                setReturnInvoiceId(data.id);
                setShowReturnModal(true);
-               setErrorToast("Modo Devolución Activado");
-               setTimeout(() => setErrorToast(null), 2000);
                return;
             }
          }
       } catch (e) {
-         // Not a JSON or invalid, ignore and proceed to normal barcode
+         // Not a JSON or invalid
+      }
+
+      // 0.1 Try Transaction Search (Direct bypass for TCK... barcodes)
+      const txnFound = (transactions || []).find(t => t.displayId === trimmed || t.id === trimmed);
+      if (txnFound) {
+         setReturnInvoiceId(txnFound.id);
+         setShowReturnModal(true);
+         return;
       }
 
       // 1. Try Scale Parser
       if (config.scaleLabelConfig?.isEnabled) {
-         const scaleItem = parseScaleBarcode(code, config.scaleLabelConfig);
+         const scaleItem = parseScaleBarcode(trimmed, config.scaleLabelConfig);
          if (scaleItem) {
-            // Find product by PLU (assuming PLU matches barcode or part of it)
-            // We search for a product whose barcode ENDS with the PLU or equals it.
-            // Or strictly equals. Usually PLU 2001 matches product with barcode 2001.
             const product = (products || []).find(p => p.barcode === scaleItem.plu || p.id === scaleItem.plu);
 
             if (product) {
@@ -408,14 +449,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   addToCart(product, scaleItem.value);
                   setErrorToast(`⚖️ Peso: ${scaleItem.value.toFixed(3)}kg`);
                } else {
-                  // Price Type
                   const unitPrice = getProductPrice(product);
                   if (unitPrice > 0) {
                      const weight = scaleItem.value / unitPrice;
                      addToCart(product, weight);
                      setErrorToast(`💲 Precio: $${scaleItem.value} (${weight.toFixed(3)}kg)`);
                   } else {
-                     // Fallback if no unit price (shouldn't happen for weighted items)
                      addToCart(product, 1, scaleItem.value);
                   }
                }
@@ -430,13 +469,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       // 2. Normal Barcode Search
-      const product = (products || []).find(p => p.barcode === code);
+      const product = (products || []).find(p => p.barcode === trimmed);
       if (product) {
          handleProductClick(product);
          setErrorToast(`Producto agregado: ${product.name}`);
          setTimeout(() => setErrorToast(null), 1500);
       }
-   }, [config, products, handleProductClick, getProductPrice, canAddItemToCart]);
+   }, [config, products, handleProductClick, getProductPrice, canAddItemToCart, transactions]);
 
    const isAnyModalOpen = !!(
       showPaymentModal ||
@@ -733,7 +772,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      customerId: selectedCustomer?.id,
                      customerName: selectedCustomer?.name,
                      status: 'COMPLETED',
-                     walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined
+                     walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
+                     authorizedById: refundAuthorizedBy?.id,
+                     authorizedByName: refundAuthorizedBy?.name
                   },
                   walletDeposit: walletDepositAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletDepositAmount } : undefined,
                   walletPayment: walletPaymentAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletPaymentAmount } : undefined
@@ -744,6 +785,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (data.success) {
                onUpdateCart([]);
                onSelectCustomer(null);
+               setIsReturnMode(false);
+               setRefundAuthorizedBy(null);
                return data.result.sale || data.result.refund;
             } else {
                alert(`Error en transacción: ${data.message}`);
@@ -781,12 +824,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   phone: selectedCustomer.phone,
                   email: selectedCustomer.email
                } : undefined,
-               isTaxIncluded: isTaxIncluded
+               isTaxIncluded: isTaxIncluded,
+               authorizedById: hasReturns ? refundAuthorizedBy?.id : undefined,
+               authorizedByName: hasReturns ? refundAuthorizedBy?.name : undefined
             });
 
             onTransactionComplete(txn);
             onUpdateCart([]);
             onSelectCustomer(null);
+            setIsReturnMode(false);
+            setRefundAuthorizedBy(null);
             return txn;
          }
       } catch (error: any) {
@@ -1039,7 +1086,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                </div>
 
+
                <div className="flex-1 flex items-center gap-4">
+                  {/* TERMINAL ID BADGE (DEBUG/INFO) */}
+                  <div className="hidden xl:flex flex-col leading-none border-r border-gray-100 pr-4 mr-2">
+                     <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Terminal</span>
+                     <span className={`text-xs font-bold ${terminalId === 'T1' && config.terminals?.length > 1 ? 'text-red-500 animate-pulse' : 'text-gray-700'}`}>
+                        {terminalId}
+                     </span>
+                  </div>
+
                   <div className="relative flex-1 group">
                      <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
                      <input
@@ -1066,24 +1122,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                   {/* RETURN MODE TOGGLE */}
                   <button
-                     onClick={async () => {
+                     onClick={() => {
                         if (!isReturnMode) {
-                           // Entering Return Mode - Check Permission
-                           const userRole = roles.find(r => r.id === currentUser.role);
-                           const userPermissions = userRole?.permissions || [];
-                           const hasPermission = userPermissions.includes('POS_RETURNS') || userPermissions.includes('ALL');
+                           // ENTERING REFUND MODE - CHECK PERMISSIONS
+                           // Check if user has permission in their profile or role
+                           const hasPermission = (currentUser as any).permissions?.includes('CAN_REFUND') ||
+                              ['ADMIN', 'MANAGER'].includes(currentUser.role);
 
                            if (!hasPermission) {
-                              const authorized = await requestApproval({
-                                 permission: 'POS_RETURNS',
-                                 actionDescription: 'Activar Modo Devolución',
-                                 context: {
-                                    reason: 'Acceso restringido a devoluciones'
-                                 }
-                              });
-                              if (!authorized) return;
+                              setShowSupervisorAuth(true);
+                              return;
                            }
                         }
+                        // Turn off authorization if leaving refund mode
+                        if (isReturnMode) {
+                           setRefundAuthorizedBy(null);
+                        }
+                        // Toggle mode if authorized
                         setIsReturnMode(!isReturnMode);
                      }}
                      className={`flex items-center gap-3 px-5 py-3 rounded-2xl border-2 transition-all ${isReturnMode ? 'border-red-500 bg-red-50' : 'bg-gray-100 border-transparent hover:bg-gray-200'}`}
@@ -1094,6 +1149,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <p className={`text-xs font-bold leading-none ${isReturnMode ? 'text-red-900' : 'text-gray-600'}`}>{isReturnMode ? 'DEVOLUCIÓN' : 'VENTA'}</p>
                      </div>
                   </button>
+
+                  <SupervisorAuthModal
+                     isOpen={showSupervisorAuth}
+                     onClose={() => setShowSupervisorAuth(false)}
+                     users={users}
+                     requiredPermission="CAN_REFUND"
+                     onSuccess={(supervisor) => {
+                        console.log("Authorized by:", supervisor.name);
+                        setRefundAuthorizedBy({ id: supervisor.id, name: supervisor.name });
+                        setIsReturnMode(true);
+                     }}
+                  />
 
                   {/* MOBILE SETTINGS BUTTON */}
                   <button onClick={() => onOpenSettings()} className="md:hidden p-3 bg-gray-100 rounded-xl text-gray-600 hover:bg-gray-200">
@@ -1198,13 +1265,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   })}
                </div>
             </div>
-         </div>
+         </div >
 
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
-         <div className={`w-full ${isRetailMode ? '' : 'md:w-96'} bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
+         < div className={`w-full ${isRetailMode ? '' : 'md:w-96'} bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
 
             {/* MOBILE HEADER */}
-            <div className="md:hidden p-4 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0">
+            < div className="md:hidden p-4 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
                <div className="flex justify-between items-center">
                   <div className="flex items-center gap-3">
                      <button onClick={() => setMobileView('PRODUCTS')} className="p-2 -ml-2 text-gray-400 hover:text-blue-600 transition-colors">
@@ -1235,23 +1302,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
 
                {/* CUSTOMER PILL (MOBILE) */}
-               {selectedCustomer ? (
-                  <div className="flex items-center justify-between bg-blue-50 px-4 py-2 rounded-full border border-blue-100" onClick={onOpenCustomers}>
-                     <div className="flex items-center gap-2">
-                        <div className="w-6 h-6 bg-blue-200 text-blue-700 rounded-full flex items-center justify-center font-bold text-[10px]">{selectedCustomer.name.charAt(0)}</div>
-                        <span className="text-xs font-bold text-blue-900 truncate max-w-[150px]">{selectedCustomer.name}</span>
+               {
+                  selectedCustomer ? (
+                     <div className="flex items-center justify-between bg-blue-50 px-4 py-2 rounded-full border border-blue-100" onClick={onOpenCustomers}>
+                        <div className="flex items-center gap-2">
+                           <div className="w-6 h-6 bg-blue-200 text-blue-700 rounded-full flex items-center justify-center font-bold text-[10px]">{selectedCustomer.name.charAt(0)}</div>
+                           <span className="text-xs font-bold text-blue-900 truncate max-w-[150px]">{selectedCustomer.name}</span>
+                        </div>
+                        <button onClick={(e) => { e.stopPropagation(); onSelectCustomer(null); }} className="p-1 text-blue-400"><X size={14} /></button>
                      </div>
-                     <button onClick={(e) => { e.stopPropagation(); onSelectCustomer(null); }} className="p-1 text-blue-400"><X size={14} /></button>
-                  </div>
-               ) : (
-                  <button onClick={onOpenCustomers} className="flex items-center gap-2 px-4 py-2 bg-gray-50 border border-dashed border-gray-300 rounded-full text-gray-400 text-xs font-bold uppercase tracking-wider">
-                     <UserPlus size={14} /> Asignar Cliente
-                  </button>
-               )}
-            </div>
+                  ) : (
+                     <button onClick={onOpenCustomers} className="flex items-center gap-2 px-4 py-2 bg-gray-50 border border-dashed border-gray-300 rounded-full text-gray-400 text-xs font-bold uppercase tracking-wider">
+                        <UserPlus size={14} /> Asignar Cliente
+                     </button>
+                  )
+               }
+            </div >
 
             {/* DESKTOP HEADER (HIDDEN ON MOBILE) */}
-            <div className="hidden md:flex p-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0">
+            < div className="hidden md:flex p-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0" >
                <div className="flex justify-between items-center gap-4">
                   <div className="flex items-center gap-2 shrink-0">
                      <h2 className="font-black text-gray-800 uppercase text-xs tracking-widest whitespace-nowrap">Ticket Actual</h2>
@@ -1326,180 +1395,363 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                </div>
 
-               {selectedCustomer ? (
-                  <div className="flex items-center gap-3 mb-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
-                     <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-black">
-                        {selectedCustomer.name.substring(0, 2).toUpperCase()}
-                     </div>
-                     <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                           <p className="font-bold text-gray-800 truncate">{selectedCustomer.name}</p>
-                           {/* Save to contact feature temporarily disabled due to missing prop plumbing */}
+               {
+                  selectedCustomer ? (
+                     <div className="flex items-center gap-3 mb-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
+                        <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-black">
+                           {selectedCustomer.name.substring(0, 2).toUpperCase()}
                         </div>
-                        <div className="flex items-center gap-2">
-                           {selectedCustomer.taxId && (
-                              <span className="text-xs font-mono text-gray-500">{selectedCustomer.taxId}</span>
-                           )}
-                           {selectedCustomer.fiscalStatus === 'ACTIVO' && (
-                              <span className="text-[9px] bg-green-100 text-green-700 px-1 py-0.5 rounded font-bold">FISCAL</span>
-                           )}
-                           {selectedCustomer.isTemporary && (
-                              <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1 py-0.5 rounded font-bold">TEMP</span>
-                           )}
+                        <div className="flex-1 min-w-0">
+                           <div className="flex items-center gap-2">
+                              <p className="font-bold text-gray-800 truncate">{selectedCustomer.name}</p>
+                              {/* Save to contact feature temporarily disabled due to missing prop plumbing */}
+                           </div>
+                           <div className="flex items-center gap-2">
+                              {selectedCustomer.taxId && (
+                                 <span className="text-xs font-mono text-gray-500">{selectedCustomer.taxId}</span>
+                              )}
+                              {selectedCustomer.fiscalStatus === 'ACTIVO' && (
+                                 <span className="text-[9px] bg-green-100 text-green-700 px-1 py-0.5 rounded font-bold">FISCAL</span>
+                              )}
+                              {selectedCustomer.isTemporary && (
+                                 <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1 py-0.5 rounded font-bold">TEMP</span>
+                              )}
+                           </div>
                         </div>
+                        <button onClick={() => onSelectCustomer(null)} className="p-2 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-lg transition-colors">
+                           <X size={16} />
+                        </button>
                      </div>
-                     <button onClick={() => onSelectCustomer(null)} className="p-2 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-lg transition-colors">
-                        <X size={16} />
-                     </button>
-                  </div>
-               ) : (
-                  <button onClick={onOpenCustomers} className="w-full flex items-center justify-between p-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 group"><div className="flex items-center gap-2"><UserPlus size={18} /><span className="text-xs font-bold uppercase">Asignar Cliente</span></div><ChevronRight size={16} /></button>
-               )}
+                  ) : (
+                     <button onClick={onOpenCustomers} className="w-full flex items-center justify-between p-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 group"><div className="flex items-center gap-2"><UserPlus size={18} /><span className="text-xs font-bold uppercase">Asignar Cliente</span></div><ChevronRight size={16} /></button>
+                  )
+               }
 
                <div className={`mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${fiscalStatus.hasNCF ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100 animate-pulse'}`}>
                   <Landmark size={12} />
                   <span>Status Fiscal: {fiscalStatus.type} {fiscalStatus.hasNCF ? (fiscalStatus.isUsingPool ? 'Reservado en Pool' : 'Lote Activo') : 'Agotado'}</span>
                </div>
-            </div>
+            </div >
 
             {/* --- CART ITEMS LIST --- */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-gray-50/50">
-               {processedCart.map((item, idx) => {
-                  const hasDiscount = item.originalPrice && item.price < item.originalPrice;
-                  const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
-                  const lineNet = item.price * item.quantity;
+            < div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-gray-50/50" >
+               {
+                  processedCart.map((item, idx) => {
+                     const hasDiscount = item.originalPrice && item.price < item.originalPrice;
+                     const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
+                     const lineNet = item.price * item.quantity;
 
-                  // MOBILE CARD DESIGN
-                  if (isMobile) {
-                     return (
-                        <div key={item.cartId || `cart-m-${idx}`} className="bg-white rounded-2xl p-3 shadow-sm border border-gray-100 flex gap-3 animate-in slide-in-from-right-2">
-                           <div className="w-16 h-16 rounded-xl bg-gray-50 overflow-hidden shrink-0 border border-gray-100">
-                              {item.image ? <img src={item.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={24} /></div>}
-                           </div>
-                           <div className="flex-1 min-w-0 flex flex-col justify-between">
-                              <div>
-                                 <div className="flex justify-between items-start">
-                                    <h4 className="font-bold text-gray-800 text-sm leading-tight line-clamp-1">{item.name}</h4>
-                                    <button onClick={() => updateCartItem(null, item.cartId)} className="p-1 text-gray-300 hover:text-red-500"><Trash2 size={16} /></button>
-                                 </div>
-                                 <div className="flex flex-col mt-0.5">
-                                    <div className="flex items-center gap-2">
-                                       <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toFixed(2)}</span>
-                                       {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toFixed(2)}</span>}
+                     // MOBILE CARD DESIGN
+                     if (isMobile) {
+                        return (
+                           <div key={item.cartId || `cart-m-${idx}`} className="bg-white rounded-2xl p-3 shadow-sm border border-gray-100 flex gap-3 animate-in slide-in-from-right-2">
+                              <div className="w-16 h-16 rounded-xl bg-gray-50 overflow-hidden shrink-0 border border-gray-100">
+                                 {item.image ? <img src={item.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={24} /></div>}
+                              </div>
+                              <div className="flex-1 min-w-0 flex flex-col justify-between">
+                                 <div>
+                                    <div className="flex justify-between items-start">
+                                       <h4 className="font-bold text-gray-800 text-sm leading-tight line-clamp-1">{item.name}</h4>
+                                       <button onClick={() => updateCartItem(null, item.cartId)} className="p-1 text-gray-300 hover:text-red-500"><Trash2 size={16} /></button>
                                     </div>
-                                    <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">
-                                       ITBIS: {baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)}
-                                    </span>
+                                    <div className="flex flex-col mt-0.5">
+                                       <div className="flex items-center gap-2">
+                                          <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toFixed(2)}</span>
+                                          {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toFixed(2)}</span>}
+                                       </div>
+                                       <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">
+                                          ITBIS: {baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)}
+                                       </span>
+                                    </div>
+                                    {item.salespersonId && (
+                                       <p className="text-[10px] text-blue-500 font-bold uppercase mt-1">
+                                          Vendedor: {users.find(u => u.id === item.salespersonId)?.name || 'Desconocido'}
+                                       </p>
+                                    )}
+                                    {item.note && (
+                                       <p className="text-[10px] text-gray-500 font-medium mt-0.5 italic">
+                                          Nota: {item.note}
+                                       </p>
+                                    )}
                                  </div>
-                                 {item.salespersonId && (
-                                    <p className="text-[10px] text-blue-500 font-bold uppercase mt-1">
-                                       Vendedor: {users.find(u => u.id === item.salespersonId)?.name || 'Desconocido'}
-                                    </p>
-                                 )}
-                                 {item.note && (
-                                    <p className="text-[10px] text-gray-500 font-medium mt-0.5 italic">
-                                       Nota: {item.note}
-                                    </p>
-                                 )}
-                              </div>
-                              <div className="flex justify-between items-center mt-2">
-                                 <div className="flex items-center bg-gray-100 rounded-lg p-0.5">
-                                    <button onClick={() => updateCartItem({ ...item, quantity: Math.max(0.001, item.quantity - 1) })} className="p-1 text-gray-500 hover:text-blue-600"><Minus size={14} strokeWidth={3} /></button>
-                                    <span className="px-2 text-xs font-black text-gray-700 min-w-[24px] text-center">{item.quantity}</span>
-                                    <button onClick={() => updateCartItem({ ...item, quantity: item.quantity + 1 })} className="p-1 text-gray-500 hover:text-blue-600"><Plus size={14} strokeWidth={3} /></button>
+                                 <div className="flex justify-between items-center mt-2">
+                                    <div className="flex items-center bg-gray-100 rounded-lg p-0.5">
+                                       <button onClick={() => updateCartItem({ ...item, quantity: Math.max(0.001, item.quantity - 1) })} className="p-1 text-gray-500 hover:text-blue-600"><Minus size={14} strokeWidth={3} /></button>
+                                       <span className="px-2 text-xs font-black text-gray-700 min-w-[24px] text-center">{item.quantity}</span>
+                                       <button onClick={() => updateCartItem({ ...item, quantity: item.quantity + 1 })} className="p-1 text-gray-500 hover:text-blue-600"><Plus size={14} strokeWidth={3} /></button>
+                                    </div>
+                                    <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toFixed(2)}</span>
                                  </div>
-                                 <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toFixed(2)}</span>
                               </div>
                            </div>
+                        );
+                     }
+
+                     // DESKTOP ROW DESIGN (UNCHANGED)
+                     return (
+                        <div key={item.cartId || `cart-d-${idx}`} onClick={() => setEditingItem(item)} className="flex flex-col gap-1 px-3 py-3 transition-all hover:bg-white rounded-xl cursor-pointer group border border-transparent hover:border-gray-200 hover:shadow-sm animate-in slide-in-from-right-2">
+                           <div className="flex justify-between items-start">
+                              <div className="flex-1 min-w-0 pr-2">
+                                 <span className={`font-bold text-gray-700 leading-tight line-clamp-2 ${isRetailMode ? 'text-lg' : 'text-sm'}`}>{item.name}</span>
+                              </div>
+                              <span className={`font-black text-gray-900 shrink-0 ${isRetailMode ? 'text-lg' : 'text-sm'}`}>{baseCurrency.symbol}{(lineNet).toFixed(2)}</span>
+                           </div>
+                           <div className="flex items-center gap-3 mt-1">
+                              <div className="flex flex-col">
+                                 <span className={`bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-black uppercase tracking-tighter ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>
+                                    {(item.quantity || 0).toFixed(item.type === 'SERVICE' ? 3 : 0)}x {baseCurrency.symbol}{(item.price || 0).toFixed(2)}
+                                 </span>
+                                 <span className={`text-gray-400 font-bold uppercase tracking-tighter ml-1 ${isRetailMode ? 'text-[10px]' : 'text-[8px]'}`}>
+                                    ITBIS: {baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)}
+                                 </span>
+                              </div>
+                              {hasDiscount && (
+                                 <div className="flex flex-col items-end">
+                                    <span className={`bg-red-50 text-red-600 px-1.5 py-0.5 rounded font-black border border-red-100 ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>-{discountPct}%</span>
+                                    <span className={`text-gray-400 line-through decoration-red-400 ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>{baseCurrency.symbol}{item.originalPrice?.toFixed(2)}</span>
+                                 </div>
+                              )}
+                           </div>
+                           {item.salespersonId && (
+                              <p className="text-[10px] text-blue-500 font-bold uppercase mt-0.5">
+                                 Vendedor: {users.find(u => u.id === item.salespersonId)?.name || 'Desconocido'}
+                              </p>
+                           )}
+                           {item.note && (
+                              <p className="text-[10px] text-gray-500 font-medium mt-0.5 italic">
+                                 Nota: {item.note}
+                              </p>
+                           )}
+                           {item.modifiers && item.modifiers.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                 {item.modifiers.map((m, mi) => (
+                                    <span key={mi} className={`bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-bold border border-blue-100 uppercase ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>{m}</span>
+                                 ))}
+                              </div>
+                           )}
                         </div>
                      );
-                  }
-
-                  // DESKTOP ROW DESIGN (UNCHANGED)
-                  return (
-                     <div key={item.cartId || `cart-d-${idx}`} onClick={() => setEditingItem(item)} className="flex flex-col gap-1 px-3 py-3 transition-all hover:bg-white rounded-xl cursor-pointer group border border-transparent hover:border-gray-200 hover:shadow-sm animate-in slide-in-from-right-2">
-                        <div className="flex justify-between items-start">
-                           <div className="flex-1 min-w-0 pr-2">
-                              <span className={`font-bold text-gray-700 leading-tight line-clamp-2 ${isRetailMode ? 'text-lg' : 'text-sm'}`}>{item.name}</span>
-                           </div>
-                           <span className={`font-black text-gray-900 shrink-0 ${isRetailMode ? 'text-lg' : 'text-sm'}`}>{baseCurrency.symbol}{(lineNet).toFixed(2)}</span>
-                        </div>
-                        <div className="flex items-center gap-3 mt-1">
-                           <div className="flex flex-col">
-                              <span className={`bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-black uppercase tracking-tighter ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>
-                                 {(item.quantity || 0).toFixed(item.type === 'SERVICE' ? 3 : 0)}x {baseCurrency.symbol}{(item.price || 0).toFixed(2)}
-                              </span>
-                              <span className={`text-gray-400 font-bold uppercase tracking-tighter ml-1 ${isRetailMode ? 'text-[10px]' : 'text-[8px]'}`}>
-                                 ITBIS: {baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)}
-                              </span>
-                           </div>
-                           {hasDiscount && (
-                              <div className="flex flex-col items-end">
-                                 <span className={`bg-red-50 text-red-600 px-1.5 py-0.5 rounded font-black border border-red-100 ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>-{discountPct}%</span>
-                                 <span className={`text-gray-400 line-through decoration-red-400 ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>{baseCurrency.symbol}{item.originalPrice?.toFixed(2)}</span>
-                              </div>
-                           )}
-                        </div>
-                        {item.salespersonId && (
-                           <p className="text-[10px] text-blue-500 font-bold uppercase mt-0.5">
-                              Vendedor: {users.find(u => u.id === item.salespersonId)?.name || 'Desconocido'}
-                           </p>
-                        )}
-                        {item.note && (
-                           <p className="text-[10px] text-gray-500 font-medium mt-0.5 italic">
-                              Nota: {item.note}
-                           </p>
-                        )}
-                        {item.modifiers && item.modifiers.length > 0 && (
-                           <div className="flex flex-wrap gap-1 mt-1">
-                              {item.modifiers.map((m, mi) => (
-                                 <span key={mi} className={`bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-bold border border-blue-100 uppercase ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>{m}</span>
-                              ))}
-                           </div>
-                        )}
-                     </div>
-                  );
-               })}
-               <div ref={cartEndRef} />
-            </div>
+                  })
+               }
+               < div ref={cartEndRef} />
+            </div >
 
             {/* Sidebar Footer */}
-            <div className={`bg-white border-t border-gray-200 p-4 shadow-inner shrink-0 ${isRetailMode ? 'flex flex-row-reverse items-center justify-between gap-6' : 'space-y-3'} ${isMobile ? 'hidden' : ''}`}>
+            < div className={`bg-white border-t border-gray-200 p-4 shadow-inner shrink-0 ${isRetailMode ? 'flex flex-row-reverse items-center justify-between gap-6' : 'space-y-3'} ${isMobile ? 'hidden' : ''}`}>
                {/* DESKTOP FOOTER CONTENT (UNCHANGED) */}
-               {isRetailMode ? (
-                  // --- RETAIL MODE FOOTER (HORIZONTAL) ---
-                  <>
-                     {/* RIGHT: PAY & TOTAL */}
-                     <div className="flex items-center gap-6">
-                        {/* TOTALS BREAKDOWN */}
-                        <div className="hidden xl:flex items-center gap-6 mr-2">
-                           <div className="text-right">
-                              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Subtotal</p>
-                              <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartSubtotal.toFixed(2)}</p>
-                           </div>
-                           {discountAmount > 0 && (
+               {
+                  isRetailMode ? (
+                     // --- RETAIL MODE FOOTER (HORIZONTAL) ---
+                     <>
+                        {/* RIGHT: PAY & TOTAL */}
+                        <div className="flex items-center gap-6">
+                           {/* TOTALS BREAKDOWN */}
+                           <div className="hidden xl:flex items-center gap-6 mr-2">
                               <div className="text-right">
-                                 <p className="text-[10px] text-red-400 font-bold uppercase tracking-wider">Descuento</p>
-                                 <p className="text-lg font-bold text-red-500">-{baseCurrency.symbol}{discountAmount.toFixed(2)}</p>
+                                 <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Subtotal</p>
+                                 <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartSubtotal.toFixed(2)}</p>
                               </div>
-                           )}
-                           <div className="text-right">
-                              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Impuestos</p>
-                              <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartTax.toFixed(2)}</p>
+                              {discountAmount > 0 && (
+                                 <div className="text-right">
+                                    <p className="text-[10px] text-red-400 font-bold uppercase tracking-wider">Descuento</p>
+                                    <p className="text-lg font-bold text-red-500">-{baseCurrency.symbol}{discountAmount.toFixed(2)}</p>
+                                 </div>
+                              )}
+                              <div className="text-right">
+                                 <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Impuestos</p>
+                                 <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartTax.toFixed(2)}</p>
+                              </div>
+                              <div className="w-px h-10 bg-gray-200"></div>
                            </div>
-                           <div className="w-px h-10 bg-gray-200"></div>
+
+                           <div className="text-right hidden sm:block">
+                              <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Total a Pagar</p>
+                              <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
+                                 {baseCurrency.symbol}{cartTotal.toFixed(2)}
+                              </div>
+                              <p className="text-[10px] font-bold text-gray-400 mt-1">
+                                 {cart.reduce((acc, i) => acc + i.quantity, 0)} Artículos
+                                 {pointsEarned > 0 && <span className="text-purple-500 ml-2">• Ganarás +{pointsEarned} pts</span>}
+                              </p>
+                           </div>
+                           <button
+                              onClick={() => {
+                                 if (cart.length > 0 && fiscalStatus.hasNCF) {
+                                    const validation = validateTerminalDocument(config, terminalId, 'TICKET');
+                                    if (!validation.isValid) {
+                                       alert(validation.error);
+                                       return;
+                                    }
+                                    if (terminalTransactions.length > 0 && activeTerminalConfig) {
+                                       const sessionStartDate = terminalTransactions[0].date;
+                                       if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
+                                          // Allow bypass if user insists (Fix for "Zombie Transactions" issue)
+                                          const proceed = confirm("⚠️ ADVERTENCIA DE JORNADA\n\nEl sistema detecta que la jornada operativa ha cambiado (hay transacciones abiertas de días anteriores).\n\n¿Desea continuar facturando de todos modos?\n(Seleccione 'Aceptar' para ignorar y facturar, 'Cancelar' para ir a Cierre Z)");
+                                          if (!proceed) return;
+                                       }
+                                    }
+                                    setShowPaymentModal(true);
+                                 } else if (!fiscalStatus.hasNCF) {
+                                    alert("No hay secuencias fiscales disponibles.");
+                                 }
+                              }}
+                              disabled={cart.length === 0 || !fiscalStatus.hasNCF}
+                              className={`h-16 px-8 rounded-2xl font-black text-xl shadow-xl hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-3 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
+                           >
+                              <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : 'COBRAR'}</span>
+                              <ArrowRight size={24} />
+                           </button>
                         </div>
 
-                        <div className="text-right hidden sm:block">
-                           <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Total a Pagar</p>
-                           <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
-                              {baseCurrency.symbol}{cartTotal.toFixed(2)}
-                           </div>
-                           <p className="text-[10px] font-bold text-gray-400 mt-1">
-                              {cart.reduce((acc, i) => acc + i.quantity, 0)} Artículos
-                              {pointsEarned > 0 && <span className="text-purple-500 ml-2">• Ganarás +{pointsEarned} pts</span>}
-                           </p>
+                        {/* LEFT: ACTIONS */}
+                        <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                           <button onClick={handleOpenDrawer} title="Abrir Cajón" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-emerald-50 border-emerald-100 text-emerald-600 hover:bg-emerald-100 transition-all min-w-[60px]">
+                              <Box size={18} />
+                              <span className="text-[9px] font-black uppercase mt-1">Cajón</span>
+                           </button>
+                           <button onClick={handleParkCurrentTicket} title="Guardar Ticket" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 transition-all min-w-[60px]">
+                              <Save size={18} />
+                              <span className="text-[9px] font-black uppercase mt-1">Guardar</span>
+                           </button>
+                           <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-orange-50 border-orange-100 text-orange-600 hover:bg-orange-100 transition-all min-w-[60px] relative">
+                              <Inbox size={18} />
+                              <span className="text-[9px] font-black uppercase mt-1">Espera</span>
+                              {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white"></span>}
+                           </button>
+                           <button onClick={onOpenHistory} title="Historial" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-purple-50 border-purple-100 text-purple-600 hover:bg-purple-100 transition-all min-w-[60px]">
+                              <History size={18} />
+                              <span className="text-[9px] font-black uppercase mt-1">Hist.</span>
+                           </button>
+                           <button onClick={() => onOpenSettings()} title="Configuración" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100 transition-all min-w-[60px]">
+                              <Settings size={18} />
+                              <span className="text-[9px] font-black uppercase mt-1">Config</span>
+                           </button>
+
+                           <div className="w-px h-10 bg-gray-200 mx-1 self-center"></div>
+
+                           <button
+                              onClick={() => setShowGlobalDiscount(true)}
+                              className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-pink-50 border-pink-100 text-pink-600 hover:bg-pink-100 transition-all min-w-[60px]"
+                           >
+                              <Percent size={18} />
+                              <span className="text-[9px] font-black uppercase mt-1">Desc.</span>
+                           </button>
+                           <button
+                              onClick={() => setShowCouponModal(true)}
+                              className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-cyan-50 border-cyan-100 text-cyan-600 hover:bg-cyan-100 transition-all min-w-[60px]"
+                           >
+                              <QrCode size={18} />
+                              <span className="text-[9px] font-black uppercase mt-1">Cupón</span>
+                           </button>
+                           <button
+                              onClick={onOpenFinance}
+                              className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 transition-all min-w-[60px]"
+                           >
+                              <Lock size={18} />
+                              <span className="text-[9px] font-black uppercase mt-1">Cierre</span>
+                           </button>
+                           <button
+                              onClick={() => setShowLoyaltyModal(true)}
+                              title="Tarjeta Lealtad"
+                              className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 transition-all min-w-[60px]"
+                           >
+                              <CreditCard size={18} />
+                              <span className="text-[9px] font-black uppercase mt-1">Tarjeta</span>
+                           </button>
+                           <button
+                              onClick={onLogout}
+                              className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-red-50 border-red-100 text-red-600 hover:bg-red-100 transition-all min-w-[60px]"
+                           >
+                              <LogOut size={18} />
+                              <span className="text-[9px] font-black uppercase mt-1">Salir</span>
+                           </button>
                         </div>
+                     </>
+                  ) : (
+                     // --- VISUAL MODE FOOTER (VERTICAL) ---
+                     <>
+                        {/* --- BOTONES DE ACCIÓN --- */}
+                        <div className="grid grid-cols-3 gap-2">
+                           <button
+                              onClick={() => setShowGlobalDiscount(true)}
+                              className={`flex flex-col items-center justify-center py-2 rounded-xl border-2 transition-all ${globalDiscount.value > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-pink-50 border-pink-100 text-pink-600 hover:bg-pink-100 hover:border-pink-200'}`}
+                           >
+                              <Percent size={16} />
+                              <span className="text-[9px] font-black uppercase mt-1">Descuento</span>
+                           </button>
+                           <button
+                              onClick={() => setShowCouponModal(true)}
+                              className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-cyan-50 border-cyan-100 text-cyan-600 hover:bg-cyan-100 hover:border-cyan-200 transition-all"
+                           >
+                              <QrCode size={16} />
+                              <span className="text-[9px] font-black uppercase mt-1">Cupón</span>
+                           </button>
+                           <button
+                              onClick={onOpenFinance}
+                              className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all"
+                           >
+                              <Lock size={16} />
+                              <span className="text-[9px] font-black uppercase mt-1">Cierre Z</span>
+                           </button>
+                           <button
+                              onClick={() => setShowLoyaltyModal(true)}
+                              className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-white border-gray-100 text-blue-500 hover:border-blue-200 hover:bg-blue-50 transition-all"
+                           >
+                              <CreditCard size={16} />
+                              <span className="text-[9px] font-black uppercase mt-1">Tarjeta</span>
+                           </button>
+                           <button
+                              onClick={onLogout}
+                              className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-white border-gray-100 text-gray-400 hover:border-red-100 hover:text-red-500 transition-all"
+                           >
+                              <LogOut size={16} />
+                              <span className="text-[9px] font-black uppercase mt-1">Salir</span>
+                           </button>
+                           <button
+                              onClick={handleParkCurrentTicket}
+                              className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 hover:border-blue-200 transition-all"
+                           >
+                              <Save size={16} />
+                              <span className="text-[9px] font-black uppercase mt-1">Guardar</span>
+                           </button>
+                           <button
+                              onClick={() => setShowParkedList(!showParkedList)}
+                              className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-orange-50 border-orange-100 text-orange-600 hover:bg-orange-100 hover:border-orange-200 transition-all relative"
+                           >
+                              <Inbox size={16} />
+                              <span className="text-[9px] font-black uppercase mt-1">Espera</span>
+                              {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-1 right-2 w-2 h-2 bg-orange-500 rounded-full border border-white"></span>}
+                           </button>
+                        </div>
+
+                        {/* --- BLOQUE DE TOTALES --- */}
+                        <div className="space-y-1.5 pt-1 border-t border-dashed border-gray-200">
+                           <div className="flex justify-between items-center text-xs font-bold text-gray-500">
+                              <span>SUBTOTAL</span>
+                              <span>{baseCurrency.symbol}{cartSubtotal.toFixed(2)}</span>
+                           </div>
+                           {discountAmount > 0 && (
+                              <div className="flex justify-between items-center text-xs font-black text-red-500">
+                                 <span>DESCUENTO</span>
+                                 <span>-{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>
+                              </div>
+                           )}
+                           <div className="flex justify-between items-center text-xs font-bold text-gray-500">
+                              <span>IMPUESTOS</span>
+                              <span>{baseCurrency.symbol}{cartTax.toFixed(2)}</span>
+                           </div>
+
+                           <div className="flex justify-between items-end pt-2">
+                              <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
+                                 {baseCurrency.symbol}{cartTotal.toFixed(2)}
+                              </div>
+                              <div className="text-right">
+                                 <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total General</p>
+                                 {pointsEarned > 0 && <p className="text-[10px] font-bold text-purple-500">+{pointsEarned} Puntos</p>}
+                              </div>
+                           </div>
+                        </div>
+
                         <button
                            onClick={() => {
                               if (cart.length > 0 && fiscalStatus.hasNCF) {
@@ -1511,9 +1763,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  if (terminalTransactions.length > 0 && activeTerminalConfig) {
                                     const sessionStartDate = terminalTransactions[0].date;
                                     if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
-                                       // Allow bypass if user insists (Fix for "Zombie Transactions" issue)
-                                       const proceed = confirm("⚠️ ADVERTENCIA DE JORNADA\n\nEl sistema detecta que la jornada operativa ha cambiado (hay transacciones abiertas de días anteriores).\n\n¿Desea continuar facturando de todos modos?\n(Seleccione 'Aceptar' para ignorar y facturar, 'Cancelar' para ir a Cierre Z)");
-                                       if (!proceed) return;
+                                       alert("⚠️ CIERRE Z REQUERIDO\n\nLa jornada operativa ha cambiado. Debe realizar el Cierre Z antes de continuar facturando.");
+                                       return;
                                     }
                                  }
                                  setShowPaymentModal(true);
@@ -1522,248 +1773,74 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               }
                            }}
                            disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                           className={`h-16 px-8 rounded-2xl font-black text-xl shadow-xl hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-3 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
+                           className={`w-full py-4 rounded-2xl font-black text-xl shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
                         >
                            <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : 'COBRAR'}</span>
                            <ArrowRight size={24} />
                         </button>
-                     </div>
-
-                     {/* LEFT: ACTIONS */}
-                     <div className="flex gap-2 overflow-x-auto no-scrollbar">
-                        <button onClick={handleOpenDrawer} title="Abrir Cajón" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-emerald-50 border-emerald-100 text-emerald-600 hover:bg-emerald-100 transition-all min-w-[60px]">
-                           <Box size={18} />
-                           <span className="text-[9px] font-black uppercase mt-1">Cajón</span>
-                        </button>
-                        <button onClick={handleParkCurrentTicket} title="Guardar Ticket" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 transition-all min-w-[60px]">
-                           <Save size={18} />
-                           <span className="text-[9px] font-black uppercase mt-1">Guardar</span>
-                        </button>
-                        <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-orange-50 border-orange-100 text-orange-600 hover:bg-orange-100 transition-all min-w-[60px] relative">
-                           <Inbox size={18} />
-                           <span className="text-[9px] font-black uppercase mt-1">Espera</span>
-                           {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white"></span>}
-                        </button>
-                        <button onClick={onOpenHistory} title="Historial" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-purple-50 border-purple-100 text-purple-600 hover:bg-purple-100 transition-all min-w-[60px]">
-                           <History size={18} />
-                           <span className="text-[9px] font-black uppercase mt-1">Hist.</span>
-                        </button>
-                        <button onClick={() => onOpenSettings()} title="Configuración" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100 transition-all min-w-[60px]">
-                           <Settings size={18} />
-                           <span className="text-[9px] font-black uppercase mt-1">Config</span>
-                        </button>
-
-                        <div className="w-px h-10 bg-gray-200 mx-1 self-center"></div>
-
-                        <button
-                           onClick={() => setShowGlobalDiscount(true)}
-                           className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-pink-50 border-pink-100 text-pink-600 hover:bg-pink-100 transition-all min-w-[60px]"
-                        >
-                           <Percent size={18} />
-                           <span className="text-[9px] font-black uppercase mt-1">Desc.</span>
-                        </button>
-                        <button
-                           onClick={() => setShowCouponModal(true)}
-                           className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-cyan-50 border-cyan-100 text-cyan-600 hover:bg-cyan-100 transition-all min-w-[60px]"
-                        >
-                           <QrCode size={18} />
-                           <span className="text-[9px] font-black uppercase mt-1">Cupón</span>
-                        </button>
-                        <button
-                           onClick={onOpenFinance}
-                           className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 transition-all min-w-[60px]"
-                        >
-                           <Lock size={18} />
-                           <span className="text-[9px] font-black uppercase mt-1">Cierre</span>
-                        </button>
-                        <button
-                           onClick={() => setShowLoyaltyModal(true)}
-                           title="Tarjeta Lealtad"
-                           className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 transition-all min-w-[60px]"
-                        >
-                           <CreditCard size={18} />
-                           <span className="text-[9px] font-black uppercase mt-1">Tarjeta</span>
-                        </button>
-                        <button
-                           onClick={onLogout}
-                           className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-red-50 border-red-100 text-red-600 hover:bg-red-100 transition-all min-w-[60px]"
-                        >
-                           <LogOut size={18} />
-                           <span className="text-[9px] font-black uppercase mt-1">Salir</span>
-                        </button>
-                     </div>
-                  </>
-               ) : (
-                  // --- VISUAL MODE FOOTER (VERTICAL) ---
-                  <>
-                     {/* --- BOTONES DE ACCIÓN --- */}
-                     <div className="grid grid-cols-3 gap-2">
-                        <button
-                           onClick={() => setShowGlobalDiscount(true)}
-                           className={`flex flex-col items-center justify-center py-2 rounded-xl border-2 transition-all ${globalDiscount.value > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-pink-50 border-pink-100 text-pink-600 hover:bg-pink-100 hover:border-pink-200'}`}
-                        >
-                           <Percent size={16} />
-                           <span className="text-[9px] font-black uppercase mt-1">Descuento</span>
-                        </button>
-                        <button
-                           onClick={() => setShowCouponModal(true)}
-                           className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-cyan-50 border-cyan-100 text-cyan-600 hover:bg-cyan-100 hover:border-cyan-200 transition-all"
-                        >
-                           <QrCode size={16} />
-                           <span className="text-[9px] font-black uppercase mt-1">Cupón</span>
-                        </button>
-                        <button
-                           onClick={onOpenFinance}
-                           className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all"
-                        >
-                           <Lock size={16} />
-                           <span className="text-[9px] font-black uppercase mt-1">Cierre Z</span>
-                        </button>
-                        <button
-                           onClick={() => setShowLoyaltyModal(true)}
-                           className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-white border-gray-100 text-blue-500 hover:border-blue-200 hover:bg-blue-50 transition-all"
-                        >
-                           <CreditCard size={16} />
-                           <span className="text-[9px] font-black uppercase mt-1">Tarjeta</span>
-                        </button>
-                        <button
-                           onClick={onLogout}
-                           className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-white border-gray-100 text-gray-400 hover:border-red-100 hover:text-red-500 transition-all"
-                        >
-                           <LogOut size={16} />
-                           <span className="text-[9px] font-black uppercase mt-1">Salir</span>
-                        </button>
-                        <button
-                           onClick={handleParkCurrentTicket}
-                           className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 hover:border-blue-200 transition-all"
-                        >
-                           <Save size={16} />
-                           <span className="text-[9px] font-black uppercase mt-1">Guardar</span>
-                        </button>
-                        <button
-                           onClick={() => setShowParkedList(!showParkedList)}
-                           className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-orange-50 border-orange-100 text-orange-600 hover:bg-orange-100 hover:border-orange-200 transition-all relative"
-                        >
-                           <Inbox size={16} />
-                           <span className="text-[9px] font-black uppercase mt-1">Espera</span>
-                           {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-1 right-2 w-2 h-2 bg-orange-500 rounded-full border border-white"></span>}
-                        </button>
-                     </div>
-
-                     {/* --- BLOQUE DE TOTALES --- */}
-                     <div className="space-y-1.5 pt-1 border-t border-dashed border-gray-200">
-                        <div className="flex justify-between items-center text-xs font-bold text-gray-500">
-                           <span>SUBTOTAL</span>
-                           <span>{baseCurrency.symbol}{cartSubtotal.toFixed(2)}</span>
-                        </div>
-                        {discountAmount > 0 && (
-                           <div className="flex justify-between items-center text-xs font-black text-red-500">
-                              <span>DESCUENTO</span>
-                              <span>-{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>
-                           </div>
-                        )}
-                        <div className="flex justify-between items-center text-xs font-bold text-gray-500">
-                           <span>IMPUESTOS</span>
-                           <span>{baseCurrency.symbol}{cartTax.toFixed(2)}</span>
-                        </div>
-
-                        <div className="flex justify-between items-end pt-2">
-                           <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
-                              {baseCurrency.symbol}{cartTotal.toFixed(2)}
-                           </div>
-                           <div className="text-right">
-                              <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total General</p>
-                              {pointsEarned > 0 && <p className="text-[10px] font-bold text-purple-500">+{pointsEarned} Puntos</p>}
-                           </div>
-                        </div>
-                     </div>
-
-                     <button
-                        onClick={() => {
-                           if (cart.length > 0 && fiscalStatus.hasNCF) {
-                              const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-                              if (!validation.isValid) {
-                                 alert(validation.error);
-                                 return;
-                              }
-                              if (terminalTransactions.length > 0 && activeTerminalConfig) {
-                                 const sessionStartDate = terminalTransactions[0].date;
-                                 if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
-                                    alert("⚠️ CIERRE Z REQUERIDO\n\nLa jornada operativa ha cambiado. Debe realizar el Cierre Z antes de continuar facturando.");
-                                    return;
-                                 }
-                              }
-                              setShowPaymentModal(true);
-                           } else if (!fiscalStatus.hasNCF) {
-                              alert("No hay secuencias fiscales disponibles.");
-                           }
-                        }}
-                        disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                        className={`w-full py-4 rounded-2xl font-black text-xl shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
-                     >
-                        <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : 'COBRAR'}</span>
-                        <ArrowRight size={24} />
-                     </button>
-                  </>
-               )}
-            </div>
+                     </>
+                  )
+               }
+            </div >
 
             {/* MOBILE STICKY FOOTER */}
-            {isMobile && (
-               <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5">
-                  <div className="flex justify-between items-center mb-4 px-2">
-                     <div className="flex gap-4">
-                        <button onClick={() => setShowGlobalDiscount(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-pink-500">
-                           <Percent size={18} />
-                           <span className="text-[9px] font-bold uppercase">Desc.</span>
-                        </button>
-                        <button onClick={() => setShowCouponModal(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-cyan-500">
-                           <QrCode size={18} />
-                           <span className="text-[9px] font-bold uppercase">Cupón</span>
-                        </button>
-                        <button onClick={handleParkCurrentTicket} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
-                           <Save size={18} />
-                           <span className="text-[9px] font-bold uppercase">Grd.</span>
-                        </button>
-                        <button onClick={() => setShowParkedList(!showParkedList)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-500 relative">
-                           <Inbox size={18} />
-                           <span className="text-[9px] font-bold uppercase">Esp.</span>
-                           {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
-                        </button>
+            {
+               isMobile && (
+                  <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5">
+                     <div className="flex justify-between items-center mb-4 px-2">
+                        <div className="flex gap-4">
+                           <button onClick={() => setShowGlobalDiscount(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-pink-500">
+                              <Percent size={18} />
+                              <span className="text-[9px] font-bold uppercase">Desc.</span>
+                           </button>
+                           <button onClick={() => setShowCouponModal(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-cyan-500">
+                              <QrCode size={18} />
+                              <span className="text-[9px] font-bold uppercase">Cupón</span>
+                           </button>
+                           <button onClick={handleParkCurrentTicket} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
+                              <Save size={18} />
+                              <span className="text-[9px] font-bold uppercase">Grd.</span>
+                           </button>
+                           <button onClick={() => setShowParkedList(!showParkedList)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-500 relative">
+                              <Inbox size={18} />
+                              <span className="text-[9px] font-bold uppercase">Esp.</span>
+                              {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
+                           </button>
+                        </div>
+                        <div className="text-right">
+                           <span className="text-[10px] font-bold text-gray-400 uppercase block">Subtotal: {baseCurrency.symbol}{cartSubtotal.toFixed(2)}</span>
+                           {discountAmount > 0 && <span className="text-[10px] font-bold text-red-500 uppercase block">Desc: -{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>}
+                        </div>
                      </div>
-                     <div className="text-right">
-                        <span className="text-[10px] font-bold text-gray-400 uppercase block">Subtotal: {baseCurrency.symbol}{cartSubtotal.toFixed(2)}</span>
-                        {discountAmount > 0 && <span className="text-[10px] font-bold text-red-500 uppercase block">Desc: -{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>}
-                     </div>
-                  </div>
-                  <div className="flex items-center gap-4">
-                     <div className="flex-1">
-                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block leading-none mb-1">Total</span>
-                        <span className="text-3xl font-black text-gray-900 tracking-tighter leading-none">{baseCurrency.symbol}{cartTotal.toFixed(2)}</span>
-                     </div>
-                     <button
-                        onClick={() => {
-                           if (cart.length > 0 && fiscalStatus.hasNCF) {
-                              if (terminalTransactions.length > 0 && activeTerminalConfig) {
-                                 const sessionStartDate = terminalTransactions[0].date;
-                                 if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
-                                    const proceed = confirm("⚠️ ADVERTENCIA DE JORNADA\n\nEl sistema detecta que la jornada operativa ha cambiado.\n\n¿Desea continuar facturando de todos modos?");
-                                    if (!proceed) return;
+                     <div className="flex items-center gap-4">
+                        <div className="flex-1">
+                           <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block leading-none mb-1">Total</span>
+                           <span className="text-3xl font-black text-gray-900 tracking-tighter leading-none">{baseCurrency.symbol}{cartTotal.toFixed(2)}</span>
+                        </div>
+                        <button
+                           onClick={() => {
+                              if (cart.length > 0 && fiscalStatus.hasNCF) {
+                                 if (terminalTransactions.length > 0 && activeTerminalConfig) {
+                                    const sessionStartDate = terminalTransactions[0].date;
+                                    if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
+                                       const proceed = confirm("⚠️ ADVERTENCIA DE JORNADA\n\nEl sistema detecta que la jornada operativa ha cambiado.\n\n¿Desea continuar facturando de todos modos?");
+                                       if (!proceed) return;
+                                    }
                                  }
+                                 setShowPaymentModal(true);
                               }
-                              setShowPaymentModal(true);
-                           }
-                        }}
-                        disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                        className="bg-blue-600 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-lg shadow-blue-200 active:scale-95 transition-all flex items-center gap-2"
-                     >
-                        <span>COBRAR</span>
-                        <ArrowRight size={20} />
-                     </button>
+                           }}
+                           disabled={cart.length === 0 || !fiscalStatus.hasNCF}
+                           className="bg-blue-600 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-lg shadow-blue-200 active:scale-95 transition-all flex items-center gap-2"
+                        >
+                           <span>COBRAR</span>
+                           <ArrowRight size={20} />
+                        </button>
+                     </div>
                   </div>
-               </div>
-            )}
-         </div>
+               )
+            }
+         </div >
 
          {/* Modals & Overlays */}
          {showPaymentModal && <UnifiedPaymentModal total={cartTotal} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={selectedCustomer} />}
@@ -1860,15 +1937,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             )
          }
 
-         <ReturnModal
-            isOpen={showReturnModal}
-            onClose={() => setShowReturnModal(false)}
-            invoiceId={returnInvoiceId}
-            transactions={transactions}
-            onProcessReturn={handleProcessReturn}
-            config={config}
-         />
-
          <PromoBottomSheet
             isOpen={showPromoSheet}
             onClose={() => setShowPromoSheet(false)}
@@ -1882,8 +1950,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             onClose={() => setIsScannerOpen(false)}
             onScan={async (code) => {
                // 0. Try Smart QR (JSON)
+               const trimmed = code.trim();
                try {
-                  const trimmed = code.trim();
                   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
                      const data = JSON.parse(trimmed);
                      if (data.type === 'INVOICE_RETURN' && data.id) {
@@ -1894,7 +1962,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      }
                   }
                } catch (e) {
-                  // Not a JSON or invalid, ignore and proceed to normal barcode
+                  // Not a JSON or invalid
+               }
+
+               // 0.1 Try Transaction Search (Direct bypass for TCK... barcodes)
+               const txnFound = (transactions || []).find(t => t.displayId === trimmed || t.id === trimmed);
+               if (txnFound) {
+                  setReturnInvoiceId(txnFound.id);
+                  setShowReturnModal(true);
+                  setIsScannerOpen(false);
+                  return { success: true, message: 'Factura Identificada' };
                }
 
                // 1. Try Scale Parser
@@ -1931,32 +2008,55 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                return { success: false, message: 'Producto no encontrado' };
             }}
          />
-         {quickActionData && (
-            <ProductQuickActions
-               product={quickActionData.product}
-               position={{ x: quickActionData.x, y: quickActionData.y }}
-               onClose={() => setQuickActionData(null)}
-               onUpdateProduct={(updatedProduct) => {
-                  setSuccessToast(`Producto ${updatedProduct.name} actualizado`);
-               }}
-               onAdvancedEdit={(p) => {
-                  setQuickActionData(null);
-                  onOpenSettings('CATALOG', { productId: p.id });
-               }}
-               warehouses={warehouses}
-               config={config}
-               currentUser={currentUser}
-               roles={roles}
-            />
-         )}
+         {
+            quickActionData && (
+               <ProductQuickActions
+                  product={quickActionData.product}
+                  position={{ x: quickActionData.x, y: quickActionData.y }}
+                  onClose={() => setQuickActionData(null)}
+                  onUpdateProduct={(updatedProduct) => {
+                     setSuccessToast(`Producto ${updatedProduct.name} actualizado`);
+                  }}
+                  onAdvancedEdit={(p) => {
+                     setQuickActionData(null);
+                     onOpenSettings('CATALOG', { productId: p.id });
+                  }}
+                  warehouses={warehouses}
+                  config={config}
+                  currentUser={currentUser}
+                  roles={roles}
+               />
+            )
+         }
 
-         {successToast && (
-            <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[200] animate-in slide-in-from-bottom-5">
-               <div className="bg-emerald-600 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border border-emerald-500">
-                  <Check size={20} />
-                  <span>{successToast}</span>
+         {
+            successToast && (
+               <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[200] animate-in slide-in-from-bottom-5">
+                  <div className="bg-emerald-600 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border border-emerald-500">
+                     <Check size={20} />
+                     <span>{successToast}</span>
+                  </div>
                </div>
-            </div>
+            )
+         }
+
+         {pendingTrackingProduct && (
+            <TrackingSelectionModal
+               product={pendingTrackingProduct.product}
+               warehouseId={defaultSalesWarehouseId || 'wh_central'}
+               quantity={pendingTrackingProduct.quantity}
+               onClose={() => setPendingTrackingProduct(null)}
+               onSelect={(tracking) => {
+                  addToCart(
+                     pendingTrackingProduct.product,
+                     pendingTrackingProduct.quantity,
+                     pendingTrackingProduct.price,
+                     pendingTrackingProduct.modifiers,
+                     tracking
+                  );
+                  setPendingTrackingProduct(null);
+               }}
+            />
          )}
       </div >
    );

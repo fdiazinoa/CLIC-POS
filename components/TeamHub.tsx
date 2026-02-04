@@ -4,10 +4,11 @@ import {
    Users, Calendar, ShieldCheck, Clock, Check, X,
    UserPlus, ScanFace, ChevronRight, Lock,
    Trash2, AlertCircle, LogIn, LogOut, Plus,
-   FileBarChart, AlertOctagon, Download, Edit2, User as UserIcon
+   FileBarChart, AlertOctagon, Download, Edit2, User as UserIcon, Fingerprint
 } from 'lucide-react';
 import { User, RoleDefinition, Shift, TimeRecord, ZReportModule } from '../types';
 import { AVAILABLE_PERMISSIONS } from '../constants';
+import { biometricService } from '../services/BiometricAuthService';
 
 interface TeamHubProps {
    users: User[];
@@ -177,7 +178,8 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
             name: userForm.name!,
             pin: userForm.pin!,
             role: userForm.role!,
-            photo: userForm.photo
+            photo: userForm.photo,
+            biometrics: userForm.biometrics
          };
          onUpdateUsers([...users, newUser]);
       }
@@ -494,6 +496,46 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
                                        <p className="text-[10px] text-gray-400 mt-1">Formatos: JPG, PNG. Se guardará localmente.</p>
                                     </div>
                                  </div>
+
+                                 {/* Biometric Enrollment */}
+                                 <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 flex justify-between items-center mt-4">
+                                    <div>
+                                       <label className="block text-xs font-bold text-blue-900 uppercase mb-1">Biometría</label>
+                                       <p className="text-[10px] text-blue-700">
+                                          {userForm.biometrics
+                                             ? `Registrado el ${new Date(userForm.biometrics.registeredAt).toLocaleDateString()}`
+                                             : 'No configurado'}
+                                       </p>
+                                    </div>
+                                    <button
+                                       onClick={async () => {
+                                          if (!userForm.name) return alert("Ingrese un nombre primero");
+                                          try {
+                                             const cred = await biometricService.register({ ...userForm, id: userForm.id || 'temp' } as User);
+                                             if (cred) {
+                                                setUserForm({
+                                                   ...userForm,
+                                                   biometrics: {
+                                                      credentialID: cred.credentialID,
+                                                      publicKey: cred.publicKey,
+                                                      registeredAt: new Date().toISOString()
+                                                   }
+                                                });
+                                                alert("Huella registrada correctamente");
+                                             }
+                                          } catch (e: any) {
+                                             console.error(e);
+                                             alert(`Error al registrar biometría: ${e.message || e.toString()}`);
+                                          }
+                                       }}
+                                       className={`px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all ${userForm.biometrics
+                                          ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                                          : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md'}`}
+                                    >
+                                       <Fingerprint size={16} />
+                                       {userForm.biometrics ? 'Re-enrollar' : 'Registrar Huella'}
+                                    </button>
+                                 </div>
                               </div>
                            </div>
                            <div className="flex gap-3 mt-8">
@@ -800,7 +842,7 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
             )}
 
          </div>
-      </div>
+      </div >
    );
 };
 

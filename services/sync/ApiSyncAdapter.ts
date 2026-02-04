@@ -33,16 +33,40 @@ class ApiSyncAdapter {
     private authToken: string | null = null;
     private isOnline: boolean = true;
 
+    // Circuit Breaker State
+    private consecutiveFailures: number = 0;
+    private circuitOpenTimeStamp: number = 0;
+    private readonly MAX_CONSECUTIVE_FAILURES = 3;
+    private readonly CIRCUIT_RESET_TIMEOUT = 30000; // 30 seconds
+
     /**
      * Helper: Fetch with Retry and Timeout
      */
-    private async fetchWithRetry(url: string, options: RequestInit = {}, retries = 3, backoff = 1000): Promise<Response> {
+    private async fetchWithRetry(url: string, options: RequestInit = {}, retries = 2, backoff = 500): Promise<Response> {
+        // Circuit Breaker Check
+        if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
+            const timeSinceOpen = Date.now() - this.circuitOpenTimeStamp;
+            if (timeSinceOpen < this.CIRCUIT_RESET_TIMEOUT) {
+                console.warn('⚠️ Circuit Breaker OPEN. Rejecting request to avoid freeze.');
+                throw new Error('Circuit Breaker Open: Master unreachable');
+            } else {
+                // Reset circuit on timeout test
+                console.log('🔄 Circuit Breaker Reset: Retrying connection...');
+                this.consecutiveFailures = 0;
+            }
+        }
+
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // Reduced timeout to 5s
 
         try {
             const response = await fetch(url, { ...options, signal: controller.signal });
             clearTimeout(timeoutId);
+
+            // Success resets the breaker
+            if (response.ok) {
+                this.consecutiveFailures = 0;
+            }
 
             // If 401 Unauthorized, clear token and potentially re-auth
             if (response.status === 401) {
@@ -66,10 +90,19 @@ class ApiSyncAdapter {
             const isConnectionError = error.name === 'TypeError' && error.message === 'Failed to fetch';
             const isTimeout = error.name === 'AbortError';
 
-            if ((isConnectionError || isTimeout) && retries > 0) {
+            // Increment failure count on network errors
+            if (isConnectionError || isTimeout) {
+                this.consecutiveFailures++;
+                if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
+                    this.circuitOpenTimeStamp = Date.now();
+                    console.error('🚨 Circuit Breaker TRIPPED: Too many connection failures.');
+                }
+            }
+
+            if ((isConnectionError || isTimeout) && retries > 0 && this.consecutiveFailures < this.MAX_CONSECUTIVE_FAILURES) {
                 console.warn(`⚠️ Connection error (${error.message}), retrying in ${backoff}ms...`);
                 await new Promise(r => setTimeout(r, backoff));
-                return this.fetchWithRetry(url, options, retries - 1, backoff * 2);
+                return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5);
             }
 
             throw error;
@@ -372,7 +405,15 @@ class ApiSyncAdapter {
      * Get list of connected terminals (Master only)
      */
     async getConnectedTerminals(): Promise<any[]> {
-        if (!this.config || !this.authToken) return [];
+        if (!this.config) return [];
+
+        if (!this.authToken) {
+            try {
+                await this.authenticate();
+            } catch (error) {
+                return [];
+            }
+        }
 
         try {
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/terminals`, {
@@ -647,7 +688,15 @@ class ApiSyncAdapter {
      * Get operational status (Master only)
      */
     async getOperationalStatus(): Promise<any> {
-        if (!this.config || !this.authToken) return null;
+        if (!this.config) return null;
+
+        if (!this.authToken) {
+            try {
+                await this.authenticate();
+            } catch (error) {
+                return null;
+            }
+        }
 
         try {
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/operational-status`, {

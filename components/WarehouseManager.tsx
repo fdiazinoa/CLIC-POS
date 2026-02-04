@@ -76,6 +76,9 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
       items: { productId: string; productName: string; sent: number; received: number }[];
    } | null>(null);
 
+   const [breakdownData, setBreakdownData] = useState<{ product: Product, warehouseId: string } | null>(null);
+   const [activeTracking, setActiveTracking] = useState<any[]>([]);
+
    // --- WAREHOUSE CRUD ---
 
    const handleSaveWarehouse = () => {
@@ -603,742 +606,814 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
    const pendingCount = transfers.filter(t => t.status === 'IN_TRANSIT').length;
 
    return (
-      <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">
+      <>
+         <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">
 
-         {/* Header */}
-         <div className="bg-white px-8 py-6 border-b border-gray-200 flex justify-between items-center shrink-0">
-            <div>
-               <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2">
-                  <Building2 className="text-purple-600" /> Gestión de Almacenes
-               </h1>
-               <p className="text-sm text-gray-500">Configuración de ubicaciones y transferencias de stock.</p>
-            </div>
-            <div className="flex gap-3">
-               <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
-                  <X size={24} />
-               </button>
-            </div>
-         </div>
-
-         {/* Tabs */}
-         <div className="bg-white px-8 border-b border-gray-200 flex gap-8">
-            <button
-               onClick={() => setActiveTab('LOCATIONS')}
-               className={`py-4 text-sm font-bold border-b-4 transition-all ${activeTab === 'LOCATIONS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-            >
-               Ubicaciones
-            </button>
-            <button
-               onClick={() => setActiveTab('TRANSFERS')}
-               className={`py-4 text-sm font-bold border-b-4 transition-all ${activeTab === 'TRANSFERS' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-            >
-               Nuevo Traspaso
-            </button>
-            <button
-               onClick={() => setActiveTab('HISTORY')}
-               className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'HISTORY' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-            >
-               Historial y Recepción
-               {pendingCount > 0 && (
-                  <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">{pendingCount}</span>
-               )}
-            </button>
-            <button
-               onClick={() => setActiveTab('OPTIMIZER')}
-               className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'OPTIMIZER' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-            >
-               <Zap size={18} /> Optimización
-            </button>
-            <button
-               onClick={() => setActiveTab('FORECASTING')}
-               className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'FORECASTING' ? 'border-amber-600 text-amber-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-            >
-               <ShoppingBag size={18} /> Reabastecimiento
-            </button>
-         </div>
-
-         <div className="flex-1 overflow-hidden p-8">
-
-            {/* --- LOCATIONS TAB --- */}
-            {activeTab === 'LOCATIONS' && (
-               <div className="h-full flex flex-col">
-                  <div className="flex justify-end mb-6">
-                     <button onClick={handleCreateWarehouse} className="px-4 py-2 bg-purple-600 text-white rounded-xl font-bold shadow-md hover:bg-purple-700 transition-all flex items-center gap-2">
-                        <Plus size={18} /> Nueva Ubicación
-                     </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 overflow-y-auto pb-20">
-                     {warehouses.map(wh => (
-                        <div key={wh.id} className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-all group relative">
-                           <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button onClick={() => setEditingWarehouse(wh)} className="p-2 bg-gray-100 hover:bg-purple-50 text-gray-500 hover:text-purple-600 rounded-lg">
-                                 <Search size={16} /> {/* Edit icon placeholder */}
-                              </button>
-                           </div>
-
-                           <div className="flex items-center gap-4 mb-4">
-                              <div className={`p-3 rounded-xl ${wh.isMain ? 'bg-purple-100 text-purple-600' : 'bg-gray-100 text-gray-500'}`}>
-                                 <Building2 size={24} />
-                              </div>
-                              <div>
-                                 <h3 className="font-bold text-gray-800 text-lg">{wh.name}</h3>
-                                 <p className="text-xs text-gray-400 font-mono">{wh.code}</p>
-                              </div>
-                           </div>
-
-                           <div className="space-y-2 text-sm text-gray-600">
-                              <p className="flex items-center gap-2"><MapPin size={14} /> {wh.address || 'Sin dirección'}</p>
-                              <div className="flex gap-2 mt-3">
-                                 {wh.allowPosSale ? (
-                                    <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-bold">Venta Activa</span>
-                                 ) : (
-                                    <span className="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold">No Venta</span>
-                                 )}
-                                 {wh.type === 'VIRTUAL' && (
-                                    <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-bold">Virtual</span>
-                                 )}
-                              </div>
-                           </div>
-                        </div>
-                     ))}
-                  </div>
+            {/* Header */}
+            <div className="bg-white px-8 py-6 border-b border-gray-200 flex justify-between items-center shrink-0">
+               <div>
+                  <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2">
+                     <Building2 className="text-purple-600" /> Gestión de Almacenes
+                  </h1>
+                  <p className="text-sm text-gray-500">Configuración de ubicaciones y transferencias de stock.</p>
                </div>
-            )}
-
-            {/* --- TRANSFERS TAB --- */}
-            {activeTab === 'TRANSFERS' && (
-               <div className="h-full flex flex-col">
-                  {!isTransferMode ? (
-                     <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
-                        <ArrowRightLeft size={64} className="mb-4 opacity-50" />
-                        <p className="text-lg font-bold mb-2">Nuevo Movimiento de Inventario</p>
-                        <p className="text-sm mb-6 max-w-md text-center">
-                           Crea una solicitud de traspaso. El stock se descontará del origen inmediatamente y quedará en "Tránsito" hasta ser recibido.
-                        </p>
-                        <button
-                           onClick={() => setIsTransferMode(true)}
-                           className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 transition-all"
-                        >
-                           Iniciar Traspaso
-                        </button>
-                     </div>
-                  ) : (
-                     <div className="flex flex-col h-full gap-6">
-                        {/* Transfer Header */}
-                        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col md:flex-row gap-6 items-center flex-wrap">
-                           <div className="flex-1 min-w-[300px] w-full">
-                              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Origen (Sale de aquí)</label>
-                              <select
-                                 value={newTransfer.sourceWarehouseId || ''}
-                                 onChange={(e) => setNewTransfer({ ...newTransfer, sourceWarehouseId: e.target.value })}
-                                 className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none focus:ring-2 focus:ring-blue-500"
-                              >
-                                 <option value="">-- Seleccionar --</option>
-                                 {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-                              </select>
-                           </div>
-                           <div className="text-gray-300 hidden md:block">
-                              <ArrowRight size={24} />
-                           </div>
-                           <div className="flex-1 min-w-[300px] w-full">
-                              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Destino (Entra aquí)</label>
-                              <select
-                                 value={newTransfer.destinationWarehouseId || ''}
-                                 onChange={(e) => setNewTransfer({ ...newTransfer, destinationWarehouseId: e.target.value })}
-                                 className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none focus:ring-2 focus:ring-blue-500"
-                              >
-                                 <option value="">-- Seleccionar --</option>
-                                 {warehouses.filter(w => w.id !== newTransfer.sourceWarehouseId).map(w => (
-                                    <option key={w.id} value={w.id}>{w.name}</option>
-                                 ))}
-                              </select>
-                           </div>
-
-                           <div className="w-full lg:w-auto flex gap-3 mt-2 lg:mt-0">
-                              <button
-                                 onClick={handleSuggestReplenishment}
-                                 className="px-4 py-2 border-2 border-purple-200 text-purple-600 rounded-xl font-bold flex items-center gap-2 hover:bg-purple-50 transition-all text-sm whitespace-nowrap"
-                                 title="Sugerir productos según stock mínimo/máximo"
-                              >
-                                 <Sparkles size={18} /> Sugerir Reposición
-                              </button>
-
-                              <div className="relative">
-                                 <button
-                                    onClick={() => setShowProActions(!showProActions)}
-                                    className="px-4 py-2 bg-gray-800 text-white rounded-xl font-bold flex items-center gap-2 hover:bg-gray-900 transition-all text-sm whitespace-nowrap"
-                                 >
-                                    <LayoutGrid size={18} /> Acciones Pro <ChevronDown size={14} />
-                                 </button>
-
-                                 {showProActions && (
-                                    <div className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-gray-100 z-50 p-2 overflow-hidden animate-in zoom-in-95 duration-200">
-                                       <button
-                                          onClick={() => {
-                                             const cat = prompt("Ingrese el nombre de la categoría:");
-                                             if (cat) handleLoadByCategory(cat);
-                                             setShowProActions(false);
-                                          }}
-                                          className="w-full p-3 text-left hover:bg-gray-50 rounded-xl text-xs font-bold text-gray-600 flex items-center gap-2"
-                                       >
-                                          <Filter size={14} /> Cargar por Categoría
-                                       </button>
-                                       <button
-                                          onClick={() => {
-                                             alert("Carga por Temporada estará disponible pronto.");
-                                             setShowProActions(false);
-                                          }}
-                                          className="w-full p-3 text-left hover:bg-gray-50 rounded-xl text-xs font-bold text-gray-600 flex items-center gap-2"
-                                       >
-                                          <Calendar size={14} /> Cargar por Temporada
-                                       </button>
-                                    </div>
-                                 )}
-                              </div>
-                           </div>
-                        </div>
-
-                        {/* Item Selection */}
-                        <div className="flex-1 flex gap-6 overflow-hidden">
-                           <div className="flex-1 bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col">
-                              <div className="p-4 border-b border-gray-100">
-                                 <div className="relative">
-                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-                                    <input
-                                       type="text"
-                                       placeholder="Buscar productos..."
-                                       value={itemSearch}
-                                       onChange={(e) => setItemSearch(e.target.value)}
-                                       className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                                    />
-                                 </div>
-                              </div>
-                              <div className="flex-1 overflow-y-auto p-2">
-                                 {filteredProducts.map(p => {
-                                    const srcStock = p.stockBalances?.[newTransfer.sourceWarehouseId || ''] || 0;
-                                    const dstStock = p.stockBalances?.[newTransfer.destinationWarehouseId || ''] || 0;
-                                    return (
-                                       <div
-                                          key={p.id}
-                                          onClick={() => addItemToTransfer(p)}
-                                          className="p-3 hover:bg-gray-50 rounded-xl cursor-pointer flex justify-between items-center group transition-colors"
-                                       >
-                                          <div>
-                                             <p className="font-bold text-gray-800 text-sm">{p.name}</p>
-                                             <div className="flex items-center gap-2 mt-1">
-                                                <p className="text-xs text-gray-400 font-mono pr-2 border-r border-gray-200">{p.barcode}</p>
-                                                <span className="text-[10px] font-bold px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded">
-                                                   Origen: {srcStock}
-                                                </span>
-                                                <span className="text-[10px] font-bold px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded">
-                                                   Destino: {dstStock}
-                                                </span>
-                                             </div>
-                                          </div>
-                                          <button className="p-2 bg-gray-100 text-blue-600 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity">
-                                             <Plus size={16} />
-                                          </button>
-                                       </div>
-                                    );
-                                 })}
-                              </div>
-                           </div>
-
-                           {/* Transfer Cart */}
-                           <div className="w-1/3 bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col">
-                              <div className="p-4 border-b border-gray-100 bg-blue-50/50">
-                                 <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                                    <Package size={18} className="text-blue-600" /> Items a Transferir
-                                 </h3>
-                              </div>
-                              <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                                 {newTransfer.items?.map(item => (
-                                    <div key={item.productId} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-100">
-                                       <div className="flex-1 min-w-0 pr-2">
-                                          <p className="font-bold text-sm text-gray-800 truncate">{item.productName}</p>
-                                          <div className="flex items-center gap-2 mt-2">
-                                             <div className="flex items-center bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-                                                <button
-                                                   onClick={() => updateItemQuantity(item.productId, item.quantity - 1)}
-                                                   className="p-2 hover:bg-gray-50 text-gray-400 hover:text-gray-600"
-                                                >
-                                                   <Minus size={14} />
-                                                </button>
-                                                <input
-                                                   type="number"
-                                                   value={item.quantity}
-                                                   onChange={(e) => updateItemQuantity(item.productId, parseInt(e.target.value) || 0)}
-                                                   className="w-12 text-center text-sm font-bold outline-none bg-transparent"
-                                                />
-                                                <button
-                                                   onClick={() => updateItemQuantity(item.productId, item.quantity + 1)}
-                                                   className="p-2 hover:bg-gray-50 text-gray-400 hover:text-gray-600"
-                                                >
-                                                   <Plus size={14} />
-                                                </button>
-                                             </div>
-                                             <span className="text-[10px] text-gray-400 font-bold uppercase">Unds</span>
-                                          </div>
-                                       </div>
-                                       <button onClick={() => removeItemFromTransfer(item.productId)} className="text-gray-400 hover:text-red-500 p-2">
-                                          <Trash2 size={18} />
-                                       </button>
-                                    </div>
-                                 ))}
-                                 {(!newTransfer.items || newTransfer.items.length === 0) && (
-                                    <div className="text-center text-gray-400 py-10 text-sm">
-                                       Agrega productos desde la lista izquierda.
-                                    </div>
-                                 )}
-                              </div>
-                              <div className="p-4 border-t border-gray-100 flex gap-2">
-                                 <button
-                                    onClick={() => setIsTransferMode(false)}
-                                    className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl"
-                                 >
-                                    Cancelar
-                                 </button>
-                                 <button
-                                    onClick={handleConfirmTransfer}
-                                    className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                                    disabled={isSaving || !newTransfer.items?.length || !newTransfer.sourceWarehouseId || !newTransfer.destinationWarehouseId}
-                                 >
-                                    {isSaving ? (
-                                       <>
-                                          <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                          Guardando...
-                                       </>
-                                    ) : (
-                                       'Confirmar Envío'
-                                    )}
-                                 </button>
-                              </div>
-                           </div>
-                        </div>
-                     </div>
-                  )}
-               </div>
-            )}
-
-            {/* --- HISTORY TAB --- */}
-            {activeTab === 'HISTORY' && (
-               <div className="h-full flex flex-col">
-                  <div className="mb-6 flex justify-between items-center">
-                     <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                        <History size={20} className="text-orange-500" /> Historial de Movimientos
-                     </h2>
-                     <div className="flex gap-2">
-                        {[
-                           { id: 'ALL', label: 'Todos' },
-                           { id: 'IN_TRANSIT', label: 'En Tránsito' },
-                           { id: 'COMPLETED', label: 'Completados' }
-                        ].map(f => (
-                           <button
-                              key={f.id}
-                              onClick={() => setHistoryFilter(f.id as HistoryFilter)}
-                              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${historyFilter === f.id ? 'bg-orange-100 text-orange-700' : 'bg-white text-gray-500 hover:bg-gray-100'
-                                 }`}
-                           >
-                              {f.label}
-                           </button>
-                        ))}
-                     </div>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto space-y-4 pb-20">
-                     {filteredTransfers.length === 0 && (
-                        <div className="text-center py-20 text-gray-400">
-                           <Truck size={48} className="mx-auto mb-2 opacity-50" />
-                           <p>No hay traspasos registrados con este filtro.</p>
-                        </div>
-                     )}
-                     {filteredTransfers.map(t => {
-                        const sourceName = warehouses.find(w => w.id === t.sourceWarehouseId)?.name || '???';
-                        const destName = warehouses.find(w => w.id === t.destinationWarehouseId)?.name || '???';
-                        const isPending = t.status === 'IN_TRANSIT';
-
-                        return (
-                           <div key={t.id} className={`bg-white p-5 rounded-2xl border-2 transition-all ${isPending ? 'border-orange-300 shadow-md' : 'border-gray-100'}`}>
-                              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                                 <div>
-                                    <div className="flex items-center gap-2 mb-1">
-                                       <span className="font-bold text-gray-800 text-lg">#{t.id}</span>
-                                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${isPending
-                                          ? 'bg-orange-100 text-orange-700'
-                                          : t.discrepancyReason
-                                             ? 'bg-amber-100 text-amber-700'
-                                             : 'bg-green-100 text-green-700'
-                                          }`}>
-                                          {isPending ? 'En Tránsito (Pendiente)' : t.discrepancyReason ? 'Recibido (Con Diferencia)' : 'Completado'}
-                                       </span>
-                                    </div>
-                                    <div className="flex items-center gap-3 text-sm text-gray-500">
-                                       <div className="flex items-center gap-1">
-                                          <Calendar size={14} /> {new Date(t.createdAt).toLocaleDateString()}
-                                       </div>
-                                       <div className="flex items-center gap-1 font-medium">
-                                          {sourceName} <ArrowRight size={12} /> {destName}
-                                       </div>
-                                    </div>
-                                 </div>
-
-                                 <div className="flex items-center gap-4 w-full md:w-auto">
-                                    <div className="flex -space-x-2 overflow-hidden">
-                                       {t.items.slice(0, 3).map(i => (
-                                          <div key={i.productId} className="w-8 h-8 rounded-full bg-gray-100 border-2 border-white flex items-center justify-center text-[10px] font-bold text-gray-600" title={i.productName}>
-                                             {i.quantity}
-                                          </div>
-                                       ))}
-                                       {t.items.length > 3 && (
-                                          <div className="w-8 h-8 rounded-full bg-gray-200 border-2 border-white flex items-center justify-center text-[10px] font-bold text-gray-600">
-                                             +{t.items.length - 3}
-                                          </div>
-                                       )}
-                                    </div>
-
-                                    <div className="flex gap-2">
-                                       <button
-                                          onClick={() => setViewingTransfer(t)}
-                                          className="p-2 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200 transition-colors"
-                                          title="Ver Detalles"
-                                       >
-                                          <Eye size={20} />
-                                       </button>
-
-                                       {isPending && (
-                                          <button
-                                             onClick={() => handleReceiveTransfer(t.id)}
-                                             className="px-4 py-2 bg-green-600 text-white rounded-xl font-bold shadow-md hover:bg-green-700 active:scale-95 transition-all flex items-center gap-2 text-sm"
-                                          >
-                                             <Check size={16} /> Recibir
-                                          </button>
-                                       )}
-                                    </div>
-                                 </div>
-                              </div>
-                           </div>
-                        );
-                     })}
-                  </div>
-               </div>
-            )}
-
-            {/* --- OPTIMIZER TAB --- */}
-            {activeTab === 'OPTIMIZER' && (
-               <InventoryOptimizer
-                  products={products}
-                  warehouses={warehouses}
-                  transactions={[]} // TODO: Fetch from DB if needed, or pass from App.tsx
-                  suppliers={suppliers}
-                  config={config}
-                  onUpdateProducts={onUpdateProducts}
-               />
-            )}
-
-            {activeTab === 'FORECASTING' && (
-               <SmartReplenishment
-                  products={products}
-                  warehouses={warehouses}
-                  suppliers={suppliers}
-                  purchaseOrders={purchaseOrders}
-                  parkedTickets={parkedTickets}
-                  config={config}
-                  onOrdersGenerated={(newOrders) => {
-                     // Notify refresh
-                     window.dispatchEvent(new CustomEvent('reFreshWarehouseData'));
-                  }}
-               />
-            )}
-         </div>
-
-         {/* Warehouse Editor Modal */}
-         {editingWarehouse && (
-            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-               <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden">
-                  <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                     <h3 className="font-black text-xl text-gray-800">{editingWarehouse.id.includes('wh_') && editingWarehouse.name === '' ? 'Nueva Ubicación' : 'Editar Ubicación'}</h3>
-                     <button onClick={() => setEditingWarehouse(null)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20} /></button>
-                  </div>
-                  <div className="p-6 space-y-4">
-                     <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre Almacén</label>
-                        <input
-                           type="text"
-                           value={editingWarehouse.name}
-                           onChange={(e) => setEditingWarehouse({ ...editingWarehouse, name: e.target.value })}
-                           className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-500"
-                        />
-                     </div>
-                     <div className="grid grid-cols-2 gap-4">
-                        <div>
-                           <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Código</label>
-                           <input
-                              type="text"
-                              value={editingWarehouse.code}
-                              onChange={(e) => setEditingWarehouse({ ...editingWarehouse, code: e.target.value.toUpperCase() })}
-                              className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-500 uppercase"
-                           />
-                        </div>
-                        <div>
-                           <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tipo</label>
-                           <select
-                              value={editingWarehouse.type}
-                              onChange={(e) => setEditingWarehouse({ ...editingWarehouse, type: e.target.value as any })}
-                              className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none"
-                           >
-                              <option value="PHYSICAL">Físico</option>
-                              <option value="VIRTUAL">Virtual (Mermas)</option>
-                              <option value="DISTRIBUTION">Centro Dist.</option>
-                           </select>
-                        </div>
-                     </div>
-                     <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Dirección</label>
-                        <input
-                           type="text"
-                           value={editingWarehouse.address}
-                           onChange={(e) => setEditingWarehouse({ ...editingWarehouse, address: e.target.value })}
-                           className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-500"
-                        />
-                     </div>
-                     <div className="flex gap-4 pt-2">
-                        <label className="flex items-center gap-2 cursor-pointer bg-gray-50 px-4 py-2 rounded-lg border border-gray-200 flex-1">
-                           <input
-                              type="checkbox"
-                              checked={editingWarehouse.allowPosSale}
-                              onChange={(e) => setEditingWarehouse({ ...editingWarehouse, allowPosSale: e.target.checked })}
-                              className="w-4 h-4 text-purple-600 rounded"
-                           />
-                           <span className="text-sm font-bold text-gray-700">Permitir Venta POS</span>
-                        </label>
-                        <label className="flex items-center gap-2 cursor-pointer bg-gray-50 px-4 py-2 rounded-lg border border-gray-200 flex-1">
-                           <input
-                              type="checkbox"
-                              checked={editingWarehouse.allowNegativeStock}
-                              onChange={(e) => setEditingWarehouse({ ...editingWarehouse, allowNegativeStock: e.target.checked })}
-                              className="w-4 h-4 text-purple-600 rounded"
-                           />
-                           <span className="text-sm font-bold text-gray-700">Stock Negativo</span>
-                        </label>
-                     </div>
-                  </div>
-                  <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
-                     <button onClick={() => setEditingWarehouse(null)} className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-200 rounded-xl">Cancelar</button>
-                     <button onClick={handleSaveWarehouse} className="flex-1 py-3 bg-purple-600 text-white font-bold rounded-xl shadow-md hover:bg-purple-700">Guardar</button>
-                  </div>
-               </div>
-            </div>
-         )}
-
-         {/* Transfer Detail Modal */}
-         {viewingTransfer && (
-            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-               <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
-                  <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                     <div>
-                        <h3 className="font-bold text-lg text-gray-800">Detalles de Traspaso</h3>
-                        <p className="text-xs text-gray-500 font-mono">#{viewingTransfer.id}</p>
-                     </div>
-                     <button onClick={() => setViewingTransfer(null)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20} /></button>
-                  </div>
-
-                  <div className="p-5 border-b border-gray-100">
-                     <div className="flex items-center justify-between text-sm mb-2">
-                        <span className="text-gray-500">Estado</span>
-                        <span className={`font-bold px-2 py-0.5 rounded text-xs uppercase ${viewingTransfer.status === 'IN_TRANSIT' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
-                           {viewingTransfer.status === 'IN_TRANSIT' ? 'En Tránsito' : 'Completado'}
-                        </span>
-                     </div>
-                     <div className="flex justify-between items-center bg-blue-50 p-3 rounded-xl border border-blue-100">
-                        <div className="text-center flex-1">
-                           <span className="block text-[10px] font-bold text-blue-400 uppercase">Origen</span>
-                           <span className="font-bold text-blue-900 text-sm">{warehouses.find(w => w.id === viewingTransfer.sourceWarehouseId)?.name}</span>
-                        </div>
-                        <ArrowRight size={16} className="text-blue-300" />
-                        <div className="text-center flex-1">
-                           <span className="block text-[10px] font-bold text-blue-400 uppercase">Destino</span>
-                           <span className="font-bold text-blue-900 text-sm">{warehouses.find(w => w.id === viewingTransfer.destinationWarehouseId)?.name}</span>
-                        </div>
-                     </div>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto p-5 space-y-2">
-                     <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Items Incluidos</h4>
-                     {viewingTransfer.items.map((item, idx) => {
-                        const isPending = viewingTransfer.status === 'IN_TRANSIT';
-                        const currentVal = receptionQuantities[item.productId] ?? item.quantity;
-
-                        return (
-                           <div key={idx} className="flex justify-between items-center p-3 border border-gray-100 rounded-xl hover:bg-gray-50">
-                              <span className="font-medium text-gray-700 text-sm">{item.productName}</span>
-                              {isPending ? (
-                                 <div className="flex items-center gap-2">
-                                    <input
-                                       type="number"
-                                       value={currentVal}
-                                       max={item.quantity}
-                                       min={0}
-                                       onChange={(e) => {
-                                          const val = parseInt(e.target.value) || 0;
-                                          if (val > item.quantity) {
-                                             alert(`No puede recibir más de lo enviado (${item.quantity}).`);
-                                             return;
-                                          }
-                                          setReceptionQuantities(prev => ({ ...prev, [item.productId]: val }));
-                                       }}
-                                       className="w-16 p-1 text-center bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none"
-                                    />
-                                    <span className="text-[10px] font-bold text-gray-400 uppercase">/ {item.quantity}</span>
-                                 </div>
-                              ) : (
-                                 <div className="flex items-center gap-2">
-                                    <span className="font-bold text-gray-900 bg-gray-100 px-2 py-1 rounded-lg text-sm">
-                                       {item.receivedQuantity ?? item.quantity}
-                                    </span>
-                                    {item.receivedQuantity !== undefined && item.receivedQuantity < item.quantity && (
-                                       <span className="text-[10px] font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded">
-                                          -{item.quantity - item.receivedQuantity}
-                                       </span>
-                                    )}
-                                 </div>
-                              )}
-                           </div>
-                        );
-                     })}
-                  </div>
-
-                  {viewingTransfer.status === 'IN_TRANSIT' && (
-                     <div className="p-5 border-t border-gray-100 bg-gray-50">
-                        <button
-                           onClick={() => handleReceiveTransfer(viewingTransfer.id)}
-                           className="w-full py-3 bg-green-600 text-white rounded-xl font-bold shadow-lg hover:bg-green-700 active:scale-95 transition-all flex items-center justify-center gap-2"
-                        >
-                           <Check size={20} /> Confirmar Recepción
-                        </button>
-                     </div>
-                  )}
-               </div>
-            </div>
-         )}
-
-         {/* Success Modal with QR */}
-         {successTransfer && (
-            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-               <div className="bg-white rounded-[40px] shadow-2xl max-w-md w-full p-8 text-center animate-in zoom-in-95 duration-300">
-                  <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
-                     <Check size={40} />
-                  </div>
-                  <h2 className="text-2xl font-black text-gray-800 mb-2">Traspaso Enviado</h2>
-                  <p className="text-gray-500 mb-8 text-sm">El cargo se ha descontado del origen y está listo para ser recibido.</p>
-
-                  <div className="bg-gray-50 p-6 rounded-3xl border border-gray-100 mb-8 flex flex-col items-center">
-                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Código de Recepción</p>
-                     <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 mb-4">
-                        <img
-                           src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${successTransfer.displayId}`}
-                           alt="QR Code"
-                           className="w-32 h-32"
-                        />
-                     </div>
-                     <p className="text-xl font-black text-gray-800 font-mono tracking-tighter">
-                        {successTransfer.displayId}
-                     </p>
-                  </div>
-
-                  <button
-                     onClick={() => window.location.reload()}
-                     className="w-full py-4 bg-gray-800 text-white rounded-2xl font-bold shadow-xl hover:bg-gray-900 transition-all active:scale-95"
-                  >
-                     Entendido, Finalizar
+               <div className="flex gap-3">
+                  <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
+                     <X size={24} />
                   </button>
                </div>
             </div>
-         )}
 
-         {/* Discrepancy Confirmation Modal */}
-         {discrepancyModal && (
-            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
-               <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-                  <div className="p-6 border-b border-gray-100 bg-amber-50">
-                     <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center">
-                           <AlertTriangle size={24} />
-                        </div>
-                        <div>
-                           <h3 className="font-bold text-lg text-gray-800">Gestión de Diferencias</h3>
-                           <p className="text-xs text-gray-500">La cantidad recibida no coincide con el envío</p>
-                        </div>
+            {/* Tabs */}
+            <div className="bg-white px-8 border-b border-gray-200 flex gap-8">
+               <button
+                  onClick={() => setActiveTab('LOCATIONS')}
+                  className={`py-4 text-sm font-bold border-b-4 transition-all ${activeTab === 'LOCATIONS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+               >
+                  Ubicaciones
+               </button>
+               <button
+                  onClick={() => setActiveTab('TRANSFERS')}
+                  className={`py-4 text-sm font-bold border-b-4 transition-all ${activeTab === 'TRANSFERS' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+               >
+                  Nuevo Traspaso
+               </button>
+               <button
+                  onClick={() => setActiveTab('HISTORY')}
+                  className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'HISTORY' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+               >
+                  Historial y Recepción
+                  {pendingCount > 0 && (
+                     <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">{pendingCount}</span>
+                  )}
+               </button>
+               <button
+                  onClick={() => setActiveTab('OPTIMIZER')}
+                  className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'OPTIMIZER' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+               >
+                  <Zap size={18} /> Optimización
+               </button>
+               <button
+                  onClick={() => setActiveTab('FORECASTING')}
+                  className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'FORECASTING' ? 'border-amber-600 text-amber-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+               >
+                  <ShoppingBag size={18} /> Reabastecimiento
+               </button>
+            </div>
+
+            <div className="flex-1 overflow-hidden p-8">
+
+               {/* --- LOCATIONS TAB --- */}
+               {activeTab === 'LOCATIONS' && (
+                  <div className="h-full flex flex-col">
+                     <div className="flex justify-end mb-6">
+                        <button onClick={handleCreateWarehouse} className="px-4 py-2 bg-purple-600 text-white rounded-xl font-bold shadow-md hover:bg-purple-700 transition-all flex items-center gap-2">
+                           <Plus size={18} /> Nueva Ubicación
+                        </button>
                      </div>
-                  </div>
 
-                  <div className="p-6 space-y-4">
-                     <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100">
-                        <p className="text-xs font-bold text-gray-400 uppercase mb-2">Productos Faltantes</p>
-                        {discrepancyModal.items.map((item, idx) => (
-                           <div key={idx} className="flex justify-between items-center py-2 border-b border-gray-200 last:border-0">
-                              <span className="text-sm font-medium text-gray-700">{item.productName}</span>
-                              <div className="flex items-center gap-2">
-                                 <span className="text-xs text-gray-400">Enviado: {item.sent}</span>
-                                 <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded">
-                                    Recibido: {item.received}
-                                 </span>
-                                 <span className="text-xs font-bold text-red-600 bg-red-50 px-2 py-1 rounded">
-                                    Faltante: {item.sent - item.received}
-                                 </span>
+                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 overflow-y-auto pb-20">
+                        {warehouses.map(wh => (
+                           <div key={wh.id} className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-all group relative">
+                              <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                 <button onClick={() => setEditingWarehouse(wh)} className="p-2 bg-gray-100 hover:bg-purple-50 text-gray-500 hover:text-purple-600 rounded-lg">
+                                    <Search size={16} /> {/* Edit icon placeholder */}
+                                 </button>
+                              </div>
+
+                              <div className="flex items-center gap-4 mb-4">
+                                 <div className={`p-3 rounded-xl ${wh.isMain ? 'bg-purple-100 text-purple-600' : 'bg-gray-100 text-gray-500'}`}>
+                                    <Building2 size={24} />
+                                 </div>
+                                 <div>
+                                    <h3 className="font-bold text-gray-800 text-lg">{wh.name}</h3>
+                                    <p className="text-xs text-gray-400 font-mono">{wh.code}</p>
+                                 </div>
+                              </div>
+
+                              <div className="space-y-2 text-sm text-gray-600">
+                                 <p className="flex items-center gap-2"><MapPin size={14} /> {wh.address || 'Sin dirección'}</p>
+                                 <div className="flex gap-2 mt-3">
+                                    {wh.allowPosSale ? (
+                                       <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-bold">Venta Activa</span>
+                                    ) : (
+                                       <span className="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold">No Venta</span>
+                                    )}
+                                    {wh.type === 'VIRTUAL' && (
+                                       <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-bold">Virtual</span>
+                                    )}
+                                 </div>
                               </div>
                            </div>
                         ))}
                      </div>
+                  </div>
+               )}
 
-                     <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-2">
-                           Motivo de la Diferencia <span className="text-red-500">*</span>
-                        </label>
-                        <select
-                           id="discrepancy-reason"
-                           className="w-full p-3 bg-white border-2 border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-amber-500 font-bold text-gray-700"
-                           defaultValue=""
-                        >
-                           <option value="" disabled>-- Seleccionar --</option>
-                           <option value="DAMAGE">Daño en Transporte</option>
-                           <option value="DISPATCH_ERROR">Error de Despacho</option>
-                           <option value="LOSS_THEFT">Pérdida/Robo</option>
-                        </select>
+               {/* --- TRANSFERS TAB --- */}
+               {activeTab === 'TRANSFERS' && (
+                  <div className="h-full flex flex-col">
+                     {!isTransferMode ? (
+                        <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
+                           <ArrowRightLeft size={64} className="mb-4 opacity-50" />
+                           <p className="text-lg font-bold mb-2">Nuevo Movimiento de Inventario</p>
+                           <p className="text-sm mb-6 max-w-md text-center">
+                              Crea una solicitud de traspaso. El stock se descontará del origen inmediatamente y quedará en "Tránsito" hasta ser recibido.
+                           </p>
+                           <button
+                              onClick={() => setIsTransferMode(true)}
+                              className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 transition-all"
+                           >
+                              Iniciar Traspaso
+                           </button>
+                        </div>
+                     ) : (
+                        <div className="flex flex-col h-full gap-6">
+                           {/* Transfer Header */}
+                           <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col md:flex-row gap-6 items-center flex-wrap">
+                              <div className="flex-1 min-w-[300px] w-full">
+                                 <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Origen (Sale de aquí)</label>
+                                 <select
+                                    value={newTransfer.sourceWarehouseId || ''}
+                                    onChange={(e) => setNewTransfer({ ...newTransfer, sourceWarehouseId: e.target.value })}
+                                    className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none focus:ring-2 focus:ring-blue-500"
+                                 >
+                                    <option value="">-- Seleccionar --</option>
+                                    {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                                 </select>
+                              </div>
+                              <div className="text-gray-300 hidden md:block">
+                                 <ArrowRight size={24} />
+                              </div>
+                              <div className="flex-1 min-w-[300px] w-full">
+                                 <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Destino (Entra aquí)</label>
+                                 <select
+                                    value={newTransfer.destinationWarehouseId || ''}
+                                    onChange={(e) => setNewTransfer({ ...newTransfer, destinationWarehouseId: e.target.value })}
+                                    className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none focus:ring-2 focus:ring-blue-500"
+                                 >
+                                    <option value="">-- Seleccionar --</option>
+                                    {warehouses.filter(w => w.id !== newTransfer.sourceWarehouseId).map(w => (
+                                       <option key={w.id} value={w.id}>{w.name}</option>
+                                    ))}
+                                 </select>
+                              </div>
+
+                              <div className="w-full lg:w-auto flex gap-3 mt-2 lg:mt-0">
+                                 <button
+                                    onClick={handleSuggestReplenishment}
+                                    className="px-4 py-2 border-2 border-purple-200 text-purple-600 rounded-xl font-bold flex items-center gap-2 hover:bg-purple-50 transition-all text-sm whitespace-nowrap"
+                                    title="Sugerir productos según stock mínimo/máximo"
+                                 >
+                                    <Sparkles size={18} /> Sugerir Reposición
+                                 </button>
+
+                                 <div className="relative">
+                                    <button
+                                       onClick={() => setShowProActions(!showProActions)}
+                                       className="px-4 py-2 bg-gray-800 text-white rounded-xl font-bold flex items-center gap-2 hover:bg-gray-900 transition-all text-sm whitespace-nowrap"
+                                    >
+                                       <LayoutGrid size={18} /> Acciones Pro <ChevronDown size={14} />
+                                    </button>
+
+                                    {showProActions && (
+                                       <div className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-gray-100 z-50 p-2 overflow-hidden animate-in zoom-in-95 duration-200">
+                                          <button
+                                             onClick={() => {
+                                                const cat = prompt("Ingrese el nombre de la categoría:");
+                                                if (cat) handleLoadByCategory(cat);
+                                                setShowProActions(false);
+                                             }}
+                                             className="w-full p-3 text-left hover:bg-gray-50 rounded-xl text-xs font-bold text-gray-600 flex items-center gap-2"
+                                          >
+                                             <Filter size={14} /> Cargar por Categoría
+                                          </button>
+                                          <button
+                                             onClick={() => {
+                                                alert("Carga por Temporada estará disponible pronto.");
+                                                setShowProActions(false);
+                                             }}
+                                             className="w-full p-3 text-left hover:bg-gray-50 rounded-xl text-xs font-bold text-gray-600 flex items-center gap-2"
+                                          >
+                                             <Calendar size={14} /> Cargar por Temporada
+                                          </button>
+                                       </div>
+                                    )}
+                                 </div>
+                              </div>
+                           </div>
+
+                           {/* Item Selection */}
+                           <div className="flex-1 flex gap-6 overflow-hidden">
+                              <div className="flex-1 bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col">
+                                 <div className="p-4 border-b border-gray-100">
+                                    <div className="relative">
+                                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+                                       <input
+                                          type="text"
+                                          placeholder="Buscar productos..."
+                                          value={itemSearch}
+                                          onChange={(e) => setItemSearch(e.target.value)}
+                                          className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                                       />
+                                    </div>
+                                 </div>
+                                 <div className="flex-1 overflow-y-auto p-2">
+                                    {filteredProducts.map(p => {
+                                       const srcStock = p.stockBalances?.[newTransfer.sourceWarehouseId || ''] || 0;
+                                       const dstStock = p.stockBalances?.[newTransfer.destinationWarehouseId || ''] || 0;
+                                       return (
+                                          <div
+                                             key={p.id}
+                                             onClick={() => addItemToTransfer(p)}
+                                             className="p-3 hover:bg-gray-50 rounded-xl cursor-pointer flex justify-between items-center group transition-colors"
+                                          >
+                                             <div>
+                                                <p className="font-bold text-gray-800 text-sm">{p.name}</p>
+                                                <div className="flex items-center gap-2 mt-1">
+                                                   <p className="text-xs text-gray-400 font-mono pr-2 border-r border-gray-200">{p.barcode}</p>
+                                                   <span className="text-[10px] font-bold px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded">
+                                                      Origen: {srcStock}
+                                                   </span>
+                                                   <span className="text-[10px] font-bold px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded">
+                                                      Destino: {dstStock}
+                                                   </span>
+                                                </div>
+                                             </div>
+                                             <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                {(p.operationalFlags?.usesLots || p.operationalFlags?.usesSerial) && (
+                                                   <button
+                                                      onClick={(e) => {
+                                                         e.stopPropagation();
+                                                         setBreakdownData({ product: p, warehouseId: newTransfer.sourceWarehouseId || 'wh_central' });
+                                                         db.get('inventoryTracking').then((all: any) => {
+                                                            const filtered = (all || []).filter((t: any) =>
+                                                               t.productId === p.id &&
+                                                               t.warehouseId === (newTransfer.sourceWarehouseId || 'wh_central') &&
+                                                               t.status === 'AVAILABLE'
+                                                            );
+                                                            setActiveTracking(filtered);
+                                                         });
+                                                      }}
+                                                      className="p-2 bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100"
+                                                      title="Ver Desglose de Lotes/Series"
+                                                   >
+                                                      <Eye size={16} />
+                                                   </button>
+                                                )}
+                                                <button className="p-2 bg-gray-100 text-blue-600 rounded-lg">
+                                                   <Plus size={16} />
+                                                </button>
+                                             </div>
+                                          </div>
+                                       );
+                                    })}
+                                 </div>
+                              </div>
+
+                              {/* Transfer Cart */}
+                              <div className="w-1/3 bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col">
+                                 <div className="p-4 border-b border-gray-100 bg-blue-50/50">
+                                    <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                                       <Package size={18} className="text-blue-600" /> Items a Transferir
+                                    </h3>
+                                 </div>
+                                 <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                                    {newTransfer.items?.map(item => (
+                                       <div key={item.productId} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                          <div className="flex-1 min-w-0 pr-2">
+                                             <p className="font-bold text-sm text-gray-800 truncate">{item.productName}</p>
+                                             <div className="flex items-center gap-2 mt-2">
+                                                <div className="flex items-center bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+                                                   <button
+                                                      onClick={() => updateItemQuantity(item.productId, item.quantity - 1)}
+                                                      className="p-2 hover:bg-gray-50 text-gray-400 hover:text-gray-600"
+                                                   >
+                                                      <Minus size={14} />
+                                                   </button>
+                                                   <input
+                                                      type="number"
+                                                      value={item.quantity}
+                                                      onChange={(e) => updateItemQuantity(item.productId, parseInt(e.target.value) || 0)}
+                                                      className="w-12 text-center text-sm font-bold outline-none bg-transparent"
+                                                   />
+                                                   <button
+                                                      onClick={() => updateItemQuantity(item.productId, item.quantity + 1)}
+                                                      className="p-2 hover:bg-gray-50 text-gray-400 hover:text-gray-600"
+                                                   >
+                                                      <Plus size={14} />
+                                                   </button>
+                                                </div>
+                                                <span className="text-[10px] text-gray-400 font-bold uppercase">Unds</span>
+                                             </div>
+                                          </div>
+                                          <button onClick={() => removeItemFromTransfer(item.productId)} className="text-gray-400 hover:text-red-500 p-2">
+                                             <Trash2 size={18} />
+                                          </button>
+                                       </div>
+                                    ))}
+                                    {(!newTransfer.items || newTransfer.items.length === 0) && (
+                                       <div className="text-center text-gray-400 py-10 text-sm">
+                                          Agrega productos desde la lista izquierda.
+                                       </div>
+                                    )}
+                                 </div>
+                                 <div className="p-4 border-t border-gray-100 flex gap-2">
+                                    <button
+                                       onClick={() => setIsTransferMode(false)}
+                                       className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl"
+                                    >
+                                       Cancelar
+                                    </button>
+                                    <button
+                                       onClick={handleConfirmTransfer}
+                                       className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                       disabled={isSaving || !newTransfer.items?.length || !newTransfer.sourceWarehouseId || !newTransfer.destinationWarehouseId}
+                                    >
+                                       {isSaving ? (
+                                          <>
+                                             <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                             Guardando...
+                                          </>
+                                       ) : (
+                                          'Confirmar Envío'
+                                       )}
+                                    </button>
+                                 </div>
+                              </div>
+                           </div>
+                        </div>
+                     )}
+                  </div>
+               )}
+
+               {/* --- HISTORY TAB --- */}
+               {activeTab === 'HISTORY' && (
+                  <div className="h-full flex flex-col">
+                     <div className="mb-6 flex justify-between items-center">
+                        <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                           <History size={20} className="text-orange-500" /> Historial de Movimientos
+                        </h2>
+                        <div className="flex gap-2">
+                           {[
+                              { id: 'ALL', label: 'Todos' },
+                              { id: 'IN_TRANSIT', label: 'En Tránsito' },
+                              { id: 'COMPLETED', label: 'Completados' }
+                           ].map(f => (
+                              <button
+                                 key={f.id}
+                                 onClick={() => setHistoryFilter(f.id as HistoryFilter)}
+                                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${historyFilter === f.id ? 'bg-orange-100 text-orange-700' : 'bg-white text-gray-500 hover:bg-gray-100'
+                                    }`}
+                              >
+                                 {f.label}
+                              </button>
+                           ))}
+                        </div>
+                     </div>
+
+                     <div className="flex-1 overflow-y-auto space-y-4 pb-20">
+                        {filteredTransfers.length === 0 && (
+                           <div className="text-center py-20 text-gray-400">
+                              <Truck size={48} className="mx-auto mb-2 opacity-50" />
+                              <p>No hay traspasos registrados con este filtro.</p>
+                           </div>
+                        )}
+                        {filteredTransfers.map(t => {
+                           const sourceName = warehouses.find(w => w.id === t.sourceWarehouseId)?.name || '???';
+                           const destName = warehouses.find(w => w.id === t.destinationWarehouseId)?.name || '???';
+                           const isPending = t.status === 'IN_TRANSIT';
+
+                           return (
+                              <div key={t.id} className={`bg-white p-5 rounded-2xl border-2 transition-all ${isPending ? 'border-orange-300 shadow-md' : 'border-gray-100'}`}>
+                                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                    <div>
+                                       <div className="flex items-center gap-2 mb-1">
+                                          <span className="font-bold text-gray-800 text-lg">#{t.id}</span>
+                                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${isPending
+                                             ? 'bg-orange-100 text-orange-700'
+                                             : t.discrepancyReason
+                                                ? 'bg-amber-100 text-amber-700'
+                                                : 'bg-green-100 text-green-700'
+                                             }`}>
+                                             {isPending ? 'En Tránsito (Pendiente)' : t.discrepancyReason ? 'Recibido (Con Diferencia)' : 'Completado'}
+                                          </span>
+                                       </div>
+                                       <div className="flex items-center gap-3 text-sm text-gray-500">
+                                          <div className="flex items-center gap-1">
+                                             <Calendar size={14} /> {new Date(t.createdAt).toLocaleDateString()}
+                                          </div>
+                                          <div className="flex items-center gap-1 font-medium">
+                                             {sourceName} <ArrowRight size={12} /> {destName}
+                                          </div>
+                                       </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-4 w-full md:w-auto">
+                                       <div className="flex -space-x-2 overflow-hidden">
+                                          {t.items.slice(0, 3).map(i => (
+                                             <div key={i.productId} className="w-8 h-8 rounded-full bg-gray-100 border-2 border-white flex items-center justify-center text-[10px] font-bold text-gray-600" title={i.productName}>
+                                                {i.quantity}
+                                             </div>
+                                          ))}
+                                          {t.items.length > 3 && (
+                                             <div className="w-8 h-8 rounded-full bg-gray-200 border-2 border-white flex items-center justify-center text-[10px] font-bold text-gray-600">
+                                                +{t.items.length - 3}
+                                             </div>
+                                          )}
+                                       </div>
+
+                                       <div className="flex gap-2">
+                                          <button
+                                             onClick={() => setViewingTransfer(t)}
+                                             className="p-2 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200 transition-colors"
+                                             title="Ver Detalles"
+                                          >
+                                             <Eye size={20} />
+                                          </button>
+
+                                          {isPending && (
+                                             <button
+                                                onClick={() => handleReceiveTransfer(t.id)}
+                                                className="px-4 py-2 bg-green-600 text-white rounded-xl font-bold shadow-md hover:bg-green-700 active:scale-95 transition-all flex items-center gap-2 text-sm"
+                                             >
+                                                <Check size={16} /> Recibir
+                                             </button>
+                                          )}
+                                       </div>
+                                    </div>
+                                 </div>
+                              </div>
+                           );
+                        })}
                      </div>
                   </div>
+               )}
 
-                  <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
+               {/* --- OPTIMIZER TAB --- */}
+               {activeTab === 'OPTIMIZER' && (
+                  <InventoryOptimizer
+                     products={products}
+                     warehouses={warehouses}
+                     transactions={[]} // TODO: Fetch from DB if needed, or pass from App.tsx
+                     suppliers={suppliers}
+                     config={config}
+                     onUpdateProducts={onUpdateProducts}
+                  />
+               )}
+
+               {activeTab === 'FORECASTING' && (
+                  <SmartReplenishment
+                     products={products}
+                     warehouses={warehouses}
+                     suppliers={suppliers}
+                     purchaseOrders={purchaseOrders}
+                     parkedTickets={parkedTickets}
+                     config={config}
+                     onOrdersGenerated={(newOrders) => {
+                        // Notify refresh
+                        window.dispatchEvent(new CustomEvent('reFreshWarehouseData'));
+                     }}
+                  />
+               )}
+            </div>
+
+            {/* Warehouse Editor Modal */}
+            {editingWarehouse && (
+               <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden">
+                     <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                        <h3 className="font-black text-xl text-gray-800">{editingWarehouse.id.includes('wh_') && editingWarehouse.name === '' ? 'Nueva Ubicación' : 'Editar Ubicación'}</h3>
+                        <button onClick={() => setEditingWarehouse(null)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20} /></button>
+                     </div>
+                     <div className="p-6 space-y-4">
+                        <div>
+                           <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre Almacén</label>
+                           <input
+                              type="text"
+                              value={editingWarehouse.name}
+                              onChange={(e) => setEditingWarehouse({ ...editingWarehouse, name: e.target.value })}
+                              className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-500"
+                           />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                           <div>
+                              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Código</label>
+                              <input
+                                 type="text"
+                                 value={editingWarehouse.code}
+                                 onChange={(e) => setEditingWarehouse({ ...editingWarehouse, code: e.target.value.toUpperCase() })}
+                                 className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-500 uppercase"
+                              />
+                           </div>
+                           <div>
+                              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tipo</label>
+                              <select
+                                 value={editingWarehouse.type}
+                                 onChange={(e) => setEditingWarehouse({ ...editingWarehouse, type: e.target.value as any })}
+                                 className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none"
+                              >
+                                 <option value="PHYSICAL">Físico</option>
+                                 <option value="VIRTUAL">Virtual (Mermas)</option>
+                                 <option value="DISTRIBUTION">Centro Dist.</option>
+                              </select>
+                           </div>
+                        </div>
+                        <div>
+                           <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Dirección</label>
+                           <input
+                              type="text"
+                              value={editingWarehouse.address}
+                              onChange={(e) => setEditingWarehouse({ ...editingWarehouse, address: e.target.value })}
+                              className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-purple-500"
+                           />
+                        </div>
+                        <div className="flex gap-4 pt-2">
+                           <label className="flex items-center gap-2 cursor-pointer bg-gray-50 px-4 py-2 rounded-lg border border-gray-200 flex-1">
+                              <input
+                                 type="checkbox"
+                                 checked={editingWarehouse.allowPosSale}
+                                 onChange={(e) => setEditingWarehouse({ ...editingWarehouse, allowPosSale: e.target.checked })}
+                                 className="w-4 h-4 text-purple-600 rounded"
+                              />
+                              <span className="text-sm font-bold text-gray-700">Permitir Venta POS</span>
+                           </label>
+                           <label className="flex items-center gap-2 cursor-pointer bg-gray-50 px-4 py-2 rounded-lg border border-gray-200 flex-1">
+                              <input
+                                 type="checkbox"
+                                 checked={editingWarehouse.allowNegativeStock}
+                                 onChange={(e) => setEditingWarehouse({ ...editingWarehouse, allowNegativeStock: e.target.checked })}
+                                 className="w-4 h-4 text-purple-600 rounded"
+                              />
+                              <span className="text-sm font-bold text-gray-700">Stock Negativo</span>
+                           </label>
+                        </div>
+                     </div>
+                     <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
+                        <button onClick={() => setEditingWarehouse(null)} className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-200 rounded-xl">Cancelar</button>
+                        <button onClick={handleSaveWarehouse} className="flex-1 py-3 bg-purple-600 text-white font-bold rounded-xl shadow-md hover:bg-purple-700">Guardar</button>
+                     </div>
+                  </div>
+               </div>
+            )}
+
+            {/* Transfer Detail Modal */}
+            {viewingTransfer && (
+               <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+                  <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+                     <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                        <div>
+                           <h3 className="font-bold text-lg text-gray-800">Detalles de Traspaso</h3>
+                           <p className="text-xs text-gray-500 font-mono">#{viewingTransfer.id}</p>
+                        </div>
+                        <button onClick={() => setViewingTransfer(null)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20} /></button>
+                     </div>
+
+                     <div className="p-5 border-b border-gray-100">
+                        <div className="flex items-center justify-between text-sm mb-2">
+                           <span className="text-gray-500">Estado</span>
+                           <span className={`font-bold px-2 py-0.5 rounded text-xs uppercase ${viewingTransfer.status === 'IN_TRANSIT' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
+                              {viewingTransfer.status === 'IN_TRANSIT' ? 'En Tránsito' : 'Completado'}
+                           </span>
+                        </div>
+                        <div className="flex justify-between items-center bg-blue-50 p-3 rounded-xl border border-blue-100">
+                           <div className="text-center flex-1">
+                              <span className="block text-[10px] font-bold text-blue-400 uppercase">Origen</span>
+                              <span className="font-bold text-blue-900 text-sm">{warehouses.find(w => w.id === viewingTransfer.sourceWarehouseId)?.name}</span>
+                           </div>
+                           <ArrowRight size={16} className="text-blue-300" />
+                           <div className="text-center flex-1">
+                              <span className="block text-[10px] font-bold text-blue-400 uppercase">Destino</span>
+                              <span className="font-bold text-blue-900 text-sm">{warehouses.find(w => w.id === viewingTransfer.destinationWarehouseId)?.name}</span>
+                           </div>
+                        </div>
+                     </div>
+
+                     <div className="flex-1 overflow-y-auto p-5 space-y-2">
+                        <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Items Incluidos</h4>
+                        {viewingTransfer.items.map((item, idx) => {
+                           const isPending = viewingTransfer.status === 'IN_TRANSIT';
+                           const currentVal = receptionQuantities[item.productId] ?? item.quantity;
+
+                           return (
+                              <div key={idx} className="flex justify-between items-center p-3 border border-gray-100 rounded-xl hover:bg-gray-50">
+                                 <span className="font-medium text-gray-700 text-sm">{item.productName}</span>
+                                 {isPending ? (
+                                    <div className="flex items-center gap-2">
+                                       <input
+                                          type="number"
+                                          value={currentVal}
+                                          max={item.quantity}
+                                          min={0}
+                                          onChange={(e) => {
+                                             const val = parseInt(e.target.value) || 0;
+                                             if (val > item.quantity) {
+                                                alert(`No puede recibir más de lo enviado (${item.quantity}).`);
+                                                return;
+                                             }
+                                             setReceptionQuantities(prev => ({ ...prev, [item.productId]: val }));
+                                          }}
+                                          className="w-16 p-1 text-center bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none"
+                                       />
+                                       <span className="text-[10px] font-bold text-gray-400 uppercase">/ {item.quantity}</span>
+                                    </div>
+                                 ) : (
+                                    <div className="flex items-center gap-2">
+                                       <span className="font-bold text-gray-900 bg-gray-100 px-2 py-1 rounded-lg text-sm">
+                                          {item.receivedQuantity ?? item.quantity}
+                                       </span>
+                                       {item.receivedQuantity !== undefined && item.receivedQuantity < item.quantity && (
+                                          <span className="text-[10px] font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded">
+                                             -{item.quantity - item.receivedQuantity}
+                                          </span>
+                                       )}
+                                    </div>
+                                 )}
+                              </div>
+                           );
+                        })}
+                     </div>
+
+                     {viewingTransfer.status === 'IN_TRANSIT' && (
+                        <div className="p-5 border-t border-gray-100 bg-gray-50">
+                           <button
+                              onClick={() => handleReceiveTransfer(viewingTransfer.id)}
+                              className="w-full py-3 bg-green-600 text-white rounded-xl font-bold shadow-lg hover:bg-green-700 active:scale-95 transition-all flex items-center justify-center gap-2"
+                           >
+                              <Check size={20} /> Confirmar Recepción
+                           </button>
+                        </div>
+                     )}
+                  </div>
+               </div>
+            )}
+
+            {/* Success Modal with QR */}
+            {successTransfer && (
+               <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+                  <div className="bg-white rounded-[40px] shadow-2xl max-w-md w-full p-8 text-center animate-in zoom-in-95 duration-300">
+                     <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                        <Check size={40} />
+                     </div>
+                     <h2 className="text-2xl font-black text-gray-800 mb-2">Traspaso Enviado</h2>
+                     <p className="text-gray-500 mb-8 text-sm">El cargo se ha descontado del origen y está listo para ser recibido.</p>
+
+                     <div className="bg-gray-50 p-6 rounded-3xl border border-gray-100 mb-8 flex flex-col items-center">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4">Código de Recepción</p>
+                        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 mb-4">
+                           <img
+                              src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${successTransfer.displayId}`}
+                              alt="QR Code"
+                              className="w-32 h-32"
+                           />
+                        </div>
+                        <p className="text-xl font-black text-gray-800 font-mono tracking-tighter">
+                           {successTransfer.displayId}
+                        </p>
+                     </div>
+
                      <button
-                        onClick={() => {
-                           setDiscrepancyModal(null);
-                           setReceptionQuantities({});
-                        }}
-                        className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-200 rounded-xl transition-colors"
+                        onClick={() => window.location.reload()}
+                        className="w-full py-4 bg-gray-800 text-white rounded-2xl font-bold shadow-xl hover:bg-gray-900 transition-all active:scale-95"
                      >
-                        Cancelar
-                     </button>
-                     <button
-                        onClick={() => {
-                           const select = document.getElementById("discrepancy-reason") as HTMLSelectElement;
-                           const reason = select?.value;
-                           if (!reason) {
-                              alert("Por favor seleccione un motivo para la diferencia.");
-                              return;
-                           }
-                           const transferId = discrepancyModal.transferId;
-                           setDiscrepancyModal(null);
-                           handleReceiveTransfer(transferId, reason);
-                        }}
-                        className="flex-1 py-3 bg-amber-600 text-white font-bold rounded-xl shadow-md hover:bg-amber-700 active:scale-95 transition-all"
-                     >
-                        Confirmar Recepción
+                        Entendido, Finalizar
                      </button>
                   </div>
                </div>
-            </div>
-         )}
-      </div>
+            )}
+
+            {/* Discrepancy Confirmation Modal */}
+            {discrepancyModal && (
+               <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+                  <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+                     <div className="p-6 border-b border-gray-100 bg-amber-50">
+                        <div className="flex items-center gap-3">
+                           <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center">
+                              <AlertTriangle size={24} />
+                           </div>
+                           <div>
+                              <h3 className="font-bold text-lg text-gray-800">Gestión de Diferencias</h3>
+                              <p className="text-xs text-gray-500">La cantidad recibida no coincide con el envío</p>
+                           </div>
+                        </div>
+                     </div>
+
+                     <div className="p-6 space-y-4">
+                        <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100">
+                           <p className="text-xs font-bold text-gray-400 uppercase mb-2">Productos Faltantes</p>
+                           {discrepancyModal.items.map((item, idx) => (
+                              <div key={idx} className="flex justify-between items-center py-2 border-b border-gray-200 last:border-0">
+                                 <span className="text-sm font-medium text-gray-700">{item.productName}</span>
+                                 <div className="flex items-center gap-2">
+                                    <span className="text-xs text-gray-400">Enviado: {item.sent}</span>
+                                    <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded">
+                                       Recibido: {item.received}
+                                    </span>
+                                    <span className="text-xs font-bold text-red-600 bg-red-50 px-2 py-1 rounded">
+                                       Faltante: {item.sent - item.received}
+                                    </span>
+                                 </div>
+                              </div>
+                           ))}
+                        </div>
+
+                        <div>
+                           <label className="block text-xs font-bold text-gray-500 uppercase mb-2">
+                              Motivo de la Diferencia <span className="text-red-500">*</span>
+                           </label>
+                           <select
+                              id="discrepancy-reason"
+                              className="w-full p-3 bg-white border-2 border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-amber-500 font-bold text-gray-700"
+                              defaultValue=""
+                           >
+                              <option value="" disabled>-- Seleccionar --</option>
+                              <option value="DAMAGE">Daño en Transporte</option>
+                              <option value="DISPATCH_ERROR">Error de Despacho</option>
+                              <option value="LOSS_THEFT">Pérdida/Robo</option>
+                           </select>
+                        </div>
+                     </div>
+
+                     <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
+                        <button
+                           onClick={() => {
+                              setDiscrepancyModal(null);
+                              setReceptionQuantities({});
+                           }}
+                           className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-200 rounded-xl transition-colors"
+                        >
+                           Cancelar
+                        </button>
+                        <button
+                           onClick={() => {
+                              const select = document.getElementById("discrepancy-reason") as HTMLSelectElement;
+                              const reason = select?.value;
+                              if (!reason) {
+                                 alert("Por favor seleccione un motivo para la diferencia.");
+                                 return;
+                              }
+                              const transferId = discrepancyModal.transferId;
+                              setDiscrepancyModal(null);
+                              handleReceiveTransfer(transferId, reason);
+                           }}
+                           className="flex-1 py-3 bg-amber-600 text-white font-bold rounded-xl shadow-md hover:bg-amber-700 active:scale-95 transition-all"
+                        >
+                           Confirmar Recepción
+                        </button>
+                     </div>
+                  </div>
+               </div>
+            )}
+         </div>
+
+         {
+            breakdownData && (
+               <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200">
+                  <div className="bg-white w-full max-w-2xl rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+                     <div className="p-8 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
+                        <div>
+                           <h2 className="text-xl font-black text-gray-800 tracking-tight">Desglose de Stock</h2>
+                           <p className="text-sm font-bold text-gray-400 capitalize">{breakdownData.product.name}</p>
+                        </div>
+                        <button onClick={() => setBreakdownData(null)} className="p-3 bg-white hover:bg-gray-100 rounded-2xl text-gray-400">
+                           <X size={24} />
+                        </button>
+                     </div>
+                     <div className="flex-1 overflow-y-auto p-8">
+                        <div className="overflow-hidden rounded-2xl border border-gray-100">
+                           <table className="w-full text-left">
+                              <thead className="bg-gray-50">
+                                 <tr>
+                                    <th className="p-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Código</th>
+                                    <th className="p-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Estado</th>
+                                    <th className="p-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Vence</th>
+                                    <th className="p-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Creado</th>
+                                 </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-50">
+                                 {activeTracking.map(track => (
+                                    <tr key={track.id} className="hover:bg-gray-50 transition-colors">
+                                       <td className="p-4 font-bold text-gray-700">{track.trackingCode}</td>
+                                       <td className="p-4">
+                                          <span className="bg-green-100 text-green-700 text-[10px] font-black px-2 py-0.5 rounded-full uppercase">Disponible</span>
+                                       </td>
+                                       <td className="p-4 text-sm text-gray-500">{track.expirationDate || 'N/A'}</td>
+                                       <td className="p-4 text-sm text-gray-400 font-mono">{new Date(track.createdAt).toLocaleDateString()}</td>
+                                    </tr>
+                                 ))}
+                                 {activeTracking.length === 0 && (
+                                    <tr>
+                                       <td colSpan={4} className="p-10 text-center text-gray-400 italic text-sm">No hay registros de trazabilidad disponibles en este almacén.</td>
+                                    </tr>
+                                 )}
+                              </tbody>
+                           </table>
+                        </div>
+                     </div>
+                  </div>
+               </div>
+            )}
+      </>
    );
 };
 

@@ -58,6 +58,16 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
    const safeOrders = Array.isArray(purchaseOrders) ? purchaseOrders : [];
    const safeReceptions = Array.isArray(receptions) ? receptions : [];
 
+   const [activeAuditId, setActiveAuditId] = useState<string | null>(null);
+   const [pendingTracking, setPendingTracking] = useState<{
+      itemId: string;
+      productId: string;
+      productName: string;
+      quantity: number;
+      type: 'LOTE' | 'SERIE';
+      data: { trackingCode: string; expirationDate?: string; id?: string }[];
+   } | null>(null);
+
    // Navigation State
    const [activeTab, setActiveTab] = useState<Tab>('CREATE');
    const [isCreatingOrder, setIsCreatingOrder] = useState(false);
@@ -672,6 +682,101 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
       );
    };
 
+   const renderTrackingModal = (activeOrder: PurchaseOrder) => {
+      if (!pendingTracking) return null;
+
+      const saveTracking = () => {
+         onUpdateOrder({
+            ...activeOrder,
+            items: (activeOrder.items || []).map(i => {
+               if (i.variantSku === pendingTracking.itemId || (i.productId === pendingTracking.itemId && !i.variantSku)) {
+                  return { ...i, quantityReceived: pendingTracking.quantity, trackingData: pendingTracking.data };
+               }
+               return i;
+            })
+         });
+         setPendingTracking(null);
+      };
+
+      const updateTrack = (idx: number, field: string, value: string) => {
+         const newData = [...pendingTracking.data];
+         if (!newData[idx]) newData[idx] = { trackingCode: '' };
+         newData[idx] = { ...newData[idx], [field]: value };
+         setPendingTracking({ ...pendingTracking, data: newData });
+      };
+
+      return (
+         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+               <div className="p-8 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
+                  <div className="flex items-center gap-4">
+                     <div className="p-4 rounded-2xl bg-blue-100 text-blue-600">
+                        {pendingTracking.type === 'LOTE' ? <Calendar size={32} /> : <ScanBarcode size={32} />}
+                     </div>
+                     <div>
+                        <h2 className="text-xl font-black text-gray-800 tracking-tight">Trazabilidad: {pendingTracking.type}</h2>
+                        <p className="text-sm font-bold text-gray-400 truncate max-w-[200px]">{pendingTracking.productName}</p>
+                     </div>
+                  </div>
+                  <button onClick={() => setPendingTracking(null)} className="p-3 bg-white hover:bg-gray-100 rounded-2xl text-gray-400">
+                     <X size={24} />
+                  </button>
+               </div>
+
+               <div className="flex-1 overflow-y-auto p-8 space-y-6">
+                  {pendingTracking.type === 'LOTE' ? (
+                     <div className="space-y-4">
+                        <div className="space-y-2">
+                           <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Código de Lote</label>
+                           <input
+                              className="w-full bg-gray-50 rounded-2xl p-4 border border-gray-100 font-bold outline-none focus:ring-2 focus:ring-blue-500/20"
+                              placeholder="Ej: LOTE-2024-001"
+                              value={pendingTracking.data[0]?.trackingCode || ''}
+                              onChange={e => updateTrack(0, 'trackingCode', e.target.value)}
+                           />
+                        </div>
+                        <div className="space-y-2">
+                           <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Fecha de Vencimiento</label>
+                           <input
+                              type="date"
+                              className="w-full bg-gray-50 rounded-2xl p-4 border border-gray-100 font-bold outline-none focus:ring-2 focus:ring-blue-500/20"
+                              value={pendingTracking.data[0]?.expirationDate || ''}
+                              onChange={e => updateTrack(0, 'expirationDate', e.target.value)}
+                           />
+                        </div>
+                     </div>
+                  ) : (
+                     <div className="space-y-4">
+                        <p className="text-sm text-gray-500 mb-4">Ingrese {pendingTracking.quantity} números de serie únicos:</p>
+                        {Array.from({ length: pendingTracking.quantity }).map((_, i) => (
+                           <div key={i} className="flex items-center gap-3">
+                              <span className="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-full text-[10px] font-black text-gray-400 shrink-0">{i + 1}</span>
+                              <input
+                                 className="flex-1 bg-gray-50 rounded-xl p-3 border border-gray-100 font-bold outline-none focus:ring-2 focus:ring-blue-500/20"
+                                 placeholder="Escanee o digite serie..."
+                                 value={pendingTracking.data[i]?.trackingCode || ''}
+                                 onChange={e => updateTrack(i, 'trackingCode', e.target.value)}
+                              />
+                           </div>
+                        ))}
+                     </div>
+                  )}
+               </div>
+
+               <div className="p-8 bg-gray-50 border-t border-gray-100">
+                  <button
+                     onClick={saveTracking}
+                     disabled={pendingTracking.type === 'SERIE' && pendingTracking.data.filter(d => d.trackingCode).length < pendingTracking.quantity}
+                     className="w-full py-4 bg-blue-600 active:bg-blue-700 text-white rounded-2xl font-bold text-lg shadow-lg disabled:opacity-50"
+                  >
+                     Confirmar Trazabilidad
+                  </button>
+               </div>
+            </div>
+         </div>
+      );
+   };
+
    const renderReception = () => {
       if (receivingOrderId) {
          const order = (safeOrders || []).find(o => o.id === receivingOrderId);
@@ -698,6 +803,27 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
          }
 
          const updateItemReceived = (itemIdOrSku: string, newVal: number) => {
+            const product = safeProducts.find(p => p.id === itemIdOrSku || p.variants?.some(v => v.sku === itemIdOrSku));
+            const usesLots = product?.operationalFlags?.usesLots;
+            const usesSerial = product?.operationalFlags?.usesSerial;
+
+            // If quantity increases and is traceable, trigger modal
+            const currentItem = (order.items || []).find(i => i.variantSku === itemIdOrSku || (i.productId === itemIdOrSku && !i.variantSku));
+            const currentQty = currentItem?.quantityReceived || 0;
+
+            if (newVal > currentQty && (usesLots || usesSerial)) {
+               const qtyDiff = newVal - currentQty;
+               setPendingTracking({
+                  itemId: itemIdOrSku,
+                  productId: product!.id,
+                  productName: product!.name,
+                  quantity: newVal, // Total target quantity
+                  type: usesLots ? 'LOTE' : 'SERIE',
+                  data: currentItem?.trackingData || []
+               });
+               return; // Wait for modal
+            }
+
             onUpdateOrder({
                ...order,
                items: (order.items || []).map(i => {
@@ -741,6 +867,29 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   return;
                }
 
+               const targetWarehouseId = order.warehouseId || config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
+               console.log("📊 SCM: Target Warehouse:", targetWarehouseId);
+
+               const saveTrackingRecords = async (items: PurchaseOrderItem[]) => {
+                  for (const item of items) {
+                     if (item.trackingData && item.trackingData.length > 0) {
+                        const itemProduct = safeProducts.find(p => p.id === item.productId);
+                        for (const track of item.trackingData) {
+                           await db.saveDocument('inventoryTracking', {
+                              id: track.id || Math.random().toString(36).substr(2, 9),
+                              productId: item.productId,
+                              warehouseId: targetWarehouseId,
+                              type: itemProduct?.operationalFlags?.usesLots ? 'LOTE' : 'SERIE',
+                              trackingCode: track.trackingCode,
+                              expirationDate: track.expirationDate,
+                              status: 'AVAILABLE',
+                              receivedAt: new Date().toISOString(),
+                              receptionId: order.id
+                           });
+                        }
+                     }
+                  }
+               };
 
                console.log("📊 SCM: hasAnyReceived passed");
 
@@ -763,6 +912,9 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   await onReceiveStock(order.items, order.id);
                   console.log("✅ SCM: onReceiveStock success (Partial)");
 
+                  // 1c. Persist Tracking Records
+                  await saveTrackingRecords(order.items);
+
                   // 1b. Update Prices (Best Effort)
                   try { await updateSupplierPriceCatalog(); } catch (e) { console.warn("Price update failed", e); }
 
@@ -773,7 +925,8 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                         return {
                            ...i,
                            quantityOrdered: remaining,
-                           quantityReceived: 0
+                           quantityReceived: 0,
+                           trackingData: [] // Reset tracking for next reception
                         };
                      }).filter(i => i.quantityOrdered > 0);
 
@@ -794,6 +947,9 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   await onReceiveStock(order.items, order.id);
                   console.log("✅ SCM: onReceiveStock success (Full)");
 
+                  // Persist Tracking Records
+                  await saveTrackingRecords(order.items);
+
                   // Update Prices (Best Effort)
                   try { await updateSupplierPriceCatalog(); } catch (e) { console.warn("Price update failed", e); }
 
@@ -801,9 +957,12 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                }
 
                setReceivingOrderId(null);
+               setIsReceivingOrder(false);
+               console.log("🎉 SCM: Reception fully confirmed");
+
             } catch (error: any) {
-               console.error("❌ Error confirming reception:", error);
-               setRequestError(`Error crítico: ${error.message || 'Error desconocido'}`);
+               console.error("❌ SCM: Error in confirmReception:", error);
+               alert("Error al confirmar la recepción. Ver consola.");
             }
          };
 
@@ -919,106 +1078,107 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                      Confirmar Recepción
                   </button>
                </div>
+               {renderTrackingModal(order)}
             </div>
          );
       }
+   };
 
-      // Orders List (Active Receptions)
-      if (isReceivingOrder) {
-         return (
-            <div className="animate-in fade-in h-full overflow-y-auto pb-20">
-               <div className="flex items-center gap-4 mb-6">
-                  <button onClick={() => setIsReceivingOrder(false)} className="p-3 bg-white rounded-xl shadow-sm hover:bg-gray-50">
-                     <ArrowLeft size={24} />
-                  </button>
-                  <h3 className="text-xl font-bold text-gray-800">Órdenes Pendientes</h3>
-               </div>
-               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {activeOrders.length === 0 ? (
-                     <div className="col-span-full py-32 text-center text-gray-400 bg-gray-50 rounded-[3rem] border-4 border-dashed border-gray-200">
-                        <ClipboardList size={64} className="mx-auto mb-4 opacity-30" />
-                        <p className="text-xl font-bold">No hay órdenes pendientes</p>
-                        <button onClick={() => setActiveTab('CREATE')} className="mt-4 text-blue-600 font-bold">Crear nueva orden</button>
-                     </div>
-                  ) : (
-                     (activeOrders || []).map((po, idx) => {
-                        const supplier = (safeSuppliers || []).find(s => s.id === po.supplierId);
-                        const items = po.items || [];
-                        const progress = items.reduce((acc, i) => acc + i.quantityReceived, 0) / Math.max(1, items.reduce((acc, i) => acc + i.quantityOrdered, 0)) * 100;
+   // Orders List (Active Receptions)
+   if (isReceivingOrder) {
+      return (
+         <div className="animate-in fade-in h-full overflow-y-auto pb-20">
+            <div className="flex items-center gap-4 mb-6">
+               <button onClick={() => setIsReceivingOrder(false)} className="p-3 bg-white rounded-xl shadow-sm hover:bg-gray-50">
+                  <ArrowLeft size={24} />
+               </button>
+               <h3 className="text-xl font-bold text-gray-800">Órdenes Pendientes</h3>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+               {activeOrders.length === 0 ? (
+                  <div className="col-span-full py-32 text-center text-gray-400 bg-gray-50 rounded-[3rem] border-4 border-dashed border-gray-200">
+                     <ClipboardList size={64} className="mx-auto mb-4 opacity-30" />
+                     <p className="text-xl font-bold">No hay órdenes pendientes</p>
+                     <button onClick={() => setActiveTab('CREATE')} className="mt-4 text-blue-600 font-bold">Crear nueva orden</button>
+                  </div>
+               ) : (
+                  (activeOrders || []).map((po, idx) => {
+                     const supplier = (safeSuppliers || []).find(s => s.id === po.supplierId);
+                     const items = po.items || [];
+                     const progress = items.reduce((acc, i) => acc + i.quantityReceived, 0) / Math.max(1, items.reduce((acc, i) => acc + i.quantityOrdered, 0)) * 100;
 
-                        return (
-                           <div key={po.id || `po-${idx}`} onClick={() => setReceivingOrderId(po.id)} className="bg-white p-6 rounded-[2rem] border border-gray-200 shadow-sm active:scale-[0.98] transition-all cursor-pointer relative overflow-hidden group">
-                              <div className="absolute top-0 left-0 w-2 h-full bg-blue-500"></div>
+                     return (
+                        <div key={po.id || `po-${idx}`} onClick={() => setReceivingOrderId(po.id)} className="bg-white p-6 rounded-[2rem] border border-gray-200 shadow-sm active:scale-[0.98] transition-all cursor-pointer relative overflow-hidden group">
+                           <div className="absolute top-0 left-0 w-2 h-full bg-blue-500"></div>
 
-                              <div className="flex justify-between items-start mb-4 pl-4">
-                                 <div>
-                                    <h4 className="text-2xl font-bold text-gray-800">#{po.id}</h4>
-                                    <p className="text-gray-500 font-medium">{supplier?.name}</p>
-                                 </div>
-                                 <div className="bg-blue-50 text-blue-700 px-3 py-1 rounded-lg font-bold text-sm">
-                                    {formatSafeDate(po.date)}
-                                 </div>
+                           <div className="flex justify-between items-start mb-4 pl-4">
+                              <div>
+                                 <h4 className="text-2xl font-bold text-gray-800">#{po.id}</h4>
+                                 <p className="text-gray-500 font-medium">{supplier?.name}</p>
                               </div>
-
-                              <div className="pl-4 mb-6">
-                                 <div className="flex justify-between items-end">
-                                    <div>
-                                       <p className="text-xs text-gray-400 uppercase font-bold mb-1">Progreso</p>
-                                       <div className="flex items-center gap-2">
-                                          <span className="text-3xl font-black text-gray-800">{Math.round(progress)}%</span>
-                                       </div>
-                                    </div>
-                                    <div className="text-right">
-                                       <p className="text-xs text-gray-400 uppercase font-bold mb-1">Total</p>
-                                       <p className="text-xl font-bold text-gray-600">{config.currencySymbol}{po.totalCost.toFixed(2)}</p>
-                                    </div>
-                                 </div>
-                                 <div className="w-full bg-gray-100 h-3 rounded-full mt-3 overflow-hidden">
-                                    <div className="bg-blue-500 h-full rounded-full transition-all duration-500" style={{ width: `${progress}%` }}></div>
-                                 </div>
-                              </div>
-
-                              <div className="pl-4 pt-4 border-t border-gray-100 flex justify-end gap-3">
-                                 <button
-                                    onClick={(e) => { e.stopPropagation(); handleSendEmail(po); }}
-                                    className="px-4 py-2 bg-gray-100 text-gray-600 rounded-xl font-bold text-sm hover:bg-gray-200 transition-colors flex items-center gap-2"
-                                 >
-                                    <Mail size={16} /> {po.sentAt ? 'Reenviar' : 'Enviar Email'}
-                                 </button>
-                                 <span className="text-blue-600 font-bold flex items-center gap-2 group-hover:gap-4 transition-all">
-                                    Recibir Mercancía <ArrowRight size={20} />
-                                 </span>
+                              <div className="bg-blue-50 text-blue-700 px-3 py-1 rounded-lg font-bold text-sm">
+                                 {formatSafeDate(po.date)}
                               </div>
                            </div>
-                        );
-                     })
-                  )}
-               </div>
-            </div>
-         );
-      }
 
-      // Reception History
-      return (
-         <div className="flex flex-col h-full">
-            <div className="flex justify-between items-center mb-6">
-               <h2 className="text-xl font-bold text-gray-800">Historial de Recepciones</h2>
-               <button
-                  onClick={() => setIsReceivingOrder(true)}
-                  className="px-6 py-3 bg-green-600 text-white rounded-xl font-bold shadow-lg hover:bg-green-700 transition-all flex items-center gap-2"
-               >
-                  <Plus size={20} /> Nueva Recepción
-               </button>
+                           <div className="pl-4 mb-6">
+                              <div className="flex justify-between items-end">
+                                 <div>
+                                    <p className="text-xs text-gray-400 uppercase font-bold mb-1">Progreso</p>
+                                    <div className="flex items-center gap-2">
+                                       <span className="text-3xl font-black text-gray-800">{Math.round(progress)}%</span>
+                                    </div>
+                                 </div>
+                                 <div className="text-right">
+                                    <p className="text-xs text-gray-400 uppercase font-bold mb-1">Total</p>
+                                    <p className="text-xl font-bold text-gray-600">{config.currencySymbol}{po.totalCost.toFixed(2)}</p>
+                                 </div>
+                              </div>
+                              <div className="w-full bg-gray-100 h-3 rounded-full mt-3 overflow-hidden">
+                                 <div className="bg-blue-500 h-full rounded-full transition-all duration-500" style={{ width: `${progress}%` }}></div>
+                              </div>
+                           </div>
+
+                           <div className="pl-4 pt-4 border-t border-gray-100 flex justify-end gap-3">
+                              <button
+                                 onClick={(e) => { e.stopPropagation(); handleSendEmail(po); }}
+                                 className="px-4 py-2 bg-gray-100 text-gray-600 rounded-xl font-bold text-sm hover:bg-gray-200 transition-colors flex items-center gap-2"
+                              >
+                                 <Mail size={16} /> {po.sentAt ? 'Reenviar' : 'Enviar Email'}
+                              </button>
+                              <span className="text-blue-600 font-bold flex items-center gap-2 group-hover:gap-4 transition-all">
+                                 Recibir Mercancía <ArrowRight size={20} />
+                              </span>
+                           </div>
+                        </div>
+                     );
+                  })
+               )}
             </div>
-            <ReceptionHistory
-               receptions={safeReceptions}
-               config={config}
-               suppliers={suppliers}
-               purchaseOrders={purchaseOrders}
-            />
          </div>
       );
-   };
+   }
+
+   // Reception History
+   return (
+      <div className="flex flex-col h-full">
+         <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold text-gray-800">Historial de Recepciones</h2>
+            <button
+               onClick={() => setIsReceivingOrder(true)}
+               className="px-6 py-3 bg-green-600 text-white rounded-xl font-bold shadow-lg hover:bg-green-700 transition-all flex items-center gap-2"
+            >
+               <Plus size={20} /> Nueva Recepción
+            </button>
+         </div>
+         <ReceptionHistory
+            receptions={safeReceptions}
+            config={config}
+            suppliers={suppliers}
+            purchaseOrders={purchaseOrders}
+         />
+      </div>
+   );
 
    const renderSupplierModal = () => {
       if (!editingSupplier) return null;
@@ -1391,8 +1551,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
       </div>
    );
 
-   // --- RENDER MAIN ---
-
    if (isAuditMode) {
       return (
          <ErrorBoundary componentName="InventoryAudit">
@@ -1464,7 +1622,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   {activeTab === 'SUPPLIERS' && renderSuppliers()}
                </ErrorBoundary>
             </div>
-
          </div>
          {renderSupplierModal()}
          {selectedMatrixProduct && (

@@ -1,18 +1,80 @@
 
 import React, { useState } from 'react';
-import { Delete, KeyRound, Lock, User, UserCircle, Globe, ChevronDown } from 'lucide-react';
-import { User as UserType } from '../types';
+import { Delete, KeyRound, Lock, User, UserCircle, Globe, ChevronDown, Fingerprint } from 'lucide-react';
+import { User as UserType, TerminalConfig } from '../types';
+import { biometricService } from '../services/BiometricAuthService';
 
 interface LoginScreenProps {
   onLogin: (user: UserType) => void;
   subVertical: string;
   availableUsers: UserType[];
+  config: TerminalConfig;
 }
 
-const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availableUsers }) => {
+const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availableUsers, config }) => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
   const [showUsersList, setShowUsersList] = useState(false);
+  const [biometricError, setBiometricError] = useState(false);
+  const [biometricFailCount, setBiometricFailCount] = useState(0);
+  const [isHardwareAvailable, setIsHardwareAvailable] = useState(false);
+
+  // Check availability on mount
+  React.useEffect(() => {
+    const initBiometrics = async () => {
+      const available = await biometricService.isAvailable();
+      setIsHardwareAvailable(available);
+
+      if (config.security?.allowBiometrics && available && biometricFailCount < 3) {
+        // Ready for scan
+      }
+    };
+    initBiometrics();
+  }, [config.security?.allowBiometrics, biometricFailCount]);
+
+  const handleBiometricLogin = async () => {
+    if (biometricFailCount >= 3) {
+      setBiometricError(true);
+      return;
+    }
+
+    try {
+      setBiometricError(false);
+      // We iterate through available users to find those with registered credentials
+      const enrolledUsers = availableUsers.filter(u => u.biometrics?.credentialID);
+
+      if (enrolledUsers.length === 0) {
+        alert("No hay usuarios registrados con huella en este dispositivo.");
+        return;
+      }
+
+      // Collect all credential IDs for multi-user verification
+      const credentialIDs = enrolledUsers.map(u => u.biometrics!.credentialID);
+
+      // Verify and get the matched credentialID back
+      const matchedID = await biometricService.verify(credentialIDs);
+
+      if (matchedID) {
+        // Find the user that corresponds to the matched ID
+        const targetUser = enrolledUsers.find(u => u.biometrics?.credentialID === matchedID);
+        if (targetUser) {
+          onLogin(targetUser);
+        } else {
+          handleBioFail();
+        }
+      } else {
+        handleBioFail();
+      }
+    } catch (e) {
+      handleBioFail();
+    }
+  };
+
+  const handleBioFail = () => {
+    setBiometricFailCount(prev => prev + 1);
+    setBiometricError(true);
+    setTimeout(() => setBiometricError(false), 2000);
+  };
 
   const handleKeyPress = (key: string) => {
     setError(false);
@@ -24,7 +86,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
       if (pin.length < 4) {
         const newPin = pin + key;
         setPin(newPin);
-        
+
         // Auto-check on 4 digits
         if (newPin.length === 4) {
           checkLogin(newPin);
@@ -59,69 +121,87 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
       </div>
 
       <div className="max-w-md w-full bg-gray-800/80 backdrop-blur-md rounded-3xl border border-gray-700 shadow-2xl p-8 z-10 flex flex-col relative">
-        
+
         <div className="text-center mb-8">
-           <div className="bg-gray-700 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner">
-             <Lock className="text-blue-400" size={32} />
-           </div>
-           <h1 className="text-2xl font-bold text-white mb-1">Acceso de Usuario</h1>
-           <p className="text-gray-400 text-sm mb-2">{subVertical}</p>
-           
-           {/* Demo Users Hint */}
-           <button 
-             onClick={() => setShowUsersList(!showUsersList)}
-             className="text-xs text-blue-400 font-bold hover:text-blue-300 flex items-center justify-center gap-1 mx-auto bg-gray-700/50 px-3 py-1 rounded-full transition-colors"
-           >
-             Ver Credenciales Demo <ChevronDown size={14} className={`transition-transform ${showUsersList ? 'rotate-180' : ''}`} />
-           </button>
-           
-           {showUsersList && (
-             <div className="mt-4 bg-gray-700 rounded-xl p-3 animate-in slide-in-from-top-2 text-left space-y-2 border border-gray-600">
-               {availableUsers.map(u => (
-                 <div 
-                   key={u.id} 
-                   onClick={() => handleUserClick(u.pin)}
-                   className="flex justify-between items-center p-2 hover:bg-gray-600 rounded-lg cursor-pointer transition-colors group"
-                 >
-                   <div className="flex items-center gap-3">
-                     <div className="w-8 h-8 rounded-full bg-gray-500 flex items-center justify-center text-xs font-bold text-white">
-                        {u.name.charAt(0)}
-                     </div>
-                     <div>
-                        <p className="text-sm font-bold text-white">{u.name}</p>
-                        <p className="text-[10px] text-gray-300">{u.role}</p>
-                     </div>
-                   </div>
-                   <div className="text-right">
-                      <span className="text-xs font-mono bg-black/30 px-2 py-1 rounded text-green-400 group-hover:bg-black/50">
-                        {u.pin}
-                      </span>
-                   </div>
-                 </div>
-               ))}
-             </div>
-           )}
+          <div className="bg-gray-700 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner">
+            <Lock className="text-blue-400" size={32} />
+          </div>
+          <h1 className="text-2xl font-bold text-white mb-1">Acceso de Usuario</h1>
+          <p className="text-gray-400 text-sm mb-2">{subVertical}</p>
+
+          {/* Demo Users Hint */}
+          <button
+            onClick={() => setShowUsersList(!showUsersList)}
+            className="text-xs text-blue-400 font-bold hover:text-blue-300 flex items-center justify-center gap-1 mx-auto bg-gray-700/50 px-3 py-1 rounded-full transition-colors"
+          >
+            Ver Credenciales Demo <ChevronDown size={14} className={`transition-transform ${showUsersList ? 'rotate-180' : ''}`} />
+          </button>
+          {showUsersList && (
+            <div className="mt-4 bg-gray-700 rounded-xl p-3 animate-in slide-in-from-top-2 text-left space-y-2 border border-gray-600">
+              {availableUsers.map(u => (
+                <div
+                  key={u.id}
+                  onClick={() => handleUserClick(u.pin)}
+                  className="flex justify-between items-center p-2 hover:bg-gray-600 rounded-lg cursor-pointer transition-colors group"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-gray-500 flex items-center justify-center text-xs font-bold text-white">
+                      {u.name.charAt(0)}
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-white">{u.name}</p>
+                      <p className="text-[10px] text-gray-300">{u.role}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-xs font-mono bg-black/30 px-2 py-1 rounded text-green-400 group-hover:bg-black/50">
+                      {u.pin}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
+
+        {/* Biometric Icon */}
+        {config.security?.allowBiometrics && isHardwareAvailable && biometricFailCount < 3 && (
+          <div className="flex justify-center mb-8">
+            <button
+              onClick={handleBiometricLogin}
+              className={`w-20 h-20 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${biometricError
+                ? 'bg-red-500/20 border-red-500 animate-shake'
+                : 'bg-blue-600/20 border-blue-500 hover:bg-blue-600/40 hover:scale-105 active:scale-95'
+                }`}
+            >
+              <Fingerprint size={40} className={`text-white ${biometricError ? 'text-red-400' : 'text-blue-400'}`} />
+            </button>
+            {biometricError && (
+              <div className="absolute mt-24 text-red-400 text-xs font-bold animate-in fade-in">
+                No reconocido ({biometricFailCount}/3)
+              </div>
+            )}
+          </div>
+        )}
 
         {/* PIN Display */}
         <div className="mb-8">
-           <div className={`flex justify-center gap-4 transition-all duration-300 ${error ? 'animate-shake' : ''}`}>
-             {[0, 1, 2, 3].map((i) => (
-               <div 
-                 key={i}
-                 className={`w-4 h-4 rounded-full transition-all duration-200 ${
-                   pin.length > i 
-                     ? error ? 'bg-red-500 scale-125' : 'bg-blue-500 scale-110' 
-                     : 'bg-gray-600'
-                 }`}
-               />
-             ))}
-           </div>
-           {error && (
-             <p className="text-center text-red-500 text-xs mt-4 font-semibold animate-in fade-in">
-               PIN Incorrecto. Intente nuevamente.
-             </p>
-           )}
+          <div className={`flex justify-center gap-4 transition-all duration-300 ${error ? 'animate-shake' : ''}`}>
+            {[0, 1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className={`w-4 h-4 rounded-full transition-all duration-200 ${pin.length > i
+                  ? error ? 'bg-red-500 scale-125' : 'bg-blue-500 scale-110'
+                  : 'bg-gray-600'
+                  }`}
+              />
+            ))}
+          </div>
+          {error && (
+            <p className="text-center text-red-500 text-xs mt-4 font-semibold animate-in fade-in">
+              PIN Incorrecto. Intente nuevamente.
+            </p>
+          )}
         </div>
 
         {/* Keypad */}
@@ -154,9 +234,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
             <Delete size={24} />
           </button>
         </div>
-        
+
         <div className="text-center text-gray-500 text-xs">
-           <p>Terminal ID: POS-001</p>
+          <p>Terminal ID: POS-001</p>
         </div>
 
       </div>

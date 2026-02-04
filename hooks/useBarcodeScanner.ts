@@ -15,7 +15,7 @@ interface BarcodeScannerOptions {
 export const useBarcodeScanner = ({
     onScan,
     enabled = true,
-    prefixTimeout = 30,
+    prefixTimeout = 50,
     idleTimeout = 100
 }: BarcodeScannerOptions) => {
     const buffer = useRef<string>('');

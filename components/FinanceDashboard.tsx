@@ -120,7 +120,9 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
    };
 
    // --- CALCS FOR X-REPORT ---
-   const payments = transactions.flatMap(t => t.payments);
+   // Robustly filter out any closed transactions (Double-check)
+   const openTransactions = transactions.filter(t => !t.zReportId);
+   const payments = openTransactions.flatMap(t => t.payments);
    const totalsByMethod = payments.reduce((acc: Record<string, number>, p) => {
       acc[p.method] = (acc[p.method] || 0) + p.amount;
       return acc;

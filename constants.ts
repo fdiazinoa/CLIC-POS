@@ -58,6 +58,7 @@ export const DEFAULT_TERMINAL_CONFIG = {
     requirePinForVoid: true,
     requirePinForDiscount: true,
     requireManagerForRefunds: true,
+    allowBiometrics: false,
     autoLogoutMinutes: 15
   },
   pricing: {

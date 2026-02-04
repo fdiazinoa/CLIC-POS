@@ -130,6 +130,8 @@ export interface InventoryLedgerEntry {
   syncError?: string;
   variantId?: string; // NEW: Specific variant ID
   variantName?: string; // NEW: Human readable variant detail (e.g. "Talla 40")
+  trackingId?: string; // NEW: Assigned lot/serial ID
+  trackingCode?: string; // NEW: Assigned lot/serial code
 }
 
 // --- WATCHLIST & BI TYPES ---
@@ -260,6 +262,7 @@ export interface TerminalConfig {
     requirePinForDiscount: boolean;
     requireManagerForRefunds: boolean;
     autoLogoutMinutes: number;
+    allowBiometrics?: boolean; // NEW: Biometric Auth Toggle
   };
   pricing: {
     allowedTariffIds: string[];
@@ -530,6 +533,10 @@ export interface BusinessConfig {
   roles?: RoleDefinition[];
   auditLogs?: AuditLogEntry[];
   n8nConfig?: N8nConfig;
+  inventoryScope?: {
+    defaultSalesWarehouseId: string;
+    visibleWarehouseIds: string[];
+  };
 }
 
 export interface RoleDefinition {
@@ -550,6 +557,13 @@ export interface User {
   role: string; // Legacy role string, keep for compatibility or migrate
   roleId?: string; // Link to RoleDefinition
   photo?: string;
+  biometrics?: UserBiometrics; // NEW: Biometric methods
+}
+
+export interface UserBiometrics {
+  credentialID: string;
+  publicKey: string;
+  registeredAt: string; // ISO Date
 }
 
 export interface CustomerAddress {
@@ -640,6 +654,8 @@ export interface ProductOperationalFlags {
   allowNegativeStock: boolean;
   excludeFromPromotions: boolean;
   excludeFromLoyalty: boolean;
+  usesLots: boolean;
+  usesSerial: boolean;
 }
 
 export interface Product {
@@ -683,6 +699,20 @@ export interface ProductStock {
   updatedAt: string;
 }
 
+export interface InventoryTracking {
+  id: string;
+  productId: string;
+  variantId?: string;
+  warehouseId: string;
+  type: 'LOTE' | 'SERIE';
+  trackingCode: string;
+  expirationDate?: string;
+  status: 'AVAILABLE' | 'SOLD' | 'RESERVED';
+  receivedAt: string;
+  receptionId?: string;
+  saleId?: string;
+}
+
 /**
  * Cart Item
  * 
@@ -711,6 +741,11 @@ export interface CartItem extends Product {
   salespersonId?: string;
   ncf?: string; // NCF asignado a esta línea o al ticket
   appliedPromotionId?: string;
+  trackingId?: string; // NEW: Assigned lot/serial ID
+  trackingCode?: string; // NEW: Assigned lot/serial code
+  trackingData?: any[]; // NEW: Detailed tracking records selected
+  variantSku?: string; // NEW: Specific SKU for variants
+  variantInfo?: string; // NEW: Human readable variant detail
 }
 
 export interface Transaction {
@@ -737,6 +772,10 @@ export interface Transaction {
 
   // Status
   status: 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND';
+
+  // Audit (RBAC)
+  authorizedById?: string;
+  authorizedByName?: string;
 
   // Customer
   customerId?: string;
@@ -980,11 +1019,13 @@ export interface PurchaseOrderItem {
   cost: number;
   variantSku?: string;
   variantInfo?: string; // e.g. "Rojo / 42"
+  trackingData?: { trackingCode: string; expirationDate?: string; id?: string }[];
 }
 
 export interface PurchaseOrder {
   id: string;
   supplierId: string;
+  warehouseId?: string;
   date: string;
   dueDate?: string; // Derived from supplier.paymentTermDays
   status: 'ORDERED' | 'PARTIAL' | 'COMPLETED';
@@ -1170,6 +1211,7 @@ export interface Coupon {
 
 export type Permission =
   | 'ALL'
+  | 'CAN_REFUND'
   // --- POS CORE ---
   | 'SALE'
   | 'POS_VOID_ITEM'

@@ -8,7 +8,7 @@ import {
   ShieldAlert, AlertCircle, Check, LayoutTemplate, ClipboardList, ListTree,
   Truck, ArrowDownToLine, Building2, Search, Filter, AlertTriangle,
   Scale, Ban, ShieldCheck, Zap, History, MapPin, ChevronRight, ChevronDown, Settings,
-  Keyboard, BookOpen, ArrowUpRight, ArrowDownLeft, Calendar, Award, Sparkles, TrendingUp
+  Keyboard, BookOpen, ArrowUpRight, ArrowDownLeft, Calendar, Award, Sparkles, TrendingUp, ScanBarcode
 } from 'lucide-react';
 import { calculateOptimalInventoryLevels, InventoryCalculation } from '../utils/inventoryEngine';
 import {
@@ -46,7 +46,9 @@ const DEFAULT_OPERATIONAL_FLAGS: ProductOperationalFlags = {
   ageRestricted: false,
   allowNegativeStock: false,
   excludeFromPromotions: false,
-  excludeFromLoyalty: false
+  excludeFromLoyalty: false,
+  usesLots: false,
+  usesSerial: false
 };
 
 const VARIANT_TEMPLATES = [
@@ -1092,6 +1094,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                 <OperationalSwitch label="Permitir Venta Negativa" description="Vende aunque no haya stock." checked={formData.operationalFlags?.allowNegativeStock} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, allowNegativeStock: v } })} icon={AlertCircle} />
                 <OperationalSwitch label="Excluir de Promociones" description="Ignora cupones y descuentos globales." checked={formData.operationalFlags?.excludeFromPromotions} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, excludeFromPromotions: v } })} icon={Tag} />
                 <OperationalSwitch label="Excluir de Puntos" description="Este producto no genera puntos de lealtad." checked={formData.operationalFlags?.excludeFromLoyalty} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, excludeFromLoyalty: v } })} icon={Award} />
+                <OperationalSwitch label="Usa Lotes / Vencimiento" description="Trazabilidad por lote y fecha de expiración." checked={formData.operationalFlags?.usesLots} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, usesLots: v } })} icon={Calendar} />
+                <OperationalSwitch label="Usa Números de Serie" description="Trazabilidad por código único por unidad." checked={formData.operationalFlags?.usesSerial} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, usesSerial: v } })} icon={ScanBarcode} />
               </div>
             </div>
           )}

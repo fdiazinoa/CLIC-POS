@@ -36,11 +36,14 @@ class SyncManager {
      */
     async initialize(config: BusinessConfig, terminalId: string) {
         // Detect Network Mode
+        // NOTE: We allow SyncManager even in network mode for Master to manage terminals
+        /*
         if (dbAdapter.adapterType === 'network') {
             console.log("🛑 SyncManager disabled: Application is running in full Network Mode (No local DB).");
             this.isDisabled = true;
             return;
         }
+        */
 
         permissionService.initialize(config, terminalId);
         this.isMaster = permissionService.isMasterTerminal();
@@ -75,19 +78,25 @@ class SyncManager {
                 console.error('❌ Failed to initialize API sync adapter:', error);
             }
         } else if (this.isMaster) {
-            // Master terminal may also need to authenticate with its own server for push operations
+            // Master terminal: Authenticate with own server (via proxy)
             // Use current origin to leverage the Vite proxy (avoids Mixed Content on HTTPS)
             const masterUrl = this.syncConfig.masterUrl || window.location.origin;
+
+            // Ensure config has the URL for future reference
+            if (!this.syncConfig.masterUrl) {
+                this.syncConfig.masterUrl = masterUrl;
+            }
+
             try {
                 await apiSyncAdapter.initialize({
                     masterUrl,
                     terminalId: terminalId,
-                    autoRetry: false,
+                    autoRetry: true, // Retry enabled for Master too, to handle server restarts
                     retryDelayMs: 5000
                 });
                 console.log(`🔄 SyncManager initialized in MASTER mode at ${masterUrl}`);
             } catch (error) {
-                console.warn('⚠️  Master sync adapter initialization failed (may be normal if server not running):', error);
+                console.warn('⚠️  Master sync adapter initialization failed:', error);
             }
         }
 

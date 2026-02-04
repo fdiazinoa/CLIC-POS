@@ -203,7 +203,11 @@ const db = {
   cashMovements: [],
   purchaseOrders: [],
   suppliers: [],
-  internalSequences: [],
+  internalSequences: [
+    { id: 'TICKET', documentType: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar para todas las ventas.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
+    { id: 'REFUND', documentType: 'REFUND', name: 'Devolución / Abono', description: 'Notas de crédito por devoluciones.', prefix: 'NC', nextNumber: 1, padding: 6, icon: 'RotateCcw', color: 'orange' },
+    { id: 'TRANSFER', documentType: 'TRANSFER', name: 'Nota de Traspaso', description: 'Movimiento de inventario entre almacenes.', prefix: 'TR', nextNumber: 1, padding: 6, icon: 'ArrowRightLeft', color: 'purple' },
+  ],
   inventoryLedger: []
 };
 
