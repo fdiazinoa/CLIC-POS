@@ -38,7 +38,8 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
    // Return Mode State
    const [returnModeId, setReturnModeId] = useState<string | null>(null);
-   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set()); // Set of CartItem.cartId
+   // Map of cartId -> quantity to return
+   const [selectedItemsQty, setSelectedItemsQty] = useState<Map<string, number>>(new Map());
    const [returnReason, setReturnReason] = useState<ReturnReason>('ERROR');
 
    // Gift Receipt State
@@ -120,27 +121,37 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       e.stopPropagation();
       setReturnModeId(id);
       setExpandedId(id); // Ensure it's open
-      setSelectedItems(new Set());
+      setSelectedItemsQty(new Map());
       setReturnReason('ERROR');
    };
 
    const cancelReturnMode = () => {
       setReturnModeId(null);
-      setSelectedItems(new Set());
+      setSelectedItemsQty(new Map());
    };
 
-   const toggleItemSelection = (cartId: string) => {
-      const newSet = new Set(selectedItems);
-      if (newSet.has(cartId)) {
-         newSet.delete(cartId);
-      } else {
-         newSet.add(cartId);
+   const incrementReturnQty = (cartId: string, maxQty: number) => {
+      const newMap = new Map(selectedItemsQty);
+      const current = newMap.get(cartId) || 0;
+      if (current < maxQty) {
+         newMap.set(cartId, current + 1);
+         setSelectedItemsQty(newMap);
       }
-      setSelectedItems(newSet);
+   };
+
+   const decrementReturnQty = (cartId: string) => {
+      const newMap = new Map(selectedItemsQty);
+      const current = newMap.get(cartId) || 0;
+      if (current > 1) {
+         newMap.set(cartId, current - 1);
+      } else {
+         newMap.delete(cartId);
+      }
+      setSelectedItemsQty(newMap);
    };
 
    const confirmRefund = async (transaction: Transaction) => {
-      if (selectedItems.size === 0) return;
+      if (selectedItemsQty.size === 0) return;
 
       // Validation: Check if terminal has REFUND document series assigned
       const terminalId = config.terminals?.[0]?.id || 'T1';
@@ -162,10 +173,16 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       if (!authorized) return;
 
       if (confirm("¿Confirmar devolución de los artículos seleccionados?")) {
-         const itemsToRefund = transaction.items.filter(item => selectedItems.has(item.cartId));
+         // Build items with adjusted quantities
+         const itemsToRefund = transaction.items
+            .filter(item => selectedItemsQty.has(item.cartId))
+            .map(item => ({
+               ...item,
+               quantity: selectedItemsQty.get(item.cartId) || item.quantity
+            }));
          onRefundTransaction(transaction, itemsToRefund, REASONS.find(r => r.id === returnReason)?.label || 'Devolución');
          setReturnModeId(null);
-         setSelectedItems(new Set());
+         setSelectedItemsQty(new Map());
       }
    };
 
@@ -181,9 +198,12 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       if (!tx) return 0;
 
       return tx.items
-         .filter(item => selectedItems.has(item.cartId))
-         .reduce((acc, item) => acc + (item.price * item.quantity), 0) * (1 + config.taxRate);
-   }, [returnModeId, selectedItems, transactions, config.taxRate]);
+         .filter(item => selectedItemsQty.has(item.cartId))
+         .reduce((acc, item) => {
+            const qtyToReturn = selectedItemsQty.get(item.cartId) || 0;
+            return acc + (item.price * qtyToReturn);
+         }, 0) * (1 + config.taxRate);
+   }, [returnModeId, selectedItemsQty, transactions, config.taxRate]);
 
 
    // --- RENDER HELPERS ---
@@ -251,7 +271,12 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                               <div>
                                  <div className="flex items-center gap-2">
                                     <h3 className={`font-bold text-lg ${isClosed ? 'text-gray-600' : 'text-gray-900'}`}>Ticket #{tx.displayId || tx.id}</h3>
-                                    {isRefunded && <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[10px] font-bold uppercase rounded-md">Reembolsado</span>}
+                                    {isRefunded && (
+                                       <span className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded-md ${tx.status === 'PARTIAL_REFUND' ? 'bg-orange-100 text-orange-600' : 'bg-red-100 text-red-600'
+                                          }`}>
+                                          {tx.status === 'PARTIAL_REFUND' ? 'Parcialmente Reembolsado' : 'Reembolsado'}
+                                       </span>
+                                    )}
                                     {isClosed && <span className="px-2 py-0.5 bg-gray-200 text-gray-600 text-[10px] font-bold uppercase rounded-md border border-gray-300">Cerrado</span>}
                                  </div>
                                  <div className="flex items-center gap-3 text-sm text-gray-500 mt-1">
@@ -264,6 +289,11 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                               <p className={`text-xl font-black ${isRefunded ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
                                  {config.currencySymbol}{tx.total.toFixed(2)}
                               </p>
+                              {isRefunded && (
+                                 <p className="text-[10px] font-black text-red-500 bg-red-50 px-1.5 py-0.5 rounded-md border border-red-100 mt-1">
+                                    Reembolsado: {config.currencySymbol}{((tx.relatedTransactions || []).reduce((acc, relId) => acc + (transactions.find(t => t.id === relId)?.total || 0), 0)).toFixed(2)}
+                                 </p>
+                              )}
                               <p className="text-xs text-gray-400 font-medium">{new Date(tx.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                            </div>
                         </div>
@@ -272,52 +302,102 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                         {(isExpanded || isReturnActive) && (
                            <div className="border-t border-gray-100 bg-gray-50/50 animate-in slide-in-from-top-2 duration-200">
                               <div className="p-3 space-y-1">
-                                 {tx.items.map((item, idx) => (
-                                    <div
-                                       key={item.cartId || `item-${idx}`}
-                                       onClick={() => isReturnActive && toggleItemSelection(item.cartId)}
-                                       className={`p-3 rounded-xl transition-all ${isReturnActive ? 'cursor-pointer hover:bg-white border border-transparent' : ''
-                                          } ${selectedItems.has(item.cartId) ? 'bg-red-50 border-red-200 shadow-sm' : ''}`}
-                                    >
-                                       <div className="flex justify-between items-start">
-                                          <div className="flex items-center gap-3">
-                                             {isReturnActive && (
-                                                <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${selectedItems.has(item.cartId) ? 'bg-red-500 border-red-500 text-white' : 'bg-white border-gray-300'
-                                                   }`}>
-                                                   {selectedItems.has(item.cartId) && <Check size={12} strokeWidth={3} />}
-                                                </div>
-                                             )}
-                                             <div>
-                                                <p className="font-bold text-gray-800 text-sm leading-tight">{item.name}</p>
-                                                <p className="text-[10px] text-gray-500 font-bold uppercase mt-1">
-                                                   {item.quantity}x {config.currencySymbol}{item.price.toFixed(2)}
-                                                </p>
-                                                {item.salespersonId && (
-                                                   <p className="text-[10px] text-blue-500 font-bold uppercase mt-0.5">
-                                                      Vendedor: {users.find(u => u.id === item.salespersonId)?.name || 'Desconocido'}
+                                 {tx.items.map((item, idx) => {
+                                    const isSelected = selectedItemsQty.has(item.cartId);
+                                    const returnQty = selectedItemsQty.get(item.cartId) || 0;
+                                    return (
+                                       <div
+                                          key={item.cartId || `item-${idx}`}
+                                          className={`p-3 rounded-xl transition-all ${isReturnActive ? 'border border-transparent' : ''}
+                                          ${isSelected ? 'bg-red-50 border-red-200 shadow-sm' : ''}`}
+                                       >
+                                          <div className="flex justify-between items-start">
+                                             <div className="flex items-center gap-3 flex-1">
+                                                {isReturnActive && (
+                                                   <div className="flex items-center gap-2">
+                                                      <button
+                                                         onClick={() => decrementReturnQty(item.cartId)}
+                                                         className="w-7 h-7 rounded-lg bg-white border-2 border-gray-300 hover:border-red-500 hover:bg-red-50 text-gray-600 hover:text-red-600 font-black flex items-center justify-center transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                                                         disabled={!isSelected}
+                                                      >
+                                                         −
+                                                      </button>
+                                                      <div className="w-10 text-center font-black text-lg text-gray-800">
+                                                         {returnQty}
+                                                      </div>
+                                                      <button
+                                                         onClick={() => incrementReturnQty(item.cartId, item.quantity)}
+                                                         className="w-7 h-7 rounded-lg bg-red-500 border-2 border-red-500 text-white font-black flex items-center justify-center hover:bg-red-600 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                                                         disabled={returnQty >= item.quantity}
+                                                      >
+                                                         +
+                                                      </button>
+                                                   </div>
+                                                )}
+                                                <div>
+                                                   <p className="font-bold text-gray-800 text-sm leading-tight">{item.name}</p>
+                                                   <p className="text-[10px] text-gray-500 font-bold uppercase mt-1">
+                                                      {item.quantity}x {config.currencySymbol}{item.price.toFixed(2)}
                                                    </p>
-                                                )}
-                                                {item.note && (
-                                                   <div className="mt-1 flex items-start gap-1 text-[10px] text-yellow-700 font-medium italic">
-                                                      <StickyNote size={10} className="mt-0.5" />
-                                                      <span>Nota: {item.note}</span>
-                                                   </div>
-                                                )}
-                                                {/* Properties visiblity in history */}
-                                                {item.modifiers && item.modifiers.length > 0 && (
-                                                   <div className="flex gap-1 mt-1">
-                                                      {item.modifiers.map((m, mi) => (
-                                                         <span key={mi} className="text-[9px] font-black uppercase text-blue-500 bg-blue-50 px-1 rounded border border-blue-100">{m}</span>
-                                                      ))}
-                                                   </div>
+                                                   {item.salespersonId && (
+                                                      <p className="text-[10px] text-blue-500 font-bold uppercase mt-0.5">
+                                                         Vendedor: {users.find(u => u.id === item.salespersonId)?.name || 'Desconocido'}
+                                                      </p>
+                                                   )}
+                                                   {item.note && (
+                                                      <div className="mt-1 flex items-start gap-1 text-[10px] text-yellow-700 font-medium italic">
+                                                         <StickyNote size={10} className="mt-0.5" />
+                                                         <span>Nota: {item.note}</span>
+                                                      </div>
+                                                   )}
+                                                   {/* Properties visiblity in history */}
+                                                   {item.modifiers && item.modifiers.length > 0 && (
+                                                      <div className="flex gap-1 mt-1">
+                                                         {item.modifiers.map((m, mi) => (
+                                                            <span key={mi} className="text-[9px] font-black uppercase text-blue-500 bg-blue-50 px-1 rounded border border-blue-100">{m}</span>
+                                                         ))}
+                                                      </div>
+                                                   )}
+                                                </div>
+                                             </div>
+                                             <div className="text-right">
+                                                <span className="font-bold text-gray-700 text-sm">{config.currencySymbol}{(item.price * item.quantity).toFixed(2)}</span>
+                                                {isReturnActive && isSelected && (
+                                                   <p className="text-[10px] font-black text-red-600 mt-1">
+                                                      A devolver: {config.currencySymbol}{(item.price * returnQty).toFixed(2)}
+                                                   </p>
                                                 )}
                                              </div>
                                           </div>
-                                          <span className="font-bold text-gray-700 text-sm">{config.currencySymbol}{(item.price * item.quantity).toFixed(2)}</span>
                                        </div>
-                                    </div>
-                                 ))}
+                                    );
+                                 })}
                               </div>
+
+                              {/* Linked Documents Section */}
+                              {tx.relatedTransactions && tx.relatedTransactions.length > 0 && (
+                                 <div className="mx-3 mt-1 mb-3 p-3 bg-white rounded-xl border border-gray-100 shadow-sm">
+                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                                       <FileText size={10} /> Documentos Vinculados
+                                    </p>
+                                    <div className="space-y-2">
+                                       {tx.relatedTransactions.map(relId => {
+                                          const relTx = (transactions || []).find(t => t.id === relId);
+                                          if (!relTx) return null;
+                                          return (
+                                             <div key={relId} className="flex items-center justify-between text-xs">
+                                                <div className="flex items-center gap-2 text-gray-700">
+                                                   <span className="text-gray-400">📄</span>
+                                                   <span className="font-bold">Nota de Crédito #{relTx.displayId || relTx.id}</span>
+                                                   {relTx.ncf && <span className="text-[10px] text-gray-400 bg-gray-50 px-1 rounded border border-gray-100 font-mono">{relTx.ncf}</span>}
+                                                </div>
+                                                <span className="font-black text-red-500">-{config.currencySymbol}{relTx.total.toFixed(2)}</span>
+                                             </div>
+                                          );
+                                       })}
+                                    </div>
+                                 </div>
+                              )}
 
                               {/* Controls Footer */}
                               <div className="p-4 bg-white border-t border-gray-200 flex justify-between items-center gap-4">
@@ -343,7 +423,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                                        </div>
                                        <div className="grid grid-cols-2 gap-3">
                                           <button onClick={cancelReturnMode} className="py-3 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200">Cancelar</button>
-                                          <button onClick={() => confirmRefund(tx)} disabled={selectedItems.size === 0} className="py-3 bg-red-600 text-white rounded-xl font-bold shadow-lg disabled:opacity-50 flex items-center justify-center gap-2"><Check size={18} /> Confirmar</button>
+                                          <button onClick={() => confirmRefund(tx)} disabled={selectedItemsQty.size === 0} className="py-3 bg-red-600 text-white rounded-xl font-bold shadow-lg disabled:opacity-50 flex items-center justify-center gap-2"><Check size={18} /> Confirmar</button>
                                        </div>
                                     </div>
                                  )}
@@ -357,35 +437,37 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          </div>
 
          {/* GIFT RECEIPT MODAL */}
-         {giftReceiptTx && (
-            <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-               <div className="bg-white rounded-2xl shadow-2xl overflow-hidden w-full max-w-sm flex flex-col">
-                  <div className="p-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
-                     <h3 className="font-bold text-gray-800 flex items-center gap-2"><Gift className="text-purple-600" size={20} /> Ticket Regalo</h3>
-                     <button onClick={() => setGiftReceiptTx(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
-                  </div>
-                  <div className="p-6 bg-white overflow-y-auto max-h-[60vh] font-mono text-sm leading-relaxed text-gray-700">
-                     <div className="text-center mb-6"><h2 className="font-bold text-lg uppercase">{config.companyInfo.name}</h2><p className="text-xs">{config.companyInfo.address}</p><p className="text-xs mt-2 font-bold">*** TICKET DE REGALO ***</p></div>
-                     <div className="border-b-2 border-dashed border-gray-300 pb-2 mb-2 text-xs"><p>Fecha: {new Date(giftReceiptTx.date).toLocaleString()}</p><p>Ref: {giftReceiptTx.displayId || giftReceiptTx.id}</p></div>
-                     <table className="w-full text-xs mb-4">
-                        <thead><tr className="border-b border-gray-800"><th className="text-left py-1">Cant</th><th className="text-left py-1">Descripción</th></tr></thead>
-                        <tbody>
-                           {giftReceiptTx.items.map((item, i) => (
-                              <tr key={i}><td className="py-1 align-top w-8">{item.quantity}</td><td className="py-1 align-top">{item.name} {item.modifiers && <span className="text-[9px] uppercase opacity-50 block">{item.modifiers.join(' • ')}</span>}</td></tr>
-                           ))}
-                        </tbody>
-                     </table>
-                     <div className="border-t-2 border-dashed border-gray-300 pt-4 text-center space-y-4">
-                        <p className="text-xs">Válido para cambios por 30 días.</p>
-                        <div className="flex flex-col items-center"><QrCode size={64} className="text-gray-800" /><span className="text-[10px] mt-1">{giftReceiptTx.displayId || giftReceiptTx.id}</span></div>
+         {
+            giftReceiptTx && (
+               <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+                  <div className="bg-white rounded-2xl shadow-2xl overflow-hidden w-full max-w-sm flex flex-col">
+                     <div className="p-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
+                        <h3 className="font-bold text-gray-800 flex items-center gap-2"><Gift className="text-purple-600" size={20} /> Ticket Regalo</h3>
+                        <button onClick={() => setGiftReceiptTx(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+                     </div>
+                     <div className="p-6 bg-white overflow-y-auto max-h-[60vh] font-mono text-sm leading-relaxed text-gray-700">
+                        <div className="text-center mb-6"><h2 className="font-bold text-lg uppercase">{config.companyInfo.name}</h2><p className="text-xs">{config.companyInfo.address}</p><p className="text-xs mt-2 font-bold">*** TICKET DE REGALO ***</p></div>
+                        <div className="border-b-2 border-dashed border-gray-300 pb-2 mb-2 text-xs"><p>Fecha: {new Date(giftReceiptTx.date).toLocaleString()}</p><p>Ref: {giftReceiptTx.displayId || giftReceiptTx.id}</p></div>
+                        <table className="w-full text-xs mb-4">
+                           <thead><tr className="border-b border-gray-800"><th className="text-left py-1">Cant</th><th className="text-left py-1">Descripción</th></tr></thead>
+                           <tbody>
+                              {giftReceiptTx.items.map((item, i) => (
+                                 <tr key={i}><td className="py-1 align-top w-8">{item.quantity}</td><td className="py-1 align-top">{item.name} {item.modifiers && <span className="text-[9px] uppercase opacity-50 block">{item.modifiers.join(' • ')}</span>}</td></tr>
+                              ))}
+                           </tbody>
+                        </table>
+                        <div className="border-t-2 border-dashed border-gray-300 pt-4 text-center space-y-4">
+                           <p className="text-xs">Válido para cambios por 30 días.</p>
+                           <div className="flex flex-col items-center"><QrCode size={64} className="text-gray-800" /><span className="text-[10px] mt-1">{giftReceiptTx.displayId || giftReceiptTx.id}</span></div>
+                        </div>
+                     </div>
+                     <div className="p-4 bg-gray-50 border-t border-gray-200">
+                        <button onClick={() => { alert("Imprimiendo..."); setGiftReceiptTx(null); }} className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold shadow-lg hover:bg-purple-700 transition-transform active:scale-95 flex items-center justify-center gap-2"><Printer size={20} /> Imprimir Ticket</button>
                      </div>
                   </div>
-                  <div className="p-4 bg-gray-50 border-t border-gray-200">
-                     <button onClick={() => { alert("Imprimiendo..."); setGiftReceiptTx(null); }} className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold shadow-lg hover:bg-purple-700 transition-transform active:scale-95 flex items-center justify-center gap-2"><Printer size={20} /> Imprimir Ticket</button>
-                  </div>
                </div>
-            </div>
-         )}
+            )
+         }
 
          {/* Supervisor Modal */}
          <SupervisorModal {...supervisorModalProps} users={users} />

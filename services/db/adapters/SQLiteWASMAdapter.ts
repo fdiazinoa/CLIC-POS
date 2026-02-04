@@ -9,6 +9,7 @@ const KEY_NAME = 'latest';
 export class SQLiteWASMAdapter implements DatabaseAdapter {
     private db: any = null;
     private isReady: boolean = false;
+    public readonly adapterType = 'local';
 
     constructor() {
         console.log("🔌 SQLiteWASMAdapter instantiated.");

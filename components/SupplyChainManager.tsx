@@ -4,21 +4,26 @@ import {
    ArrowLeft, Truck, Package, AlertTriangle, Search, Plus,
    ShoppingCart, Check, X, FileText, Calendar, Archive,
    ClipboardList, ArrowRight, Save, User, Minus, Box,
-   ScanBarcode, LayoutList, Mail
+   ScanBarcode, LayoutList, Mail, Landmark, Phone,
+   CreditCard, DollarSign, Clock, Info, ShieldAlert, History
 } from 'lucide-react';
-import { BusinessConfig, Product, Supplier, PurchaseOrder, PurchaseOrderItem, Reception } from '../types';
+import { BusinessConfig, Product, Supplier, PurchaseOrder, PurchaseOrderItem, Reception, ProductVariant } from '../types';
 import InventoryAudit from './InventoryAudit';
 import SupplierSelector from './SupplierSelector';
 import PurchaseOrderList from './PurchaseOrderList';
 import ReceptionHistory from './ReceptionHistory';
 import ErrorBoundary from './ErrorBoundary';
+import OrderMatrixModal from './OrderMatrixModal';
 import { formatSafeDate } from '../utils/dateUtils';
+import { db } from '../utils/db';
+import { syncManager } from '../services/sync/SyncManager';
 
 interface SupplyChainManagerProps {
    products: Product[];
    suppliers: Supplier[];
    purchaseOrders: PurchaseOrder[];
    receptions: Reception[];
+   supplierProductPrices: any[];
    config: BusinessConfig;
    onClose: () => void;
    onCreateOrder: (order: PurchaseOrder) => void;
@@ -26,9 +31,10 @@ interface SupplyChainManagerProps {
    onReceiveStock: (items: PurchaseOrderItem[], orderId?: string) => void;
    onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
    onAddSupplier: (supplier: Supplier) => void;
+   onUpdateSupplier: (supplier: Supplier) => void;
 }
 
-type Tab = 'ALERTS' | 'CREATE' | 'RECEIVE' | 'INVENTORY';
+type Tab = 'ALERTS' | 'CREATE' | 'RECEIVE' | 'INVENTORY' | 'SUPPLIERS';
 type AuditMode = 'ADDITIVE' | 'ABSOLUTE';
 
 const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
@@ -36,13 +42,15 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
    suppliers,
    purchaseOrders,
    receptions,
+   supplierProductPrices,
    config,
    onClose,
    onCreateOrder,
    onUpdateOrder,
    onReceiveStock,
    onAdjustStock,
-   onAddSupplier
+   onAddSupplier,
+   onUpdateSupplier
 }) => {
    // Defensive Checks
    const safeProducts = Array.isArray(products) ? products : [];
@@ -54,16 +62,23 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
    const [activeTab, setActiveTab] = useState<Tab>('CREATE');
    const [isCreatingOrder, setIsCreatingOrder] = useState(false);
    const [isReceivingOrder, setIsReceivingOrder] = useState(false);
+   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+   const [supplierModalTab, setSupplierModalTab] = useState<'GENERAL' | 'FINANCIAL' | 'HISTORY'>('GENERAL');
 
    // Create Order State
    const [selectedSupplier, setSelectedSupplier] = useState<string>(safeSuppliers[0]?.id || '');
    const [orderCart, setOrderCart] = useState<PurchaseOrderItem[]>([]);
    const [productSearch, setProductSearch] = useState('');
+   const [isMatrixOpen, setIsMatrixOpen] = useState(false);
+   const [selectedMatrixProduct, setSelectedMatrixProduct] = useState<Product | null>(null);
+   const [expandedProductDetail, setExpandedProductDetail] = useState<string | null>(null);
 
    // Receive Order State
    const [receivingOrderId, setReceivingOrderId] = useState<string | null>(null);
    const [receptionSearch, setReceptionSearch] = useState('');
    const [receptionCategory, setReceptionCategory] = useState('Todas');
+   const [requestError, setRequestError] = useState<string | null>(null);
+
 
    // Filter State
    const [selectedCategory, setSelectedCategory] = useState<string>('Todas');
@@ -140,10 +155,16 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
    // --- HANDLERS ---
 
    const addToOrderCart = (product: Product) => {
+      if (product.attributes && product.attributes.length > 0) {
+         setSelectedMatrixProduct(product);
+         setIsMatrixOpen(true);
+         return;
+      }
+
       setOrderCart(prev => {
-         const existing = (prev || []).find(i => i.productId === product.id);
+         const existing = (prev || []).find(i => i.productId === product.id && !i.variantSku);
          if (existing) {
-            return prev.map(i => i.productId === product.id ? { ...i, quantityOrdered: i.quantityOrdered + 1 } : i);
+            return prev.map(i => (i.productId === product.id && !i.variantSku) ? { ...i, quantityOrdered: i.quantityOrdered + 1 } : i);
          }
          return [...prev, {
             productId: product.id,
@@ -152,6 +173,38 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
             quantityReceived: 0,
             cost: product.cost || 0
          }];
+      });
+   };
+
+   const addMatrixToCart = (entries: { variant: ProductVariant, quantity: number }[]) => {
+      if (!selectedMatrixProduct) return;
+
+      setOrderCart(prev => {
+         const newCart = [...prev];
+         entries.forEach(entry => {
+            const variantInfo = Object.entries(entry.variant.attributeValues)
+               .map(([key, val]) => `${key}: ${val}`)
+               .join(' / ');
+
+            const existingIdx = newCart.findIndex(i => i.variantSku === entry.variant.sku);
+            if (existingIdx >= 0) {
+               newCart[existingIdx] = {
+                  ...newCart[existingIdx],
+                  quantityOrdered: newCart[existingIdx].quantityOrdered + entry.quantity
+               };
+            } else {
+               newCart.push({
+                  productId: selectedMatrixProduct.id,
+                  productName: selectedMatrixProduct.name,
+                  quantityOrdered: entry.quantity,
+                  quantityReceived: 0,
+                  cost: entry.variant.price || selectedMatrixProduct.cost || 0,
+                  variantSku: entry.variant.sku,
+                  variantInfo: variantInfo
+               });
+            }
+         });
+         return newCart;
       });
    };
 
@@ -504,42 +557,98 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                         <p className="text-lg font-medium">Carrito de compra vacío</p>
                      </div>
                   ) : (
-                     (orderCart || []).map((item, idx) => (
-                        <div key={item.productId || `cart-po-${idx}`} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col gap-3 animate-in slide-in-from-right-4">
-                           <div className="flex justify-between items-start">
-                              <h4 className="font-bold text-gray-800 text-lg leading-tight flex-1">{item.productName}</h4>
-                              <button onClick={() => removeFromCart(item.productId)} className="p-2 text-gray-300 hover:text-red-500 -mt-2 -mr-2">
-                                 <X size={24} />
-                              </button>
-                           </div>
-                           <div className="flex items-center justify-between">
-                              <div className="flex flex-col">
-                                 <label className="text-[10px] text-gray-400 font-bold uppercase mb-1">Costo Unitario</label>
-                                 <div className="flex items-center gap-1 bg-gray-50 rounded-lg px-2 py-1 border border-gray-200 focus-within:border-indigo-400 focus-within:bg-white transition-all">
-                                    <span className="text-xs text-gray-500 font-bold">{config.currencySymbol}</span>
-                                    <input
-                                       type="number"
-                                       min="0"
-                                       step="0.01"
-                                       value={item.cost}
-                                       onChange={(e) => updateCartCost(item.productId, parseFloat(e.target.value))}
-                                       className="w-20 bg-transparent text-sm font-bold text-gray-800 outline-none"
-                                       placeholder="0.00"
-                                    />
+                     Object.values(
+                        (orderCart || []).reduce((acc, item) => {
+                           const key = item.productId;
+                           if (!acc[key]) {
+                              acc[key] = {
+                                 productId: item.productId,
+                                 productName: item.productName,
+                                 totalQty: 0,
+                                 totalCost: 0,
+                                 items: [] as PurchaseOrderItem[]
+                              };
+                           }
+                           acc[key].totalQty += item.quantityOrdered;
+                           acc[key].totalCost += (item.cost * item.quantityOrdered);
+                           acc[key].items.push(item);
+                           return acc;
+                        }, {} as Record<string, { productId: string, productName: string, totalQty: number, totalCost: number, items: PurchaseOrderItem[] }>)
+                     ).map((group) => {
+                        const isExpanded = expandedProductDetail === group.productId;
+                        const hasVariants = group.items.some(i => i.variantSku);
+
+                        return (
+                           <div key={group.productId} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden animate-in slide-in-from-right-4">
+                              <div className="p-4 flex flex-col gap-3">
+                                 <div className="flex justify-between items-start">
+                                    <div className="flex-1">
+                                       <h4 className="font-bold text-gray-800 text-lg leading-tight">{group.productName}</h4>
+                                       {hasVariants && (
+                                          <button
+                                             onClick={() => setExpandedProductDetail(isExpanded ? null : group.productId)}
+                                             className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full font-black uppercase mt-1 flex items-center gap-1 hover:bg-indigo-100 transition-colors"
+                                          >
+                                             {isExpanded ? 'Ocultar Desglose' : `Ver Desglose (${group.items.length} variantes)`}
+                                             <div className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}>
+                                                <ArrowLeft size={10} className="-rotate-90" />
+                                             </div>
+                                          </button>
+                                       )}
+                                    </div>
+                                    <button onClick={() => removeFromCart(group.productId)} className="p-2 text-gray-300 hover:text-red-500 -mt-2 -mr-2">
+                                       <X size={24} />
+                                    </button>
+                                 </div>
+
+                                 {!isExpanded ? (
+                                    <div className="flex items-center justify-between">
+                                       <div className="flex flex-col">
+                                          <label className="text-[10px] text-gray-400 font-bold uppercase mb-1">Costo Promedio / Unid.</label>
+                                          <span className="font-bold text-gray-800">{config.currencySymbol}{(group.totalCost / group.totalQty).toFixed(2)}</span>
+                                       </div>
+                                       <div className="flex flex-col items-end">
+                                          <label className="text-[10px] text-gray-400 font-bold uppercase mb-1">Total Unidades</label>
+                                          <span className="text-xl font-black text-indigo-600">{group.totalQty}</span>
+                                       </div>
+                                    </div>
+                                 ) : (
+                                    <div className="space-y-3 pt-2 border-t border-gray-50">
+                                       {group.items.map((vItem, vIdx) => (
+                                          <div key={vItem.variantSku || vIdx} className="bg-gray-50/50 p-3 rounded-xl border border-gray-100">
+                                             <div className="flex justify-between items-center mb-2">
+                                                <span className="text-[11px] font-black text-gray-500 uppercase">{vItem.variantInfo || 'Sin variantes'}</span>
+                                                <span className="text-xs font-bold text-gray-400">SKU: {vItem.variantSku}</span>
+                                             </div>
+                                             <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-2">
+                                                   <span className="text-xs text-gray-500 font-bold">{config.currencySymbol}</span>
+                                                   <input
+                                                      type="number"
+                                                      value={vItem.cost}
+                                                      onChange={(e) => updateCartCost(vItem.variantSku || vItem.productId, parseFloat(e.target.value))}
+                                                      className="w-20 bg-white border border-gray-200 rounded-lg px-2 py-1 text-sm font-bold text-gray-800 outline-none"
+                                                   />
+                                                </div>
+                                                <BigStepper
+                                                   value={vItem.quantityOrdered}
+                                                   onDecrease={() => updateCartQuantity(vItem.variantSku || vItem.productId, -1)}
+                                                   onIncrease={() => updateCartQuantity(vItem.variantSku || vItem.productId, 1)}
+                                                />
+                                             </div>
+                                          </div>
+                                       ))}
+                                    </div>
+                                 )}
+
+                                 <div className="border-t border-gray-100 pt-2 text-right">
+                                    <span className="text-xs font-bold text-gray-400 uppercase mr-2">Subtotal Línea</span>
+                                    <span className="text-lg font-black text-gray-800">{config.currencySymbol}{group.totalCost.toFixed(2)}</span>
                                  </div>
                               </div>
-                              <BigStepper
-                                 value={item.quantityOrdered}
-                                 onDecrease={() => updateCartQuantity(item.productId, -1)}
-                                 onIncrease={() => updateCartQuantity(item.productId, 1)}
-                              />
                            </div>
-                           <div className="border-t border-gray-100 pt-2 text-right">
-                              <span className="text-xs font-bold text-gray-400 uppercase mr-2">Subtotal</span>
-                              <span className="text-lg font-black text-gray-800">{config.currencySymbol}{(item.cost * item.quantityOrdered).toFixed(2)}</span>
-                           </div>
-                        </div>
-                     ))
+                        );
+                     })
                   )}
                </div>
 
@@ -588,61 +697,114 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
             );
          }
 
-         const updateItemReceived = (itemId: string, newVal: number) => {
+         const updateItemReceived = (itemIdOrSku: string, newVal: number) => {
             onUpdateOrder({
                ...order,
-               items: (order.items || []).map(i => i.productId === itemId ? { ...i, quantityReceived: Math.max(0, newVal) } : i)
+               items: (order.items || []).map(i => {
+                  const matches = i.variantSku === itemIdOrSku || (i.productId === itemIdOrSku && !i.variantSku);
+                  return matches ? { ...i, quantityReceived: Math.max(0, newVal) } : i;
+               })
             });
          };
 
-         const confirmReception = () => {
-            const hasAnyReceived = (order.items || []).some(i => i.quantityReceived > 0);
-            if (!hasAnyReceived) {
-               alert("No ha indicado ninguna cantidad recibida.");
-               return;
+         const updateSupplierPriceCatalog = async () => {
+            const rawUpdates = (order.items || []).filter(i => i.quantityReceived > 0).map(i => ({
+               id: `${order.supplierId}_${i.productId}`,
+               supplierId: order.supplierId,
+               productId: i.productId,
+               lastCost: i.cost || 0,
+               updatedAt: new Date().toISOString()
+            }));
+
+            // Deduplicate by ID to avoid redundant network calls for variants
+            const updatesMap = new Map();
+            for (const u of rawUpdates) {
+               updatesMap.set(u.id, u);
+            }
+            const updates = Array.from(updatesMap.values());
+
+            for (const update of updates) {
+               await db.saveDocument('supplierProductPrices', update);
             }
 
-            const isPartial = (order.items || []).some(i => i.quantityReceived < i.quantityOrdered);
+            if (updates.length > 0) {
+               syncManager.broadcastChange('supplierProductPrices', updates, 'UPDATE');
+            }
+         };
 
-            if (isPartial) {
-               const keepPending = confirm(
-                  "Hay artículos pendientes por recibir.\n\n" +
-                  "¿Desea mantener la orden ABIERTA para recibir los faltantes después?\n" +
-                  "OK = Sí, mantener pendientes.\n" +
-                  "Cancelar = No, cerrar orden (Ignorar faltantes)."
-               );
+         const confirmReception = async () => {
+            console.log("🚀 SCM: confirmReception START");
+            try {
+               const hasAnyReceived = (order.items || []).some(i => i.quantityReceived > 0);
+               if (!hasAnyReceived) {
+                  alert("No ha indicado ninguna cantidad recibida.");
+                  return;
+               }
 
-               // 1. Receive Stock (Add to inventory)
-               onReceiveStock(order.items, order.id);
 
-               if (keepPending) {
-                  // 2a. Update Order: Subtract received from ordered, reset received
-                  const updatedItems = (order.items || []).map(i => {
-                     const remaining = Math.max(0, i.quantityOrdered - i.quantityReceived);
-                     return {
-                        ...i,
-                        quantityOrdered: remaining,
-                        quantityReceived: 0
-                     };
-                  }).filter(i => i.quantityOrdered > 0);
+               console.log("📊 SCM: hasAnyReceived passed");
 
-                  if (updatedItems.length === 0) {
-                     onUpdateOrder({ ...order, items: updatedItems, status: 'COMPLETED' });
+               const isPartial = (order.items || []).some(i => i.quantityReceived < i.quantityOrdered);
+               console.log("🔀 SCM: isPartial:", isPartial);
+
+               if (isPartial) {
+                  /*
+                  const keepPending = confirm(
+                     "Hay artículos pendientes por recibir.\n\n" +
+                     "¿Desea mantener la orden ABIERTA para recibir los faltantes después?\n" +
+                     "OK = Sí, mantener pendientes.\n" +
+                     "Cancelar = No, cerrar orden (Ignorar faltantes)."
+                  );
+                  */
+                  const keepPending = true; // Default to keeping order open for partials
+
+                  // 1. Receive Stock (Add to inventory)
+                  console.log("📞 SCM: calling onReceiveStock (Partial)...");
+                  await onReceiveStock(order.items, order.id);
+                  console.log("✅ SCM: onReceiveStock success (Partial)");
+
+                  // 1b. Update Prices (Best Effort)
+                  try { await updateSupplierPriceCatalog(); } catch (e) { console.warn("Price update failed", e); }
+
+                  if (keepPending) {
+                     // 2a. Update Order: Subtract received from ordered, reset received
+                     const updatedItems = (order.items || []).map(i => {
+                        const remaining = Math.max(0, i.quantityOrdered - i.quantityReceived);
+                        return {
+                           ...i,
+                           quantityOrdered: remaining,
+                           quantityReceived: 0
+                        };
+                     }).filter(i => i.quantityOrdered > 0);
+
+                     if (updatedItems.length === 0) {
+                        await onUpdateOrder({ ...order, items: updatedItems, status: 'COMPLETED' });
+                     } else {
+                        await onUpdateOrder({ ...order, items: updatedItems, status: 'PARTIAL' });
+                     }
                   } else {
-                     onUpdateOrder({ ...order, items: updatedItems, status: 'PARTIAL' });
+                     // 2b. Close Order
+                     await onUpdateOrder({ ...order, status: 'COMPLETED' });
                   }
                } else {
-                  // 2b. Close Order
-                  onUpdateOrder({ ...order, status: 'COMPLETED' });
-               }
-            } else {
-               // Full Reception
-               if (!confirm("¿Confirmar recepción completa y cerrar orden?")) return;
-               onReceiveStock(order.items, order.id);
-               onUpdateOrder({ ...order, status: 'COMPLETED' });
-            }
+                  // Full Reception
+                  // if (!confirm("¿Confirmar recepción completa y cerrar orden?")) return;
 
-            setReceivingOrderId(null);
+                  console.log("📞 SCM: calling onReceiveStock (Full)...");
+                  await onReceiveStock(order.items, order.id);
+                  console.log("✅ SCM: onReceiveStock success (Full)");
+
+                  // Update Prices (Best Effort)
+                  try { await updateSupplierPriceCatalog(); } catch (e) { console.warn("Price update failed", e); }
+
+                  await onUpdateOrder({ ...order, status: 'COMPLETED' });
+               }
+
+               setReceivingOrderId(null);
+            } catch (error: any) {
+               console.error("❌ Error confirming reception:", error);
+               setRequestError(`Error crítico: ${error.message || 'Error desconocido'}`);
+            }
          };
 
          return (
@@ -698,7 +860,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
 
                      return (
                         <div
-                           key={item.productId || `rec-${idx}`}
+                           key={item.variantSku ? `${item.productId}_${item.variantSku}` : item.productId || `rec-${idx}`}
                            className={`p-4 rounded-2xl border-2 transition-all flex flex-col gap-3 ${isComplete
                               ? 'bg-green-50 border-green-500 shadow-sm'
                               : item.quantityReceived > 0 ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200'
@@ -707,6 +869,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                            <div className="flex justify-between items-start">
                               <div>
                                  <h4 className="font-bold text-gray-800 text-lg">{item.productName}</h4>
+                                 {item.variantInfo && <p className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-bold inline-block mb-1">{item.variantInfo}</p>}
                                  <p className="text-sm text-gray-500">Solicitado: <strong className="text-gray-900">{item.quantityOrdered}</strong></p>
                               </div>
                               {isComplete && <div className="bg-green-500 text-white p-1 rounded-full"><Check size={16} /></div>}
@@ -715,7 +878,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                            <div className="flex items-center gap-3">
                               <div className="flex items-center bg-white border border-gray-300 rounded-xl overflow-hidden shadow-sm flex-1 max-w-[200px]">
                                  <button
-                                    onClick={() => updateItemReceived(item.productId, item.quantityReceived - 1)}
+                                    onClick={() => updateItemReceived(item.variantSku || item.productId, item.quantityReceived - 1)}
                                     className="p-3 hover:bg-gray-100 text-gray-600 active:bg-gray-200 border-r border-gray-100"
                                  >
                                     <Minus size={20} />
@@ -723,11 +886,11 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                                  <input
                                     type="number"
                                     value={item.quantityReceived}
-                                    onChange={(e) => updateItemReceived(item.productId, parseFloat(e.target.value) || 0)}
+                                    onChange={(e) => updateItemReceived(item.variantSku || item.productId, parseFloat(e.target.value) || 0)}
                                     className="flex-1 w-full text-center font-bold text-lg outline-none bg-transparent"
                                  />
                                  <button
-                                    onClick={() => updateItemReceived(item.productId, item.quantityReceived + 1)}
+                                    onClick={() => updateItemReceived(item.variantSku || item.productId, item.quantityReceived + 1)}
                                     className="p-3 hover:bg-gray-100 text-blue-600 active:bg-gray-200 border-l border-gray-100"
                                  >
                                     <Plus size={20} />
@@ -735,7 +898,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                               </div>
 
                               <button
-                                 onClick={() => updateItemReceived(item.productId, item.quantityOrdered)}
+                                 onClick={() => updateItemReceived(item.variantSku || item.productId, item.quantityOrdered)}
                                  className="text-xs font-bold text-blue-600 underline hover:text-blue-800 px-2"
                               >
                                  Todo
@@ -847,10 +1010,386 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   <Plus size={20} /> Nueva Recepción
                </button>
             </div>
-            <ReceptionHistory receptions={safeReceptions} config={config} />
+            <ReceptionHistory
+               receptions={safeReceptions}
+               config={config}
+               suppliers={suppliers}
+               purchaseOrders={purchaseOrders}
+            />
          </div>
       );
    };
+
+   const renderSupplierModal = () => {
+      if (!editingSupplier) return null;
+
+      const isOverLimit = editingSupplier.balance > editingSupplier.creditLimit && editingSupplier.creditLimit > 0;
+      const nearLimit = editingSupplier.balance > (editingSupplier.creditLimit * 0.9) && editingSupplier.creditLimit > 0;
+
+      return (
+         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white w-full max-w-2xl rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+               {/* Modal Header */}
+               <div className="p-8 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
+                  <div className="flex items-center gap-4">
+                     <div className={`p-4 rounded-2xl ${isOverLimit ? 'bg-red-100 text-red-600' : 'bg-indigo-100 text-indigo-600'}`}>
+                        <Truck size={32} />
+                     </div>
+                     <div>
+                        <h2 className="text-2xl font-black text-gray-800 tracking-tight">Gestión de Proveedor</h2>
+                        <div className="flex items-center gap-2 mt-1">
+                           <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">{editingSupplier.id}</span>
+                           {isOverLimit && (
+                              <span className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full font-black animate-pulse flex items-center gap-1">
+                                 <ShieldAlert size={10} /> LÍMITE EXCEDIDO
+                              </span>
+                           )}
+                        </div>
+                     </div>
+                  </div>
+                  <button onClick={() => setEditingSupplier(null)} className="p-3 bg-white hover:bg-gray-100 rounded-2xl text-gray-400 transition-all shadow-sm">
+                     <X size={24} />
+                  </button>
+               </div>
+
+               {/* Modal Tabs */}
+               <div className="flex px-8 bg-gray-50/50 border-b border-gray-100">
+                  {(['GENERAL', 'FINANCIAL', 'HISTORY'] as const).map(tab => (
+                     <button
+                        key={tab}
+                        onClick={() => setSupplierModalTab(tab)}
+                        className={`py-4 px-6 text-xs font-black uppercase tracking-widest border-b-4 transition-all ${supplierModalTab === tab ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'
+                           }`}
+                     >
+                        {tab === 'GENERAL' ? 'Información General' : tab === 'FINANCIAL' ? 'Gestión Financiera' : 'Catálogo de Precios'}
+                     </button>
+                  ))}
+               </div>
+
+               {/* Modal Content */}
+               <div className="flex-1 overflow-y-auto p-8">
+                  {supplierModalTab === 'GENERAL' && (
+                     <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-300">
+                        <div className="grid grid-cols-2 gap-6">
+                           <div className="space-y-2">
+                              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Nombre Comercial</label>
+                              <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 focus-within:border-indigo-500 transition-all">
+                                 <input
+                                    className="w-full bg-transparent font-bold text-gray-800 placeholder:text-gray-300 outline-none"
+                                    value={editingSupplier.name}
+                                    onChange={e => setEditingSupplier({ ...editingSupplier, name: e.target.value })}
+                                 />
+                              </div>
+                           </div>
+                           <div className="space-y-2">
+                              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">RNC / Cédula</label>
+                              <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 focus-within:border-indigo-500 transition-all flex items-center gap-3">
+                                 <Landmark size={18} className="text-gray-300" />
+                                 <input
+                                    className="w-full bg-transparent font-bold text-gray-800 placeholder:text-gray-300 outline-none"
+                                    value={editingSupplier.taxId}
+                                    onChange={e => setEditingSupplier({ ...editingSupplier, taxId: e.target.value })}
+                                 />
+                              </div>
+                           </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-6">
+                           <div className="space-y-2">
+                              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Correo Electrónico</label>
+                              <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 focus-within:border-indigo-500 transition-all flex items-center gap-3">
+                                 <Mail size={18} className="text-gray-300" />
+                                 <input
+                                    className="w-full bg-transparent font-bold text-gray-800 placeholder:text-gray-300 outline-none"
+                                    value={editingSupplier.email}
+                                    onChange={e => setEditingSupplier({ ...editingSupplier, email: e.target.value })}
+                                 />
+                              </div>
+                           </div>
+                           <div className="space-y-2">
+                              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Teléfono</label>
+                              <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 focus-within:border-indigo-500 transition-all flex items-center gap-3">
+                                 <Phone size={18} className="text-gray-300" />
+                                 <input
+                                    className="w-full bg-transparent font-bold text-gray-800 placeholder:text-gray-300 outline-none"
+                                    value={editingSupplier.phone}
+                                    onChange={e => setEditingSupplier({ ...editingSupplier, phone: e.target.value })}
+                                 />
+                              </div>
+                           </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-6">
+                           <div className="space-y-2">
+                              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Persona de Contacto</label>
+                              <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 focus-within:border-indigo-500 transition-all flex items-center gap-3">
+                                 <User size={18} className="text-gray-300" />
+                                 <input
+                                    className="w-full bg-transparent font-bold text-gray-800 placeholder:text-gray-300 outline-none"
+                                    value={editingSupplier.contactPerson}
+                                    onChange={e => setEditingSupplier({ ...editingSupplier, contactPerson: e.target.value })}
+                                 />
+                              </div>
+                           </div>
+                           <div className="space-y-2">
+                              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Lead Time (Días)</label>
+                              <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 focus-within:border-indigo-500 transition-all flex items-center gap-3">
+                                 <Clock size={18} className="text-gray-300" />
+                                 <input
+                                    type="number"
+                                    className="w-full bg-transparent font-bold text-gray-800 placeholder:text-gray-300 outline-none"
+                                    value={editingSupplier.leadTimeDays}
+                                    onChange={e => setEditingSupplier({ ...editingSupplier, leadTimeDays: parseInt(e.target.value) || 0 })}
+                                 />
+                              </div>
+                           </div>
+                        </div>
+                     </div>
+                  )}
+
+                  {supplierModalTab === 'FINANCIAL' && (
+                     <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-300">
+                        <div className="bg-amber-50 rounded-3xl p-6 border border-amber-100 flex items-start gap-4">
+                           <div className="p-3 bg-amber-100 text-amber-600 rounded-2xl">
+                              <Info size={24} />
+                           </div>
+                           <div>
+                              <p className="text-sm font-bold text-amber-800">Condiciones de Crédito</p>
+                              <p className="text-xs text-amber-600 mt-1">Defina los límites y plazos acordados con este proveedor para el control automático de cuentas por pagar.</p>
+                           </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-6">
+                           <div className="space-y-2">
+                              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Forma de Pago Habitual</label>
+                              <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 focus-within:border-indigo-500 transition-all flex items-center gap-3">
+                                 <CreditCard size={18} className="text-gray-300" />
+                                 <select
+                                    className="w-full bg-transparent font-bold text-gray-800 outline-none"
+                                    value={editingSupplier.paymentMethod}
+                                    onChange={e => setEditingSupplier({ ...editingSupplier, paymentMethod: e.target.value as any })}
+                                 >
+                                    <option value="CASH">Efectivo</option>
+                                    <option value="TRANSFER">Transferencia</option>
+                                    <option value="CARD">Tarjeta</option>
+                                    <option value="CREDIT">Crédito</option>
+                                 </select>
+                              </div>
+                           </div>
+                           <div className="space-y-2">
+                              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Días de Crédito</label>
+                              <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 focus-within:border-indigo-500 transition-all flex items-center gap-3">
+                                 <Calendar size={18} className="text-gray-300" />
+                                 <input
+                                    type="number"
+                                    className="w-full bg-transparent font-bold text-gray-800 outline-none"
+                                    value={editingSupplier.paymentTermDays}
+                                    onChange={e => setEditingSupplier({ ...editingSupplier, paymentTermDays: parseInt(e.target.value) || 0 })}
+                                 />
+                              </div>
+                           </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-6">
+                           <div className="space-y-2">
+                              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Límite de Crédito</label>
+                              <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 focus-within:border-indigo-500 transition-all flex items-center gap-3">
+                                 <DollarSign size={18} className="text-gray-300" />
+                                 <input
+                                    type="number"
+                                    className="w-full bg-transparent font-bold text-gray-800 outline-none"
+                                    value={editingSupplier.creditLimit}
+                                    onChange={e => setEditingSupplier({ ...editingSupplier, creditLimit: parseFloat(e.target.value) || 0 })}
+                                 />
+                              </div>
+                           </div>
+                           <div className="space-y-2">
+                              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Deuda Actual</label>
+                              <div className={`rounded-2xl p-4 border transition-all flex items-center gap-3 ${nearLimit ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-100'}`}>
+                                 <History size={18} className={nearLimit ? 'text-red-400' : 'text-gray-300'} />
+                                 <input
+                                    type="number"
+                                    className={`w-full bg-transparent font-black outline-none ${nearLimit ? 'text-red-600' : 'text-gray-800'}`}
+                                    value={editingSupplier.balance}
+                                    readOnly
+                                 />
+                              </div>
+                           </div>
+                        </div>
+                     </div>
+                  )}
+
+                  {supplierModalTab === 'HISTORY' && (
+                     <div className="animate-in slide-in-from-bottom-4 duration-300 space-y-4">
+                        <div className="flex items-center justify-between mb-4">
+                           <div className="flex items-center gap-2">
+                              <Archive size={20} className="text-gray-400" />
+                              <h3 className="text-sm font-bold text-gray-700">Catálogo de Precios del Proveedor</h3>
+                           </div>
+                           <span className="text-[10px] font-black text-gray-400 uppercase bg-gray-100 px-2 py-1 rounded">Últimos Costos</span>
+                        </div>
+
+                        {(!supplierProductPrices || supplierProductPrices.filter(p => p.supplierId === editingSupplier.id).length === 0) ? (
+                           <div className="text-center py-12 bg-gray-50 rounded-3xl border-2 border-dashed border-gray-100">
+                              <Archive size={48} className="mx-auto text-gray-200 mb-4" />
+                              <p className="text-sm font-bold text-gray-400 px-8">El catálogo de precios se alimenta automáticamente al recibir mercancía.</p>
+                           </div>
+                        ) : (
+                           <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
+                              <table className="w-full text-left border-collapse">
+                                 <thead className="bg-gray-50 border-b border-gray-100">
+                                    <tr>
+                                       <th className="px-4 py-3 text-[10px] font-black text-gray-400 uppercase tracking-widest">Producto</th>
+                                       <th className="px-4 py-3 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Costo Unit.</th>
+                                       <th className="px-4 py-3 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Actualizado</th>
+                                    </tr>
+                                 </thead>
+                                 <tbody className="divide-y divide-gray-50">
+                                    {supplierProductPrices
+                                       .filter(p => p.supplierId === editingSupplier.id)
+                                       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+                                       .map((price, idx) => {
+                                          const product = safeProducts.find(p => p.id === price.productId);
+                                          return (
+                                             <tr key={idx} className="hover:bg-gray-50/50 transition-colors">
+                                                <td className="px-4 py-4">
+                                                   <p className="font-bold text-gray-800 text-sm">{product?.name || 'Producto Desconocido'}</p>
+                                                   <p className="text-[10px] text-gray-400 font-mono">{price.productId}</p>
+                                                </td>
+                                                <td className="px-4 py-4 text-right">
+                                                   <span className="font-mono font-black text-gray-900">{config.currencySymbol}{price.lastCost.toFixed(2)}</span>
+                                                </td>
+                                                <td className="px-4 py-4 text-right">
+                                                   <p className="text-xs text-gray-500 font-medium">{formatSafeDate(price.updatedAt)}</p>
+                                                </td>
+                                             </tr>
+                                          );
+                                       })}
+                                 </tbody>
+                              </table>
+                           </div>
+                        )}
+                     </div>
+                  )}
+               </div>
+
+               {/* Modal Footer */}
+               <div className="p-8 bg-gray-50 border-t border-gray-100 flex justify-end gap-4">
+                  <button onClick={() => setEditingSupplier(null)} className="px-8 py-4 bg-white text-gray-400 font-bold rounded-2xl hover:bg-gray-100 transition-all">
+                     Cancelar
+                  </button>
+                  <button
+                     onClick={() => {
+                        onUpdateSupplier(editingSupplier);
+                        setEditingSupplier(null);
+                     }}
+                     className="px-10 py-4 bg-indigo-600 text-white font-black uppercase tracking-widest text-xs rounded-2xl shadow-xl shadow-indigo-100 hover:bg-indigo-500 transition-all flex items-center gap-2"
+                  >
+                     <Save size={18} /> Guardar Cambios
+                  </button>
+               </div>
+            </div>
+         </div>
+      );
+   };
+
+   const renderSuppliers = () => (
+      <div className="animate-in fade-in slide-in-from-right-4 pb-20">
+         <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold text-gray-800">Catálogo de Proveedores</h2>
+            <button
+               onClick={() => {
+                  const newSup: Supplier = {
+                     id: `SUP_${Date.now()}`,
+                     name: 'Nuevo Proveedor',
+                     taxId: '',
+                     email: '',
+                     phone: '',
+                     contactPerson: '',
+                     paymentMethod: 'CASH',
+                     paymentTermDays: 0,
+                     creditLimit: 0,
+                     balance: 0,
+                     leadTimeDays: 7,
+                     isActive: true
+                  };
+                  onAddSupplier(newSup);
+                  setEditingSupplier(newSup);
+                  setSupplierModalTab('GENERAL');
+               }}
+               className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-500 transition-all flex items-center gap-2"
+            >
+               <Plus size={20} /> Nuevo Proveedor
+            </button>
+         </div>
+
+         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {safeSuppliers.map(supplier => {
+               const isOverLimit = (supplier.balance || 0) > (supplier.creditLimit || 0) && (supplier.creditLimit || 0) > 0;
+
+               return (
+                  <div key={supplier.id} onClick={() => { setEditingSupplier(supplier); setSupplierModalTab('GENERAL'); }} className={`group bg-white p-6 rounded-[2rem] shadow-sm border transition-all cursor-pointer hover:shadow-xl hover:-translate-y-1 ${isOverLimit ? 'border-red-100 bg-red-50/10' : 'border-gray-100 hover:border-indigo-100'}`}>
+                     <div className="flex justify-between items-start mb-4">
+                        <div className="flex items-center gap-3">
+                           <div className={`p-3 rounded-2xl transition-colors ${isOverLimit ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-400 group-hover:bg-indigo-100 group-hover:text-indigo-600'}`}>
+                              <Truck size={24} />
+                           </div>
+                           <div>
+                              <p className="font-black text-gray-800 tracking-tight leading-none mb-1">{supplier.name}</p>
+                              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{supplier.id}</p>
+                           </div>
+                        </div>
+                        <div className={`px-2 py-0.5 rounded-full text-[9px] font-black tracking-widest border ${supplier.isActive ? 'bg-green-50 text-green-600 border-green-100' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                           {supplier.isActive ? 'ACTIVO' : 'OFFLINE'}
+                        </div>
+                     </div>
+
+                     <div className="space-y-3">
+                        <div className="flex justify-between items-center text-[10px] font-bold">
+                           <span className="text-gray-400 uppercase tracking-widest">Balance Pendiente</span>
+                           <span className={`font-mono ${isOverLimit ? 'text-red-600' : (supplier.balance || 0) > 0 ? 'text-amber-600' : 'text-green-600'}`}>
+                              ${(supplier.balance || 0).toLocaleString()}
+                           </span>
+                        </div>
+
+                        {(supplier.creditLimit || 0) > 0 && (
+                           <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                              <div
+                                 className={`h-full rounded-full transition-all ${isOverLimit ? 'bg-red-500' : 'bg-indigo-500'}`}
+                                 style={{ width: `${Math.min(100, ((supplier.balance || 0) / (supplier.creditLimit || 1)) * 100)}%` }}
+                              />
+                           </div>
+                        )}
+
+                        <div className="grid grid-cols-2 gap-2 mt-4 pt-4 border-t border-gray-50">
+                           <div className="text-[9px]">
+                              <p className="text-gray-400 uppercase font-black tracking-widest mb-1">Días Crédito</p>
+                              <p className="text-gray-700 font-bold">{supplier.paymentTermDays || 0} Días</p>
+                           </div>
+                           <div className="text-[9px]">
+                              <p className="text-gray-400 uppercase font-black tracking-widest mb-1">Lead Time</p>
+                              <p className="text-gray-700 font-bold">{supplier.leadTimeDays || 0} Días</p>
+                           </div>
+                        </div>
+                     </div>
+
+                     <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="bg-indigo-600 text-white p-2 rounded-xl shadow-lg">
+                           <Save size={16} />
+                        </div>
+                     </div>
+                  </div>
+               );
+            })}
+         </div>
+         {safeSuppliers.length === 0 && (
+            <div className="py-20 text-center opacity-30">
+               <Truck size={64} className="mx-auto mb-4" />
+               <p className="font-bold">No hay proveedores registrados.</p>
+            </div>
+         )}
+      </div>
+   );
 
    // --- RENDER MAIN ---
 
@@ -906,6 +1445,12 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                      <AlertTriangle size={20} /> Alertas
                      {lowStockProducts.length > 0 && <span className="bg-red-500 text-white text-[10px] px-1.5 rounded-full">{lowStockProducts.length}</span>}
                   </button>
+                  <button
+                     onClick={() => setActiveTab('SUPPLIERS')}
+                     className={`px-6 py-3 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeTab === 'SUPPLIERS' ? 'bg-white text-orange-600 shadow-md' : 'text-gray-500'}`}
+                  >
+                     <Truck size={20} /> Proveedores
+                  </button>
                </div>
             </header>
 
@@ -916,10 +1461,24 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   {activeTab === 'CREATE' && renderCreateOrder()}
                   {activeTab === 'RECEIVE' && renderReception()}
                   {activeTab === 'INVENTORY' && renderInventoryList()}
+                  {activeTab === 'SUPPLIERS' && renderSuppliers()}
                </ErrorBoundary>
             </div>
 
          </div>
+         {renderSupplierModal()}
+         {selectedMatrixProduct && (
+            <OrderMatrixModal
+               isOpen={isMatrixOpen}
+               onClose={() => {
+                  setIsMatrixOpen(false);
+                  setSelectedMatrixProduct(null);
+               }}
+               product={selectedMatrixProduct}
+               config={config}
+               onConfirm={addMatrixToCart}
+            />
+         )}
       </ErrorBoundary>
    );
 };

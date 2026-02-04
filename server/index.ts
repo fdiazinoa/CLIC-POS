@@ -7,6 +7,9 @@ import passKitRoutes from './routes/passKitRoutes.js';
 import emailRoutes from './routes/emailRoutes.js';
 import syncRoutes from './routes/sync.js';
 import supplierRoutes from './routes/supplierRoutes.js';
+import currencyRoutes from './routes/currencies.js';
+import maintenanceRoutes from './routes/maintenance.js'; // Restore missing import
+import dgiiRoutes from './routes/dgiiRoutes.js'; // Import new route
 
 import { db, getCollection, getSetting, saveSetting } from './db';
 
@@ -64,6 +67,24 @@ server.post('/smtp/config', (req, res) => {
     res.json({ success: true, message: 'Configuration saved' });
 });
 
+// NEW: Z-Report Email Route
+import { EmailService } from './services/emailService.js';
+server.post('/smtp/z-report', async (req, res) => {
+    const { to, reportData } = req.body;
+    if (!to || !reportData) {
+        return res.status(400).json({ success: false, message: 'Missing to or reportData' });
+    }
+
+    try {
+        const emailService = new EmailService();
+        await emailService.sendZReport(to, reportData);
+        res.json({ success: true, message: 'Z-Report sent' });
+    } catch (error: any) {
+        console.error('❌ Error sending Z-Report email:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 // Custom Product Stocks Endpoint
 server.get('/api/productStocks', (req, res) => {
     try {
@@ -76,9 +97,10 @@ server.get('/api/productStocks', (req, res) => {
         const paginatedStocks = stocks.slice(startIndex, endIndex);
         const safeStocks = paginatedStocks.map((s: any) => ({
             id: s.id,
-            pId: s.productId,
-            wId: s.warehouseId,
-            q: s.quantity || 0
+            productId: s.productId,
+            warehouseId: s.warehouseId,
+            quantity: s.quantity || 0,
+            updatedAt: s.updatedAt || new Date().toISOString()
         }));
 
         res.set('X-Total-Count', stocks.length.toString());
@@ -89,17 +111,15 @@ server.get('/api/productStocks', (req, res) => {
     }
 });
 
-import maintenanceRoutes from './routes/maintenance';
-
-// ... imports
-
 // Mount custom routes
 server.use('/api/sync', syncRoutes);
 server.use('/api/wallet', walletRoutes);
 server.use('/v1', passKitRoutes);
 server.use('/api/email', emailRoutes);
 server.use('/api/suppliers', supplierRoutes);
+server.use('/api/currencies', currencyRoutes);
 server.use('/api/maintenance', maintenanceRoutes);
+server.use('/api/dgii', dgiiRoutes); // Mount new route
 
 // Helper to process json-server style queries
 const processQuery = (data: any[], query: any) => {
@@ -165,8 +185,11 @@ const mapCollectionName = (name: string): string => {
         'productStocks': 'product_stocks',
         'cashMovements': 'cash_movements',
         'zReports': 'z_reports',
+        'wallets': 'wallets',
+        'walletTransactions': 'wallet_transactions',
         'connectedTerminals': 'connected_terminals',
-        'syncTokens': 'sync_tokens'
+        'syncTokens': 'sync_tokens',
+        'transactionHistory': 'transaction_history'
     };
     return mapping[name] || name;
 };
@@ -291,7 +314,8 @@ server.put('/api/:collection/:id', (req, res) => {
 
                 const values = colNames.map(col => {
                     const val = item[col];
-                    if (typeof val === 'object') return JSON.stringify(val);
+                    if (val === undefined) return null; // FIX: Better-sqlite3 throws on undefined
+                    if (typeof val === 'object' && val !== null) return JSON.stringify(val);
                     if (typeof val === 'boolean') return val ? 1 : 0;
                     return val;
                 });
@@ -381,3 +405,54 @@ appInstance.on('error', (e: any) => {
     }
 });
 
+// Helper to auto-migrate transaction_history if missing
+const ensureTransactionHistoryTable = () => {
+    try {
+        const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='transaction_history'").get();
+        if (!tableExists) {
+            console.log('📦 Migrating transaction_history table...');
+            db.prepare(`
+                CREATE TABLE IF NOT EXISTS transaction_history (
+                    id TEXT PRIMARY KEY,
+                    globalSequence INTEGER,
+                    displayId TEXT,
+                    documentType TEXT,
+                    seriesId TEXT,
+                    seriesNumber INTEGER,
+                    date TEXT NOT NULL,
+                    items TEXT NOT NULL, -- JSON array
+                    total REAL NOT NULL,
+                    payments TEXT, -- JSON array
+                    userId TEXT,
+                    userName TEXT,
+                    terminalId TEXT,
+                    status TEXT,
+                    customerId TEXT,
+                    customerName TEXT,
+                    customerSnapshot TEXT, -- JSON object
+                    taxAmount REAL DEFAULT 0,
+                    netAmount REAL DEFAULT 0,
+                    discountAmount REAL DEFAULT 0,
+                    isTaxIncluded INTEGER DEFAULT 0,
+                    ncf TEXT,
+                    ncfType TEXT,
+                    relatedTransactions TEXT, -- JSON array
+                    originalTransactionId TEXT,
+                    refundReason TEXT,
+                    affectedInvoiceNumber TEXT,
+                    affectedNCF TEXT,
+                    syncStatus TEXT DEFAULT 'PENDING',
+                    syncError TEXT,
+                    zReportId TEXT
+                );
+            `).run();
+            db.prepare("CREATE INDEX IF NOT EXISTS idx_transaction_history_zreport ON transaction_history(zReportId)").run();
+            console.log('✅ transaction_history table created.');
+        }
+    } catch (error) {
+        console.error('❌ Failed to ensure transaction_history table:', error);
+    }
+}
+
+// Run migration on startup
+ensureTransactionHistoryTable();

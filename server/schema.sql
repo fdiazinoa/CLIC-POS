@@ -168,8 +168,44 @@ CREATE TABLE IF NOT EXISTS transactions (
     relatedTransactions TEXT, -- JSON array
     originalTransactionId TEXT,
     refundReason TEXT,
+    affectedInvoiceNumber TEXT,
+    affectedNCF TEXT,
     syncStatus TEXT DEFAULT 'PENDING',
     syncError TEXT
+);
+
+CREATE TABLE IF NOT EXISTS transaction_history (
+    id TEXT PRIMARY KEY,
+    globalSequence INTEGER,
+    displayId TEXT,
+    documentType TEXT,
+    seriesId TEXT,
+    seriesNumber INTEGER,
+    date TEXT NOT NULL,
+    items TEXT NOT NULL, -- JSON array (CartItems)
+    total REAL NOT NULL,
+    payments TEXT, -- JSON array
+    userId TEXT,
+    userName TEXT,
+    terminalId TEXT,
+    status TEXT,
+    customerId TEXT,
+    customerName TEXT,
+    customerSnapshot TEXT, -- JSON object
+    taxAmount REAL DEFAULT 0,
+    netAmount REAL DEFAULT 0,
+    discountAmount REAL DEFAULT 0,
+    isTaxIncluded INTEGER DEFAULT 0,
+    ncf TEXT,
+    ncfType TEXT,
+    relatedTransactions TEXT, -- JSON array
+    originalTransactionId TEXT,
+    refundReason TEXT,
+    affectedInvoiceNumber TEXT,
+    affectedNCF TEXT,
+    syncStatus TEXT DEFAULT 'PENDING',
+    syncError TEXT,
+    zReportId TEXT
 );
 
 -- 6. Other Collections (Flexible)
@@ -204,6 +240,15 @@ CREATE TABLE IF NOT EXISTS z_reports (
     totalCard REAL,
     totalTransfer REAL,
     totalOther REAL,
+    sequenceNumber TEXT,
+    totalsByMethod TEXT,
+    cashExpected TEXT,
+    cashCounted TEXT,
+    cashDiscrepancy TEXT,
+    stats TEXT,
+    transactionCount INTEGER,
+    notes TEXT,
+    baseCurrency TEXT,
     status TEXT,
     syncStatus TEXT DEFAULT 'PENDING',
     syncError TEXT
@@ -225,15 +270,42 @@ CREATE TABLE IF NOT EXISTS cash_movements (
 
 CREATE TABLE IF NOT EXISTS receptions (
     id TEXT PRIMARY KEY,
-    createdAt TEXT,
-    supplierId TEXT,
-    supplierName TEXT,
-    items TEXT, -- JSON array
-    total REAL,
-    status TEXT,
+    data TEXT -- JSON object
+);
+
+-- 7. Wallets & Advances
+CREATE TABLE IF NOT EXISTS wallets (
+    id TEXT PRIMARY KEY,
+    customerId TEXT NOT NULL,
+    balance REAL DEFAULT 0,
+    currency TEXT DEFAULT 'DOP',
+    status TEXT DEFAULT 'ACTIVE',
+    updatedAt TEXT,
+    FOREIGN KEY (customerId) REFERENCES customers(id)
+);
+
+CREATE TABLE IF NOT EXISTS wallet_transactions (
+    id TEXT PRIMARY KEY,
+    walletId TEXT NOT NULL,
+    type TEXT NOT NULL, -- 'DEPOSIT', 'PAYMENT', 'REFUND'
+    amount REAL NOT NULL,
+    referenceId TEXT, -- Transaction displayId
+    createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (walletId) REFERENCES wallets(id)
+);
+
+-- Currency Audit Log
+CREATE TABLE IF NOT EXISTS currency_audit_logs (
+    id TEXT PRIMARY KEY,
+    currencyCode TEXT NOT NULL,
+    field TEXT NOT NULL, -- 'rate', 'buyRate', 'sellRate', etc.
+    oldValue TEXT,
+    newValue TEXT,
+    changedAt TEXT NOT NULL,
+    changedBy TEXT NOT NULL,
+    changedByName TEXT NOT NULL,
     terminalId TEXT,
-    syncStatus TEXT DEFAULT 'PENDING',
-    syncError TEXT
+    FOREIGN KEY (changedBy) REFERENCES users(id)
 );
 
 -- Indexes for performance
@@ -244,4 +316,6 @@ CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
 CREATE INDEX IF NOT EXISTS idx_transactions_sync ON transactions(syncStatus);
 CREATE INDEX IF NOT EXISTS idx_z_reports_terminal ON z_reports(terminalId);
 CREATE INDEX IF NOT EXISTS idx_cash_movements_zreport ON cash_movements(zReportId);
+CREATE INDEX IF NOT EXISTS idx_currency_audit_currency ON currency_audit_logs(currencyCode);
+CREATE INDEX IF NOT EXISTS idx_currency_audit_date ON currency_audit_logs(changedAt);
 

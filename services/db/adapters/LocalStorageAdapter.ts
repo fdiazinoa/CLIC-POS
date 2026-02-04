@@ -5,6 +5,7 @@ const DB_KEY = 'clic_pos_db_v1';
 
 export class LocalStorageAdapter implements DatabaseAdapter {
     private dbCache: any = null;
+    public readonly adapterType = 'local';
 
     async connect(): Promise<void> {
         // Simulate connection delay

@@ -45,6 +45,11 @@ class NetworkSyncService {
     }
 
     public init() {
+        if (dbAdapter.adapterType === 'network') {
+            console.log("🛑 NetworkSyncService disabled: Application is running in full Network Mode (No local DB).");
+            return;
+        }
+
         console.log("🔄 NetworkSyncService initializing...");
 
         // HARD RESET CHECK (Slave Mode)
@@ -159,6 +164,7 @@ class NetworkSyncService {
     }
 
     public async sync() {
+        if (dbAdapter.adapterType === 'network') return;
         if (this.isSyncing || !navigator.onLine) return;
 
         this.isSyncing = true;
@@ -186,6 +192,12 @@ class NetworkSyncService {
             await this.pullCollection('internalSequences');
             await this.pullCollection('inventoryLedger'); // Sync Kardex
             await this.pullCollection('purchaseOrders');  // Sync Orders
+            await this.pullCollection('transfers');       // Sync Stock Transfers
+            await this.pullCollection('receptions');      // Sync Purchase Receptions
+
+            // 4. Push Other Pending Collections
+            await this.pushCollection('transfers');
+            await this.pushCollection('receptions');
 
             this.updateStatus({
                 lastSync: new Date(),
@@ -459,6 +471,49 @@ class NetworkSyncService {
                 return m;
             });
             await dbAdapter.saveCollection('inventoryLedger', updatedLedger);
+        }
+    }
+
+    private async pushCollection(collection: string) {
+        try {
+            const data = await dbAdapter.getCollection(collection) || [];
+            if (data.length === 0) return;
+
+            // For structured collections like 'receptions', we might only want to push PENDING
+            // For data-bag collections like 'transfers', we push everything and let server handle it
+            let itemsToPush = data;
+
+            if (collection === 'receptions') {
+                itemsToPush = data.filter((item: any) => item.syncStatus === 'PENDING');
+            }
+
+            if (itemsToPush.length === 0) return;
+
+            const res = await fetch(`${getApiUrl()}/sync/collections/${collection}/push`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Token': this.token || '',
+                    'Connection': 'keep-alive'
+                },
+                mode: 'cors',
+                body: JSON.stringify({ items: itemsToPush })
+            });
+
+            if (res.ok) {
+                const result = await res.json();
+                if (result.success && collection === 'receptions') {
+                    // Mark as synced if they were pending
+                    const updated = data.map((item: any) => {
+                        const pushed = itemsToPush.find((p: any) => p.id === item.id);
+                        if (pushed) return { ...item, syncStatus: 'SYNCED' };
+                        return item;
+                    });
+                    await dbAdapter.saveCollection(collection, updated);
+                }
+            }
+        } catch (error) {
+            console.error(`Error pushing ${collection}:`, error);
         }
     }
 }

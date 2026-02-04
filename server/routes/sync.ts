@@ -204,7 +204,7 @@ router.get('/delta/:collection', async (req, res) => {
 
         const sinceDate = new Date(since as string);
         const deltaItems = items.filter((item: any) => {
-            const updatedAt = new Date(item.updatedAt || item.createdAt || 0);
+            const updatedAt = new Date(item.updatedAt || item.createdAt || item.date || 0);
             const deletedAt = item.deletedAt ? new Date(item.deletedAt) : null;
             return updatedAt > sinceDate || (deletedAt && deletedAt > sinceDate);
         });
@@ -357,9 +357,9 @@ router.post('/transactions', async (req, res) => {
 
         let addedCount = 0;
         db.transaction(() => {
-            const stmt = db.prepare(`INSERT OR IGNORE INTO transactions (id, globalSequence, displayId, documentType, seriesId, seriesNumber, date, items, total, payments, userId, userName, terminalId, status, customerId, customerName, customerSnapshot, taxAmount, netAmount, discountAmount, isTaxIncluded, ncf, ncfType, relatedTransactions, originalTransactionId, refundReason, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            const stmt = db.prepare(`INSERT OR IGNORE INTO transactions (id, globalSequence, displayId, documentType, seriesId, seriesNumber, date, items, total, payments, userId, userName, terminalId, status, customerId, customerName, customerSnapshot, taxAmount, netAmount, discountAmount, isTaxIncluded, ncf, ncfType, relatedTransactions, originalTransactionId, refundReason, affectedInvoiceNumber, affectedNCF, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
             for (const txn of items) {
-                const result = stmt.run(txn.id, txn.globalSequence, txn.displayId, txn.documentType, txn.seriesId, txn.seriesNumber, txn.date, JSON.stringify(txn.items), txn.total, JSON.stringify(txn.payments), txn.userId, txn.userName, txn.terminalId, txn.status, txn.customerId, txn.customerName, JSON.stringify(txn.customerSnapshot), txn.taxAmount, txn.netAmount, txn.discountAmount, txn.isTaxIncluded ? 1 : 0, txn.ncf, txn.ncfType, JSON.stringify(txn.relatedTransactions), txn.originalTransactionId, txn.refundReason, txn.syncStatus, txn.syncError);
+                const result = stmt.run(txn.id, txn.globalSequence, txn.displayId, txn.documentType, txn.seriesId, txn.seriesNumber, txn.date, JSON.stringify(txn.items), txn.total, JSON.stringify(txn.payments), txn.userId, txn.userName, txn.terminalId, txn.status, txn.customerId, txn.customerName, JSON.stringify(txn.customerSnapshot), txn.taxAmount, txn.netAmount, txn.discountAmount, txn.isTaxIncluded ? 1 : 0, txn.ncf, txn.ncfType, JSON.stringify(txn.relatedTransactions), txn.originalTransactionId, txn.refundReason, txn.affectedInvoiceNumber, txn.affectedNCF, txn.syncStatus, txn.syncError);
                 if (result.changes > 0) addedCount++;
             }
 
@@ -591,9 +591,31 @@ router.post('/z-reports', async (req, res) => {
 
         let addedCount = 0;
         db.transaction(() => {
-            const stmt = db.prepare(`INSERT OR IGNORE INTO z_reports (id, openedAt, closedAt, terminalId, userId, userName, openingBalance, closingBalance, totalSales, totalTaxes, totalDiscounts, totalCash, totalCard, totalTransfer, totalOther, status, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            const stmt = db.prepare(`INSERT OR IGNORE INTO z_reports (id, openedAt, closedAt, terminalId, userId, userName, openingBalance, closingBalance, totalSales, totalTaxes, totalDiscounts, totalCash, totalCard, totalTransfer, totalOther, status, syncStatus, syncError, sequenceNumber, totalsByMethod, cashExpected, cashCounted, cashDiscrepancy, stats, transactionCount, notes, baseCurrency, cashSales, cashIn, cashOut) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
             for (const report of items) {
-                const result = stmt.run(report.id, report.openedAt, report.closedAt, report.terminalId, report.userId, report.userName, report.openingBalance, report.closingBalance, report.totalSales, report.totalTaxes, report.totalDiscounts, report.totalCash, report.totalCard, report.totalTransfer, report.totalOther, report.status, report.syncStatus, report.syncError);
+                // Determine total sales from totalsByMethod if possible
+                const totalSales = typeof report.totalsByMethod === 'object' ?
+                    Object.values(report.totalsByMethod).reduce((sum: any, val: any) => sum + (val || 0), 0) :
+                    (report.totalSales || 0);
+
+                const result = stmt.run(
+                    report.id, report.openedAt, report.closedAt, report.terminalId, report.userId, report.userName,
+                    report.openingBalance, report.closingBalance, totalSales, report.totalTaxes, report.totalDiscounts,
+                    report.totalCash, report.totalCard, report.totalTransfer, report.totalOther, report.status,
+                    report.syncStatus, report.syncError,
+                    report.sequenceNumber,
+                    typeof report.totalsByMethod === 'object' ? JSON.stringify(report.totalsByMethod) : (report.totalsByMethod || '{}'),
+                    typeof report.cashExpected === 'object' ? JSON.stringify(report.cashExpected) : (report.cashExpected || '{}'),
+                    typeof report.cashCounted === 'object' ? JSON.stringify(report.cashCounted) : (report.cashCounted || '{}'),
+                    typeof report.cashDiscrepancy === 'object' ? JSON.stringify(report.cashDiscrepancy) : (report.cashDiscrepancy || '{}'),
+                    typeof report.stats === 'object' ? JSON.stringify(report.stats) : (report.stats || '{}'),
+                    report.transactionCount || 0,
+                    report.notes || '',
+                    report.baseCurrency || '',
+                    report.cashSales || 0,
+                    report.cashIn || 0,
+                    report.cashOut || 0
+                );
                 if (result.changes > 0) addedCount++;
             }
 

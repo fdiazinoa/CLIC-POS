@@ -6,8 +6,9 @@
  */
 
 import React, { useState } from 'react';
-import { ScanBarcode, Plus, Minus, Save, X } from 'lucide-react';
+import { ScanBarcode, Plus, Minus, Save, X, Camera } from 'lucide-react';
 import { Product } from '../../types';
+import BarcodeScannerModal from '../BarcodeScannerModal';
 
 interface CountedItem {
     productId: string;
@@ -31,6 +32,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
     const [counts, setCounts] = useState<CountedItem[]>([]);
     const [scanInput, setScanInput] = useState('');
     const [selectedItem, setSelectedItem] = useState<string | null>(null);
+    const [showCameraScanner, setShowCameraScanner] = useState(false);
 
     // Handle scan
     const handleScan = () => {
@@ -66,6 +68,39 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
         } else {
             alert('Producto no encontrado');
             setScanInput('');
+        }
+    };
+
+    // Handle camera scan
+    const handleCameraScan = async (code: string): Promise<{ success: boolean; message?: string }> => {
+        const product = products.find(p =>
+            p.barcode === code.trim() || p.id === code.trim()
+        );
+
+        if (product) {
+            const existing = counts.find(c => c.productId === product.id);
+
+            if (existing) {
+                // Increment count
+                setCounts(counts.map(c =>
+                    c.productId === product.id
+                        ? { ...c, countedQty: c.countedQty + 1, difference: c.countedQty + 1 - c.expectedQty }
+                        : c
+                ));
+            } else {
+                // Add new item
+                setCounts([...counts, {
+                    productId: product.id,
+                    productName: product.name,
+                    expectedQty: product.stock || 0,
+                    countedQty: 1,
+                    difference: 1 - (product.stock || 0)
+                }]);
+            }
+
+            return { success: true, message: `${product.name} agregado` };
+        } else {
+            return { success: false, message: 'Producto no encontrado' };
         }
     };
 
@@ -123,9 +158,17 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                             onChange={(e) => setScanInput(e.target.value)}
                             onKeyPress={(e) => e.key === 'Enter' && handleScan()}
                             placeholder="Escanear código..."
-                            className="w-full pl-10 pr-4 py-3 bg-white/10 border-2 border-white/20 rounded-xl text-white placeholder-blue-200 font-bold outline-none focus:bg-white/20"
+                            className="w-full pl-10 pr-12 py-3 bg-white/10 border-2 border-white/20 rounded-xl text-white placeholder-blue-200 font-bold outline-none focus:bg-white/20"
                             autoFocus
                         />
+                        {/* Camera Button */}
+                        <button
+                            onClick={() => setShowCameraScanner(true)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors"
+                            title="Abrir cámara"
+                        >
+                            <Camera size={20} className="text-white" />
+                        </button>
                     </div>
                     <button
                         onClick={handleScan}
@@ -240,6 +283,13 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                     </button>
                 </div>
             )}
+
+            {/* Camera Scanner Modal */}
+            <BarcodeScannerModal
+                isOpen={showCameraScanner}
+                onClose={() => setShowCameraScanner(false)}
+                onScan={handleCameraScan}
+            />
         </div>
     );
 };

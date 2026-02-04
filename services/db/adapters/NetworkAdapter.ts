@@ -2,6 +2,7 @@ import { DatabaseAdapter } from '../DatabaseAdapter';
 
 export class NetworkAdapter implements DatabaseAdapter {
     private baseUrl: string | null = null;
+    public readonly adapterType = 'network';
 
     constructor() {
         console.log("🌐 NetworkAdapter instantiated.");
@@ -217,7 +218,7 @@ export class NetworkAdapter implements DatabaseAdapter {
 
             if (check.ok) {
                 // Update
-                await fetch(checkUrl, {
+                const res = await fetch(checkUrl, {
                     method: 'PUT',
                     headers: {
                         'Content-Type': 'application/json',
@@ -226,10 +227,13 @@ export class NetworkAdapter implements DatabaseAdapter {
                     mode: 'cors',
                     body: JSON.stringify(doc)
                 });
+                if (!res.ok) {
+                    throw new Error(`Failed to update ${collectionName}/${doc.id}: ${res.statusText}`);
+                }
             } else {
                 // Create
                 const createUrl = this.getUrl(collectionName);
-                await fetch(createUrl, {
+                const res = await fetch(createUrl, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -238,6 +242,12 @@ export class NetworkAdapter implements DatabaseAdapter {
                     mode: 'cors',
                     body: JSON.stringify(doc)
                 });
+
+                if (!res.ok) {
+                    const errorText = await res.text().catch(() => 'Unknown Error');
+                    console.error(`❌ NetworkAdapter POST Failed:`, { url: createUrl, status: res.status, error: errorText });
+                    throw new Error(`Failed to create in ${collectionName}: ${res.statusText} (${errorText})`);
+                }
             }
         } catch (error) {
             console.error(`Error saving document to ${collectionName}:`, error);

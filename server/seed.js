@@ -109,27 +109,41 @@ const PRODUCTS = [
     image: "https://images.unsplash.com/photo-1592924357228-91a4daadcfea?q=80&w=200&auto=format&fit=crop"
   },
   {
-    id: "prod_zapatillas",
-    name: "Zapatillas Runner X",
-    price: 2500.00,
-    cost: 1200.00,
+    id: "p-var-1",
+    name: "Zapatillas Runner 5.0",
+    price: 85.00,
+    cost: 40.00,
     category: "Calzado",
     type: "PRODUCT",
-    barcode: "ZAP-001",
+    barcode: "RUN-001",
     trackStock: true,
     activeInWarehouses: ["wh_central", "wh_norte"],
-    stockBalances: {
-      "wh_central": 0,
-      "wh_norte": 50 // Stock solo en el norte
+    stockBalances: { "wh_central": 10, "wh_norte": 0 },
+    warehouseSettings: {
+      "wh_central": { min: 20, max: 50 }
     },
     attributes: [
-      { id: "attr_size", name: "Talla", options: ["40", "42"], optionCodes: ["40", "42"] }
+      { id: "attr_size", name: "Talla", options: ["38", "39", "40", "41", "42"], optionCodes: ["38", "39", "40", "41", "42"] },
+      { id: "attr_color", name: "Color", options: ["Rojo", "Azul", "Negro"], optionCodes: ["RJ", "AZ", "NG"] }
     ],
     variants: [
-      { sku: "ZAP-001-40", barcode: ["ZAP-001-40"], attributeValues: { "Talla": "40" }, price: 2500, initialStock: 25 },
-      { sku: "ZAP-001-42", barcode: ["ZAP-001-42"], attributeValues: { "Talla": "42" }, price: 2500, initialStock: 25 }
+      { sku: 'RUN-01-38-RJ', barcode: ['RUN0138RJ'], attributeValues: { 'Talla': '38', 'Color': 'Rojo' }, price: 85.00 },
+      { sku: 'RUN-01-39-RJ', barcode: ['RUN0139RJ'], attributeValues: { 'Talla': '39', 'Color': 'Rojo' }, price: 85.00 },
+      { sku: 'RUN-01-40-RJ', barcode: ['RUN0140RJ'], attributeValues: { 'Talla': '40', 'Color': 'Rojo' }, price: 85.00 },
+      { sku: 'RUN-01-41-RJ', barcode: ['RUN0141RJ'], attributeValues: { 'Talla': '41', 'Color': 'Rojo' }, price: 85.00 },
+      { sku: 'RUN-01-42-RJ', barcode: ['RUN0142RJ'], attributeValues: { 'Talla': '42', 'Color': 'Rojo' }, price: 85.00 },
+      { sku: 'RUN-01-38-AZ', barcode: ['RUN0138AZ'], attributeValues: { 'Talla': '38', 'Color': 'Azul' }, price: 85.00 },
+      { sku: 'RUN-01-39-AZ', barcode: ['RUN0139AZ'], attributeValues: { 'Talla': '39', 'Color': 'Azul' }, price: 85.00 },
+      { sku: 'RUN-01-40-AZ', barcode: ['RUN0140AZ'], attributeValues: { 'Talla': '40', 'Color': 'Azul' }, price: 85.00 },
+      { sku: 'RUN-01-41-AZ', barcode: ['RUN0141AZ'], attributeValues: { 'Talla': '41', 'Color': 'Azul' }, price: 85.00 },
+      { sku: 'RUN-01-42-AZ', barcode: ['RUN0142AZ'], attributeValues: { 'Talla': '42', 'Color': 'Azul' }, price: 85.00 },
+      { sku: 'RUN-01-38-NG', barcode: ['RUN0138NG'], attributeValues: { 'Talla': '38', 'Color': 'Negro' }, price: 85.00 },
+      { sku: 'RUN-01-39-NG', barcode: ['RUN0139NG'], attributeValues: { 'Talla': '39', 'Color': 'Negro' }, price: 85.00 },
+      { sku: 'RUN-01-40-NG', barcode: ['RUN0140NG'], attributeValues: { 'Talla': '40', 'Color': 'Negro' }, price: 85.00 },
+      { sku: 'RUN-01-41-NG', barcode: ['RUN0141NG'], attributeValues: { 'Talla': '41', 'Color': 'Negro' }, price: 85.00 },
+      { sku: 'RUN-01-42-NG', barcode: ['RUN0142NG'], attributeValues: { 'Talla': '42', 'Color': 'Negro' }, price: 85.00 }
     ],
-    tariffs: [{ tariffId: "trf-gen", price: 2500.00 }],
+    tariffs: [{ tariffId: "trf-gen", price: 85.00 }],
     image: "https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=200&auto=format&fit=crop"
   }
 ];

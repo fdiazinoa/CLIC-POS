@@ -1,9 +1,9 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
    Search, ShoppingCart, Trash2, MoreVertical,
    CreditCard, User, Tag, Grid, Save,
    Settings, Users, History, Wallet,
-   UserPlus, X, Percent, ArrowLeft, ChevronRight,
+   UserPlus, PlusCircle, X, Percent, ArrowLeft, ChevronRight,
    Scale as ScaleIcon, PauseCircle, LogOut, Minus, Plus,
    ArrowRightLeft, Globe, DollarSign,
    ChevronDown, Check, AlertCircle, Layers,
@@ -15,7 +15,8 @@ import {
 import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
-   Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType
+   Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType,
+   PaymentEntry
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import UnifiedPaymentModal from './PaymentModal';
@@ -44,6 +45,8 @@ import PromoBottomSheet from './PromoBottomSheet';
 import { backgroundSyncManager, SyncState } from '../services/sync/BackgroundSyncManager';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { visorSync } from '../utils/visorSync';
+import ProductQuickActions from './ProductQuickActions';
+import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 
 interface POSInterfaceProps {
    config: BusinessConfig;
@@ -61,7 +64,7 @@ interface POSInterfaceProps {
    parkedTickets: ParkedTicket[];
    onUpdateParkedTickets: (tickets: ParkedTicket[]) => void;
    onLogout: () => void;
-   onOpenSettings: () => void;
+   onOpenSettings: (initialView?: string, initialData?: any) => void;
    onOpenCustomers: () => void;
    onOpenHistory: () => void;
    onOpenFinance: () => void;
@@ -96,6 +99,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    activeTerminalId
 }) => {
    const cartEndRef = useRef<HTMLDivElement>(null);
+   const [quickActionData, setQuickActionData] = useState<{ product: Product; x: number; y: number } | null>(null);
+   const [successToast, setSuccessToast] = useState<string | null>(null);
+
+   useEffect(() => {
+      if (successToast) {
+         const timer = setTimeout(() => setSuccessToast(null), 3000);
+         return () => clearTimeout(timer);
+      }
+   }, [successToast]);
 
    const activeTerminal = (config.terminals || []).find(t => t.id === activeTerminalId) || (config.terminals || [])[0];
    const activeTerminalConfig = activeTerminal?.config;
@@ -137,7 +149,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return activeTerminalConfig?.pricing?.defaultTariffId || allowedTariffs[0]?.id || config.tariffs[0]?.id || '';
    });
 
+   // FILTER: Only care about transactions for THIS terminal for active session checks
+   const terminalTransactions = useMemo(() => {
+      return transactions
+         .filter(t => t.terminalId === terminalId || (!t.terminalId && terminalId === 'T1'))
+         .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+   }, [transactions, terminalId]);
+
    const [showTariffSelector, setShowTariffSelector] = useState(false);
+   const [isReturnMode, setIsReturnMode] = useState(false);
    const [errorToast, setErrorToast] = useState<string | null>(null);
 
    const activeTariff = useMemo(() => (config.tariffs || []).find(t => t.id === activeTariffId), [config.tariffs, activeTariffId]);
@@ -166,6 +186,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const [isScannerOpen, setIsScannerOpen] = useState(false);
    const scannerRef = useRef<Html5Qrcode | null>(null);
+   const searchInputRef = useRef<HTMLInputElement>(null);
 
    const [fiscalStatus, setFiscalStatus] = useState<{ type: NCFType, hasNCF: boolean, localBuffer: any, isUsingPool: boolean }>({
       type: 'B02', hasNCF: false, localBuffer: null, isUsingPool: false
@@ -219,7 +240,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const handleLoyaltyScan = (code: string) => {
+   const getProductPrice = useCallback((p: Product) => (p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price || p.price || 0, [activeTariffId]);
+
+   const handleLoyaltyScan = useCallback((code: string) => {
       // Find customer by loyalty card or gift card
       const customer = (customers || []).find(c =>
          c.cards?.some(card => card.cardNumber === code && card.status === 'ACTIVE') ||
@@ -234,13 +257,127 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       } else {
          alert("Tarjeta no encontrada o inactiva.");
       }
-   };
+   }, [customers, onSelectCustomer]);
+
+   const canAddItemToCart = useCallback((product: Product, quantityToAdd: number = 1): boolean => {
+      // 1. Warehouse enablement check
+      if (!defaultSalesWarehouseId) return true;
+      const isEnabled = product.activeInWarehouses?.includes(defaultSalesWarehouseId);
+      if (!isEnabled) {
+         const whName = (warehouses || []).find(w => w.id === defaultSalesWarehouseId)?.name || 'Almacén Actual';
+         setErrorToast(`Artículo no habilitado para la venta en: ${whName}`);
+         setTimeout(() => setErrorToast(null), 3500);
+         return false;
+      }
+
+      // 2. Stock validation
+      const trackInventory = product.operationalFlags?.trackInventory ?? config.features.stockTracking;
+      if (trackInventory) {
+         const productAllowsNegative = product.operationalFlags?.allowNegativeStock ?? false;
+         const terminalAllowsNegative = activeTerminalConfig?.workflow?.inventory?.allowNegativeStock ?? false;
+
+         // If negative stock is NOT allowed (at either level), check availability
+         if (!productAllowsNegative || !terminalAllowsNegative) {
+            const currentStock = product.stockBalances?.[defaultSalesWarehouseId] ?? product.stock ?? 0;
+            const inCartQty = cart.filter(item => item.id === product.id).reduce((sum, item) => sum + item.quantity, 0);
+            const totalRequested = inCartQty + quantityToAdd;
+
+            if (totalRequested > currentStock) {
+               setErrorToast(`Stock insuficiente. Disponible: ${currentStock}. En carrito: ${inCartQty}`);
+               setTimeout(() => setErrorToast(null), 3500);
+               return false;
+            }
+         }
+      }
+
+      return true;
+   }, [defaultSalesWarehouseId, warehouses, config.features.stockTracking, activeTerminalConfig, cart]);
+
+   const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[]) => {
+      if (!canAddItemToCart(product, quantity)) return;
+      const finalPrice = priceOverride || getProductPrice(product);
+      onUpdateCart(prev => {
+         const modifiersString = modifiers ? modifiers.sort().join('|') : '';
+         const existing = (prev || []).find(i => {
+            const iMods = i.modifiers ? i.modifiers.sort().join('|') : '';
+            return i.id === product.id && iMods === modifiersString && i.price === finalPrice;
+         });
+         if (existing) return prev.map(i => i.cartId === existing.cartId ? { ...i, quantity: i.quantity + quantity } : i);
+         return [...prev, { ...product, cartId: Math.random().toString(36).substr(2, 9), quantity, price: finalPrice, modifiers, originalPrice: getProductPrice(product) }];
+      });
+   }, [canAddItemToCart, getProductPrice, onUpdateCart]);
+
+   const handleProductClick = useCallback((product: Product) => {
+      // MOBILE INTERCEPTION
+      if (isMobile && !defaultSalesWarehouseId) {
+         setPendingProductToAdd(product);
+         setShowMobileConfigModal(true);
+         return;
+      }
+
+      if (!canAddItemToCart(product)) return;
+      const productName = product.name || '';
+      const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
+      const hasVariants = product.attributes && product.attributes.length > 0;
+      if (isWeighted) setProductForScale(product);
+      else if (hasVariants) setSelectedProductForVariants(product);
+      else addToCart(product, isReturnMode ? -1 : 1);
+   }, [isMobile, defaultSalesWarehouseId, canAddItemToCart, addToCart, isReturnMode]);
+
+   // --- SEARCH LOGIC (Auto-Add Variantes) ---
+   const findProductByAnyCode = useCallback((code: string) => {
+      let quantity = 1;
+      let searchCode = code.trim();
+
+      // Multiplier Support: [Qty]*[SKU]
+      if (searchCode.includes('*')) {
+         const parts = searchCode.split('*');
+         if (parts.length === 2 && !isNaN(Number(parts[0]))) {
+            quantity = Number(parts[0]);
+            searchCode = parts[1].trim();
+         }
+      }
+
+      if (!searchCode) return null;
+
+      for (const p of products) {
+         // A. Check Variants (SKU or Barcode)
+         if (p.variants && p.variants.length > 0) {
+            for (const v of p.variants) {
+               if (v.sku === searchCode || (v.barcode && v.barcode.includes(searchCode))) {
+                  // Map attribute values to a simple list of modifiers
+                  const modifiersList = Object.entries(v.attributeValues || {}).map(([_, val]) => val);
+                  return { product: p, quantity, price: v.price || getProductPrice(p), modifiers: modifiersList };
+               }
+            }
+         }
+
+         // B. Check Parent (ID, SKU, or Barcode)
+         if (p.id === searchCode || p.barcode === searchCode) {
+            return { product: p, quantity, price: getProductPrice(p), modifiers: [] };
+         }
+      }
+      return null;
+   }, [products, getProductPrice]);
+
+   const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Enter') {
+         const match = findProductByAnyCode(searchTerm || '');
+         if (match) {
+            addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers);
+            setSearchTerm('');
+            setErrorToast(null);
+            // Ensure focus stays on search bar
+            searchInputRef.current?.focus();
+         } else if (searchTerm && searchTerm.trim()) {
+            setErrorToast("Código no encontrado");
+            setTimeout(() => setErrorToast(null), 2000);
+         }
+      }
+   }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode]);
 
    // --- BARCODE SCANNER LOGIC ---
-   const [barcodeBuffer, setBarcodeBuffer] = useState('');
-   const lastKeyTime = useRef<number>(0);
-
-   const processBarcode = (code: string) => {
+   const processBarcode = useCallback((code: string) => {
       // 0. Try Smart QR (JSON)
       try {
          if (code.trim().startsWith('{') && code.trim().endsWith('}')) {
@@ -298,51 +435,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          handleProductClick(product);
          setErrorToast(`Producto agregado: ${product.name}`);
          setTimeout(() => setErrorToast(null), 1500);
-      } else {
-         setErrorToast(`Código no encontrado: ${code}`);
-         setTimeout(() => setErrorToast(null), 2000);
       }
-   };
+   }, [config, products, handleProductClick, getProductPrice, canAddItemToCart]);
 
-   useEffect(() => {
-      const handleGlobalKeyDown = (e: KeyboardEvent) => {
-         const target = e.target as HTMLElement;
-         const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+   const isAnyModalOpen = !!(
+      showPaymentModal ||
+      showTicketOptions ||
+      showParkedList ||
+      showGlobalDiscount ||
+      showCouponModal ||
+      editingItem ||
+      selectedProductForVariants ||
+      productForScale ||
+      showLoyaltyModal ||
+      isScannerOpen ||
+      showReturnModal ||
+      showPromoSheet ||
+      showMobileConfigModal ||
+      supervisorModalProps.isOpen
+   );
 
-         // If we are in a specific input (like search), we might want to let it handle it,
-         // UNLESS it's a fast scan which implies a barcode.
-
-         const currentTime = Date.now();
-         const gap = currentTime - lastKeyTime.current;
-         lastKeyTime.current = currentTime;
-
-         if (e.key === 'Enter') {
-            // If buffer has content and was typed relatively fast (or just has content), process it.
-            // We use a threshold for "scanner speed" or just check buffer length.
-            if (barcodeBuffer.length >= 3) {
-               processBarcode(barcodeBuffer);
-               setBarcodeBuffer('');
-               if (isInput) e.preventDefault(); // Prevent form submission
-            } else {
-               setBarcodeBuffer('');
-            }
-            return;
-         }
-
-         if (e.key.length === 1) { // Printable char
-            if (gap > 100) {
-               // Slow typing - reset buffer (assume manual input start)
-               setBarcodeBuffer(e.key);
-            } else {
-               // Fast typing - append to buffer
-               setBarcodeBuffer(prev => prev + e.key);
-            }
-         }
-      };
-
-      window.addEventListener('keydown', handleGlobalKeyDown);
-      return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-   }, [barcodeBuffer, config, products, cart]); // Dependencies
+   useBarcodeScanner({
+      onScan: processBarcode,
+      enabled: !isAnyModalOpen
+   });
 
 
    useEffect(() => {
@@ -373,39 +489,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       checkFiscalStatus();
    }, [selectedCustomer, cart]);
 
-   const canAddItemToCart = (product: Product, quantityToAdd: number = 1): boolean => {
-      // 1. Warehouse enablement check
-      if (!defaultSalesWarehouseId) return true;
-      const isEnabled = product.activeInWarehouses?.includes(defaultSalesWarehouseId);
-      if (!isEnabled) {
-         const whName = (warehouses || []).find(w => w.id === defaultSalesWarehouseId)?.name || 'Almacén Actual';
-         setErrorToast(`Artículo no habilitado para la venta en: ${whName}`);
-         setTimeout(() => setErrorToast(null), 3500);
-         return false;
-      }
-
-      // 2. Stock validation
-      const trackInventory = product.operationalFlags?.trackInventory ?? config.features.stockTracking;
-      if (trackInventory) {
-         const productAllowsNegative = product.operationalFlags?.allowNegativeStock ?? false;
-         const terminalAllowsNegative = activeTerminalConfig?.workflow?.inventory?.allowNegativeStock ?? false;
-
-         // If negative stock is NOT allowed (at either level), check availability
-         if (!productAllowsNegative || !terminalAllowsNegative) {
-            const currentStock = product.stockBalances?.[defaultSalesWarehouseId] ?? product.stock ?? 0;
-            const inCartQty = cart.filter(item => item.id === product.id).reduce((sum, item) => sum + item.quantity, 0);
-            const totalRequested = inCartQty + quantityToAdd;
-
-            if (totalRequested > currentStock) {
-               setErrorToast(`Stock insuficiente. Disponible: ${currentStock}. En carrito: ${inCartQty}`);
-               setTimeout(() => setErrorToast(null), 3500);
-               return false;
-            }
-         }
-      }
-
-      return true;
-   };
 
    const filteredProducts = useMemo(() => {
       const filtered = products.filter(p => {
@@ -442,7 +525,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return cats;
    }, [products, activeTerminalConfig]);
 
-   const getProductPrice = (p: Product) => (p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price || p.price || 0;
 
 
 
@@ -527,36 +609,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, [cart.length]);
 
-   const handleProductClick = (product: Product) => {
-      // MOBILE INTERCEPTION
-      if (isMobile && !defaultSalesWarehouseId) {
-         setPendingProductToAdd(product);
-         setShowMobileConfigModal(true);
-         return;
-      }
 
-      if (!canAddItemToCart(product)) return;
-      const productName = product.name || '';
-      const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
-      const hasVariants = product.attributes && product.attributes.length > 0;
-      if (isWeighted) setProductForScale(product);
-      else if (hasVariants) setSelectedProductForVariants(product);
-      else addToCart(product);
-   };
-
-   const addToCart = (product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[]) => {
-      if (!canAddItemToCart(product, quantity)) return;
-      const finalPrice = priceOverride || getProductPrice(product);
-      onUpdateCart(prev => {
-         const modifiersString = modifiers ? modifiers.sort().join('|') : '';
-         const existing = (prev || []).find(i => {
-            const iMods = i.modifiers ? i.modifiers.sort().join('|') : '';
-            return i.id === product.id && iMods === modifiersString && i.price === finalPrice;
-         });
-         if (existing) return prev.map(i => i.cartId === existing.cartId ? { ...i, quantity: i.quantity + quantity } : i);
-         return [...prev, { ...product, cartId: Math.random().toString(36).substr(2, 9), quantity, price: finalPrice, modifiers, originalPrice: getProductPrice(product) }];
-      });
-   };
 
    const updateCartItem = async (updatedItem: CartItem | null, cartIdToDelete?: string) => {
       if (cartIdToDelete || updatedItem === null) {
@@ -598,7 +651,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
 
-   const handlePaymentConfirm = async (payments: any[]): Promise<Transaction | null> => {
+   const handlePaymentConfirm = async (payments: PaymentEntry[]): Promise<Transaction | null> => {
+      // --- FISCAL COMPLIANCE CHECK (DGII RNC VALIDATION) ---
+      if (fiscalStatus && fiscalStatus.type === 'B01' && selectedCustomer) {
+         if (selectedCustomer.fiscalStatus && selectedCustomer.fiscalStatus !== 'ACTIVO') {
+            alert(
+               `⛔ COMPROBANTE BLOQUEADO\n\n` +
+               `El contribuyente ${selectedCustomer.name} tiene estatus: ${selectedCustomer.fiscalStatus || 'DESCONOCIDO'}.\n` +
+               `No se puede emitir Crédito Fiscal (B01) según normas de la DGII.\n\n` +
+               `Acción requerida: Cambie el tipo de comprobante a Consumo (B02) o seleccione otro cliente.`
+            );
+            return null;
+         }
+      }
+
+      const terminalId = activeTerminalId || 't1';
       const finalNcf = await db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100);
 
       if (!finalNcf) {
@@ -606,54 +673,127 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return null;
       }
 
-      // Validate series assignment
       const validation = validateTerminalSeries(activeTerminalConfig, 'TICKET');
       if (!validation.isValid) {
          alert(validation.message);
          return null;
       }
 
-      // Get assigned series for TICKET documents
       const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
+      const hasReturns = processedCart.some(i => i.quantity < 0);
+      const hasSales = processedCart.some(i => i.quantity > 0);
 
-      // Calculate tax amounts
-      const taxAmount = activeTariff?.taxIncluded ? cartTotal * 0.18 : 0; // Assuming 18% tax
-      const netAmount = activeTariff?.taxIncluded ? cartTotal - taxAmount : cartTotal;
+      try {
+         // If it's a mixed transaction, use the split endpoint
+         if (hasReturns && hasSales) {
+            const saleItems = processedCart.filter(i => i.quantity > 0);
+            const returnItems = processedCart.filter(i => i.quantity < 0);
 
-      // Create transaction using transaction service
-      const txn = await transactionService.createTransaction({
-         documentType: 'TICKET',
-         seriesId: assignedSequenceId,
-         date: new Date().toISOString(),
-         items: processedCart,
-         total: cartTotal,
-         payments: payments,
-         userId: currentUser.id,
-         userName: currentUser.name,
-         terminalId: terminalId,
-         status: 'COMPLETED',
-         customerId: selectedCustomer?.id,
-         customerName: selectedCustomer?.name,
-         ncf: finalNcf,
-         ncfType: fiscalStatus.type,
-         taxAmount: taxAmount,
-         netAmount: netAmount,
-         discountAmount: discountAmount,
-         customerSnapshot: selectedCustomer ? {
-            name: selectedCustomer.name,
-            taxId: selectedCustomer.taxId,
-            address: selectedCustomer.address,
-            phone: selectedCustomer.phone,
-            email: selectedCustomer.email
-         } : undefined,
-         isTaxIncluded: activeTariff?.taxIncluded || false
-      });
+            // Calculate totals for each part
+            const saleTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+            const returnTotal = returnItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
 
-      onTransactionComplete(txn);
-      // setShowPaymentModal(false); // Removed: Modal handles closing
-      onUpdateCart([]); onSelectCustomer(null);
-      setMobileView('PRODUCTS'); setGlobalDiscount({ value: 0, type: 'PERCENT' });
-      return txn;
+            // Prepare wallet operations
+            const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
+            const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
+
+            const response = await fetch('/api/transactions/split', {
+               method: 'POST',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({
+                  saleTransaction: {
+                     documentType: 'TICKET',
+                     seriesId: assignedSequenceId,
+                     items: saleItems,
+                     total: saleTotal,
+                     payments: payments.filter(p => !['WALLET', 'ADVANCE'].includes(p.method)),
+                     userId: currentUser.id,
+                     userName: currentUser.name,
+                     terminalId: terminalId,
+                     customerId: selectedCustomer?.id,
+                     customerName: selectedCustomer?.name,
+                     ncf: finalNcf,
+                     ncfType: fiscalStatus.type,
+                     taxAmount: isTaxIncluded ? saleTotal * 0.18 : 0,
+                     netAmount: isTaxIncluded ? saleTotal / 1.18 : saleTotal,
+                     customerSnapshot: selectedCustomer ? {
+                        name: selectedCustomer.name,
+                        taxId: selectedCustomer.taxId
+                     } : undefined,
+                     walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined
+                  },
+                  refundTransaction: {
+                     documentType: 'REFUND',
+                     seriesId: activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC',
+                     items: returnItems,
+                     total: returnTotal,
+                     userId: currentUser.id,
+                     userName: currentUser.name,
+                     terminalId: terminalId,
+                     customerId: selectedCustomer?.id,
+                     customerName: selectedCustomer?.name,
+                     status: 'COMPLETED',
+                     walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined
+                  },
+                  walletDeposit: walletDepositAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletDepositAmount } : undefined,
+                  walletPayment: walletPaymentAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletPaymentAmount } : undefined
+               })
+            });
+
+            const data = await response.json();
+            if (data.success) {
+               onUpdateCart([]);
+               onSelectCustomer(null);
+               return data.result.sale || data.result.refund;
+            } else {
+               alert(`Error en transacción: ${data.message}`);
+               return null;
+            }
+         } else {
+            // Standard single transaction logic
+            const taxAmount = cartTax;
+            const netAmount = grossLineTotal - discountAmount - (isTaxIncluded ? 0 : taxAmount);
+
+            const txn = await transactionService.createTransaction({
+               documentType: hasReturns ? 'REFUND' : 'TICKET',
+               seriesId: hasReturns
+                  ? (activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC')
+                  : assignedSequenceId,
+               date: new Date().toISOString(),
+               items: processedCart,
+               total: cartTotal,
+               payments: payments,
+               userId: currentUser.id,
+               userName: currentUser.name,
+               terminalId: terminalId,
+               status: 'COMPLETED',
+               customerId: selectedCustomer?.id,
+               customerName: selectedCustomer?.name,
+               ncf: finalNcf,
+               ncfType: fiscalStatus.type,
+               taxAmount: taxAmount,
+               netAmount: netAmount,
+               discountAmount: discountAmount,
+               customerSnapshot: selectedCustomer ? {
+                  name: selectedCustomer.name,
+                  taxId: selectedCustomer.taxId,
+                  address: selectedCustomer.address,
+                  phone: selectedCustomer.phone,
+                  email: selectedCustomer.email
+               } : undefined,
+               isTaxIncluded: isTaxIncluded
+            });
+
+            onTransactionComplete(txn);
+            onUpdateCart([]);
+            onSelectCustomer(null);
+            return txn;
+         }
+      } catch (error: any) {
+         console.error('Split Transaction Error:', error);
+         alert(`Error de red: ${error.message}`);
+         return null;
+      }
    };
 
    const handleParkCurrentTicket = () => {
@@ -735,8 +875,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          isTaxIncluded: originalTransaction.isTaxIncluded
       });
 
+
+
+      // 3. Update Original Transaction Status (Global & Local)
+      try {
+         // Global/Server Update
+         await fetch(`/api/transactions/${originalTransaction.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'REFUNDED' })
+         });
+
+         // Local Update (if exists in current view)
+         const localExists = transactions.find(t => t.id === originalTransaction.id);
+         if (localExists) {
+            // Use a custom event or callback? 
+            // Since transactions prop is passed down, we might not be able to set it directly if onTransactionComplete handles addition only.
+            // Ideally we should reload transactions or optimistically update.
+            // Given the architecture, onTransactionComplete usually refreshes or adds.
+            // For now, let's just log success.
+            console.log('✅ Original transaction marked as REFUNDED remotely.');
+         }
+      } catch (e) {
+         console.error("Failed to update original transaction status:", e);
+         // Don't block the UI, the refund itself is valid.
+      }
+
       onTransactionComplete(refundTxn);
-      alert(`Devolución registrada: ${config.currencySymbol}${refundTotal.toFixed(2)}`);
+      alert(`Devolución registrada: ${config.currencySymbol}${refundTotal.toFixed(2)}\nTicket original (${originalTransaction.displayId}) marcado como REEMBOLSADO.`);
    };
 
    return (
@@ -876,7 +1042,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                <div className="flex-1 flex items-center gap-4">
                   <div className="relative flex-1 group">
                      <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-                     <input type="text" placeholder="Buscar producto..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-12 pr-12 md:pr-4 py-3 bg-gray-100 rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium" />
+                     <input
+                        ref={searchInputRef}
+                        type="text"
+                        placeholder="Buscar producto..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        onKeyDown={handleSearchKeyDown}
+                        className="w-full pl-12 pr-12 md:pr-4 py-3 bg-gray-100 rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
+                     />
                      <button onClick={() => setIsScannerOpen(true)} className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
                   </div>
                   <div className="relative shrink-0">
@@ -889,8 +1063,40 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <ChevronDown size={16} className={`text-purple-400 ${showTariffSelector ? 'rotate-180' : ''}`} />
                      </button>
                   </div>
+
+                  {/* RETURN MODE TOGGLE */}
+                  <button
+                     onClick={async () => {
+                        if (!isReturnMode) {
+                           // Entering Return Mode - Check Permission
+                           const userRole = roles.find(r => r.id === currentUser.role);
+                           const userPermissions = userRole?.permissions || [];
+                           const hasPermission = userPermissions.includes('POS_RETURNS') || userPermissions.includes('ALL');
+
+                           if (!hasPermission) {
+                              const authorized = await requestApproval({
+                                 permission: 'POS_RETURNS',
+                                 actionDescription: 'Activar Modo Devolución',
+                                 context: {
+                                    reason: 'Acceso restringido a devoluciones'
+                                 }
+                              });
+                              if (!authorized) return;
+                           }
+                        }
+                        setIsReturnMode(!isReturnMode);
+                     }}
+                     className={`flex items-center gap-3 px-5 py-3 rounded-2xl border-2 transition-all ${isReturnMode ? 'border-red-500 bg-red-50' : 'bg-gray-100 border-transparent hover:bg-gray-200'}`}
+                  >
+                     <ArrowRightLeft size={18} className={isReturnMode ? 'text-red-600' : 'text-gray-400'} />
+                     <div className="text-left hidden sm:block">
+                        <p className={`text-[9px] font-black uppercase tracking-widest leading-none mb-1 ${isReturnMode ? 'text-red-400' : 'text-gray-400'}`}>Modo Operación</p>
+                        <p className={`text-xs font-bold leading-none ${isReturnMode ? 'text-red-900' : 'text-gray-600'}`}>{isReturnMode ? 'DEVOLUCIÓN' : 'VENTA'}</p>
+                     </div>
+                  </button>
+
                   {/* MOBILE SETTINGS BUTTON */}
-                  <button onClick={onOpenSettings} className="md:hidden p-3 bg-gray-100 rounded-xl text-gray-600 hover:bg-gray-200">
+                  <button onClick={() => onOpenSettings()} className="md:hidden p-3 bg-gray-100 rounded-xl text-gray-600 hover:bg-gray-200">
                      <Settings size={20} />
                   </button>
                </div>
@@ -919,9 +1125,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
                      const hasVariants = product.attributes && product.attributes.length > 0;
 
+                     // Long Press Detection Logic
+                     let touchTimer: any;
+                     const handleTouchStart = (e: React.TouchEvent) => {
+                        const touch = e.touches[0];
+                        const { clientX, clientY } = touch;
+                        touchTimer = setTimeout(() => {
+                           setQuickActionData({ product, x: clientX, y: clientY });
+                        }, 800);
+                     };
+                     const handleTouchEnd = () => {
+                        clearTimeout(touchTimer);
+                     };
+
                      return (
 
-                        <div key={product.id || `prod-${idx}`} onClick={() => handleProductClick(product)} className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-[2rem] p-4 shadow-sm border border-gray-100 cursor-pointer hover:shadow-xl hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group flex flex-col h-full relative overflow-hidden">
+                        <div
+                           key={product.id || `prod-${idx}`}
+                           onClick={(e) => {
+                              if (quickActionData) return;
+                              handleProductClick(product);
+                           }}
+                           onContextMenu={(e) => {
+                              e.preventDefault();
+                              setQuickActionData({ product, x: e.clientX, y: e.clientY });
+                           }}
+                           onTouchStart={handleTouchStart}
+                           onTouchEnd={handleTouchEnd}
+                           className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-[2rem] p-4 shadow-sm border border-gray-100 cursor-pointer hover:shadow-xl hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group flex flex-col h-full relative overflow-hidden"
+                        >
                            {uxConfig.showProductImages && (
                               <div className="aspect-square bg-gray-50 dark:bg-slate-800 rounded-[1.5rem] mb-4 overflow-hidden relative">
                                  {product.image ? <img src={product.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
@@ -995,7 +1227,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-xl border border-gray-100 hidden group-hover:block z-50">
                            <button onClick={onOpenHistory} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><History size={16} /> Historial</button>
                            <button onClick={onOpenFinance} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><Lock size={16} /> Cierre Z</button>
-                           <button onClick={onOpenSettings} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><Settings size={16} /> Ajustes</button>
+                           <button onClick={() => onOpenSettings()} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><Settings size={16} /> Ajustes</button>
                            <button onClick={onLogout} className="w-full px-4 py-3 text-left text-sm font-bold text-red-600 hover:bg-red-50 flex items-center gap-2 border-t border-gray-50"><LogOut size={16} /> Salir</button>
                         </div>
                      </div>
@@ -1090,29 +1322,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <button onClick={onOpenHistory} title="Historial" className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><History size={18} /></button>
                         </>
                      )}
-                     <button onClick={onOpenSettings} title="Configuración" className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Settings size={18} /></button>
+                     <button onClick={() => onOpenSettings()} title="Configuración" className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Settings size={18} /></button>
                   </div>
                </div>
 
                {selectedCustomer ? (
-                  <div className="flex items-center justify-between bg-blue-50 p-3 rounded-xl border border-blue-100 cursor-pointer" onClick={onOpenCustomers}>
-                     <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-blue-200 text-blue-700 rounded-full flex items-center justify-center font-bold text-xs">{selectedCustomer.name.charAt(0)}</div>
-                        <div>
-                           <p className="text-xs font-bold text-blue-900 leading-none">{selectedCustomer.name}</p>
-                           <div className="flex gap-2 mt-0.5">
-                              <span className="text-[9px] font-black text-blue-500 uppercase tracking-tighter">
-                                 {selectedCustomer.defaultNcfType || (selectedCustomer.requiresFiscalInvoice ? 'B01' : 'B02')}
-                              </span>
-                              {selectedCustomer.wallet && (
-                                 <span className="text-[9px] font-black text-emerald-600 flex items-center gap-0.5">
-                                    <Wallet size={10} /> {config.currencySymbol}{selectedCustomer.wallet.balance.toLocaleString()}
-                                 </span>
-                              )}
-                           </div>
+                  <div className="flex items-center gap-3 mb-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
+                     <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-black">
+                        {selectedCustomer.name.substring(0, 2).toUpperCase()}
+                     </div>
+                     <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                           <p className="font-bold text-gray-800 truncate">{selectedCustomer.name}</p>
+                           {/* Save to contact feature temporarily disabled due to missing prop plumbing */}
+                        </div>
+                        <div className="flex items-center gap-2">
+                           {selectedCustomer.taxId && (
+                              <span className="text-xs font-mono text-gray-500">{selectedCustomer.taxId}</span>
+                           )}
+                           {selectedCustomer.fiscalStatus === 'ACTIVO' && (
+                              <span className="text-[9px] bg-green-100 text-green-700 px-1 py-0.5 rounded font-bold">FISCAL</span>
+                           )}
+                           {selectedCustomer.isTemporary && (
+                              <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1 py-0.5 rounded font-bold">TEMP</span>
+                           )}
                         </div>
                      </div>
-                     <button onClick={(e) => { e.stopPropagation(); onSelectCustomer(null); }} className="p-1 text-blue-400"><X size={14} /></button>
+                     <button onClick={() => onSelectCustomer(null)} className="p-2 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-lg transition-colors">
+                        <X size={16} />
+                     </button>
                   </div>
                ) : (
                   <button onClick={onOpenCustomers} className="w-full flex items-center justify-between p-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 group"><div className="flex items-center gap-2"><UserPlus size={18} /><span className="text-xs font-bold uppercase">Asignar Cliente</span></div><ChevronRight size={16} /></button>
@@ -1270,8 +1508,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     alert(validation.error);
                                     return;
                                  }
-                                 if (transactions.length > 0 && activeTerminalConfig) {
-                                    const sessionStartDate = transactions[0].date;
+                                 if (terminalTransactions.length > 0 && activeTerminalConfig) {
+                                    const sessionStartDate = terminalTransactions[0].date;
                                     if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
                                        // Allow bypass if user insists (Fix for "Zombie Transactions" issue)
                                        const proceed = confirm("⚠️ ADVERTENCIA DE JORNADA\n\nEl sistema detecta que la jornada operativa ha cambiado (hay transacciones abiertas de días anteriores).\n\n¿Desea continuar facturando de todos modos?\n(Seleccione 'Aceptar' para ignorar y facturar, 'Cancelar' para ir a Cierre Z)");
@@ -1310,7 +1548,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <History size={18} />
                            <span className="text-[9px] font-black uppercase mt-1">Hist.</span>
                         </button>
-                        <button onClick={onOpenSettings} title="Configuración" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100 transition-all min-w-[60px]">
+                        <button onClick={() => onOpenSettings()} title="Configuración" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100 transition-all min-w-[60px]">
                            <Settings size={18} />
                            <span className="text-[9px] font-black uppercase mt-1">Config</span>
                         </button>
@@ -1448,8 +1686,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  alert(validation.error);
                                  return;
                               }
-                              if (transactions.length > 0 && activeTerminalConfig) {
-                                 const sessionStartDate = transactions[0].date;
+                              if (terminalTransactions.length > 0 && activeTerminalConfig) {
+                                 const sessionStartDate = terminalTransactions[0].date;
                                  if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
                                     alert("⚠️ CIERRE Z REQUERIDO\n\nLa jornada operativa ha cambiado. Debe realizar el Cierre Z antes de continuar facturando.");
                                     return;
@@ -1506,8 +1744,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <button
                         onClick={() => {
                            if (cart.length > 0 && fiscalStatus.hasNCF) {
-                              if (transactions.length > 0 && activeTerminalConfig) {
-                                 const sessionStartDate = transactions[0].date;
+                              if (terminalTransactions.length > 0 && activeTerminalConfig) {
+                                 const sessionStartDate = terminalTransactions[0].date;
                                  if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
                                     const proceed = confirm("⚠️ ADVERTENCIA DE JORNADA\n\nEl sistema detecta que la jornada operativa ha cambiado.\n\n¿Desea continuar facturando de todos modos?");
                                     if (!proceed) return;
@@ -1643,6 +1881,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             isOpen={isScannerOpen}
             onClose={() => setIsScannerOpen(false)}
             onScan={async (code) => {
+               // 0. Try Smart QR (JSON)
+               try {
+                  const trimmed = code.trim();
+                  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                     const data = JSON.parse(trimmed);
+                     if (data.type === 'INVOICE_RETURN' && data.id) {
+                        setReturnInvoiceId(data.id);
+                        setShowReturnModal(true);
+                        setIsScannerOpen(false);
+                        return { success: true, message: 'Factura Identificada' };
+                     }
+                  }
+               } catch (e) {
+                  // Not a JSON or invalid, ignore and proceed to normal barcode
+               }
+
                // 1. Try Scale Parser
                if (config.scaleLabelConfig?.isEnabled) {
                   const scaleItem = parseScaleBarcode(code, config.scaleLabelConfig);
@@ -1677,6 +1931,33 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                return { success: false, message: 'Producto no encontrado' };
             }}
          />
+         {quickActionData && (
+            <ProductQuickActions
+               product={quickActionData.product}
+               position={{ x: quickActionData.x, y: quickActionData.y }}
+               onClose={() => setQuickActionData(null)}
+               onUpdateProduct={(updatedProduct) => {
+                  setSuccessToast(`Producto ${updatedProduct.name} actualizado`);
+               }}
+               onAdvancedEdit={(p) => {
+                  setQuickActionData(null);
+                  onOpenSettings('CATALOG', { productId: p.id });
+               }}
+               warehouses={warehouses}
+               config={config}
+               currentUser={currentUser}
+               roles={roles}
+            />
+         )}
+
+         {successToast && (
+            <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[200] animate-in slide-in-from-bottom-5">
+               <div className="bg-emerald-600 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border border-emerald-500">
+                  <Check size={20} />
+                  <span>{successToast}</span>
+               </div>
+            </div>
+         )}
       </div >
    );
 };

@@ -105,8 +105,14 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
                                 <FileText size={20} className="text-blue-600" />
                                 Reporte {r.sequenceNumber}
                             </h2>
-                            <p className="text-xs text-gray-500">
-                                Cerrado por {r.closedByUserName} • {formatDate(r.closedAt)} {formatTime(r.closedAt)}
+                            <p className="text-xs text-gray-500 flex items-center gap-2">
+                                <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-black text-[10px] uppercase">
+                                    Caja: {r.terminalId || 'N/A'}
+                                </span>
+                                <span>•</span>
+                                <span>{r.closedByUserName}</span>
+                                <span>•</span>
+                                <span>{formatDate(r.closedAt)} {formatTime(r.closedAt)}</span>
                             </p>
                         </div>
                     </div>
@@ -114,10 +120,11 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
                     <div className="flex gap-2">
                         <button
                             onClick={() => ThermalPrinterService.printZReport(r)}
-                            className="p-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-600"
+                            className="px-4 py-2 bg-gray-100 hover:bg-blue-600 hover:text-white rounded-xl text-gray-600 transition-all font-bold text-sm flex items-center gap-2 shadow-sm"
                             title="Imprimir"
                         >
-                            <Printer size={20} />
+                            <Printer size={18} />
+                            <span className="hidden sm:inline">Imprimir</span>
                         </button>
                         <button
                             onClick={async () => {
@@ -130,7 +137,7 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
 
                                 if (confirm(`¿Reenviar reporte a ${recipients}?`)) {
                                     try {
-                                        await fetch('/smtp/z-report', {
+                                        const response = await fetch('/smtp/z-report', {
                                             method: 'POST',
                                             headers: { 'Content-Type': 'application/json' },
                                             body: JSON.stringify({
@@ -141,17 +148,19 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
                                                 }
                                             })
                                         });
-                                        alert("Correo enviado exitosamente.");
+                                        if (response.ok) alert("Correo enviado exitosamente.");
+                                        else alert("Error al enviar correo (Servidor)");
                                     } catch (e) {
                                         alert("Error al enviar correo.");
                                         console.error(e);
                                     }
                                 }
                             }}
-                            className="p-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-600"
+                            className="px-4 py-2 bg-gray-100 hover:bg-indigo-600 hover:text-white rounded-xl text-gray-600 transition-all font-bold text-sm flex items-center gap-2 shadow-sm"
                             title="Reenviar Email"
                         >
-                            <Mail size={20} />
+                            <Mail size={18} />
+                            <span className="hidden sm:inline">Email</span>
                         </button>
                     </div>
                 </div>
@@ -404,9 +413,17 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
                                         </div>
                                         <div>
                                             <h3 className="font-bold text-gray-800">{report.sequenceNumber}</h3>
-                                            <p className="text-xs text-gray-500 flex items-center gap-1">
-                                                <Calendar size={12} /> {formatDate(report.closedAt)} • {formatTime(report.closedAt)} • <span className="font-bold text-blue-600">{report.terminalId}</span>
+                                            <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
+                                                <Calendar size={12} /> {formatDate(report.closedAt)} • {formatTime(report.closedAt)}
                                             </p>
+                                            <div className="mt-1 flex gap-2">
+                                                <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-[9px] font-black uppercase tracking-wider">
+                                                    Caja: {report.terminalId || 'POS-01'}
+                                                </span>
+                                                <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded text-[9px] font-black uppercase tracking-wider">
+                                                    {report.closedByUserName}
+                                                </span>
+                                            </div>
                                         </div>
                                     </div>
 

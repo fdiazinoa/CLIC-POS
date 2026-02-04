@@ -65,11 +65,11 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
       </div>
       <div class="row">
         <span>Cajero:</span>
-        <span>${report.closedByUserName}</span>
+        <span class="bold">${report.closedByUserName}</span>
       </div>
-      <div class="row">
-        <span>Terminal:</span>
-        <span>${report.terminalId || 'POS-01'}</span>
+      <div class="row" style="font-size: 14px; margin-top: 4px;">
+        <span class="bold">CAJA/TERMINAL:</span>
+        <span class="bold">${report.terminalId || 'POS-01'}</span>
       </div>
 
       <div class="divider"></div>

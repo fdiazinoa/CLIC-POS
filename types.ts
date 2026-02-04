@@ -78,7 +78,7 @@ export interface PrinterDevice {
 }
 
 // --- FISCAL NCF TYPES ---
-export type NCFType = 'B01' | 'B02' | 'B14' | 'B15';
+export type NCFType = 'B01' | 'B02' | 'B04' | 'B14' | 'B15';
 
 export interface FiscalRangeDGII {
   id: string;
@@ -128,6 +128,8 @@ export interface InventoryLedgerEntry {
   terminalId?: string; // Terminal ID or Series
   syncStatus?: SyncStatus;
   syncError?: string;
+  variantId?: string; // NEW: Specific variant ID
+  variantName?: string; // NEW: Human readable variant detail (e.g. "Talla 40")
 }
 
 // --- WATCHLIST & BI TYPES ---
@@ -345,12 +347,52 @@ export interface CurrencyConfig {
   code: string;
   name: string;
   symbol: string;
-  rate: number;
+
+  // --- TASAS DUALES ---
+  rate: number;                    // Valor unificado (retrocompatibilidad)
+  buyRate?: number;                // Tasa de Recepción/Compra (cuando cliente paga en POS)
+  sellRate?: number;               // Tasa de Valoración/Venta (para reportes/contabilidad)
+  useDualRates?: boolean;          // Flag para activar modo dual
+
   isEnabled: boolean;
   isBase?: boolean;
+
+  // --- AUTOMATIZACIÓN ---
+  autoSync?: {
+    enabled: boolean;              // Activar actualización automática
+    spread: number;                // Margen de ajuste (ej: +0.50 DOP)
+    scheduleTime?: string;         // Hora programada "HH:MM" (ej: "08:00")
+    lastSync?: string;             // Timestamp última sincronización
+    source?: string;               // API de origen (ej: "exchangerate-api.com")
+  };
+
+  // --- POLÍTICAS DE CAJA ---
+  changePolicy?: {
+    forceBaseChange: boolean;      // Forzar vuelto en moneda base (DOP)
+    roundingRule: 'NONE' | 'NEAREST' | 'TO_99';  // Regla de redondeo
+  };
+
+  // --- VISIBILIDAD ---
+  showExchangeRateOnTicket?: boolean;  // Mostrar tasa en ticket impreso
+
+  // --- AUDITORÍA ---
+  lastModified?: string;           // Timestamp última modificación
+  lastModifiedBy?: string;         // Usuario que modificó
 }
 
-export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'OTHER';
+export interface CurrencyAuditLog {
+  id: string;
+  currencyCode: string;
+  field: string;                   // Campo modificado (ej: "rate", "buyRate", "sellRate")
+  oldValue: any;
+  newValue: any;
+  changedAt: string;               // ISO timestamp
+  changedBy: string;               // User ID
+  changedByName: string;           // User name
+  terminalId?: string;             // Terminal donde se hizo el cambio
+}
+
+export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTHER';
 
 export interface PaymentMethodDefinition {
   id: string;
@@ -393,6 +435,8 @@ export interface Season {
   endDate: string;
   isActive: boolean;
   productIds: string[];
+  multiplier: number; // Demand factor (e.g., 1.5)
+  affectedCategories: string[]; // Categories affected by this season
 }
 
 export interface TipConfiguration {
@@ -550,6 +594,16 @@ export interface Customer {
   wallet?: Wallet;
   cards?: LoyaltyCard[];
   loyalty?: LoyaltyCard; // Deprecated, kept for backward compatibility during migration
+
+  // DGII Fiscal Validation (Dominican Republic)
+  fiscalStatus?: 'ACTIVO' | 'INACTIVO' | 'NO_REGISTRADO';
+  verifiedAt?: string; // ISO timestamp of last DGII validation
+  dgiiData?: {
+    commercialName?: string;
+    economicActivity?: string;
+    regimeType?: string;
+  };
+  isTemporary?: boolean; // Flag for ephemeral customers from DGII search
 }
 
 export interface ProductAttribute {
@@ -615,9 +669,10 @@ export interface Product {
   subfamilyId?: string;
   brandId?: string;
   operationalFlags?: ProductOperationalFlags;
-  createdAt?: string;
   updatedAt?: string;
   hasActivePromotion?: boolean; // UI Flag for badges
+  returnReason?: string; // For items with qty < 0
+  primarySupplierId?: string; // NEW: Preferred supplier for lead time calculation
 }
 
 export interface ProductStock {
@@ -703,6 +758,8 @@ export interface Transaction {
   // Fiscal
   ncf?: string;                     // NCF final del documento
   ncfType?: NCFType;
+  affectedNCF?: string;             // NCF de la factura afectada (para Notas de Crédito B04)
+  affectedInvoiceNumber?: string;   // No. de factura afectada (displayId para búsquedas)
 
   // Relationships
   relatedTransactions?: string[];   // Related transaction IDs
@@ -711,6 +768,10 @@ export interface Transaction {
   syncStatus?: SyncStatus;
   syncError?: string;
   zReportId?: string; // ID of the Z-Report that closed this transaction
+
+  // Wallet Interaction
+  walletDepositAmount?: number;     // Amount sent to customer wallet (advance/refund)
+  walletPaymentAmount?: number;     // Amount paid using customer wallet balance
 }
 
 export type ViewState =
@@ -789,10 +850,14 @@ export interface StockTransferItem {
   productId: string;
   productName: string;
   quantity: number;
+  receivedQuantity?: number; // Actual units received
 }
 
 export interface StockTransfer {
   id: string;
+  seriesId?: string;
+  seriesNumber?: number;
+  displayId?: string;
   sourceWarehouseId: string;
   destinationWarehouseId: string;
   items: StockTransferItem[];
@@ -801,6 +866,11 @@ export interface StockTransfer {
   sentAt?: string;
   receivedAt?: string;
   createdBy?: string;
+  terminalId?: string;
+  syncStatus?: SyncStatus;
+  syncError?: string;
+  updatedAt?: string;
+  discrepancyReason?: string;
 }
 
 export type PromotionType = 'DISCOUNT' | 'BOGO' | 'HAPPY_HOUR' | 'CONDITIONAL_TARGET' | 'BUNDLE';
@@ -875,6 +945,7 @@ export interface CashMovement {
   userId: string;
   userName: string;
   currencyCode?: string; // For multi-currency support, defaults to base currency
+  terminalId?: string; // ID of the terminal where the movement was recorded
   syncStatus?: SyncStatus;
   syncError?: string;
 }
@@ -886,8 +957,19 @@ export interface Supplier {
   email: string;
   phone: string;
   contactPerson: string;
-  paymentTermDays: number;
+  paymentMethod: 'CASH' | 'TRANSFER' | 'CARD' | 'CREDIT';
+  paymentTermDays: number; // Días de crédito
+  creditLimit: number;
+  balance: number; // Deuda actual
+  leadTimeDays: number; // NEW: Average delivery time in days
   isActive: boolean;
+}
+
+export interface SupplierProductPrice {
+  supplierId: string;
+  productId: string;
+  lastCost: number;
+  updatedAt: string;
 }
 
 export interface PurchaseOrderItem {
@@ -896,6 +978,8 @@ export interface PurchaseOrderItem {
   quantityOrdered: number;
   quantityReceived: number;
   cost: number;
+  variantSku?: string;
+  variantInfo?: string; // e.g. "Rojo / 42"
 }
 
 export interface PurchaseOrder {
@@ -918,6 +1002,8 @@ export interface Reception {
   items: PurchaseOrderItem[];
   terminalId?: string;
   syncStatus?: SyncStatus;
+  syncError?: string;
+  updatedAt?: string;
 }
 
 export interface ParkedTicket {

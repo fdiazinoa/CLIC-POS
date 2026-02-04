@@ -21,7 +21,8 @@ import {
   DeviceRole,
   Reception,
   ProductStock,
-  LedgerConcept
+  LedgerConcept,
+  DocumentSeries
 } from './types';
 import {
   DEFAULT_ROLES,
@@ -102,10 +103,16 @@ const App: React.FC = () => {
   const [parkedTickets, setParkedTickets] = useState<ParkedTicket[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [transfers, setTransfers] = useState<StockTransfer[]>([]);
+  const [internalSequences, setInternalSequences] = useState<any[]>([]);
   const [receptions, setReceptions] = useState<Reception[]>([]);
   const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [supplierProductPrices, setSupplierProductPrices] = useState<any[]>([]);
   const [isAdminMode, setIsAdminMode] = useState(false); // Temporary admin elevation
+
+  // Settings Deep Linking state
+  const [settingsInitialView, setSettingsInitialView] = useState<string | undefined>(undefined);
+  const [settingsInitialData, setSettingsInitialData] = useState<any>(undefined);
 
   // --- NAVIGATION GUARD ---
   /**
@@ -187,29 +194,30 @@ const App: React.FC = () => {
             return;
           }
 
-          // RECOVERY: If we have Master IP but no local config (e.g. after DB nuke), fetch it!
-          const localConfig = await db.get('config') as any;
-          const hasTerminals = localConfig && localConfig.terminals && localConfig.terminals.length > 0;
+          // FETCH LATEST CONFIG FROM MASTER (Always, not just recovery)
+          // This ensures terminal configuration (including deviceRole) persists across devices
+          console.log("🔄 Slave Mode: Fetching latest config from Master...");
+          try {
+            const protocol = window.location.protocol;
+            const port = window.location.port || (protocol === 'https:' ? '443' : '80');
+            const targetUrl = `${protocol}//${isSlaveConfig}:${port}/api/config`;
 
-          if (!hasTerminals) {
-            console.log("⚠️ Slave Config Recovery: Fetching config from Master...");
-            try {
-              const protocol = window.location.protocol;
-              const port = window.location.port || (protocol === 'https:' ? '443' : '80');
-              const targetUrl = `${protocol}//${isSlaveConfig}:${port}/api/config`;
-
-              const res = await fetch(targetUrl);
-              if (res.ok) {
-                const fetchedConfig = await res.json();
-                if (fetchedConfig && fetchedConfig.terminals) {
-                  console.log("✅ Config recovered from Master. Saving to local DB...");
-                  await db.save('config', fetchedConfig);
-                  setConfig(fetchedConfig); // Update state immediately
-                }
+            const res = await fetch(targetUrl);
+            if (res.ok) {
+              const fetchedConfig = await res.json();
+              if (fetchedConfig && fetchedConfig.terminals) {
+                console.log("✅ Config fetched from Master. Saving to local DB...");
+                await db.save('config', fetchedConfig);
+                setConfig(fetchedConfig); // Update state immediately
               }
-            } catch (e) {
-              console.error("❌ Failed to recover config from Master:", e);
+            } else {
+              console.warn(`⚠️ Failed to fetch config from Master (HTTP ${res.status}). Using cached config.`);
+              // Fall back to local cached config
             }
+          } catch (e) {
+            console.error("❌ Failed to fetch config from Master:", e);
+            console.warn("⚠️ Using cached local config as fallback.");
+            // Fall back to local cached config - will be loaded in the next step
           }
 
           // CLEAN SYNC CACHE if recovering from error
@@ -288,8 +296,10 @@ const App: React.FC = () => {
           setSuppliers(data.suppliers || []);
           setParkedTickets(Array.isArray(data.parkedTickets) ? data.parkedTickets : []);
           setTransfers(data.transfers || []);
+          setInternalSequences(data.internalSequences || []);
           setReceptions(data.receptions || []);
           setProductStocks(data.productStocks || []);
+          setSupplierProductPrices(data.supplierProductPrices || []);
 
           // 1.5 Repair sequences (ensure counters are correct)
           try {
@@ -664,7 +674,10 @@ const App: React.FC = () => {
     const defaultWarehouseId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
 
     // Get current terminal ID
-    const currentTerminalId = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
+    const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+    const terminalId = currentTerminal?.id || 'T1';
+
+    txn.terminalId = terminalId;
 
     for (const item of txn.items) {
       const entry = await db.recordInventoryMovement(
@@ -674,7 +687,7 @@ const App: React.FC = () => {
         txn.displayId || txn.id,
         -item.quantity, // Negative for sales
         item.price, // Use price as cost proxy if cost not available, or fetch product cost
-        txn.terminalId || currentTerminalId
+        terminalId
       );
 
       if (entry) {
@@ -695,6 +708,7 @@ const App: React.FC = () => {
       timestamp: new Date().toISOString(),
       userId: currentUser?.id || 'sys',
       userName: currentUser?.name || 'System',
+      terminalId: getCurrentTerminal()?.id || 'T1',
       syncStatus: 'PENDING' as const
     };
     const updated = [...cashMovements, move];
@@ -706,89 +720,88 @@ const App: React.FC = () => {
   };
 
   const handleZReport = async (cashCounted: number, notes: string, reportData?: any) => {
-    // 1. Calculate Totals by Method
-    const totalsByMethod = transactions.flatMap(t => t?.payments || []).reduce((acc: Record<string, number>, p) => {
+    // 1. Robust Terminal ID Discovery
+    const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+    const terminalId = currentTerminal?.id || 'T1';
+
+    console.log(`📊 Z-Report: Starting closure for terminal ${terminalId} (Device: ${deviceId})`);
+
+    // 2. Identify Transactions for closure
+    // STRICT MODE: Only include transactions explicitly tagged with this terminalId.
+    // Untagged transactions must be handled via Admin Recovery tools, not automatically included here.
+    const terminalTransactions = transactions.filter(t => t.terminalId === terminalId);
+    const terminalCashMovements = cashMovements.filter(m => m.terminalId === terminalId);
+
+    console.log(`🔒 Shift Segregation: Found ${terminalTransactions.length} txns and ${terminalCashMovements.length} cash movements for ${terminalId}`);
+
+    // 3. Totals and Stats (Prioritize Dashboard-confirmed values)
+    const totalsByMethod = reportData?.totalsByMethod || terminalTransactions.flatMap(t => t?.payments || []).reduce((acc: Record<string, number>, p) => {
       if (p && p.method) {
         acc[p.method] = (acc[p.method] || 0) + p.amount;
       }
       return acc;
     }, {});
 
-    // 2. Get Next Sequence Number
+    const stats = reportData?.stats || calculateZReportStats(terminalTransactions);
+    const transactionCount = reportData?.transactionCount ?? terminalTransactions.length;
+
+    // 4. Create and Save Z-Report
     const existingReports = await db.get('zReports') as ZReport[];
     const nextSeqNum = (existingReports.length + 1).toString().padStart(6, '0');
     const sequenceNumber = `Z-${nextSeqNum}`;
 
-    // 3. Create ZReport Object
     const newZReport: ZReport = {
       id: `ZR-${Date.now()}`,
-      terminalId: (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || (config.terminals || [])[0]?.id || 'TERM-01',
+      terminalId,
       sequenceNumber,
-      openedAt: transactions.length > 0 ? transactions[0].date : new Date().toISOString(), // Approximation
+      openedAt: terminalTransactions.length > 0 ? terminalTransactions[0].date : new Date().toISOString(),
       closedAt: new Date().toISOString(),
       closedByUserId: currentUser?.id || 'sys',
       closedByUserName: currentUser?.name || 'System',
-
       baseCurrency: config.currencySymbol,
       totalsByMethod,
-
-      // Data from Dashboard (Multi-currency)
       cashExpected: reportData?.expectedCashByCurrency || {},
       cashCounted: reportData?.cashCountedByCurrency || {},
       cashDiscrepancy: reportData?.cashDiscrepancyByCurrency || {},
-
       cashSales: reportData?.cashSalesTotal || 0,
       cashIn: reportData?.cashIn || 0,
       cashOut: reportData?.cashOut || 0,
-
-      transactionCount: transactions.length,
+      transactionCount,
       notes,
-
-      // Analytics
-      stats: calculateZReportStats(transactions),
+      stats,
       syncStatus: 'PENDING' as const
     };
 
     console.log("💾 Saving Z-Report:", newZReport);
-
-    // 4. Save to DB (Optimized: Append only)
     await db.saveDocument('zReports', newZReport);
-
-    // 5. Sync to Master/Server immediately
     await syncManager.pushZReport(newZReport);
 
-    // 6. Archive Transactions locally (Move to History)
-    const closedTransactions = transactions.map(t => ({ ...t, zReportId: newZReport.id }));
-    // We use saveDocument for each to append to history efficiently
-    // But wait, saveDocument appends to the collection.
-    // We need to iterate.
-    // Or better: Use saveCollection for history if it's not too big? No, saveDocument is safer.
-    // Actually, let's just use a loop for now, or maybe we can optimize later.
-    // Given the previous fix, we should use saveDocument to avoid overwriting if history is huge.
-    // But iterating 1000 txns might be slow.
-    // However, for a single Z-Report, it's acceptable.
+    // 5. Build lookup set for IDs that were actually closed to prevent data loss
+    const closedTxnIds = new Set(terminalTransactions.map(t => t.id));
+    const closedMoveIds = new Set(terminalCashMovements.map(m => m.id));
 
-    // OPTIMIZATION: We can use the new server-side append if available, but for now client-side loop.
-    // Actually, let's just push them to the server history if needed?
-    // The user wants LOCAL history visibility.
-    // So we save to 'transactionHistory'.
-
-    console.log(`🗄️ Archiving ${closedTransactions.length} transactions to history...`);
-    for (const tx of closedTransactions) {
-      await db.saveDocument('transactionHistory', tx);
+    // 6. Archive locally
+    console.log(`🗄️ Archiving ${terminalTransactions.length} transactions to history...`);
+    for (const tx of terminalTransactions) {
+      await db.saveDocument('transactionHistory', { ...tx, zReportId: newZReport.id });
     }
 
-    // 7. Reset Current Period Data
-    setTransactions([]);
-    setCashMovements([]);
-    await db.save('transactions', []);
-    await db.save('cashMovements', []);
+    // 7. Update states by removing ONLY what was closed
+    const remainingTransactions = transactions.filter(t => !closedTxnIds.has(t.id));
+    const remainingCashMovements = cashMovements.filter(m => !closedMoveIds.has(m.id));
+
+    setTransactions(remainingTransactions);
+    setCashMovements(remainingCashMovements);
+
+    await db.save('transactions', remainingTransactions);
+    await db.save('cashMovements', remainingCashMovements);
+
+    // 8. Global Reset
+    console.log(`⚙️ Sending Global Reset for Terminal ${terminalId} to Master...`);
+    await syncManager.resetTerminalData(terminalId);
+
     setCurrentView('POS');
-
-    // Trigger background sync
     backgroundSyncManager.triggerSync().catch(console.error);
-
-
   };
 
   // --- VIEW RENDERING LOGIC ---
@@ -817,7 +830,21 @@ const App: React.FC = () => {
         );
 
       case 'LOGIN':
-        return <LoginScreen availableUsers={users} subVertical={config.subVertical} onLogin={(u) => { setCurrentUser(u); setCurrentView('POS'); }} />;
+        return (
+          <LoginScreen
+            availableUsers={users}
+            subVertical={config.subVertical}
+            onLogin={(u) => {
+              setCurrentUser(u);
+              const role = getCurrentDeviceRole();
+              if (role === DeviceRole.HANDHELD_INVENTORY) setCurrentView('INVENTORY_HOME');
+              else if (role === DeviceRole.KITCHEN_DISPLAY) setCurrentView('KITCHEN_ORDERS');
+              else if (role === DeviceRole.SELF_CHECKOUT) setCurrentView('KIOSK_WELCOME'); // Rare for login
+              else if (role === DeviceRole.PRICE_CHECKER) setCurrentView('CHECKER_SCAN'); // Rare for login
+              else setCurrentView('POS');
+            }}
+          />
+        );
 
       case 'POS':
         if (!currentUser) { setCurrentView('LOGIN'); return null; }
@@ -842,7 +869,11 @@ const App: React.FC = () => {
               await db.save('parkedTickets', validArray);
             }}
             onLogout={() => { setCurrentUser(null); setCurrentView('LOGIN'); }}
-            onOpenSettings={() => setCurrentView('SETTINGS')}
+            onOpenSettings={(view, data) => {
+              setSettingsInitialView(view);
+              setSettingsInitialData(data);
+              setCurrentView('SETTINGS');
+            }}
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
             onOpenHistory={() => setCurrentView('HISTORY')}
             onOpenFinance={() => setCurrentView('FINANCE')}
@@ -869,7 +900,14 @@ const App: React.FC = () => {
             products={products}
             warehouses={warehouses}
             transfers={transfers}
+            internalSequences={internalSequences}
+            suppliers={suppliers}
+            customers={customers}
+            purchaseOrders={purchaseOrders}
+            receptions={receptions}
+            parkedTickets={parkedTickets}
             onUpdateTransfers={async (t) => { setTransfers(t); await db.save('transfers', t); }}
+            onUpdateSequences={async (s) => { setInternalSequences(s); await db.save('internalSequences', s); }}
             onUpdateConfig={handleConfigUpdate}
             onUpdateUsers={async (u) => { setUsers(u); await db.save('users', u); }}
             onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
@@ -878,8 +916,12 @@ const App: React.FC = () => {
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
+            initialView={settingsInitialView as any}
+            initialData={settingsInitialData}
             isAdminMode={isAdminMode}
             onClose={() => {
+              setSettingsInitialView(undefined);
+              setSettingsInitialData(undefined);
               setIsAdminMode(false); // Exit admin mode when closing settings
 
               // Return to appropriate view based on role
@@ -906,7 +948,9 @@ const App: React.FC = () => {
             products={products}
             warehouses={warehouses}
             transfers={transfers}
+            internalSequences={internalSequences}
             onUpdateTransfers={async (t) => { setTransfers(t); await db.save('transfers', t); }}
+            onUpdateSequences={async (s) => { setInternalSequences(s); await db.save('internalSequences', s); }}
             onUpdateConfig={handleConfigUpdate}
             onUpdateUsers={async (u) => { setUsers(u); await db.save('users', u); }}
             onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
@@ -967,40 +1011,96 @@ const App: React.FC = () => {
             onUpdateConfig={handleConfigUpdate}
             onClose={() => setCurrentView('POS')}
             onRefundTransaction={async (tx, items, reason) => {
-              const updatedTxns = transactions.map(t => t.id === tx.id ? { ...t, status: 'REFUNDED' as const, refundReason: reason, syncStatus: 'PENDING' as const } : t);
-              setTransactions(updatedTxns);
-              await db.save('transactions', updatedTxns);
+              // 1. Calculate totals for the refund
+              const itemsToRefund = items && items.length > 0 ? items : tx.items;
+              const refundSubtotalRaw = itemsToRefund.reduce((acc, item) => acc + (item.price * item.quantity), 0);
 
-              // Trigger background sync
+              // Respect the original tax inclusion setting
+              const refundTotal = tx.isTaxIncluded
+                ? refundSubtotalRaw
+                : refundSubtotalRaw * (1 + (config.taxRate || 0));
+
+              // Check if it's a full refund
+              const isFullRefund = itemsToRefund.length === tx.items.length;
+              const newStatus = isFullRefund ? 'REFUNDED' : 'PARTIAL_REFUND';
+
+              // ... (sequences logic remains same) ...
+              const sequences = await db.get('internalSequences') as DocumentSeries[];
+              const refundSeries = sequences.find(s => s.id === 'REFUND');
+              let displayId = '';
+              if (refundSeries) {
+                displayId = `${refundSeries.prefix}${refundSeries.nextNumber.toString().padStart(refundSeries.padding, '0')}`;
+                refundSeries.nextNumber++;
+                await db.save('internalSequences', sequences);
+              }
+
+              // 3. Generate Fiscal Sequence (B04)
+              const currentTerminalId = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
+              const ncf = await db.getNextNCF('B04', currentTerminalId);
+
+              // 4. Create the Credit Note Transaction
+              const creditNote: Transaction = {
+                id: crypto.randomUUID(),
+                displayId: displayId,
+                documentType: 'REFUND',
+                date: new Date().toISOString(),
+                items: itemsToRefund.map(it => ({ ...it, quantity: it.quantity })),
+                total: refundTotal,
+                payments: [{ method: 'STORE_CREDIT', amount: refundTotal, date: new Date().toISOString() }],
+                userId: currentUser?.id || 'system',
+                userName: currentUser?.name || 'System',
+                terminalId: currentTerminalId,
+                status: 'COMPLETED',
+                customerId: tx.customerId,
+                customerName: tx.customerName || 'Cliente Mostrador',
+                ncf: ncf || undefined,
+                ncfType: 'B04',
+                affectedNCF: tx.ncf || undefined, // NCF de la factura afectada
+                affectedInvoiceNumber: tx.displayId || tx.id, // No. de factura afectada
+                originalTransactionId: tx.id,
+                refundReason: reason,
+                isTaxIncluded: tx.isTaxIncluded,
+                syncStatus: 'PENDING'
+              };
+
+              // 5. Update the Parent Transaction status and link the Credit Note
+              const updatedTxns = transactions.map(t => {
+                if (t.id === tx.id) {
+                  const related = t.relatedTransactions || [];
+                  return {
+                    ...t,
+                    status: newStatus as any,
+                    relatedTransactions: Array.from(new Set([...related, creditNote.id])),
+                    syncStatus: 'PENDING' as const
+                  };
+                }
+                return t;
+              });
+
+              // 6. Save both the updated parent and the new credit note
+              const finalizedTransactions = [...updatedTxns, creditNote];
+              setTransactions(finalizedTransactions);
+              await db.save('transactions', finalizedTransactions);
+
+              // 7. Trigger background sync
               backgroundSyncManager.triggerSync().catch(console.error);
 
-              // Record Inventory Movement (Return = Entry)
+              // 8. Record Inventory Movement (Return = Entry)
               const defaultWarehouseId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
 
-              // If items are provided (partial refund), use them. Otherwise use all items from transaction.
-              const itemsToRefund = items && items.length > 0 ? items : tx.items;
-
-              // Get current terminal ID
-              const currentTerminalId = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
-
               for (const item of itemsToRefund) {
-                const entry = await db.recordInventoryMovement(
+                await db.recordInventoryMovement(
                   defaultWarehouseId,
                   item.id,
                   'DEVOLUCION',
-                  tx.displayId || tx.id,
+                  displayId || tx.displayId || tx.id,
                   item.quantity, // Positive for returns (Entry)
                   item.price,
-                  tx.terminalId || currentTerminalId
+                  currentTerminalId
                 );
-
-                if (entry) {
-                  // No need to push individually anymore, BackgroundSyncManager handles it
-                  // await syncManager.pushInventoryMovement(entry);
-                }
               }
 
-              // Refresh products
+              // Refresh products to show updated stock
               const refreshedDb = await db.init();
               setProducts(refreshedDb.products || []);
 
@@ -1033,6 +1133,7 @@ const App: React.FC = () => {
             currentUser={currentUser}
             roles={roles}
             onConfirmClose={handleZReport}
+            terminalId={getCurrentTerminal()?.id}
             onClose={() => {
               const role = getCurrentDeviceRole();
               if (role === DeviceRole.SELF_CHECKOUT) setCurrentView('KIOSK_WELCOME');
@@ -1050,11 +1151,15 @@ const App: React.FC = () => {
             products={products}
             suppliers={suppliers}
             purchaseOrders={purchaseOrders}
+            receptions={receptions}
+            supplierProductPrices={supplierProductPrices}
             config={config}
             onClose={() => setCurrentView('POS')}
-            onCreateOrder={async (o) => { const updated = [...purchaseOrders, o]; setPurchaseOrders(updated); await db.save('purchaseOrders', updated); }}
-            onUpdateOrder={async (o) => { const updated = purchaseOrders.map(p => p.id === o.id ? o : p); setPurchaseOrders(updated); await db.save('purchaseOrders', updated); }}
+            onCreateOrder={async (o) => { const updated = [...purchaseOrders, o]; setPurchaseOrders(updated); await db.saveDocument('purchaseOrders', o); }}
+            onUpdateOrder={async (o) => { const updated = purchaseOrders.map(p => p.id === o.id ? o : p); setPurchaseOrders(updated); await db.saveDocument('purchaseOrders', o); }}
             onReceiveStock={async (items, orderId) => {
+              console.log("🚀 APP: onReceiveStock CALLED", { orderId, itemsCount: items.length });
+
               const pairedTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
               const terminalId = pairedTerminal?.id || 'LOCAL';
               const whId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
@@ -1069,11 +1174,24 @@ const App: React.FC = () => {
                   documentRef: orderId || 'OC-REC',
                   qty: item.quantityReceived,
                   movementCost: item.cost,
-                  terminalId
+                  terminalId: terminalId || 'LOCAL',
+                  variantId: item.variantSku, // NEW: Variant SKU as ID
+                  variantName: item.variantInfo // NEW: Variant Name "Size 42"
                 }));
 
+              console.log("📦 APP: Calculated movements:", movements.length, movements);
+
               if (movements.length > 0) {
-                await db.recordInventoryMovements(movements);
+                console.log("💾 APP: Calling db.recordInventoryMovements...");
+                try {
+                  await db.recordInventoryMovements(movements);
+                  console.log("✅ APP: db.recordInventoryMovements success");
+                } catch (e) {
+                  console.error("❌ APP: db.recordInventoryMovements FAILED:", e);
+                  throw e; // Propagate to UI
+                }
+              } else {
+                console.warn("⚠️ APP: No movements to record (quantityReceived = 0?)");
               }
 
               // 2. Save Reception Document
@@ -1085,14 +1203,17 @@ const App: React.FC = () => {
                 receivedByUserName: currentUser?.name || 'System',
                 items: items.filter(i => i.quantityReceived > 0),
                 terminalId,
-                syncStatus: 'PENDING'
+                syncStatus: 'PENDING',
+                updatedAt: new Date().toISOString()
               };
+
+              console.log("📝 APP: Saving new reception document:", newReception.id);
 
               const updatedReceptions = [...receptions, newReception];
               setReceptions(updatedReceptions);
-              await db.save('receptions', updatedReceptions);
+              await db.saveDocument('receptions', newReception);
 
-              // 3. Refresh Products State and Broadcast (CRITICAL for Sync)
+              // 3. Refresh Products State
               const refreshedProducts = await db.get('products') as Product[] || [];
               setProducts(refreshedProducts);
 
@@ -1105,7 +1226,11 @@ const App: React.FC = () => {
               const freshStocks = await db.get('productStocks') as ProductStock[] || [];
               setProductStocks(freshStocks);
 
-              networkSyncService.sync();
+              // NEW: Refresh Supplier Prices
+              const freshSupplierPrices = await db.get('supplierProductPrices') as any[] || [];
+              setSupplierProductPrices(freshSupplierPrices);
+
+              console.log("🏁 APP: onReceiveStock FINISHED");
             }}
             onAdjustStock={async (adjustments) => {
               const pairedTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
@@ -1136,12 +1261,13 @@ const App: React.FC = () => {
             onAddSupplier={async (s) => {
               const updated = [...suppliers, s];
               setSuppliers(updated);
-              // Note: The SupplierSelector already saves to DB via API, 
-              // but we update local state here for immediate UI reflection if needed,
-              // or we could re-fetch. Since we use API in selector, maybe we should just re-fetch?
-              // For now, optimistic update is fine as the selector returns the saved object.
             }}
-            receptions={receptions}
+            onUpdateSupplier={async (s) => {
+              const updated = suppliers.map(sup => sup.id === s.id ? s : sup);
+              setSuppliers(updated);
+              await db.save('suppliers', updated);
+              syncManager.broadcastChange('suppliers', s, 'UPDATE').catch(console.error);
+            }}
           />
         );
 

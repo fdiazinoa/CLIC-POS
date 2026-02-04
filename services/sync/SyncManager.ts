@@ -6,11 +6,12 @@
  */
 
 import { db } from '../../utils/db';
+import { dbAdapter } from '../db';
 import { apiSyncAdapter, SyncMetadata } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
 import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig } from '../../types';
 
-export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'internalSequences' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks';
+export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'internalSequences' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices';
 
 interface SyncStatus {
     collection: string;
@@ -28,11 +29,19 @@ class SyncManager {
     private syncTimestamps: Map<string, string> = new Map();
     private syncConfig: SyncConfig | null = null;
     private isMaster: boolean = false;
+    private isDisabled: boolean = false;
 
     /**
      * Initialize sync manager
      */
     async initialize(config: BusinessConfig, terminalId: string) {
+        // Detect Network Mode
+        if (dbAdapter.adapterType === 'network') {
+            console.log("🛑 SyncManager disabled: Application is running in full Network Mode (No local DB).");
+            this.isDisabled = true;
+            return;
+        }
+
         permissionService.initialize(config, terminalId);
         this.isMaster = permissionService.isMasterTerminal();
 
@@ -170,6 +179,8 @@ class SyncManager {
      * Now uses API instead of localStorage
      */
     async pushCatalog(collection: SyncableCollection): Promise<void> {
+        if (this.isDisabled) return;
+
         if (!permissionService.isMasterTerminal()) {
             console.warn(`⚠️  Slave terminal cannot push ${collection}`);
             return;
@@ -196,6 +207,8 @@ class SyncManager {
     }
 
     async pullCatalog(collection: SyncableCollection): Promise<number> {
+        if (this.isDisabled) return 0;
+
         const lastSync = this.syncTimestamps.get(collection) || null;
         console.log(`🔽 SyncManager.pullCatalog('${collection}') - Last Sync: ${lastSync || 'Never'}`);
 
@@ -279,6 +292,8 @@ class SyncManager {
      * Sync all catalogs (Master: push, Slave: pull)
      */
     async syncAllCatalogs(): Promise<SyncStatus[]> {
+        if (this.isDisabled) return [];
+
         // Catalogs: Master PUSHES, Slaves PULL
         // Added inventoryLedger and transactions so slaves can see history from other terminals
         const isMaster = permissionService.isMasterTerminal();
@@ -289,7 +304,9 @@ class SyncManager {
             'internalSequences',
             'productStocks',
             ...(isMaster ? ['inventoryLedger' as SyncableCollection] : []),
-            'transactions'
+            'transactions',
+            'transfers',
+            'receptions'
         ];
 
         // Operations: Master PULLS, Slaves PUSH (via separate methods, but we sync here for visibility)
@@ -536,6 +553,8 @@ class SyncManager {
      * Start automatic sync (for slave terminals)
      */
     startAutoSync(intervalMs: number = 30000) {
+        if (this.isDisabled) return;
+
         if (this.autoSyncInterval) {
             this.stopAutoSync();
         }
@@ -571,6 +590,8 @@ class SyncManager {
      * Used when individual items are created/updated
      */
     async broadcastChange(collection: SyncableCollection, item: any, action: 'CREATE' | 'UPDATE' | 'DELETE') {
+        if (this.isDisabled) return;
+
         if (!permissionService.isMasterTerminal()) {
             console.warn('⚠️  Only master terminal can broadcast changes');
             return;
@@ -635,6 +656,18 @@ class SyncManager {
             mode: this.syncConfig?.mode || 'MASTER',
             isEnabled: this.syncConfig?.isEnabled !== false
         };
+    }
+
+    /**
+     * Reset terminal data on Master server
+     */
+    async resetTerminalData(terminalId: string) {
+        try {
+            await apiSyncAdapter.resetTerminalData(terminalId);
+            console.log(`✅ SyncManager: Reset signal sent for terminal ${terminalId}`);
+        } catch (error) {
+            console.warn(`⚠️ SyncManager: Failed to send reset signal for terminal ${terminalId}:`, error);
+        }
     }
 
     /**

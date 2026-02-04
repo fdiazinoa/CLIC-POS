@@ -31,9 +31,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    const baseCurrency = currencies.find(c => c.isBase) || { code: 'DOP', symbol: 'RD$', rate: 1 };
    const [selectedCurrency, setSelectedCurrency] = useState<CurrencyConfig>(baseCurrency as CurrencyConfig);
 
+   const isRefund = total < 0;
+   const absTotal = Math.abs(total);
    const totalPaid = payments.reduce((acc, p) => acc + p.amount, 0);
-   const remaining = Math.max(0, parseFloat((total - totalPaid).toFixed(2)));
-   const change = Math.max(0, parseFloat((totalPaid - total).toFixed(2)));
+   const remaining = Math.max(0, parseFloat((absTotal - totalPaid).toFixed(2)));
+   const change = Math.max(0, parseFloat((totalPaid - absTotal).toFixed(2)));
 
    const denominations = selectedCurrency.code === 'USD' ? [1, 5, 10, 20, 50, 100] : [50, 100, 200, 500, 1000, 2000];
 
@@ -84,7 +86,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    const handleRemovePayment = (id: string) => { setPayments(prev => prev.filter(p => p.id !== id)); };
 
    const handleFinalize = async () => {
-      if (totalPaid < total - 0.01) {
+      if (totalPaid < absTotal - 0.01) {
          alert("Monto insuficiente");
          return;
       }
@@ -246,8 +248,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                </div>
 
                <div className="mb-4 md:mb-8 flex flex-col md:block items-center md:items-start text-center md:text-left">
-                  <p className="text-gray-500 font-medium uppercase text-[10px] md:text-xs tracking-widest mb-1">Total a Cobrar</p>
-                  <h1 className="text-3xl md:text-5xl font-black text-gray-900 leading-none">{currencySymbol}{total.toFixed(2)}</h1>
+                  <p className={`font-medium uppercase text-[10px] md:text-xs tracking-widest mb-1 ${isRefund ? 'text-rose-500' : 'text-gray-500'}`}>
+                     {isRefund ? 'Monto a Devolver' : 'Total a Cobrar'}
+                  </p>
+                  <h1 className={`text-3xl md:text-5xl font-black leading-none ${isRefund ? 'text-rose-600' : 'text-gray-900'}`}>
+                     {currencySymbol}{absTotal.toFixed(2)}
+                  </h1>
 
                   <div className="hidden md:flex mt-6 gap-2">
                      {currencies.filter(c => c.isEnabled).map(c => (
@@ -289,22 +295,22 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                   <div className="flex justify-between items-end mb-3 md:mb-4">
                      {change > 0 ? (
                         <div className="w-full text-right">
-                           <p className="text-[9px] md:text-[10px] font-bold text-green-600 uppercase tracking-widest">Cambio</p>
-                           <p className="text-xl md:text-3xl font-black text-green-600">{currencySymbol}{change.toFixed(2)}</p>
+                           <p className="text-[9px] md:text-[10px] font-bold text-emerald-600 uppercase tracking-widest">{isRefund ? 'Diferencia a Favor' : 'Cambio'}</p>
+                           <p className="text-xl md:text-3xl font-black text-emerald-600">{currencySymbol}{change.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
                         </div>
                      ) : (
                         <div>
                            <p className="text-[9px] md:text-[10px] font-bold text-gray-400 uppercase tracking-widest">Restante</p>
-                           <p className={`text-xl md:text-3xl font-black ${remaining > 0 ? 'text-red-500' : 'text-green-500'}`}>{currencySymbol}{remaining.toFixed(2)}</p>
+                           <p className={`text-xl md:text-3xl font-black ${remaining > 0 ? (isRefund ? 'text-rose-500' : 'text-amber-500') : 'text-emerald-500'}`}>{currencySymbol}{remaining.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
                         </div>
                      )}
                   </div>
                   <button
                      onClick={handleFinalize}
                      disabled={remaining > 0.01}
-                     className={`w-full py-3 md:py-4 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${remaining > 0.01 ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} hover:brightness-110`}`}
+                     className={`w-full py-3 md:py-4 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${remaining > 0.01 ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : `${themeBgClass} hover:brightness-110`}`}`}
                   >
-                     FINALIZAR VENTA
+                     {remaining > 0 ? 'PAGO INCOMPLETO' : isRefund ? 'PROCESAR DEVOLUCIÓN' : 'FINALIZAR VENTA'}
                   </button>
                </div>
             </div>

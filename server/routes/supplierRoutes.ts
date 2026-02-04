@@ -43,7 +43,11 @@ router.post('/', (req, res) => {
         email: email || '',
         phone: phone || '',
         contactPerson: contactPerson || '',
+        paymentMethod: 'CASH',
         paymentTermDays: paymentTermDays || 0,
+        creditLimit: 0,
+        balance: 0,
+        leadTimeDays: 7,
         isActive: true
     };
 

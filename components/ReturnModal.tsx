@@ -39,15 +39,32 @@ const ReturnModal: React.FC<ReturnModalProps> = ({
         setLoading(true);
         setError(null);
         try {
-            // First try to find in local props
+            // 1. Try to find in local props (Current Terminal History)
             let found = transactions.find(t => t.id === id || t.displayId === id);
 
-            // If not found, try service (if implemented) or show error
-            // For now assuming it's in the list or we can't find it
+            // 2. Global Search (Cross-Terminal)
             if (!found) {
-                // Fallback: try to find by ID if the QR passed the UUID
-                // In a real app we might fetch from API
-                setError("Factura no encontrada en el historial local.");
+                try {
+                    const res = await fetch(`/api/transactions/${id}`);
+                    if (res.ok) {
+                        found = await res.json();
+                    } else {
+                        // Fallback: Search by Display ID (Ticket #)
+                        const searchRes = await fetch(`/api/transactions?displayId=${id}`);
+                        if (searchRes.ok) {
+                            const results = await searchRes.json();
+                            if (Array.isArray(results) && results.length > 0) {
+                                found = results[0];
+                            }
+                        }
+                    }
+                } catch (netErr) {
+                    console.error("Global search failed:", netErr);
+                }
+            }
+
+            if (!found) {
+                setError("Factura no encontrada (Local o Global).");
             } else {
                 setTransaction(found);
                 // Initialize return quantities to 0

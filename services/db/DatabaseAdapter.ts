@@ -2,6 +2,7 @@
 export interface DatabaseAdapter {
     connect(): Promise<void>;
     disconnect(): Promise<void>;
+    readonly adapterType: 'local' | 'network';
 
     // Generic CRUD
     getCollection<T>(collectionName: string): Promise<T[]>;

@@ -1,4 +1,5 @@
 import { db } from '../../utils/db';
+import { dbAdapter } from '../db';
 import { apiSyncAdapter } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
 import { Transaction, InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
@@ -25,6 +26,11 @@ class BackgroundSyncManager {
      * Initialize the background sync manager
      */
     async initialize() {
+        if (dbAdapter.adapterType === 'network') {
+            console.log("🛑 BackgroundSyncManager disabled: Running in Network Mode.");
+            return;
+        }
+
         console.log('🔄 BackgroundSyncManager: Initializing...');
 
         // Initial count of pending items

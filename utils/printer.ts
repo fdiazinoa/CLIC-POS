@@ -11,7 +11,7 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
     let taxTotal = 0;
     const isTaxIncluded = transaction.isTaxIncluded || false;
 
-    // 1. Calculate Raw Totals (Pre-Global Discount)
+    // 1. Calculate Raw Totals
     let rawNetTotal = 0;
     let rawTaxTotal = 0;
     let rawGrossTotal = 0;
@@ -32,7 +32,7 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
                 if (t) itemTaxRate += t.rate;
             });
         } else {
-            itemTaxRate = config.taxRate; // Fallback
+            itemTaxRate = config.taxRate || 0;
         }
 
         let lineNet = 0;
@@ -51,27 +51,15 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
     });
 
     // 2. Apply Global Discount
-    if (transaction.discountAmount) {
+    if (transaction.discountAmount && transaction.discountAmount > 0) {
         discountTotal += transaction.discountAmount;
 
-        // Discount reduces the base. We need to scale down Net and Tax.
-        // If Tax Included: Discount is on Gross.
-        // If Tax Excluded: Discount is on Net.
-
         if (isTaxIncluded) {
-            // Discount is removed from Gross Total
-            // New Gross = Old Gross - Discount
-            // Ratio = New Gross / Old Gross
             const ratio = (rawGrossTotal - transaction.discountAmount) / (rawGrossTotal || 1);
             subtotal = rawNetTotal * ratio;
             taxTotal = rawTaxTotal * ratio;
         } else {
-            // Discount is removed from Net Total
-            // New Net = Old Net - Discount
             subtotal = rawNetTotal - transaction.discountAmount;
-            // Tax is recalculated on new Net? 
-            // Usually yes, tax is on the discounted amount.
-            // Ratio = New Net / Old Net
             const ratio = subtotal / (rawNetTotal || 1);
             taxTotal = rawTaxTotal * ratio;
         }
@@ -80,18 +68,20 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
         taxTotal = rawTaxTotal;
     }
 
-    const finalTotal = transaction.total;
+    const finalTotal = transaction.total || (subtotal + taxTotal);
     const savings = discountTotal;
 
     // NCF Type Label Map
     const ncfTypeLabels: Record<string, string> = {
         'B01': 'FACTURA DE CRÉDITO FISCAL',
         'B02': 'FACTURA DE CONSUMO',
+        'B04': 'NOTA DE CRÉDITO',
         'B14': 'REGÍMENES ESPECIALES',
         'B15': 'GUBERNAMENTAL'
     };
 
     const documentTitle = transaction.ncfType ? (ncfTypeLabels[transaction.ncfType] || 'FACTURA DE VENTA') : 'TICKET DE VENTA';
+    const isCreditNote = transaction.ncfType === 'B04' || transaction.documentType === 'REFUND';
 
     // Foreign Currency Calculation
     const foreignCurrenciesHtml = receiptConfig?.showForeignCurrencyTotals && currencies ? currencies
@@ -111,11 +101,11 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
             <style>
                 @page { size: 80mm auto; margin: 0; }
                 body {
-                    font-family: 'Courier New', Courier, monospace; /* Monospace is better for alignment on thermal */
-                    width: 72mm; /* 80mm - margins */
+                    font-family: 'Courier New', Courier, monospace;
+                    width: 72mm;
                     margin: 0 auto;
                     padding: 4mm;
-                    font-size: 14px; /* Increased from 12px */
+                    font-size: 14px;
                     line-height: 1.2;
                     color: #000;
                     background: #fff;
@@ -132,7 +122,7 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
                     max-width: 100%;
                     height: auto;
                     object-fit: contain;
-                    filter: grayscale(100%) contrast(150%); /* Optimize for B&W thermal */
+                    filter: grayscale(100%) contrast(150%);
                 }
                 
                 .company-name { font-size: 18px; font-weight: 900; margin-bottom: 2px; text-transform: uppercase; }
@@ -174,17 +164,9 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
                     margin: 10px auto;
                 }
                 #qrcode img { margin: 0 auto; }
-                
-                .currency-section {
-                    margin-top: 5px;
-                    padding-top: 2px;
-                    border-top: 1px dashed #000;
-                    text-align: center;
-                }
             </style>
         </head>
         <body>
-            <!-- HEADER -->
             <div class="text-center">
                 ${receiptConfig?.logo ? `<img src="${receiptConfig.logo}" class="header-logo" alt="Logo" />` : ''}
                 <div class="company-name">${companyInfo.name}</div>
@@ -197,7 +179,6 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
 
             <div class="divider"></div>
             
-            <!-- DOCUMENT INFO -->
             <div class="text-center">
                 <div class="doc-title">${documentTitle}</div>
                 ${transaction.ncf ? `<div class="ncf-row">NCF: ${transaction.ncf}</div>` : ''}
@@ -209,17 +190,15 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
 
             <div class="divider"></div>
 
-            <!-- CUSTOMER INFO -->
             ${(() => {
             const snapshot = transaction.customerSnapshot;
             const name = snapshot?.name || transaction.customerName || 'Cliente Mostrador';
+            const cleanName = (name === 'null' || !name) ? 'Cliente Mostrador' : name;
 
-            // Always show name
             let html = `<div class="text-left" style="margin-bottom: 5px;">
-                    <div style="font-weight: bold;">Cliente: ${name}</div>`;
+                    <div style="font-weight: bold;">Cliente: ${cleanName}</div>`;
 
-            // Show details if not "Cliente Mostrador" and snapshot exists
-            if (snapshot && !name.toLowerCase().includes('mostrador')) {
+            if (snapshot && cleanName !== 'Cliente Mostrador') {
                 if (snapshot.taxId) html += `<div class="meta-row">RNC/Ced: ${snapshot.taxId}</div>`;
                 if (snapshot.address) html += `<div class="meta-row">Dir: ${snapshot.address}</div>`;
                 if (snapshot.phone) html += `<div class="meta-row">Tel: ${snapshot.phone}</div>`;
@@ -232,11 +211,27 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
 
             <div class="divider"></div>
 
-            <!-- ITEMS -->
             <table class="items-table">
                 <tbody>
                     ${transaction.items.map(item => {
-            const itemTax = (item.price * item.quantity) * config.taxRate;
+            let itemTaxRate = 0;
+            if (item.appliedTaxIds && item.appliedTaxIds.length > 0) {
+                item.appliedTaxIds.forEach(id => {
+                    const t = (config.taxes || []).find(tax => tax.id === id);
+                    if (t) itemTaxRate += t.rate;
+                });
+            } else {
+                itemTaxRate = config.taxRate || 0;
+            }
+
+            const lineVal = item.price * item.quantity;
+            let iTax = 0;
+            if (isTaxIncluded) {
+                iTax = lineVal - (lineVal / (1 + itemTaxRate));
+            } else {
+                iTax = lineVal * itemTaxRate;
+            }
+
             const originalPrice = item.originalPrice || item.price;
             const hasDiscount = originalPrice > item.price;
 
@@ -248,11 +243,11 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
                                     ${item.quantity} x ${currencySymbol}${item.price.toFixed(2)}
                                     ${hasDiscount ? `<span style="text-decoration: line-through; color: #999; margin-left: 5px;">${currencySymbol}${originalPrice.toFixed(2)}</span>` : ''}
                                     ${item.modifiers ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
-                                    <br/>ITBIS Aplicado: ${currencySymbol}${itemTax.toFixed(2)}
+                                    <br/>ITBIS: ${currencySymbol}${iTax.toFixed(2)}
                                 </span>
                             </td>
                             <td class="item-price">
-                                ${currencySymbol}${(item.price * item.quantity).toFixed(2)}
+                                ${currencySymbol}${lineVal.toFixed(2)}
                             </td>
                         </tr>
                     `}).join('')}
@@ -261,25 +256,24 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
 
             <div class="divider"></div>
 
-            <!-- TOTALS -->
             <div class="totals-section">
                 <div class="total-row">
                     <span>SUBTOTAL</span>
-                    <span>${currencySymbol}${subtotal.toFixed(2)}</span>
+                    <span>${currencySymbol}${(subtotal || 0).toFixed(2)}</span>
                 </div>
                 ${discountTotal > 0 ? `
-                <div class="total-row" style="color: #000;">
+                <div class="total-row">
                     <span>DESCUENTO TOTAL</span>
-                    <span>-${currencySymbol}${discountTotal.toFixed(2)}</span>
+                    <span>-${currencySymbol}${(discountTotal || 0).toFixed(2)}</span>
                 </div>` : ''}
                 <div class="total-row">
                     <span>TOTAL IMPUESTOS</span>
-                    <span>${currencySymbol}${taxTotal.toFixed(2)}</span>
+                    <span>${currencySymbol}${(taxTotal || 0).toFixed(2)}</span>
                 </div>
                 
                 <div class="total-row total-final">
                     <span>TOTAL</span>
-                    <span>${currencySymbol}${finalTotal.toFixed(2)}</span>
+                    <span>${currencySymbol}${(finalTotal || 0).toFixed(2)}</span>
                 </div>
                 
                 ${foreignCurrenciesHtml ? `
@@ -290,7 +284,6 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
                 ` : ''}
             </div>
 
-            <!-- SAVINGS BOX -->
             ${savings > 0 ? `
             <div class="savings-box">
                 <div>¡USTED HA AHORRADO!</div>
@@ -298,11 +291,10 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
             </div>
             ` : ''}
 
-            <!-- PAYMENT BREAKDOWN -->
             ${(() => {
             const payments = transaction.payments || [];
             const totalPaid = payments.reduce((acc: number, p: any) => acc + (p.amount || 0), 0);
-            const change = Math.max(0, totalPaid - finalTotal);
+            const change = Math.max(0, totalPaid - (finalTotal || 0));
 
             if (payments.length === 0) return '';
 
@@ -312,7 +304,7 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
                     <div style="font-weight: bold; margin-bottom: 4px; font-size: 10px;">FORMAS DE PAGO</div>
                     ${payments.map((p: any) => `
                     <div class="total-row">
-                        <span>${p.method === 'CASH' ? 'EFECTIVO' : p.method === 'CARD' ? 'TARJETA' : p.method}</span>
+                        <span>${p.method === 'CASH' ? 'EFECTIVO' : p.method === 'CARD' ? 'TARJETA' : p.method === 'STORE_CREDIT' ? 'NOTA DE CRÉDITO' : p.method}</span>
                         <span>${currencySymbol}${(p.amount || 0).toFixed(2)}</span>
                     </div>
                     `).join('')}
@@ -327,7 +319,23 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
                 `;
         })()}
 
-            <!-- FOOTER -->
+            <!-- SECCIÓN: FACTURA AFECTADA (ALINEADA A LA IZQUIERDA) -->
+            ${isCreditNote ? `
+                <div class="divider"></div>
+                <div class="text-left" style="margin-top: 10px; font-size: 12px; line-height: 1.4;">
+                    <span style="font-weight: bold; text-decoration: underline;">FACTURA AFECTADA:</span><br/>
+                    ${(transaction.affectedInvoiceNumber || transaction.originalTransactionId) ? `
+                        <span>No. ${transaction.affectedInvoiceNumber || transaction.originalTransactionId}</span><br/>
+                    ` : ''}
+                    ${transaction.affectedNCF ? `
+                        <span>NCF: ${transaction.affectedNCF}</span>
+                    ` : ''}
+                    ${!(transaction.affectedInvoiceNumber || transaction.affectedNCF || transaction.originalTransactionId) ? `
+                        <span style="font-style: italic; color: #666;">Sin referencia disponible</span>
+                    ` : ''}
+                </div>
+            ` : ''}
+
             <div class="footer">
                 ${receiptConfig?.footerMessage ? `<div style="margin-bottom: 8px;">${receiptConfig.footerMessage}</div>` : ''}
                 <div>¡Gracias por su compra!</div>
@@ -341,7 +349,6 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
             
             <script>
                 window.onload = function() {
-                    // Generate QR Code
                     ${receiptConfig?.showQr ? `
                     try {
                         const qrData = JSON.stringify({
@@ -363,10 +370,8 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
                     }
                     ` : ''}
                     
-                    // Auto print after a short delay to ensure QR is rendered
                     setTimeout(() => {
                         window.print();
-                        // Optional: window.close();
                     }, 500);
                 }
             </script>

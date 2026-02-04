@@ -19,6 +19,7 @@ interface ZReportDashboardProps {
    roles: RoleDefinition[];
    onClose: () => void;
    onConfirmClose: (cashCounted: number, notes: string, reportData?: any) => void;
+   terminalId?: string;
 }
 
 // --- HELPER: Slide To Action Button ---
@@ -66,7 +67,7 @@ const SlideButton: React.FC<{ onComplete: () => void; label: string; colorClass:
    );
 };
 
-const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashMovements, config, userName, currentUser, roles, onClose, onConfirmClose }) => {
+const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashMovements, config, userName, currentUser, roles, onClose, onConfirmClose, terminalId }) => {
    const [cashCountedByCurrency, setCashCountedByCurrency] = useState<Record<string, string>>({});
    const [notes, setNotes] = useState('');
 
@@ -90,9 +91,15 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
       return userRole.permissions.includes(permission as any);
    };
 
-   // Identificar terminal activa (asumimos la primera en este contexto POS local)
-   const activeTerminal = config.terminals?.[0];
+   // Identificar terminal activa
+   const activeTerminal = config.terminals?.find(t => t.id === terminalId) || config.terminals?.[0];
    const activeTerminalConfig = activeTerminal?.config;
+   const currentTerminalId = activeTerminal?.id || 'T1';
+
+   // FILTER: Solo procesar data de esta terminal
+   // Si no hay ID, o es 'T1' (default), intentamos mostrar lo que no tenga ID asignado para recuperación
+   const filteredTransactions = transactions.filter(t => t.terminalId === currentTerminalId || (!t.terminalId && currentTerminalId === 'T1'));
+   const filteredCashMovements = cashMovements.filter(m => m.terminalId === currentTerminalId || (!m.terminalId && currentTerminalId === 'T1'));
 
    const handleStartClosing = () => {
       // Check if at least one currency amount is entered
@@ -124,13 +131,13 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                cashExpected: expectedCashByCurrency,
                cashCounted: cashCountedByCurrency,
                cashDiscrepancy: cashDiscrepancyByCurrency,
-               transactionCount: transactions.length,
-               stats: calculateZReportStats(transactions)
+               transactionCount: filteredTransactions.length,
+               stats: calculateZReportStats(filteredTransactions)
             };
 
             // Calculate totals by method
             const totalsByMethod: Record<string, number> = {};
-            transactions.forEach(t => {
+            filteredTransactions.forEach(t => {
                (t?.payments || []).forEach(p => {
                   if (p && p.method) {
                      totalsByMethod[p.method] = (totalsByMethod[p.method] || 0) + p.amount;
@@ -160,6 +167,18 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
             cashCountedData[curr] = parseFloat(val) || 0;
          });
 
+         // Calculate final stats and totals once to ensure consistency
+         const finalTotalsByMethod: Record<string, number> = {};
+         filteredTransactions.forEach(t => {
+            (t?.payments || []).forEach(p => {
+               if (p && p.method) {
+                  finalTotalsByMethod[p.method] = (finalTotalsByMethod[p.method] || 0) + p.amount;
+               }
+            });
+         });
+         const finalStats = calculateZReportStats(filteredTransactions);
+         const finalTxCount = filteredTransactions.length;
+
          // Step 2: Emails
          setCurrentStep(2);
          // Use terminal specific email or fallback to global default
@@ -172,31 +191,15 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                closedByUserName: userName,
                terminalId: activeTerminal?.id || 'POS-01',
                baseCurrency: baseCurrencyCode,
-               totalsByMethod: {},
+               totalsByMethod: finalTotalsByMethod,
                cashExpected: expectedCashByCurrency,
-               cashCounted: cashCountedByCurrency,
+               cashCounted: cashCountedData,
                cashDiscrepancy: cashDiscrepancyByCurrency,
-               transactionCount: transactions.length,
-               stats: calculateZReportStats(transactions),
+               transactionCount: finalTxCount,
+               stats: finalStats,
                companyName: config.companyInfo.name,
                notes: notes
             };
-
-            // Calculate totals by method
-            const totalsByMethod: Record<string, number> = {};
-            transactions.forEach(t => {
-               (t?.payments || []).forEach(p => {
-                  if (p && p.method) {
-                     totalsByMethod[p.method] = (totalsByMethod[p.method] || 0) + p.amount;
-                  }
-               });
-            });
-            emailReportData.totalsByMethod = totalsByMethod;
-
-            // Convert cash counted strings to numbers
-            const cashCountedNums: Record<string, number> = {};
-            Object.entries(cashCountedByCurrency).forEach(([k, v]) => cashCountedNums[k] = parseFloat(v) || 0);
-            emailReportData.cashCounted = cashCountedNums;
 
             try {
                await fetch('/smtp/z-report', {
@@ -226,7 +229,10 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
             cashSalesTotal,
             cashIn,
             cashOut,
-            expectedCash: expectedCashInDrawer
+            expectedCash: expectedCashInDrawer,
+            totalsByMethod: finalTotalsByMethod,
+            stats: finalStats,
+            transactionCount: finalTxCount
          };
          onConfirmClose(parseFloat(cashCountedByCurrency[baseCurrencyCode]) || 0, notes, reportData);
       };
@@ -240,7 +246,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const baseCurrencyCode = baseCurrency?.code || 'DOP';
 
    // --- STATS CALCS (MULTI-CURRENCY) ---
-   const payments = transactions.flatMap(t => t?.payments || []).filter(Boolean);
+   const payments = filteredTransactions.flatMap(t => t?.payments || []).filter(Boolean);
 
    // Group cash sales by currency
    const cashSalesByCurrency: Record<string, number> = {};
@@ -254,7 +260,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    // Group cash movements by currency
    const cashInByCurrency: Record<string, number> = {};
    const cashOutByCurrency: Record<string, number> = {};
-   cashMovements.forEach(m => {
+   filteredCashMovements.forEach(m => {
       const currency = m.currencyCode || baseCurrencyCode;
       if (m.type === 'IN') {
          cashInByCurrency[currency] = (cashInByCurrency[currency] || 0) + m.amount;
@@ -294,7 +300,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const cashDiscrepancy = cashDiscrepancyByCurrency[baseCurrencyCode] || 0;
 
    // Calculate Stats for Preview
-   const stats = calculateZReportStats(transactions);
+   const stats = calculateZReportStats(filteredTransactions);
 
 
    if (showHistory) {

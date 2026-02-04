@@ -7,7 +7,7 @@ import {
   Cpu, HardDrive, Smartphone, Cloud, Lock, Package, Building2,
   Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw
 } from 'lucide-react';
-import { BusinessConfig, User, RoleDefinition, Transaction, Product, Warehouse, StockTransfer } from '../types';
+import { BusinessConfig, User, RoleDefinition, Transaction, Product, Warehouse, StockTransfer, Supplier, Customer, PurchaseOrder, Reception } from '../types';
 
 // Component Imports
 import WarehouseManager from './WarehouseManager';
@@ -37,8 +37,15 @@ interface SettingsProps {
   transactions: Transaction[];
   products: Product[];
   warehouses: Warehouse[];
+  suppliers?: Supplier[];
+  customers?: Customer[];
+  purchaseOrders?: PurchaseOrder[];
+  receptions?: Reception[];
+  parkedTickets?: any[];
   transfers?: StockTransfer[];
+  internalSequences?: any[];
   onUpdateTransfers?: (transfers: StockTransfer[]) => void;
+  onUpdateSequences?: (sequences: any[]) => void;
   onUpdateConfig: (newConfig: BusinessConfig, restart?: boolean) => void;
   onUpdateUsers: (users: User[]) => void;
   onUpdateRoles: (roles: RoleDefinition[]) => void;
@@ -52,6 +59,7 @@ interface SettingsProps {
   currentDeviceId?: string;
   terminalId?: string;
   initialView?: SettingsView;
+  initialData?: any;
 }
 
 type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC';
@@ -78,8 +86,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
           <ImportWizard
             config={props.config}
             products={props.products}
-            customers={props.users.map(u => ({ ...u, creditLimit: 0, currentDebt: 0, points: 0 } as any))} // Hack: users are not customers. We need customers prop in Settings.
-            suppliers={[]} // Hack: suppliers not in Settings props yet
+            customers={props.customers || []}
+            suppliers={props.suppliers || []}
             warehouses={props.warehouses}
             onClose={() => setCurrentView('HOME')}
             onUpdateConfig={props.onUpdateConfig}
@@ -112,6 +120,10 @@ const Settings: React.FC<SettingsProps> = (props) => {
             onClose={() => setCurrentView('HOME')}
             isAdminMode={props.isAdminMode}
             terminalId={props.terminalId}
+            initialProductId={props.initialData?.productId}
+            transfers={props.transfers}
+            purchaseOrders={props.purchaseOrders}
+            suppliers={props.suppliers}
           />
         );
 
@@ -121,10 +133,16 @@ const Settings: React.FC<SettingsProps> = (props) => {
             warehouses={props.warehouses}
             products={props.products}
             transfers={props.transfers || []}
+            suppliers={props.suppliers || []}
+            purchaseOrders={props.purchaseOrders || []}
+            parkedTickets={props.parkedTickets || []}
             config={props.config}
+            terminalId={props.terminalId}
+            internalSequences={props.internalSequences || []}
             onUpdateWarehouses={props.onUpdateWarehouses}
             onUpdateProducts={props.onUpdateProducts}
             onUpdateTransfers={props.onUpdateTransfers || (() => { })}
+            onUpdateSequences={props.onUpdateSequences || (() => { })}
             onClose={() => setCurrentView('HOME')}
           />
         );

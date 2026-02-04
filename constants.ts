@@ -47,7 +47,10 @@ export const DEFAULT_TERMINAL_CONFIG = {
     lowBatchThreshold: 20,
     typeConfigs: {
       'B01': { batchSize: 50, lowBatchThreshold: 10, lowBatchThresholdPct: 20 },
-      'B02': { batchSize: 200, lowBatchThreshold: 20, lowBatchThresholdPct: 20 }
+      'B02': { batchSize: 200, lowBatchThreshold: 20, lowBatchThresholdPct: 20 },
+      'B04': { batchSize: 50, lowBatchThreshold: 10, lowBatchThresholdPct: 20 },
+      'B14': { batchSize: 50, lowBatchThreshold: 10, lowBatchThresholdPct: 20 },
+      'B15': { batchSize: 50, lowBatchThreshold: 10, lowBatchThresholdPct: 20 }
     }
   },
   security: {
@@ -296,8 +299,28 @@ export const RETAIL_PRODUCTS: Product[] = [
       { id: 'attr_size', name: 'Talla', options: ['38', '39', '40', '41', '42'], optionCodes: ['38', '39', '40', '41', '42'] },
       { id: 'attr_color', name: 'Color', options: ['Rojo', 'Azul', 'Negro'], optionCodes: ['RJ', 'AZ', 'NG'] }
     ],
-    variants: [],
+    variants: [
+      { sku: 'RUN-01-38-RJ', barcode: ['RUN0138RJ'], attributeValues: { 'Talla': '38', 'Color': 'Rojo' }, price: 85.00 },
+      { sku: 'RUN-01-39-RJ', barcode: ['RUN0139RJ'], attributeValues: { 'Talla': '39', 'Color': 'Rojo' }, price: 85.00 },
+      { sku: 'RUN-01-40-RJ', barcode: ['RUN0140RJ'], attributeValues: { 'Talla': '40', 'Color': 'Rojo' }, price: 85.00 },
+      { sku: 'RUN-01-41-RJ', barcode: ['RUN0141RJ'], attributeValues: { 'Talla': '41', 'Color': 'Rojo' }, price: 85.00 },
+      { sku: 'RUN-01-42-RJ', barcode: ['RUN0142RJ'], attributeValues: { 'Talla': '42', 'Color': 'Rojo' }, price: 85.00 },
+      { sku: 'RUN-01-38-AZ', barcode: ['RUN0138AZ'], attributeValues: { 'Talla': '38', 'Color': 'Azul' }, price: 85.00 },
+      { sku: 'RUN-01-39-AZ', barcode: ['RUN0139AZ'], attributeValues: { 'Talla': '39', 'Color': 'Azul' }, price: 85.00 },
+      { sku: 'RUN-01-40-AZ', barcode: ['RUN0140AZ'], attributeValues: { 'Talla': '40', 'Color': 'Azul' }, price: 85.00 },
+      { sku: 'RUN-01-41-AZ', barcode: ['RUN0141AZ'], attributeValues: { 'Talla': '41', 'Color': 'Azul' }, price: 85.00 },
+      { sku: 'RUN-01-42-AZ', barcode: ['RUN0142AZ'], attributeValues: { 'Talla': '42', 'Color': 'Azul' }, price: 85.00 },
+      { sku: 'RUN-01-38-NG', barcode: ['RUN0138NG'], attributeValues: { 'Talla': '38', 'Color': 'Negro' }, price: 85.00 },
+      { sku: 'RUN-01-39-NG', barcode: ['RUN0139NG'], attributeValues: { 'Talla': '39', 'Color': 'Negro' }, price: 85.00 },
+      { sku: 'RUN-01-40-NG', barcode: ['RUN0140NG'], attributeValues: { 'Talla': '40', 'Color': 'Negro' }, price: 85.00 },
+      { sku: 'RUN-01-41-NG', barcode: ['RUN0141NG'], attributeValues: { 'Talla': '41', 'Color': 'Negro' }, price: 85.00 },
+      { sku: 'RUN-01-42-NG', barcode: ['RUN0142NG'], attributeValues: { 'Talla': '42', 'Color': 'Negro' }, price: 85.00 }
+    ],
     tariffs: [{ tariffId: 'trf-gen', price: 85.00 }],
+    stockBalances: { 'wh_central': 10 },
+    warehouseSettings: {
+      'wh_central': { min: 20, max: 50 }
+    },
     appliedTaxIds: ['tax-18']
   },
   { id: 'p1', name: 'Camiseta Algodón Premium', price: 25.00, category: 'Ropa', stock: 45, minStock: 10, cost: 12.00, barcode: '74210001', images: [], attributes: [], variants: [], tariffs: [{ tariffId: 'trf-gen', price: 25.00 }, { tariffId: 'trf-vip', price: 20.00 }], appliedTaxIds: ['tax-18'] },
@@ -317,7 +340,7 @@ export const AVAILABLE_PERMISSIONS = [
   { key: 'POS_VOID_ITEM', label: 'Anular Ítem', description: 'Eliminar productos del carrito', category: 'SALES' },
   { key: 'POS_VOID_TICKET', label: 'Anular Ticket (En Curso)', description: 'Cancelar venta antes de pago', category: 'SALES' },
   { key: 'POS_VOID_PAID_TICKET', label: 'Anular Factura Pagada', description: 'Revertir una venta finalizada', category: 'SALES' },
-  { key: 'POS_RETURNS', label: 'Devoluciones', description: 'Procesar notas de crédito', category: 'SALES' },
+  { key: 'POS_RETURNS', label: 'Autorizar Devoluciones y Notas de Crédito', description: 'Permite activar el modo de devolución en el POS y procesar notas de crédito', category: 'SALES' },
   { key: 'POS_MANAGE_PARKED', label: 'Gestionar Cuentas', description: 'Ver y recuperar cuentas de otros', category: 'SALES' },
 
   // --- CASH & FINANCE ---

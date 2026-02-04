@@ -1,14 +1,17 @@
 import React, { useState, useMemo } from 'react';
 import { Search, Package, Calendar, User, ArrowRight, Clock, X, Hash, Box } from 'lucide-react';
-import { Reception, BusinessConfig } from '../types';
+import { Reception, BusinessConfig, Supplier, PurchaseOrder } from '../types';
 import { formatSafeDate, formatSafeTime } from '../utils/dateUtils';
+import { Landmark, CreditCard, Receipt } from 'lucide-react';
 
 interface ReceptionHistoryProps {
     receptions: Reception[];
     config: BusinessConfig;
+    suppliers: Supplier[];
+    purchaseOrders: PurchaseOrder[];
 }
 
-const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config }) => {
+const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config, suppliers, purchaseOrders }) => {
     const [search, setSearch] = useState('');
     const [selectedReception, setSelectedReception] = useState<Reception | null>(null);
 
@@ -122,7 +125,7 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config 
                             </button>
                         </div>
 
-                        <div className="p-6 border-b border-gray-100 bg-gray-50 flex flex-wrap gap-6">
+                        <div className="p-6 border-b border-gray-100 bg-gray-50 grid grid-cols-2 md:grid-cols-4 gap-6">
                             <div>
                                 <p className="text-[10px] uppercase text-gray-400 font-bold mb-1">Fecha y Hora</p>
                                 <p className="text-sm font-bold text-gray-700">
@@ -133,6 +136,36 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config 
                                 <p className="text-[10px] uppercase text-gray-400 font-bold mb-1">Recibido por</p>
                                 <p className="text-sm font-bold text-gray-700">{selectedReception.receivedByUserName}</p>
                             </div>
+                            {(() => {
+                                const po = purchaseOrders.find(o => o.id === selectedReception.purchaseOrderId);
+                                const supplier = suppliers.find(s => s.id === po?.supplierId);
+                                if (!supplier) return null;
+                                return (
+                                    <>
+                                        <div>
+                                            <p className="text-[10px] uppercase text-gray-400 font-bold mb-1">Proveedor</p>
+                                            <div className="flex items-center gap-2">
+                                                <Landmark size={14} className="text-indigo-400" />
+                                                <div>
+                                                    <p className="text-sm font-bold text-gray-800 leading-tight">{supplier.name}</p>
+                                                    <p className="text-[10px] text-gray-400 font-medium">{supplier.taxId}</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <p className="text-[10px] uppercase text-gray-400 font-bold mb-1">Forma de Pago</p>
+                                            <div className="flex items-center gap-2">
+                                                <CreditCard size={14} className="text-amber-500" />
+                                                <span className="text-xs font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded uppercase">
+                                                    {supplier.paymentMethod === 'CASH' ? 'Efectivo' :
+                                                        supplier.paymentMethod === 'TRANSFER' ? 'Transferencia' :
+                                                            supplier.paymentMethod === 'CARD' ? 'Tarjeta' : 'Crédito'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </>
+                                );
+                            })()}
                         </div>
 
                         <div className="flex-1 overflow-y-auto p-6">

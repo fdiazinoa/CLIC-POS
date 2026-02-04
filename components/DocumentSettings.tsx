@@ -63,7 +63,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
 
    // --- FISCAL AUDIT LOGIC ---
    const fiscalConsumption = useMemo(() => {
-      const stats: Record<NCFType, number> = { 'B01': 0, 'B02': 0, 'B14': 0, 'B15': 0 };
+      const stats: Record<NCFType, number> = { 'B01': 0, 'B02': 0, 'B04': 0, 'B14': 0, 'B15': 0 };
 
       if (Array.isArray(transactions)) {
          transactions.forEach(tx => {
@@ -301,7 +301,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                            </div>
 
                            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-                              {(['B01', 'B02', 'B14', 'B15'] as NCFType[]).map(type => {
+                              {(['B01', 'B02', 'B04', 'B14', 'B15'] as NCFType[]).map(type => {
                                  const consumed = fiscalConsumption[type] || 0;
                                  const range = fiscalRanges.find(r => r.type === type);
                                  const totalAuthorized = range ? (range.endNumber - range.startNumber + 1) : 0;
@@ -546,6 +546,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                            >
                               <option value="B01">Crédito Fiscal (B01)</option>
                               <option value="B02">Consumo (B02)</option>
+                              <option value="B04">Nota de Crédito (B04)</option>
                               <option value="B14">Reg. Especiales (B14)</option>
                               <option value="B15">Gubernamentales (B15)</option>
                            </select>

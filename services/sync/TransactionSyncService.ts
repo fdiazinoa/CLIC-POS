@@ -5,6 +5,7 @@
  * Slave terminals enqueue transactions, master processes and consolidates.
  */
 
+import { dbAdapter } from '../db';
 import { apiSyncAdapter } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
 import { Transaction } from '../../types';
@@ -30,6 +31,8 @@ class TransactionSyncService {
      * Returns transactions from all slave terminals
      */
     async pullPendingTransactions(): Promise<Transaction[]> {
+        if (dbAdapter.adapterType === 'network') return [];
+
         if (!permissionService.isMasterTerminal()) {
             console.warn('⚠️  Only master terminal can pull transactions');
             return [];
@@ -80,6 +83,11 @@ class TransactionSyncService {
         intervalMs: number,
         onNewTransactions: (txns: Transaction[]) => Promise<void>
     ): number {
+        if (dbAdapter.adapterType === 'network') {
+            console.log("🛑 TransactionSyncService disabled: Running in Network Mode.");
+            return -1;
+        }
+
         if (!permissionService.isMasterTerminal()) {
             return -1;
         }

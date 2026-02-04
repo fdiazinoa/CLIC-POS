@@ -5,9 +5,10 @@ import {
    Filter, Tag, Image as ImageIcon, DollarSign,
    Calendar, CheckCircle2, XCircle, Layers, ClipboardList,
    ChevronDown, ChevronRight, Box, AlertCircle, MapPin, Grid, Sun,
-   CheckSquare, Square, MoreHorizontal, Settings2, Activity
+   CheckSquare, Square, MoreHorizontal, Settings2, Activity, RefreshCw
 } from 'lucide-react';
-import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season, Watchlist, ProductStock } from '../types';
+import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season, Watchlist, ProductStock, StockTransfer, Supplier } from '../types';
+import { calculateOptimalInventoryLevels } from '../utils/inventoryEngine';
 import ProductForm from './ProductForm';
 import TariffForm from './TariffForm';
 import VariantManager from './VariantManager';
@@ -31,6 +32,10 @@ interface CatalogManagerProps {
    onClose: () => void;
    isAdminMode?: boolean;
    terminalId?: string;
+   initialProductId?: string;
+   transfers?: StockTransfer[];
+   purchaseOrders?: any[];
+   suppliers?: Supplier[];
 }
 
 type ViewMode = 'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS' | 'GROUPS' | 'SEASONS' | 'BI_MONITOR';
@@ -190,7 +195,11 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    products, config, warehouses, transactions, currentUser, roles, onUpdateProducts, onUpdateConfig,
    onClose,
    isAdminMode,
-   terminalId
+   terminalId,
+   initialProductId,
+   transfers = [],
+   purchaseOrders = [],
+   suppliers = []
 }) => {
    const [viewMode, setViewMode] = useState<ViewMode>('PRODUCTS');
    const [searchTerm, setSearchTerm] = useState('');
@@ -232,6 +241,15 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          setProductStocks(stocks);
       };
       window.addEventListener('productStocksUpdated', handleStockUpdate);
+
+      // --- INITIAL PRODUCT DEEP LINKING ---
+      if (initialProductId) {
+         const prod = products.find(p => p.id === initialProductId);
+         if (prod) {
+            setEditingProduct(prod);
+         }
+      }
+
       return () => window.removeEventListener('productStocksUpdated', handleStockUpdate);
    }, []);
 
@@ -307,8 +325,37 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       await db.save('watchlists', newLists);
    };
 
+   const handleBulkRecalculate = async (season: Season) => {
+      if (!confirm(`¿Recalcular niveles mínimos y máximos para los ${season.productIds.length} productos de "${season.name}"?`)) return;
+
+      const updatedProducts = [...products];
+      let updatedCount = 0;
+
+      for (const p of updatedProducts) {
+         // Check if product is in season OR in affected category
+         const isProductInSeason = season.productIds.includes(p.id);
+         const isCategoryAffected = season.affectedCategories?.includes(p.category);
+
+         if (isProductInSeason || isCategoryAffected) {
+            try {
+               const baselineWhId = warehouses[0]?.id || 'wh_central';
+               const calc = await calculateOptimalInventoryLevels(p, baselineWhId, config.seasons || [], suppliers);
+               p.minStock = calc.suggestedMin;
+               // We also update warehouse-specific mins if they exist
+               // For simplicity in bulk, we just set the global minStock which the system uses as default
+               updatedCount++;
+            } catch (err) {
+               console.error(`Error calculating for ${p.id}`, err);
+            }
+         }
+      }
+
+      onUpdateProducts(updatedProducts);
+      alert(`¡Listo! Se actualizaron ${updatedCount} productos.`);
+   };
+
    if (viewMode === 'VARIANTS') return <VariantManager onClose={() => setViewMode('PRODUCTS')} />;
-   if (editingProduct) return <ProductForm initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={warehouses} availableTariffs={tariffs} hasHistory={transactions.some(t => t.items.some(item => item.id === (editingProduct as any).id))} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} />;
+   if (editingProduct) return <ProductForm initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={warehouses} availableTariffs={tariffs} hasHistory={transactions.some(t => t.items.some(item => item.id === (editingProduct as any).id))} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} transfers={transfers} purchaseOrders={purchaseOrders} suppliers={suppliers} seasons={config.seasons || []} />;
    if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={products} config={config} availableTariffs={tariffs} onSave={handleSaveTariff} onUpdateProducts={onUpdateProducts} onClose={() => setEditingTariff(null)} />;
    if (editingGroup) return <GroupForm initialData={editingGroup === 'NEW' ? null : editingGroup} products={products} onSave={handleSaveGroup} onClose={() => setEditingGroup(null)} />;
    if (editingSeason) return <SeasonForm initialData={editingSeason === 'NEW' ? null : editingSeason} products={products} onSave={handleSaveSeason} onClose={() => setEditingSeason(null)} />;
@@ -643,6 +690,13 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                  <Box size={16} className="text-yellow-500" />
                                  <span>{season.productIds.length} Artículos vinculados</span>
                               </div>
+
+                              <button
+                                 onClick={() => handleBulkRecalculate(season)}
+                                 className="w-full mt-4 py-3 bg-gray-800 text-white rounded-xl font-bold text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-black transition-all shadow-lg active:scale-95"
+                              >
+                                 <RefreshCw size={14} /> Recalcular Sugerencias
+                              </button>
                            </div>
                         </div>
                      );

@@ -69,6 +69,14 @@ const DOCUMENT_ROLES = [
 
 type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY' | 'LAN_BINDING' | 'CATALOG' | 'DEVICE_ROLE';
 
+const NCF_LABELS: Record<NCFType, string> = {
+   'B01': 'Crédito Fiscal',
+   'B02': 'Consumo',
+   'B04': 'Nota de Crédito',
+   'B14': 'Reg. Especiales',
+   'B15': 'Gubernamentales'
+};
+
 const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [], isAdminMode = false, currentDeviceId }) => {
    // ... existing state ...
    const [terminals, setTerminals] = useState(config.terminals || []);
@@ -171,8 +179,42 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    // ... existing handlers ...
    const handleAssignSequence = (roleId: string, sequenceId: string) => {
       if (!activeTerminal) return;
+
       const currentAssignments = activeTerminal.config.documentAssignments || {};
-      handleUpdateActiveConfig('', 'documentAssignments', { ...currentAssignments, [roleId]: sequenceId });
+      const newAssignments = { ...currentAssignments, [roleId]: sequenceId };
+
+      // 1. Find the master series object
+      const startSeries = masterSequences.find(s => s.id === sequenceId);
+
+      let newDocumentSeries = [...(activeTerminal.config.documentSeries || [])];
+
+      if (sequenceId && startSeries) {
+         // Check if this specific series is already in the terminal config
+         const existingIndex = newDocumentSeries.findIndex(s => s.id === sequenceId);
+
+         if (existingIndex >= 0) {
+            // Update existing just in case master changed
+            newDocumentSeries[existingIndex] = startSeries;
+         } else {
+            // Add new series definition
+            newDocumentSeries.push(startSeries);
+         }
+      }
+
+      // Update both the assignment map AND the local series definition array
+      setTerminals(prev => prev.map(t => {
+         if (t.id === selectedTerminalId) {
+            return {
+               ...t,
+               config: {
+                  ...t.config,
+                  documentAssignments: newAssignments,
+                  documentSeries: newDocumentSeries
+               }
+            };
+         }
+         return t;
+      }));
    };
 
    const handleToggleMasterNode = (enabled: boolean) => {
@@ -1333,13 +1375,13 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  </div>
                               )}
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                 {['B01', 'B02'].map((type) => {
-                                    const typeConfig = activeTerminal.config.fiscal?.typeConfigs?.[type as NCFType] || { batchSize: 100, lowBatchThreshold: 20, lowBatchThresholdPct: 20 };
+                                 {(['B01', 'B02', 'B04', 'B14', 'B15'] as NCFType[]).map((type) => {
+                                    const typeConfig = activeTerminal.config.fiscal?.typeConfigs?.[type] || { batchSize: 100, lowBatchThreshold: 20, lowBatchThresholdPct: 20 };
                                     return (
                                        <div key={type} className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-4">
                                           <div className="flex items-center gap-2">
                                              <span className="bg-indigo-600 text-white px-2.5 py-1 rounded-lg text-xs font-black tracking-widest">{type}</span>
-                                             <h4 className="font-bold text-gray-800">{type === 'B01' ? 'Crédito Fiscal' : 'Consumo'}</h4>
+                                             <h4 className="font-bold text-gray-800">{NCF_LABELS[type]}</h4>
                                           </div>
 
                                           <div className="space-y-4">

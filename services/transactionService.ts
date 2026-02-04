@@ -351,6 +351,103 @@ class TransactionService {
     }
 
     /**
+     * Create a split transaction (Sales + Returns)
+     */
+    async createSplitTransaction(
+        data: {
+            saleTransaction?: Partial<Transaction>,
+            refundTransaction?: Partial<Transaction>,
+            walletDeposit?: { customerId: string, amount: number },
+            walletPayment?: { customerId: string, amount: number }
+        }
+    ): Promise<{ sale?: Transaction, refund?: Transaction }> {
+        const results: { sale?: Transaction, refund?: Transaction } = {};
+
+        // 1. Process Refund (Credit Note B04) first to "free up" balance or apply to wallet
+        if (data.refundTransaction) {
+            results.refund = await this.createTransaction(data.refundTransaction);
+        }
+
+        // 2. Process Sale (Invoice B01/B02)
+        if (data.saleTransaction) {
+            // Link to the refund if it exists
+            if (results.refund) {
+                if (!data.saleTransaction.relatedTransactions) data.saleTransaction.relatedTransactions = [];
+                data.saleTransaction.relatedTransactions.push(results.refund.id);
+                data.saleTransaction.affectedNCF = results.refund.ncf;
+                data.saleTransaction.affectedInvoiceNumber = results.refund.displayId;
+            }
+            results.sale = await this.createTransaction(data.saleTransaction);
+        }
+
+        // 3. Update Wallet if applicable
+        if (data.walletDeposit) {
+            await this.updateWalletBalance(data.walletDeposit.customerId, data.walletDeposit.amount, 'DEPOSIT', results.refund?.displayId);
+        }
+
+        if (data.walletPayment) {
+            await this.updateWalletBalance(data.walletPayment.customerId, -data.walletPayment.amount, 'PAYMENT', results.sale?.displayId);
+        }
+
+        return results;
+    }
+
+    /**
+     * Atomic Wallet Balance Update
+     */
+    private async updateWalletBalance(
+        customerId: string,
+        amount: number,
+        type: 'DEPOSIT' | 'PAYMENT' | 'REFUND',
+        referenceId?: string
+    ): Promise<void> {
+        // In a real SQLite environment, this would be wrapped in a transaction
+        // Since we are using an adapter, we rely on its internal handling or the server's lock
+
+        const wallets = await db.get('wallets' as any) as any[] || [];
+        let wallet = wallets.find(w => w.customerId === customerId);
+
+        if (!wallet) {
+            // Create wallet if not exists
+            wallet = {
+                id: `WLT-${customerId}`,
+                customerId,
+                balance: 0,
+                currency: 'DOP',
+                status: 'ACTIVE',
+                updatedAt: new Date().toISOString()
+            };
+            wallets.push(wallet);
+        }
+
+        if (wallet.status !== 'ACTIVE') {
+            throw new Error(`Wallet for customer ${customerId} is not active.`);
+        }
+
+        const newBalance = wallet.balance + amount;
+        if (newBalance < -0.01) { // Allow tiny precision diff
+            throw new Error('Insufficient wallet balance');
+        }
+
+        wallet.balance = parseFloat(newBalance.toFixed(2));
+        wallet.updatedAt = new Date().toISOString();
+
+        await db.save('wallets' as any, wallets);
+
+        // Record wallet transaction
+        const walletTxns = await db.get('wallet_transactions' as any) as any[] || [];
+        walletTxns.push({
+            id: `WLT-TXN-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            walletId: wallet.id,
+            type,
+            amount,
+            referenceId,
+            createdAt: new Date().toISOString()
+        });
+        await db.save('wallet_transactions' as any, walletTxns);
+    }
+
+    /**
      * Get transaction by display ID
      */
     async getTransactionByDisplayId(displayId: string): Promise<Transaction | null> {

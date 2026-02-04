@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
    X, Save, Calendar, Info, Box, Search,
-   Check, Sun, Trash2
+   Check, Sun, Trash2, Zap
 } from 'lucide-react';
 import { Season, Product } from '../types';
 
@@ -27,7 +27,9 @@ const SeasonForm: React.FC<SeasonFormProps> = ({
       startDate: new Date().toISOString().split('T')[0],
       endDate: new Date(new Date().setMonth(new Date().getMonth() + 3)).toISOString().split('T')[0],
       isActive: true,
-      productIds: []
+      productIds: [],
+      multiplier: 1.0,
+      affectedCategories: []
    });
 
    // Items Selection State
@@ -39,7 +41,9 @@ const SeasonForm: React.FC<SeasonFormProps> = ({
       if (initialData) {
          setFormData({
             ...JSON.parse(JSON.stringify(initialData)),
-            productIds: initialData.productIds || []
+            productIds: initialData.productIds || [],
+            multiplier: initialData.multiplier || 1.0,
+            affectedCategories: initialData.affectedCategories || []
          });
       }
    }, [initialData]);
@@ -168,16 +172,33 @@ const SeasonForm: React.FC<SeasonFormProps> = ({
                {activeTab === 'GENERAL' && (
                   <div className="space-y-8 animate-in slide-in-from-right-4 max-w-3xl mx-auto">
                      <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm space-y-6">
-                        <div>
-                           <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Código Interno</label>
-                           <input
-                              type="text"
-                              value={formData.code}
-                              onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
-                              placeholder="Ej. S24"
-                              className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-800 outline-none focus:ring-2 focus:ring-yellow-200 uppercase"
-                              required
-                           />
+                        <div className="grid grid-cols-2 gap-6">
+                           <div>
+                              <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Código Interno</label>
+                              <input
+                                 type="text"
+                                 value={formData.code}
+                                 onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
+                                 placeholder="Ej. S24"
+                                 className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-800 outline-none focus:ring-2 focus:ring-yellow-200 uppercase"
+                                 required
+                              />
+                           </div>
+                           <div>
+                              <label className="block text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1">
+                                 <Sun size={14} className="text-yellow-500" /> Multiplicador Demanda
+                              </label>
+                              <input
+                                 type="number"
+                                 step="0.1"
+                                 min="0.1"
+                                 value={formData.multiplier}
+                                 onChange={(e) => setFormData({ ...formData, multiplier: parseFloat(e.target.value) || 1.0 })}
+                                 className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-800 outline-none focus:ring-2 focus:ring-yellow-200"
+                                 placeholder="Ej. 1.5"
+                                 required
+                              />
+                           </div>
                         </div>
 
                         <div className="grid grid-cols-2 gap-6">
@@ -206,13 +227,51 @@ const SeasonForm: React.FC<SeasonFormProps> = ({
                               />
                            </div>
                         </div>
+
+                        <div>
+                           <label className="block text-xs font-bold text-gray-500 uppercase mb-3 flex items-center gap-2">
+                              Categorías Afectadas
+                              <span className="text-[10px] bg-gray-100 text-gray-400 px-2 py-0.5 rounded">Opcional</span>
+                           </label>
+                           <div className="flex flex-wrap gap-2">
+                              {categories.filter(c => c !== 'ALL').map(category => {
+                                 const isSelected = formData.affectedCategories.includes(category);
+                                 return (
+                                    <button
+                                       key={category}
+                                       type="button"
+                                       onClick={() => {
+                                          const current = new Set(formData.affectedCategories);
+                                          if (current.has(category)) current.delete(category);
+                                          else current.add(category);
+                                          setFormData({ ...formData, affectedCategories: Array.from(current) });
+                                       }}
+                                       className={`px-4 py-2 rounded-xl border text-sm font-bold transition-all ${isSelected
+                                          ? 'bg-yellow-500 border-yellow-500 text-white shadow-md'
+                                          : 'bg-white border-gray-200 text-gray-500 hover:border-yellow-300'
+                                          }`}
+                                    >
+                                       {category}
+                                    </button>
+                                 );
+                              })}
+                           </div>
+                        </div>
                      </div>
 
                      <div className="bg-yellow-50 p-6 rounded-2xl border border-yellow-100 flex items-start gap-4">
                         <Info className="text-yellow-600 mt-1" size={20} />
                         <div className="text-sm text-yellow-800">
                            <h4 className="font-bold mb-1">¿Para qué sirven las temporadas?</h4>
-                           <p>Agrupar productos por temporada permite crear <strong>reglas de promoción</strong> automáticas (Ej. "20% descuento en toda la colección Verano") y filtrar reportes de ventas por estación.</p>
+                           <p>Agrupar productos por temporada permite crear <strong>reglas de promoción</strong> automáticas y automatizar el cálculo de <strong>Min/Max</strong> dinámicamente según la demanda proyectada.</p>
+                        </div>
+                     </div>
+
+                     <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100 flex items-start gap-4">
+                        <Zap className="text-indigo-600 mt-1" size={20} />
+                        <div className="text-sm text-indigo-800">
+                           <h4 className="font-bold mb-1">¿Qué es el multiplicador de demanda?</h4>
+                           <p>Es un factor que ajusta las sugerencias de stock. Un valor de <strong>1.5</strong> aumentará los niveles un <strong>50%</strong> para anticipar picos de venta, mientras que <strong>0.8</strong> los reducirá para evitar exceso de inventario.</p>
                         </div>
                      </div>
                   </div>
@@ -271,8 +330,8 @@ const SeasonForm: React.FC<SeasonFormProps> = ({
                                     key={product.id}
                                     onClick={() => toggleProductSelection(product.id)}
                                     className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex items-center justify-between ${isSelected
-                                          ? 'bg-yellow-50 border-yellow-500 shadow-sm'
-                                          : 'bg-white border-gray-200 hover:border-yellow-200'
+                                       ? 'bg-yellow-50 border-yellow-500 shadow-sm'
+                                       : 'bg-white border-gray-200 hover:border-yellow-200'
                                        }`}
                                  >
                                     <div>
@@ -321,8 +380,8 @@ const SeasonForm: React.FC<SeasonFormProps> = ({
                </button>
             </div>
 
-         </form>
-      </div>
+         </form >
+      </div >
    );
 };
 

@@ -1,13 +1,15 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
    ArrowLeft, Users, UserPlus, Search, Phone, Mail, MapPin,
    Edit2, Trash2, Save, X, FileText, Award, Wallet as WalletIcon,
    TrendingUp, TrendingDown, AlertCircle, CreditCard, History, Check,
    MessageCircle, Star, Tag, ChevronRight, ShoppingBag,
-   Globe, Calendar, Map, Navigation, CheckSquare, Clock, Landmark, ShieldCheck, Zap, Gift
+   Globe, Calendar, Map, Navigation, CheckSquare, Clock, Landmark, ShieldCheck, Zap, Gift,
+   Loader2, AlertOctagon
 } from 'lucide-react';
 import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType, Wallet, LoyaltyCard } from '../types';
+import { dgiiService, DGIIResponse } from '../services/dgii/DGIIValidationService';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -49,19 +51,99 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    const [cardLinkInput, setCardLinkInput] = useState('');
    const [cardLinkType, setCardLinkType] = useState<'LOYALTY' | 'GIFT'>('LOYALTY');
 
+   // DGII Validation State
+   const [isValidatingRNC, setIsValidatingRNC] = useState(false);
+   const [validationError, setValidationError] = useState<string | null>(null);
+
+   // --- HYBRID SEARCH STATE ---
+   const [searchingDGII, setSearchingDGII] = useState(false);
+   const [remoteResult, setRemoteResult] = useState<Customer | null>(null);
+
+   const isRNC = (term: string) => /^\d{9,11}$/.test(term);
+
    const selectedCustomer = useMemo(() =>
       customers.find(c => c.id === selectedCustomerId),
       [customers, selectedCustomerId]);
 
    const filteredCustomers = useMemo(() => {
+      // If we have a remote result and search term matches its RNC, include it or prioritize it?
+      // Actually we'll handle remote result separately in the UI
       return customers.filter(c => {
-         const matchesSearch = (c.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+         const searchLower = searchTerm.toLowerCase();
+         const matchesSearch =
+            c.name.toLowerCase().includes(searchLower) ||
             c.phone?.includes(searchTerm) ||
+            c.email?.toLowerCase().includes(searchLower) ||
             c.taxId?.includes(searchTerm);
-         const matchesTag = filterTag === 'ALL' || c.tags?.includes(filterTag);
+
+         const matchesTag = filterTag === 'ALL' || (c.tags || []).includes(filterTag);
+
          return matchesSearch && matchesTag;
       });
    }, [customers, searchTerm, filterTag]);
+
+   // --- HYBRID SEARCH HANDLER ---
+   // Triggered on input change or debounced?
+   // For now let's trigger DGII search if it looks like an RNC and no local results
+   useEffect(() => {
+      const performRemoteSearch = async () => {
+         if (!isRNC(searchTerm)) {
+            setRemoteResult(null);
+            return;
+         }
+
+         // Check if we already have it locally
+         const localExists = customers.some(c => c.taxId === searchTerm);
+         if (localExists) {
+            setRemoteResult(null);
+            return;
+         }
+
+         setSearchingDGII(true);
+         try {
+            const data: DGIIResponse = await dgiiService.validateRNC(searchTerm);
+            if (data.status === 'ACTIVO' || data.status === 'INACTIVO') { // Show result even if inactive? Implementation plan says validateRNC
+               // Construct Temporary Customer
+               const tempCustomer: Customer = {
+                  id: `temp_${searchTerm}_${Date.now()}`,
+                  name: data.name || 'CONTRIBUYENTE DESCONOCIDO',
+                  taxId: data.rnc,
+                  fiscalStatus: data.status,
+                  isTemporary: true,
+                  verifiedAt: new Date().toISOString(),
+                  dgiiData: {
+                     commercialName: data.commercialName,
+                     economicActivity: data.economicActivity,
+                     regimeType: data.regimeType
+                  },
+                  defaultNcfType: data.status === 'ACTIVO' ? 'B01' : 'B02', // Auto-NCF logic
+                  // Defaults
+                  totalSpent: 0,
+                  currentDebt: 0,
+                  loyaltyPoints: 0,
+                  cards: [],
+                  balance: 0,
+                  currency: 'DOP',
+                  status: 'ACTIVE',
+                  lastActivity: new Date().toISOString(),
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString()
+               } as Customer;
+               setRemoteResult(tempCustomer);
+            } else {
+               setRemoteResult(null);
+            }
+         } catch (e) {
+            console.error("DGII Search failed", e);
+            setRemoteResult(null);
+         } finally {
+            setSearchingDGII(false);
+         }
+      };
+
+      const timer = setTimeout(performRemoteSearch, 800); // 800ms debounce
+      return () => clearTimeout(timer);
+   }, [searchTerm, customers]);
 
    // --- HANDLERS ---
 
@@ -126,6 +208,60 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       if (confirm('¿Eliminar cliente permanentemente?')) {
          onDeleteCustomer(id);
          if (selectedCustomerId === id) setSelectedCustomerId(null);
+      }
+   };
+
+   // --- DGII VALIDATION LOGIC ---
+   const handleValidateRNC = async () => {
+      const rnc = formData.taxId;
+      if (!rnc || rnc.length < 9) {
+         setValidationError('RNC/Cédula debe tener al menos 9 dígitos');
+         return;
+      }
+
+      setIsValidatingRNC(true);
+      setValidationError(null);
+
+      try {
+         const dgiiData: DGIIResponse = await dgiiService.validateRNC(rnc);
+
+         if (dgiiData.error) {
+            setValidationError(dgiiData.error);
+            setIsValidatingRNC(false);
+            return;
+         }
+
+         // Show warning if not ACTIVO
+         if (dgiiData.status !== 'ACTIVO') {
+            const message = `⚠️ ATENCIÓN: Contribuyente ${dgiiData.status}\n\n` +
+               `RNC: ${dgiiData.rnc}\n` +
+               `Nombre: ${dgiiData.name}\n\n` +
+               `Este contribuyente NO está vigente en DGII.\n` +
+               `No se puede emitir crédito fiscal B01.`;
+            alert(message);
+         }
+
+         // Auto-populate fields
+         setFormData({
+            ...formData,
+            name: dgiiData.name || formData.name,
+            fiscalStatus: dgiiData.status,
+            verifiedAt: new Date().toISOString(),
+            dgiiData: {
+               commercialName: dgiiData.commercialName,
+               economicActivity: dgiiData.economicActivity,
+               regimeType: dgiiData.regimeType
+            },
+            // Auto-set NCF type based on status
+            defaultNcfType: dgiiData.status === 'ACTIVO' ? 'B01' : 'B02'
+         });
+
+         setValidationError(null);
+      } catch (error) {
+         console.error('[CustomerManagement] DGII validation error:', error);
+         setValidationError('Error al consultar DGII. Verifique la conexión.');
+      } finally {
+         setIsValidatingRNC(false);
       }
    };
 
@@ -359,33 +495,87 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
                {/* List */}
                <div className="flex-1 overflow-y-auto">
-                  {filteredCustomers.map((customer, idx) => (
-                     <div
-                        key={customer.id || `cust-${idx}`}
-                        onClick={() => setSelectedCustomerId(customer.id)}
-                        className={`p-4 border-b border-gray-50 cursor-pointer transition-colors hover:bg-blue-50/50 flex items-center gap-3 ${selectedCustomerId === customer.id ? 'bg-blue-50 border-l-4 border-l-blue-500' : 'border-l-4 border-l-transparent'
-                           }`}
-                     >
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-slate-200 to-slate-300 flex items-center justify-center font-bold text-slate-600 text-sm">
-                           {customer.name.charAt(0)}
+                  {/* --- REMOTE RESULT (DGII) --- */}
+                  {remoteResult && (
+                     <div className="mb-4 animate-in fade-in slide-in-from-top-4">
+                        <div className="flex items-center gap-2 mb-2 px-1">
+                           <Globe size={14} className="text-blue-500" />
+                           <h4 className="text-xs font-black text-blue-500 uppercase tracking-widest">Directorio DGII (Nacional)</h4>
                         </div>
-                        <div className="flex-1 min-w-0">
-                           <h4 className={`font-bold text-sm truncate ${selectedCustomerId === customer.id ? 'text-blue-700' : 'text-gray-800'}`}>{customer.name}</h4>
-                           <div className="flex items-center gap-2">
-                              <p className="text-xs text-gray-400 truncate">{customer.phone || 'Sin contacto'}</p>
-                              <span className="text-[9px] font-black text-blue-500 bg-blue-50 px-1 rounded">{customer.defaultNcfType || 'B02'}</span>
+                        <div
+                           onClick={() => {
+                              setSelectedCustomerId(remoteResult.id);
+                              // If in select mode, we might want to select immediately?
+                              // But UI logic below shows details.
+                              // Hack: Since it's not in 'customers' list, selectedCustomer memo won't find it.
+                              // We need to handle this.
+                              if (onSelect) onSelect(remoteResult);
+                           }}
+                           className="bg-blue-50 border-2 border-blue-200 rounded-2xl p-4 cursor-pointer hover:bg-blue-100 transition-all group"
+                        >
+                           <div className="flex justify-between items-start">
+                              <div className="flex items-center gap-3">
+                                 <div className="w-10 h-10 rounded-full bg-blue-200 text-blue-700 flex items-center justify-center font-black text-md">
+                                    DG
+                                 </div>
+                                 <div>
+                                    <h3 className="font-bold text-gray-800 group-hover:text-blue-800">{remoteResult.name}</h3>
+                                    <div className="flex items-center gap-2 mt-0.5">
+                                       <span className="text-xs font-mono font-bold text-gray-500">{remoteResult.taxId}</span>
+                                       <span className="px-1.5 py-0.5 bg-green-200 text-green-800 text-[9px] font-black rounded uppercase">
+                                          {remoteResult.fiscalStatus}
+                                       </span>
+                                       <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-800 text-[9px] font-black rounded uppercase ml-1">
+                                          TEMPORAL
+                                       </span>
+                                    </div>
+                                 </div>
+                              </div>
+                              <div className="p-2 bg-white rounded-xl text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                                 <ChevronRight size={18} />
+                              </div>
                            </div>
                         </div>
-                        {(customer.currentDebt || 0) > 0 && (
-                           <span className="text-[10px] font-bold text-red-500 bg-red-50 px-2 py-0.5 rounded-full">
-                              -${customer.currentDebt}
-                           </span>
-                        )}
                      </div>
-                  ))}
-                  {filteredCustomers.length === 0 && (
-                     <div className="p-8 text-center text-gray-400 text-sm">No se encontraron clientes.</div>
                   )}
+
+                  {/* LOADING STATE */}
+                  {searchingDGII && (
+                     <div className="p-4 flex items-center justify-center gap-3 text-gray-400 bg-gray-50 rounded-2xl border border-dashed border-gray-200 mb-4">
+                        <Loader2 size={16} className="animate-spin" />
+                        <span className="text-xs font-bold">Consultando DGII...</span>
+                     </div>
+                  )}
+
+                  <div className="space-y-2">
+                     {filteredCustomers.map((customer, idx) => (
+                        <div
+                           key={customer.id || `cust-${idx}`}
+                           onClick={() => setSelectedCustomerId(customer.id)}
+                           className={`p-4 border-b border-gray-50 cursor-pointer transition-colors hover:bg-blue-50/50 flex items-center gap-3 ${selectedCustomerId === customer.id ? 'bg-blue-50 border-l-4 border-l-blue-500' : 'border-l-4 border-l-transparent'
+                              }`}
+                        >
+                           <div className="w-10 h-10 rounded-full bg-gradient-to-br from-slate-200 to-slate-300 flex items-center justify-center font-bold text-slate-600 text-sm">
+                              {customer.name.charAt(0)}
+                           </div>
+                           <div className="flex-1 min-w-0">
+                              <h4 className={`font-bold text-sm truncate ${selectedCustomerId === customer.id ? 'text-blue-700' : 'text-gray-800'}`}>{customer.name}</h4>
+                              <div className="flex items-center gap-2">
+                                 <p className="text-xs text-gray-400 truncate">{customer.phone || 'Sin contacto'}</p>
+                                 <span className="text-[9px] font-black text-blue-500 bg-blue-50 px-1 rounded">{customer.defaultNcfType || 'B02'}</span>
+                              </div>
+                           </div>
+                           {(customer.currentDebt || 0) > 0 && (
+                              <span className="text-[10px] font-bold text-red-500 bg-red-50 px-2 py-0.5 rounded-full">
+                                 -${customer.currentDebt}
+                              </span>
+                           )}
+                        </div>
+                     ))}
+                     {filteredCustomers.length === 0 && !remoteResult && (
+                        <div className="p-8 text-center text-gray-400 text-sm">No se encontraron clientes.</div>
+                     )}
+                  </div>
                </div>
             </div>
 
@@ -711,292 +901,298 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
          </div>
 
          {/* EDIT MODAL */}
-         {isEditModalOpen && (
-            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-               <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-                  <div className="p-5 border-b border-gray-100 bg-gray-50">
-                     <div className="flex justify-between items-center mb-4">
-                        <h3 className="font-bold text-lg text-gray-800">{formData.id ? 'Editar Cliente' : 'Nuevo Cliente'}</h3>
-                        <button onClick={() => setIsEditModalOpen(false)} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X size={20} /></button>
-                     </div>
-
-                     <div className="flex gap-4">
-                        <button
-                           onClick={() => setEditModalTab('GENERAL')}
-                           className={`pb-2 text-sm font-bold border-b-2 transition-all ${editModalTab === 'GENERAL' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-                        >
-                           General & Fiscal
-                        </button>
-                        <button
-                           onClick={() => setEditModalTab('ADDRESSES')}
-                           className={`pb-2 text-sm font-bold border-b-2 transition-all ${editModalTab === 'ADDRESSES' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-                        >
-                           Direcciones ({formData.addresses?.length || 0})
-                        </button>
-                     </div>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto p-6">
-                     {editModalTab === 'GENERAL' ? (
-                        <form onSubmit={handleSubmit} className="space-y-6">
-                           <div className="space-y-4">
-                              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Información Básica</h4>
-                              <div>
-                                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre Completo *</label>
-                                 <input required type="text" value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
-                              </div>
-                              <div className="grid grid-cols-2 gap-4">
-                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Teléfono</label>
-                                    <input type="tel" value={formData.phone || ''} onChange={e => setFormData({ ...formData, phone: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
-                                 </div>
-                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Email</label>
-                                    <input type="email" value={formData.email || ''} onChange={e => setFormData({ ...formData, email: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
-                                 </div>
-                              </div>
-
-                              {/* FISCAL SECTION (Edición destacada) */}
-                              <div className="p-6 bg-slate-50 rounded-[2rem] border-2 border-slate-200 space-y-4">
-                                 <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                                    <Landmark size={14} className="text-blue-500" /> Configuración de Facturación
-                                 </h4>
-                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                       <label className="block text-[10px] font-black text-slate-500 uppercase mb-1 ml-1">RNC / Cédula / Identificación</label>
-                                       <input
-                                          type="text"
-                                          value={formData.taxId || ''}
-                                          onChange={e => setFormData({ ...formData, taxId: e.target.value })}
-                                          placeholder="101555559"
-                                          className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-mono font-bold"
-                                       />
-                                    </div>
-                                    <div>
-                                       <label className="block text-[10px] font-black text-slate-500 uppercase mb-1 ml-1">Tipo de Comprobante (NCF)</label>
-                                       <select
-                                          value={formData.defaultNcfType || 'B02'}
-                                          onChange={e => setFormData({ ...formData, defaultNcfType: e.target.value as NCFType })}
-                                          className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-black text-sm text-blue-700"
-                                       >
-                                          <option value="B02">Factura de Consumo (B02)</option>
-                                          <option value="B01">Crédito Fiscal (B01)</option>
-                                          <option value="B14">Regímenes Especiales (B14)</option>
-                                          <option value="B15">Gubernamental (B15)</option>
-                                       </select>
-                                    </div>
-                                 </div>
-                              </div>
-                           </div>
-
-                           <div className="pt-4 border-t border-gray-100 space-y-4">
-                              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Datos Financieros</h4>
-                              <div className="grid grid-cols-2 gap-4">
-                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Límite Crédito</label>
-                                    <input type="number" value={formData.creditLimit || 0} onChange={e => setFormData({ ...formData, creditLimit: parseFloat(e.target.value) })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-mono" />
-                                 </div>
-                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Días de Crédito</label>
-                                    <input type="number" value={formData.creditDays || 0} onChange={e => setFormData({ ...formData, creditDays: parseInt(e.target.value) })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
-                                 </div>
-                              </div>
-
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
-                                 <BooleanField label="Enviar Doc. por Email" checked={formData.prefersEmail || false} onChange={v => setFormData({ ...formData, prefersEmail: v })} />
-                                 <BooleanField label="Exento de Impuestos" checked={formData.isTaxExempt || false} onChange={v => setFormData({ ...formData, isTaxExempt: v })} />
-                              </div>
-                           </div>
-                        </form>
-                     ) : (
-                        <div className="space-y-4">
-                           <div className="flex justify-between items-center mb-4">
-                              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Mis Direcciones</h4>
-                              <button onClick={handleAddAddress} className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-1">
-                                 <MapPin size={12} /> Agregar Dirección
-                              </button>
-                           </div>
-
-                           {formData.addresses && formData.addresses.length > 0 ? (
-                              <div className="grid grid-cols-1 gap-3">
-                                 {formData.addresses.map(addr => (
-                                    <div key={addr.id} className="p-4 rounded-xl border border-gray-200 hover:border-blue-300 transition-all bg-white relative group">
-                                       <div className="flex justify-between items-start mb-2">
-                                          <div className="flex gap-2 items-center">
-                                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${addr.type === 'BILLING' ? 'bg-indigo-50 text-indigo-600' : 'bg-orange-50 text-orange-600'}`}>
-                                                {addr.type === 'BILLING' ? 'Facturación' : 'Envío'}
-                                             </span>
-                                             {addr.isDefault && (
-                                                <span className="text-[10px] font-bold bg-green-50 text-green-600 px-2 py-0.5 rounded border border-green-100">
-                                                   Principal
-                                                </span>
-                                             )}
-                                          </div>
-                                          <div className="flex gap-2">
-                                             <button onClick={() => handleEditAddress(addr)} className="text-gray-400 hover:text-blue-500"><Edit2 size={16} /></button>
-                                             <button onClick={() => handleDeleteAddress(addr.id)} className="text-gray-400 hover:text-red-500"><Trash2 size={16} /></button>
-                                          </div>
-                                       </div>
-                                       <p className="text-sm font-bold text-gray-800">{addr.street} #{addr.number}</p>
-                                       <p className="text-xs text-gray-500">{addr.city}, {addr.state} ({addr.zipCode})</p>
-                                       <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
-                                          <Globe size={10} /> {addr.country}
-                                       </p>
-                                    </div>
-                                 ))}
-                              </div>
-                           ) : (
-                              <div className="text-center py-10 bg-gray-50 rounded-xl border border-dashed border-gray-200 text-gray-400">
-                                 <MapPin size={32} className="mx-auto mb-2 opacity-50" />
-                                 <p className="text-sm">No hay direcciones registradas.</p>
-                              </div>
-                           )}
+         {
+            isEditModalOpen && (
+               <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+                  <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+                     <div className="p-5 border-b border-gray-100 bg-gray-50">
+                        <div className="flex justify-between items-center mb-4">
+                           <h3 className="font-bold text-lg text-gray-800">{formData.id ? 'Editar Cliente' : 'Nuevo Cliente'}</h3>
+                           <button onClick={() => setIsEditModalOpen(false)} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X size={20} /></button>
                         </div>
-                     )}
-                  </div>
 
-                  <div className="p-5 border-t border-gray-100 flex gap-3 bg-white">
-                     <button onClick={() => setIsEditModalOpen(false)} className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition-colors">Cancelar</button>
-                     <button onClick={handleSubmit} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-md hover:bg-blue-700 transition-colors">Guardar Cliente</button>
+                        <div className="flex gap-4">
+                           <button
+                              onClick={() => setEditModalTab('GENERAL')}
+                              className={`pb-2 text-sm font-bold border-b-2 transition-all ${editModalTab === 'GENERAL' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                           >
+                              General & Fiscal
+                           </button>
+                           <button
+                              onClick={() => setEditModalTab('ADDRESSES')}
+                              className={`pb-2 text-sm font-bold border-b-2 transition-all ${editModalTab === 'ADDRESSES' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                           >
+                              Direcciones ({formData.addresses?.length || 0})
+                           </button>
+                        </div>
+                     </div>
+
+                     <div className="flex-1 overflow-y-auto p-6">
+                        {editModalTab === 'GENERAL' ? (
+                           <form onSubmit={handleSubmit} className="space-y-6">
+                              <div className="space-y-4">
+                                 <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Información Básica</h4>
+                                 <div>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre Completo *</label>
+                                    <input required type="text" value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+                                 </div>
+                                 <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Teléfono</label>
+                                       <input type="tel" value={formData.phone || ''} onChange={e => setFormData({ ...formData, phone: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+                                    </div>
+                                    <div>
+                                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Email</label>
+                                       <input type="email" value={formData.email || ''} onChange={e => setFormData({ ...formData, email: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+                                    </div>
+                                 </div>
+
+                                 {/* FISCAL SECTION (Edición destacada) */}
+                                 <div className="p-6 bg-slate-50 rounded-[2rem] border-2 border-slate-200 space-y-4">
+                                    <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                                       <Landmark size={14} className="text-blue-500" /> Configuración de Facturación
+                                    </h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                       <div>
+                                          <label className="block text-[10px] font-black text-slate-500 uppercase mb-1 ml-1">RNC / Cédula / Identificación</label>
+                                          <input
+                                             type="text"
+                                             value={formData.taxId || ''}
+                                             onChange={e => setFormData({ ...formData, taxId: e.target.value })}
+                                             placeholder="101555559"
+                                             className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-mono font-bold"
+                                          />
+                                       </div>
+                                       <div>
+                                          <label className="block text-[10px] font-black text-slate-500 uppercase mb-1 ml-1">Tipo de Comprobante (NCF)</label>
+                                          <select
+                                             value={formData.defaultNcfType || 'B02'}
+                                             onChange={e => setFormData({ ...formData, defaultNcfType: e.target.value as NCFType })}
+                                             className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-black text-sm text-blue-700"
+                                          >
+                                             <option value="B02">Factura de Consumo (B02)</option>
+                                             <option value="B01">Crédito Fiscal (B01)</option>
+                                             <option value="B14">Regímenes Especiales (B14)</option>
+                                             <option value="B15">Gubernamental (B15)</option>
+                                          </select>
+                                       </div>
+                                    </div>
+                                 </div>
+                              </div>
+
+                              <div className="pt-4 border-t border-gray-100 space-y-4">
+                                 <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Datos Financieros</h4>
+                                 <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Límite Crédito</label>
+                                       <input type="number" value={formData.creditLimit || 0} onChange={e => setFormData({ ...formData, creditLimit: parseFloat(e.target.value) })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-mono" />
+                                    </div>
+                                    <div>
+                                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Días de Crédito</label>
+                                       <input type="number" value={formData.creditDays || 0} onChange={e => setFormData({ ...formData, creditDays: parseInt(e.target.value) })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+                                    </div>
+                                 </div>
+
+                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+                                    <BooleanField label="Enviar Doc. por Email" checked={formData.prefersEmail || false} onChange={v => setFormData({ ...formData, prefersEmail: v })} />
+                                    <BooleanField label="Exento de Impuestos" checked={formData.isTaxExempt || false} onChange={v => setFormData({ ...formData, isTaxExempt: v })} />
+                                 </div>
+                              </div>
+                           </form>
+                        ) : (
+                           <div className="space-y-4">
+                              <div className="flex justify-between items-center mb-4">
+                                 <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Mis Direcciones</h4>
+                                 <button onClick={handleAddAddress} className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-1">
+                                    <MapPin size={12} /> Agregar Dirección
+                                 </button>
+                              </div>
+
+                              {formData.addresses && formData.addresses.length > 0 ? (
+                                 <div className="grid grid-cols-1 gap-3">
+                                    {formData.addresses.map(addr => (
+                                       <div key={addr.id} className="p-4 rounded-xl border border-gray-200 hover:border-blue-300 transition-all bg-white relative group">
+                                          <div className="flex justify-between items-start mb-2">
+                                             <div className="flex gap-2 items-center">
+                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${addr.type === 'BILLING' ? 'bg-indigo-50 text-indigo-600' : 'bg-orange-50 text-orange-600'}`}>
+                                                   {addr.type === 'BILLING' ? 'Facturación' : 'Envío'}
+                                                </span>
+                                                {addr.isDefault && (
+                                                   <span className="text-[10px] font-bold bg-green-50 text-green-600 px-2 py-0.5 rounded border border-green-100">
+                                                      Principal
+                                                   </span>
+                                                )}
+                                             </div>
+                                             <div className="flex gap-2">
+                                                <button onClick={() => handleEditAddress(addr)} className="text-gray-400 hover:text-blue-500"><Edit2 size={16} /></button>
+                                                <button onClick={() => handleDeleteAddress(addr.id)} className="text-gray-400 hover:text-red-500"><Trash2 size={16} /></button>
+                                             </div>
+                                          </div>
+                                          <p className="text-sm font-bold text-gray-800">{addr.street} #{addr.number}</p>
+                                          <p className="text-xs text-gray-500">{addr.city}, {addr.state} ({addr.zipCode})</p>
+                                          <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+                                             <Globe size={10} /> {addr.country}
+                                          </p>
+                                       </div>
+                                    ))}
+                                 </div>
+                              ) : (
+                                 <div className="text-center py-10 bg-gray-50 rounded-xl border border-dashed border-gray-200 text-gray-400">
+                                    <MapPin size={32} className="mx-auto mb-2 opacity-50" />
+                                    <p className="text-sm">No hay direcciones registradas.</p>
+                                 </div>
+                              )}
+                           </div>
+                        )}
+                     </div>
+
+                     <div className="p-5 border-t border-gray-100 flex gap-3 bg-white">
+                        <button onClick={() => setIsEditModalOpen(false)} className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition-colors">Cancelar</button>
+                        <button onClick={handleSubmit} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-md hover:bg-blue-700 transition-colors">Guardar Cliente</button>
+                     </div>
                   </div>
                </div>
-            </div>
-         )}
+            )
+         }
 
          {/* ADDRESS FORM SUB-MODAL */}
-         {isAddressFormOpen && (
-            <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-               <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
-                  <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                     <h3 className="font-bold text-gray-800">Detalle de Dirección</h3>
-                     <button onClick={() => setIsAddressFormOpen(false)} className="p-1 hover:bg-gray-200 rounded-full text-gray-500"><X size={18} /></button>
-                  </div>
-                  <div className="p-6 overflow-y-auto space-y-4">
-                     <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tipo</label>
-                        <div className="flex gap-2">
-                           {['BILLING', 'SHIPPING'].map(t => (
-                              <button
-                                 key={t}
-                                 onClick={() => setEditingAddress({ ...editingAddress, type: t as any })}
-                                 className={`flex-1 py-2 rounded-lg text-xs font-bold border-2 transition-all ${editingAddress.type === t ? 'bg-blue-50 border-blue-500 text-blue-600' : 'bg-white border-gray-200 text-gray-400'}`}
-                              >
-                                 {t === 'BILLING' ? 'Facturación' : 'Envío'}
-                              </button>
-                           ))}
-                        </div>
+         {
+            isAddressFormOpen && (
+               <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+                  <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+                     <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                        <h3 className="font-bold text-gray-800">Detalle de Dirección</h3>
+                        <button onClick={() => setIsAddressFormOpen(false)} className="p-1 hover:bg-gray-200 rounded-full text-gray-500"><X size={18} /></button>
                      </div>
-                     <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Calle y Número</label>
-                        <div className="flex gap-2">
-                           <input type="text" placeholder="Calle Principal" value={editingAddress.street || ''} onChange={e => setEditingAddress({ ...editingAddress, street: e.target.value })} className="flex-[3] p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
-                           <input type="text" placeholder="#" value={editingAddress.number || ''} onChange={e => setEditingAddress({ ...editingAddress, number: e.target.value })} className="flex-1 p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
-                        </div>
-                     </div>
-                     <div className="grid grid-cols-2 gap-2">
+                     <div className="p-6 overflow-y-auto space-y-4">
                         <div>
-                           <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Ciudad</label>
-                           <input type="text" value={editingAddress.city || ''} onChange={e => setEditingAddress({ ...editingAddress, city: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
-                        </div>
-                        <div>
-                           <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Provincia</label>
-                           <input type="text" value={editingAddress.state || ''} onChange={e => setEditingAddress({ ...editingAddress, state: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
-                        </div>
-                     </div>
-                     <div className="grid grid-cols-2 gap-2">
-                        <div>
-                           <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Código Postal</label>
-                           <input type="text" value={editingAddress.zipCode || ''} onChange={e => setEditingAddress({ ...editingAddress, zipCode: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
-                        </div>
-                        <div>
-                           <label className="block text-xs font-bold text-gray-500 uppercase mb-1">País</label>
-                           <input type="text" value={editingAddress.country || 'RD'} onChange={e => setEditingAddress({ ...editingAddress, country: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
-                        </div>
-                     </div>
-                     <BooleanField label="Dirección Principal" checked={editingAddress.isDefault || false} onChange={v => setEditingAddress({ ...editingAddress, isDefault: v })} />
-                  </div>
-                  <div className="p-4 bg-gray-50 border-t border-gray-100">
-                     <button onClick={handleSaveAddress} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold shadow-md hover:bg-blue-700 transition-colors">
-                        Guardar Dirección
-                     </button>
-                  </div>
-               </div>
-            </div>
-         )}
-
-         {/* LINK CARD MODAL */}
-         {isLinkCardOpen && (
-            <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-               <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
-                  <div className="p-6 text-center">
-                     <div className="w-16 h-16 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <CreditCard size={32} />
-                     </div>
-                     <h3 className="text-xl font-black text-gray-800 mb-2">Vincular Tarjeta</h3>
-                     <p className="text-sm text-gray-500 mb-6">Escanea una tarjeta física o genera una digital.</p>
-
-                     <div className="space-y-4">
-                        <div className="flex bg-gray-100 p-1 rounded-xl mb-4">
-                           <button
-                              onClick={() => setCardLinkType('LOYALTY')}
-                              className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${cardLinkType === 'LOYALTY' ? 'bg-white shadow text-purple-600' : 'text-gray-500'}`}
-                           >
-                              Fidelización
-                           </button>
-                           <button
-                              onClick={() => setCardLinkType('GIFT')}
-                              className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${cardLinkType === 'GIFT' ? 'bg-white shadow text-pink-600' : 'text-gray-500'}`}
-                           >
-                              Regalo
-                           </button>
-                        </div>
-
-                        <div>
-                           <label className="block text-xs font-bold text-gray-400 uppercase mb-1 text-left">Número de Tarjeta</label>
+                           <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tipo</label>
                            <div className="flex gap-2">
-                              <input
-                                 type="text"
-                                 autoFocus
-                                 value={cardLinkInput}
-                                 onChange={(e) => setCardLinkInput(e.target.value)}
-                                 placeholder="Escanea o escribe..."
-                                 className="flex-1 p-3 bg-gray-50 border border-gray-200 rounded-xl font-mono font-bold outline-none focus:ring-2 focus:ring-purple-500"
-                                 onKeyDown={(e) => {
-                                    if (e.key === 'Enter' && cardLinkInput) confirmLinkCard(cardLinkInput);
-                                 }}
-                              />
-                              <button
-                                 onClick={() => confirmLinkCard(cardLinkInput)}
-                                 disabled={!cardLinkInput}
-                                 className="p-3 bg-purple-600 text-white rounded-xl disabled:opacity-50"
-                              >
-                                 <Check size={20} />
-                              </button>
+                              {['BILLING', 'SHIPPING'].map(t => (
+                                 <button
+                                    key={t}
+                                    onClick={() => setEditingAddress({ ...editingAddress, type: t as any })}
+                                    className={`flex-1 py-2 rounded-lg text-xs font-bold border-2 transition-all ${editingAddress.type === t ? 'bg-blue-50 border-blue-500 text-blue-600' : 'bg-white border-gray-200 text-gray-400'}`}
+                                 >
+                                    {t === 'BILLING' ? 'Facturación' : 'Envío'}
+                                 </button>
+                              ))}
                            </div>
                         </div>
-
-                        <div className="relative flex py-2 items-center">
-                           <div className="flex-grow border-t border-gray-100"></div>
-                           <span className="flex-shrink-0 mx-4 text-xs text-gray-400 font-bold uppercase">O bien</span>
-                           <div className="flex-grow border-t border-gray-100"></div>
+                        <div>
+                           <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Calle y Número</label>
+                           <div className="flex gap-2">
+                              <input type="text" placeholder="Calle Principal" value={editingAddress.street || ''} onChange={e => setEditingAddress({ ...editingAddress, street: e.target.value })} className="flex-[3] p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+                              <input type="text" placeholder="#" value={editingAddress.number || ''} onChange={e => setEditingAddress({ ...editingAddress, number: e.target.value })} className="flex-1 p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+                           </div>
                         </div>
-
-                        <button
-                           onClick={generateDigitalCard}
-                           className="w-full py-3 bg-gray-50 text-gray-600 hover:bg-gray-100 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors"
-                        >
-                           <Zap size={18} className="text-yellow-500" /> Generar Tarjeta Digital
+                        <div className="grid grid-cols-2 gap-2">
+                           <div>
+                              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Ciudad</label>
+                              <input type="text" value={editingAddress.city || ''} onChange={e => setEditingAddress({ ...editingAddress, city: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+                           </div>
+                           <div>
+                              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Provincia</label>
+                              <input type="text" value={editingAddress.state || ''} onChange={e => setEditingAddress({ ...editingAddress, state: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+                           </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                           <div>
+                              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Código Postal</label>
+                              <input type="text" value={editingAddress.zipCode || ''} onChange={e => setEditingAddress({ ...editingAddress, zipCode: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+                           </div>
+                           <div>
+                              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">País</label>
+                              <input type="text" value={editingAddress.country || 'RD'} onChange={e => setEditingAddress({ ...editingAddress, country: e.target.value })} className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+                           </div>
+                        </div>
+                        <BooleanField label="Dirección Principal" checked={editingAddress.isDefault || false} onChange={v => setEditingAddress({ ...editingAddress, isDefault: v })} />
+                     </div>
+                     <div className="p-4 bg-gray-50 border-t border-gray-100">
+                        <button onClick={handleSaveAddress} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold shadow-md hover:bg-blue-700 transition-colors">
+                           Guardar Dirección
                         </button>
                      </div>
                   </div>
-                  <div className="p-4 bg-gray-50 border-t border-gray-100 text-center">
-                     <button onClick={() => setIsLinkCardOpen(false)} className="text-sm font-bold text-gray-400 hover:text-gray-600">Cancelar</button>
+               </div>
+            )
+         }
+
+         {/* LINK CARD MODAL */}
+         {
+            isLinkCardOpen && (
+               <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+                  <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+                     <div className="p-6 text-center">
+                        <div className="w-16 h-16 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                           <CreditCard size={32} />
+                        </div>
+                        <h3 className="text-xl font-black text-gray-800 mb-2">Vincular Tarjeta</h3>
+                        <p className="text-sm text-gray-500 mb-6">Escanea una tarjeta física o genera una digital.</p>
+
+                        <div className="space-y-4">
+                           <div className="flex bg-gray-100 p-1 rounded-xl mb-4">
+                              <button
+                                 onClick={() => setCardLinkType('LOYALTY')}
+                                 className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${cardLinkType === 'LOYALTY' ? 'bg-white shadow text-purple-600' : 'text-gray-500'}`}
+                              >
+                                 Fidelización
+                              </button>
+                              <button
+                                 onClick={() => setCardLinkType('GIFT')}
+                                 className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${cardLinkType === 'GIFT' ? 'bg-white shadow text-pink-600' : 'text-gray-500'}`}
+                              >
+                                 Regalo
+                              </button>
+                           </div>
+
+                           <div>
+                              <label className="block text-xs font-bold text-gray-400 uppercase mb-1 text-left">Número de Tarjeta</label>
+                              <div className="flex gap-2">
+                                 <input
+                                    type="text"
+                                    autoFocus
+                                    value={cardLinkInput}
+                                    onChange={(e) => setCardLinkInput(e.target.value)}
+                                    placeholder="Escanea o escribe..."
+                                    className="flex-1 p-3 bg-gray-50 border border-gray-200 rounded-xl font-mono font-bold outline-none focus:ring-2 focus:ring-purple-500"
+                                    onKeyDown={(e) => {
+                                       if (e.key === 'Enter' && cardLinkInput) confirmLinkCard(cardLinkInput);
+                                    }}
+                                 />
+                                 <button
+                                    onClick={() => confirmLinkCard(cardLinkInput)}
+                                    disabled={!cardLinkInput}
+                                    className="p-3 bg-purple-600 text-white rounded-xl disabled:opacity-50"
+                                 >
+                                    <Check size={20} />
+                                 </button>
+                              </div>
+                           </div>
+
+                           <div className="relative flex py-2 items-center">
+                              <div className="flex-grow border-t border-gray-100"></div>
+                              <span className="flex-shrink-0 mx-4 text-xs text-gray-400 font-bold uppercase">O bien</span>
+                              <div className="flex-grow border-t border-gray-100"></div>
+                           </div>
+
+                           <button
+                              onClick={generateDigitalCard}
+                              className="w-full py-3 bg-gray-50 text-gray-600 hover:bg-gray-100 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors"
+                           >
+                              <Zap size={18} className="text-yellow-500" /> Generar Tarjeta Digital
+                           </button>
+                        </div>
+                     </div>
+                     <div className="p-4 bg-gray-50 border-t border-gray-100 text-center">
+                        <button onClick={() => setIsLinkCardOpen(false)} className="text-sm font-bold text-gray-400 hover:text-gray-600">Cancelar</button>
+                     </div>
                   </div>
                </div>
-            </div>
-         )}
+            )
+         }
 
-      </div>
+      </div >
    );
 };
 

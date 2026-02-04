@@ -35,7 +35,9 @@ export const getCollection = (name: string): any[] => {
                     customers: ['tags', 'addresses'],
                     transactions: ['items', 'payments', 'customerSnapshot', 'relatedTransactions'],
                     receptions: ['items'],
-                    users: [] // No JSON fields
+                    z_reports: ['totalsByMethod', 'cashExpected', 'cashCounted', 'cashDiscrepancy', 'stats'],
+                    users: [], // No JSON fields
+                    transaction_history: ['items', 'payments', 'customerSnapshot', 'relatedTransactions']
                 };
 
                 // Boolean conversion for dedicated tables
@@ -44,6 +46,7 @@ export const getCollection = (name: string): any[] => {
                     warehouses: ['allowPosSale', 'allowNegativeStock', 'isMain'],
                     customers: ['requiresFiscalInvoice', 'prefersEmail', 'isTaxExempt', 'applyChainedTax'],
                     transactions: ['isTaxIncluded'],
+                    transaction_history: ['isTaxIncluded'],
                     products: ['hasActivePromotion'] // UI flag if present
                 };
 

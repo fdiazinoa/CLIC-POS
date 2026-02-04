@@ -53,7 +53,10 @@ const SEED_DATA = {
   internalSequences: DEFAULT_DOCUMENT_SERIES as DocumentSeries[],
   fiscalRanges: [
     { id: 'fr1', type: 'B01', prefix: 'B01', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
-    { id: 'fr2', type: 'B02', prefix: 'B02', startNumber: 1, endNumber: 50000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true }
+    { id: 'fr2', type: 'B02', prefix: 'B02', startNumber: 1, endNumber: 50000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
+    { id: 'fr3', type: 'B04', prefix: 'B04', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
+    { id: 'fr4', type: 'B14', prefix: 'B14', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
+    { id: 'fr5', type: 'B15', prefix: 'B15', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true }
   ] as FiscalRangeDGII[],
   fiscalAllocations: [] as FiscalAllocation[],
   localFiscalBuffer: [] as LocalFiscalBuffer[],
@@ -77,7 +80,10 @@ const SEED_DATA = {
   ] as Coupon[],
   zReports: [] as ZReport[],
   receptions: [] as Reception[],
-  productStocks: [] as ProductStock[]
+  productStocks: [] as ProductStock[],
+  wallets: [] as any[],
+  walletTransactions: [] as any[],
+  supplierProductPrices: [] as any[]
 };
 
 export const db = {
@@ -283,6 +289,11 @@ export const db = {
           break;
 
 
+        case 'supplier_product_prices':
+          await dbAdapter.saveCollection('supplierProductPrices', []);
+          console.log('✅ Supplier product prices cleared');
+          break;
+
         default:
           console.warn(`⚠️ Unknown category: ${category.id}`);
       }
@@ -342,6 +353,10 @@ export const db = {
 
   deleteDocument: async (collection: keyof typeof SEED_DATA, id: string) => {
     await dbAdapter.deleteDocument(collection as string, id);
+  },
+
+  getDocument: async (collection: keyof typeof SEED_DATA, id: string) => {
+    return await dbAdapter.getDocument(collection as string, id);
   },
 
   canRequestMoreNCF: async (type: NCFType): Promise<boolean> => {
@@ -471,7 +486,6 @@ export const db = {
   },
 
   recordInventoryMovements: async (movements: { warehouseId: string, productId: string, concept: LedgerConcept, documentRef: string, qty: number, movementCost?: number, terminalId?: string }[]): Promise<InventoryLedgerEntry[]> => {
-    const ledger = await dbAdapter.getCollection<InventoryLedgerEntry>('inventoryLedger') || [];
     const newEntries: InventoryLedgerEntry[] = [];
 
     for (const move of movements) {
@@ -493,11 +507,11 @@ export const db = {
         terminalId: move.terminalId || 'LOCAL',
         syncStatus: 'PENDING'
       };
+
+      // OPTIMIZATION: Save each entry individually to avoid rewriting the whole ledger
+      await dbAdapter.saveDocument('inventoryLedger', newEntry);
       newEntries.push(newEntry);
     }
-
-    const newLedger = [...ledger, ...newEntries];
-    await dbAdapter.saveCollection('inventoryLedger', newLedger);
 
     // Recalculate all affected products
     const uniqueProductWarehousePairs = Array.from(new Set(movements.map(m => `${m.productId}|${m.warehouseId}`)));
@@ -522,20 +536,25 @@ export const db = {
     console.log(`🔄 Recalculating stock for Product: ${productId}, Warehouse: ${warehouseId}`);
 
     // 1. Get all ledger entries
-    const ledger = await dbAdapter.getCollection<InventoryLedgerEntry>('inventoryLedger') || [];
+    const ledger = await dbAdapter.getCollection<InventoryLedgerEntry>('inventoryLedger');
 
-    // 2. Deduplicate entire ledger by ID (cleanup legacy duplicates)
-    const seenIds = new Set<string>();
-    const uniqueLedger = ledger.filter(e => {
-      if (seenIds.has(e.id)) return false;
-      seenIds.add(e.id);
-      return true;
-    });
+    if (!ledger || !Array.isArray(ledger)) {
+      console.error(`❌ Recalculate Error: Could not fetch 'inventoryLedger' collection for product ${productId}. Aborting to prevent data wipe!`);
+      return;
+    }
 
-    // 3. Filter entries for this product/warehouse
-    const productEntries = uniqueLedger.filter(e => e.productId === productId && e.warehouseId === warehouseId);
+    console.log(`📊 Recalculate: ${ledger.length} total entries loaded from DB`);
 
-    // 4. Stable Sort: Chronological + ID as tie-breaker
+    // 2. Filter entries for this product/warehouse
+    const productEntries = ledger.filter(e => e.productId === productId && e.warehouseId === warehouseId);
+    console.log(`🔍 Recalculate: ${productEntries.length} entries match Product: ${productId}, Warehouse: ${warehouseId}`);
+
+    // If no entries found AND the product currently has stock, this is highly suspicious
+    if (productEntries.length === 0) {
+      console.warn(`⚠️ Recalculate: No ledger entries found for ${productId} @ ${warehouseId}. Resulting stock will be 0.`);
+    }
+
+    // 3. Stable Sort: Chronological + ID as tie-breaker
     productEntries.sort((a, b) => {
       const timeA = new Date(a.createdAt).getTime();
       const timeB = new Date(b.createdAt).getTime();
@@ -543,9 +562,13 @@ export const db = {
       return a.id.localeCompare(b.id);
     });
 
-    // 5. Recalculate balances
+    // Recalculate balances
     let currentBalance = 0;
     let currentAvgCost = 0;
+
+    // OPTIMIZATION: We only update the ledger entries in memory for this product/warehouse.
+    // We DON'T save the whole ledger collection here because it's massive.
+    // Instead, we update the product master directly at the end.
 
     for (const entry of productEntries) {
       currentBalance += (entry.qtyIn - entry.qtyOut);
@@ -556,12 +579,14 @@ export const db = {
         currentAvgCost = currentBalance > 0 ? totalValue / currentBalance : entry.unitCost;
       }
 
+      // PERSIST: Update the entry with calculated balance
       entry.balanceQty = currentBalance;
       entry.balanceAvgCost = currentAvgCost;
-    }
 
-    // 6. Save updated unique ledger
-    await dbAdapter.saveCollection('inventoryLedger', uniqueLedger);
+      // We save each entry individually. Since this is only for ONE product/warehouse,
+      // the number of entries is usually small.
+      await dbAdapter.saveDocument('inventoryLedger', entry);
+    }
 
     // 7. Update Product Master
     const products = await dbAdapter.getCollection<Product>('products') || [];
@@ -575,10 +600,11 @@ export const db = {
 
       console.log(`📝 Updating product ${product.id} (${product.name}): Stock=${product.stock}, Cost=${product.cost}, updatedAt=${product.updatedAt}`);
 
-      await dbAdapter.saveCollection('products', products);
-      console.log(`✅ Product ${productId} persisted to database.`);
+      // SUCCESS: Update only the product document
+      await dbAdapter.saveDocument('products', product);
+      console.log(`✅ Product ${productId} updated in database.`);
 
-      // 8. Update Detailed Stocks Collection (productStocks) - CRITICAL for Multi-Warehouse Sync
+      // 8. Update Detailed Stocks Collection (productStocks)
       const stockId = `${productId}_${warehouseId}`;
       const productStock: ProductStock = {
         id: stockId,
@@ -590,7 +616,7 @@ export const db = {
       await dbAdapter.saveDocument('productStocks', productStock);
       console.log(`✅ Detailed stock for ${productId} in ${warehouseId} updated: ${currentBalance}`);
     } else {
-      console.error(`❌ Product ${productId} NOT FOUND in products collection during recalculation!`);
+      console.error(`❌ Product ${productId} NOT FOUND!`);
     }
 
     console.log(`✅ Recalculation complete. Final balance: ${currentBalance}`);
