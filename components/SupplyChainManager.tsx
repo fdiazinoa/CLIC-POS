@@ -5,7 +5,7 @@ import {
    ShoppingCart, Check, X, FileText, Calendar, Archive,
    ClipboardList, ArrowRight, Save, User, Minus, Box,
    ScanBarcode, LayoutList, Mail, Landmark, Phone,
-   CreditCard, DollarSign, Clock, Info, ShieldAlert, History
+   CreditCard, DollarSign, Clock, Info, ShieldAlert, History, Trash2
 } from 'lucide-react';
 import { BusinessConfig, Product, Supplier, PurchaseOrder, PurchaseOrderItem, Reception, ProductVariant } from '../types';
 import InventoryAudit from './InventoryAudit';
@@ -32,6 +32,7 @@ interface SupplyChainManagerProps {
    onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
    onAddSupplier: (supplier: Supplier) => void;
    onUpdateSupplier: (supplier: Supplier) => void;
+   onDeleteSupplier: (id: string) => Promise<void>;
 }
 
 type Tab = 'ALERTS' | 'CREATE' | 'RECEIVE' | 'INVENTORY' | 'SUPPLIERS';
@@ -50,7 +51,8 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
    onReceiveStock,
    onAdjustStock,
    onAddSupplier,
-   onUpdateSupplier
+   onUpdateSupplier,
+   onDeleteSupplier
 }) => {
    // Defensive Checks
    const safeProducts = Array.isArray(products) ? products : [];
@@ -778,6 +780,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
    };
 
    const renderReception = () => {
+      // 1. Specific Order Reception Form
       if (receivingOrderId) {
          const order = (safeOrders || []).find(o => o.id === receivingOrderId);
          if (!order) return <div>Error: Orden no encontrada</div>;
@@ -807,21 +810,19 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
             const usesLots = product?.operationalFlags?.usesLots;
             const usesSerial = product?.operationalFlags?.usesSerial;
 
-            // If quantity increases and is traceable, trigger modal
             const currentItem = (order.items || []).find(i => i.variantSku === itemIdOrSku || (i.productId === itemIdOrSku && !i.variantSku));
             const currentQty = currentItem?.quantityReceived || 0;
 
             if (newVal > currentQty && (usesLots || usesSerial)) {
-               const qtyDiff = newVal - currentQty;
                setPendingTracking({
                   itemId: itemIdOrSku,
                   productId: product!.id,
                   productName: product!.name,
-                  quantity: newVal, // Total target quantity
+                  quantity: newVal,
                   type: usesLots ? 'LOTE' : 'SERIE',
                   data: currentItem?.trackingData || []
                });
-               return; // Wait for modal
+               return;
             }
 
             onUpdateOrder({
@@ -842,7 +843,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                updatedAt: new Date().toISOString()
             }));
 
-            // Deduplicate by ID to avoid redundant network calls for variants
             const updatesMap = new Map();
             for (const u of rawUpdates) {
                updatesMap.set(u.id, u);
@@ -859,7 +859,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
          };
 
          const confirmReception = async () => {
-            console.log("🚀 SCM: confirmReception START");
             try {
                const hasAnyReceived = (order.items || []).some(i => i.quantityReceived > 0);
                if (!hasAnyReceived) {
@@ -868,7 +867,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                }
 
                const targetWarehouseId = order.warehouseId || config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
-               console.log("📊 SCM: Target Warehouse:", targetWarehouseId);
 
                const saveTrackingRecords = async (items: PurchaseOrderItem[]) => {
                   for (const item of items) {
@@ -891,42 +889,22 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   }
                };
 
-               console.log("📊 SCM: hasAnyReceived passed");
-
                const isPartial = (order.items || []).some(i => i.quantityReceived < i.quantityOrdered);
-               console.log("🔀 SCM: isPartial:", isPartial);
 
                if (isPartial) {
-                  /*
-                  const keepPending = confirm(
-                     "Hay artículos pendientes por recibir.\n\n" +
-                     "¿Desea mantener la orden ABIERTA para recibir los faltantes después?\n" +
-                     "OK = Sí, mantener pendientes.\n" +
-                     "Cancelar = No, cerrar orden (Ignorar faltantes)."
-                  );
-                  */
-                  const keepPending = true; // Default to keeping order open for partials
-
-                  // 1. Receive Stock (Add to inventory)
-                  console.log("📞 SCM: calling onReceiveStock (Partial)...");
+                  const keepPending = true;
                   await onReceiveStock(order.items, order.id);
-                  console.log("✅ SCM: onReceiveStock success (Partial)");
-
-                  // 1c. Persist Tracking Records
                   await saveTrackingRecords(order.items);
-
-                  // 1b. Update Prices (Best Effort)
                   try { await updateSupplierPriceCatalog(); } catch (e) { console.warn("Price update failed", e); }
 
                   if (keepPending) {
-                     // 2a. Update Order: Subtract received from ordered, reset received
                      const updatedItems = (order.items || []).map(i => {
                         const remaining = Math.max(0, i.quantityOrdered - i.quantityReceived);
                         return {
                            ...i,
                            quantityOrdered: remaining,
                            quantityReceived: 0,
-                           trackingData: [] // Reset tracking for next reception
+                           trackingData: []
                         };
                      }).filter(i => i.quantityOrdered > 0);
 
@@ -936,30 +914,17 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                         await onUpdateOrder({ ...order, items: updatedItems, status: 'PARTIAL' });
                      }
                   } else {
-                     // 2b. Close Order
                      await onUpdateOrder({ ...order, status: 'COMPLETED' });
                   }
                } else {
-                  // Full Reception
-                  // if (!confirm("¿Confirmar recepción completa y cerrar orden?")) return;
-
-                  console.log("📞 SCM: calling onReceiveStock (Full)...");
                   await onReceiveStock(order.items, order.id);
-                  console.log("✅ SCM: onReceiveStock success (Full)");
-
-                  // Persist Tracking Records
                   await saveTrackingRecords(order.items);
-
-                  // Update Prices (Best Effort)
                   try { await updateSupplierPriceCatalog(); } catch (e) { console.warn("Price update failed", e); }
-
                   await onUpdateOrder({ ...order, status: 'COMPLETED' });
                }
 
                setReceivingOrderId(null);
                setIsReceivingOrder(false);
-               console.log("🎉 SCM: Reception fully confirmed");
-
             } catch (error: any) {
                console.error("❌ SCM: Error in confirmReception:", error);
                alert("Error al confirmar la recepción. Ver consola.");
@@ -968,7 +933,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
 
          return (
             <div className="h-full flex flex-col animate-in slide-in-from-right-4">
-               {/* Header */}
                <div className="flex items-center gap-4 mb-6 bg-white p-4 rounded-2xl border border-gray-200 shadow-sm">
                   <button onClick={() => setReceivingOrderId(null)} className="p-3 bg-gray-100 rounded-xl hover:bg-gray-200">
                      <ArrowLeft size={24} />
@@ -979,7 +943,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   </div>
                </div>
 
-               {/* Reception Filter bar */}
                <div className="flex flex-col md:flex-row gap-3 p-4 bg-white rounded-2xl border border-gray-200 shadow-sm mb-4">
                   <div className="relative flex-1">
                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
@@ -1007,7 +970,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   </div>
                </div>
 
-               {/* List */}
                <div className="flex-1 overflow-y-auto space-y-3 pb-20">
                   {((order.items || []).filter(item => {
                      const p = safeProducts.find(prod => prod.id === item.productId);
@@ -1068,7 +1030,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   })}
                </div>
 
-               {/* Footer Actions */}
                <div className="p-6 bg-white border-t border-gray-200 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] mt-auto">
                   <button
                      onClick={confirmReception}
@@ -1082,103 +1043,103 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
             </div>
          );
       }
-   };
 
-   // Orders List (Active Receptions)
-   if (isReceivingOrder) {
-      return (
-         <div className="animate-in fade-in h-full overflow-y-auto pb-20">
-            <div className="flex items-center gap-4 mb-6">
-               <button onClick={() => setIsReceivingOrder(false)} className="p-3 bg-white rounded-xl shadow-sm hover:bg-gray-50">
-                  <ArrowLeft size={24} />
-               </button>
-               <h3 className="text-xl font-bold text-gray-800">Órdenes Pendientes</h3>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-               {activeOrders.length === 0 ? (
-                  <div className="col-span-full py-32 text-center text-gray-400 bg-gray-50 rounded-[3rem] border-4 border-dashed border-gray-200">
-                     <ClipboardList size={64} className="mx-auto mb-4 opacity-30" />
-                     <p className="text-xl font-bold">No hay órdenes pendientes</p>
-                     <button onClick={() => setActiveTab('CREATE')} className="mt-4 text-blue-600 font-bold">Crear nueva orden</button>
-                  </div>
-               ) : (
-                  (activeOrders || []).map((po, idx) => {
-                     const supplier = (safeSuppliers || []).find(s => s.id === po.supplierId);
-                     const items = po.items || [];
-                     const progress = items.reduce((acc, i) => acc + i.quantityReceived, 0) / Math.max(1, items.reduce((acc, i) => acc + i.quantityOrdered, 0)) * 100;
+      // 2. Pending Orders Selection List
+      if (isReceivingOrder) {
+         return (
+            <div className="animate-in fade-in h-full overflow-y-auto pb-20">
+               <div className="flex items-center gap-4 mb-6">
+                  <button onClick={() => setIsReceivingOrder(false)} className="p-3 bg-white rounded-xl shadow-sm hover:bg-gray-50">
+                     <ArrowLeft size={24} />
+                  </button>
+                  <h3 className="text-xl font-bold text-gray-800">Órdenes Pendientes</h3>
+               </div>
+               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {activeOrders.length === 0 ? (
+                     <div className="col-span-full py-32 text-center text-gray-400 bg-gray-50 rounded-[3rem] border-4 border-dashed border-gray-200">
+                        <ClipboardList size={64} className="mx-auto mb-4 opacity-30" />
+                        <p className="text-xl font-bold">No hay órdenes pendientes</p>
+                        <button onClick={() => setActiveTab('CREATE')} className="mt-4 text-blue-600 font-bold">Crear nueva orden</button>
+                     </div>
+                  ) : (
+                     (activeOrders || []).map((po, idx) => {
+                        const supplier = (safeSuppliers || []).find(s => s.id === po.supplierId);
+                        const items = po.items || [];
+                        const progress = items.reduce((acc, i) => acc + i.quantityReceived, 0) / Math.max(1, items.reduce((acc, i) => acc + i.quantityOrdered, 0)) * 100;
 
-                     return (
-                        <div key={po.id || `po-${idx}`} onClick={() => setReceivingOrderId(po.id)} className="bg-white p-6 rounded-[2rem] border border-gray-200 shadow-sm active:scale-[0.98] transition-all cursor-pointer relative overflow-hidden group">
-                           <div className="absolute top-0 left-0 w-2 h-full bg-blue-500"></div>
+                        return (
+                           <div key={po.id || `po-${idx}`} onClick={() => setReceivingOrderId(po.id)} className="bg-white p-6 rounded-[2rem] border border-gray-200 shadow-sm active:scale-[0.98] transition-all cursor-pointer relative overflow-hidden group">
+                              <div className="absolute top-0 left-0 w-2 h-full bg-blue-500"></div>
 
-                           <div className="flex justify-between items-start mb-4 pl-4">
-                              <div>
-                                 <h4 className="text-2xl font-bold text-gray-800">#{po.id}</h4>
-                                 <p className="text-gray-500 font-medium">{supplier?.name}</p>
-                              </div>
-                              <div className="bg-blue-50 text-blue-700 px-3 py-1 rounded-lg font-bold text-sm">
-                                 {formatSafeDate(po.date)}
-                              </div>
-                           </div>
-
-                           <div className="pl-4 mb-6">
-                              <div className="flex justify-between items-end">
+                              <div className="flex justify-between items-start mb-4 pl-4">
                                  <div>
-                                    <p className="text-xs text-gray-400 uppercase font-bold mb-1">Progreso</p>
-                                    <div className="flex items-center gap-2">
-                                       <span className="text-3xl font-black text-gray-800">{Math.round(progress)}%</span>
+                                    <h4 className="text-2xl font-bold text-gray-800">#{po.id}</h4>
+                                    <p className="text-gray-500 font-medium">{supplier?.name}</p>
+                                 </div>
+                                 <div className="bg-blue-50 text-blue-700 px-3 py-1 rounded-lg font-bold text-sm">
+                                    {formatSafeDate(po.date)}
+                                 </div>
+                              </div>
+
+                              <div className="pl-4 mb-6">
+                                 <div className="flex justify-between items-end">
+                                    <div>
+                                       <p className="text-xs text-gray-400 uppercase font-bold mb-1">Progreso</p>
+                                       <div className="flex items-center gap-2">
+                                          <span className="text-3xl font-black text-gray-800">{Math.round(progress)}%</span>
+                                       </div>
+                                    </div>
+                                    <div className="text-right">
+                                       <p className="text-xs text-gray-400 uppercase font-bold mb-1">Total</p>
+                                       <p className="text-xl font-bold text-gray-600">{config.currencySymbol}{po.totalCost.toFixed(2)}</p>
                                     </div>
                                  </div>
-                                 <div className="text-right">
-                                    <p className="text-xs text-gray-400 uppercase font-bold mb-1">Total</p>
-                                    <p className="text-xl font-bold text-gray-600">{config.currencySymbol}{po.totalCost.toFixed(2)}</p>
+                                 <div className="w-full bg-gray-100 h-3 rounded-full mt-3 overflow-hidden">
+                                    <div className="bg-blue-500 h-full rounded-full transition-all duration-500" style={{ width: `${progress}%` }}></div>
                                  </div>
                               </div>
-                              <div className="w-full bg-gray-100 h-3 rounded-full mt-3 overflow-hidden">
-                                 <div className="bg-blue-500 h-full rounded-full transition-all duration-500" style={{ width: `${progress}%` }}></div>
+
+                              <div className="pl-4 pt-4 border-t border-gray-100 flex justify-end gap-3">
+                                 <button
+                                    onClick={(e) => { e.stopPropagation(); handleSendEmail(po); }}
+                                    className="px-4 py-2 bg-gray-100 text-gray-600 rounded-xl font-bold text-sm hover:bg-gray-200 transition-colors flex items-center gap-2"
+                                 >
+                                    <Mail size={16} /> {po.sentAt ? 'Reenviar' : 'Enviar Email'}
+                                 </button>
+                                 <span className="text-blue-600 font-bold flex items-center gap-2 group-hover:gap-4 transition-all">
+                                    Recibir Mercancía <ArrowRight size={20} />
+                                 </span>
                               </div>
                            </div>
-
-                           <div className="pl-4 pt-4 border-t border-gray-100 flex justify-end gap-3">
-                              <button
-                                 onClick={(e) => { e.stopPropagation(); handleSendEmail(po); }}
-                                 className="px-4 py-2 bg-gray-100 text-gray-600 rounded-xl font-bold text-sm hover:bg-gray-200 transition-colors flex items-center gap-2"
-                              >
-                                 <Mail size={16} /> {po.sentAt ? 'Reenviar' : 'Enviar Email'}
-                              </button>
-                              <span className="text-blue-600 font-bold flex items-center gap-2 group-hover:gap-4 transition-all">
-                                 Recibir Mercancía <ArrowRight size={20} />
-                              </span>
-                           </div>
-                        </div>
-                     );
-                  })
-               )}
+                        );
+                     })
+                  )}
+               </div>
             </div>
+         );
+      }
+
+      // 3. Default: Reception History List
+      return (
+         <div className="flex flex-col h-full">
+            <div className="flex justify-between items-center mb-6">
+               <h2 className="text-xl font-bold text-gray-800">Historial de Recepciones</h2>
+               <button
+                  onClick={() => setIsReceivingOrder(true)}
+                  className="px-6 py-3 bg-green-600 text-white rounded-xl font-bold shadow-lg hover:bg-green-700 transition-all flex items-center gap-2"
+               >
+                  <Plus size={20} /> Nueva Recepción
+               </button>
+            </div>
+            <ReceptionHistory
+               receptions={safeReceptions}
+               config={config}
+               suppliers={suppliers}
+               purchaseOrders={purchaseOrders}
+            />
          </div>
       );
-   }
-
-   // Reception History
-   return (
-      <div className="flex flex-col h-full">
-         <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-bold text-gray-800">Historial de Recepciones</h2>
-            <button
-               onClick={() => setIsReceivingOrder(true)}
-               className="px-6 py-3 bg-green-600 text-white rounded-xl font-bold shadow-lg hover:bg-green-700 transition-all flex items-center gap-2"
-            >
-               <Plus size={20} /> Nueva Recepción
-            </button>
-         </div>
-         <ReceptionHistory
-            receptions={safeReceptions}
-            config={config}
-            suppliers={suppliers}
-            purchaseOrders={purchaseOrders}
-         />
-      </div>
-   );
+   };
 
    const renderSupplierModal = () => {
       if (!editingSupplier) return null;
@@ -1434,19 +1395,38 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                </div>
 
                {/* Modal Footer */}
-               <div className="p-8 bg-gray-50 border-t border-gray-100 flex justify-end gap-4">
-                  <button onClick={() => setEditingSupplier(null)} className="px-8 py-4 bg-white text-gray-400 font-bold rounded-2xl hover:bg-gray-100 transition-all">
-                     Cancelar
-                  </button>
+               <div className="p-8 bg-gray-50 border-t border-gray-100 flex justify-between gap-4">
                   <button
-                     onClick={() => {
-                        onUpdateSupplier(editingSupplier);
-                        setEditingSupplier(null);
+                     onClick={async () => {
+                        if (window.confirm(`¿Está seguro que desea eliminar al proveedor "${editingSupplier.name}"?\n\nEsta acción no se puede deshacer.`)) {
+                           // Set loading or similar? No simple state for it.
+                           await onDeleteSupplier(editingSupplier.id);
+                           setEditingSupplier(null);
+                        }
                      }}
-                     className="px-10 py-4 bg-indigo-600 text-white font-black uppercase tracking-widest text-xs rounded-2xl shadow-xl shadow-indigo-100 hover:bg-indigo-500 transition-all flex items-center gap-2"
+                     className="px-6 py-4 bg-red-100 text-red-600 font-bold rounded-2xl hover:bg-red-200 transition-all flex items-center gap-2"
                   >
-                     <Save size={18} /> Guardar Cambios
+                     <Trash2 size={18} /> Eliminar Proveedor
                   </button>
+                  <div className="flex gap-4">
+                     <button onClick={() => setEditingSupplier(null)} className="px-8 py-4 bg-white text-gray-400 font-bold rounded-2xl hover:bg-gray-100 transition-all">
+                        Cancelar
+                     </button>
+                     <button
+                        onClick={() => {
+                           const isNew = !safeSuppliers.find(s => s.id === editingSupplier.id);
+                           if (isNew) {
+                              onAddSupplier(editingSupplier);
+                           } else {
+                              onUpdateSupplier(editingSupplier);
+                           }
+                           setEditingSupplier(null);
+                        }}
+                        className="px-10 py-4 bg-indigo-600 text-white font-black uppercase tracking-widest text-xs rounded-2xl shadow-xl shadow-indigo-100 hover:bg-indigo-500 transition-all flex items-center gap-2"
+                     >
+                        <Save size={18} /> Guardar Cambios
+                     </button>
+                  </div>
                </div>
             </div>
          </div>
@@ -1460,8 +1440,8 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
             <button
                onClick={() => {
                   const newSup: Supplier = {
-                     id: `SUP_${Date.now()}`,
-                     name: 'Nuevo Proveedor',
+                     id: `SUP-${Date.now()}`,
+                     name: '',
                      taxId: '',
                      email: '',
                      phone: '',
@@ -1473,7 +1453,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                      leadTimeDays: 7,
                      isActive: true
                   };
-                  onAddSupplier(newSup);
                   setEditingSupplier(newSup);
                   setSupplierModalTab('GENERAL');
                }}
@@ -1488,7 +1467,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                const isOverLimit = (supplier.balance || 0) > (supplier.creditLimit || 0) && (supplier.creditLimit || 0) > 0;
 
                return (
-                  <div key={supplier.id} onClick={() => { setEditingSupplier(supplier); setSupplierModalTab('GENERAL'); }} className={`group bg-white p-6 rounded-[2rem] shadow-sm border transition-all cursor-pointer hover:shadow-xl hover:-translate-y-1 ${isOverLimit ? 'border-red-100 bg-red-50/10' : 'border-gray-100 hover:border-indigo-100'}`}>
+                  <div key={supplier.id} onClick={() => { setEditingSupplier(supplier); setSupplierModalTab('GENERAL'); }} className={`group relative bg-white p-6 rounded-[2rem] shadow-sm border transition-all cursor-pointer hover:shadow-xl hover:-translate-y-1 ${isOverLimit ? 'border-red-100 bg-red-50/10' : 'border-gray-100 hover:border-indigo-100'}`}>
                      <div className="flex justify-between items-start mb-4">
                         <div className="flex items-center gap-3">
                            <div className={`p-3 rounded-2xl transition-colors ${isOverLimit ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-400 group-hover:bg-indigo-100 group-hover:text-indigo-600'}`}>
@@ -1533,7 +1512,20 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                         </div>
                      </div>
 
-                     <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                     <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                           onClick={async (e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (window.confirm(`¿Eliminar proveedor "${supplier.name}"?`)) {
+                                 await onDeleteSupplier(supplier.id);
+                              }
+                           }}
+                           className="bg-red-500 text-white p-2 rounded-xl shadow-lg hover:bg-red-600 transition-colors"
+                           title="Eliminar Proveedor"
+                        >
+                           <Trash2 size={16} />
+                        </button>
                         <div className="bg-indigo-600 text-white p-2 rounded-xl shadow-lg">
                            <Save size={16} />
                         </div>

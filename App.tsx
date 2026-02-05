@@ -1211,6 +1211,19 @@ const App: React.FC = () => {
             supplierProductPrices={supplierProductPrices}
             config={config}
             onClose={() => setCurrentView('POS')}
+            onDeleteSupplier={async (id) => {
+              try {
+                // Delete from DB first to ensure persistence consistency
+                await db.deleteDocument('suppliers', id);
+                // Then update state
+                setSuppliers(prev => prev.filter(s => s.id !== id));
+                // Broadcast change
+                syncManager.broadcastChange('suppliers', { id }, 'DELETE').catch(console.error);
+              } catch (error) {
+                console.error("Failed to delete supplier:", error);
+                alert("Error al eliminar el proveedor. Por favor, intente de nuevo.");
+              }
+            }}
             onCreateOrder={async (o) => { const updated = [...purchaseOrders, o]; setPurchaseOrders(updated); await db.saveDocument('purchaseOrders', o); }}
             onUpdateOrder={async (o) => { const updated = purchaseOrders.map(p => p.id === o.id ? o : p); setPurchaseOrders(updated); await db.saveDocument('purchaseOrders', o); }}
             onReceiveStock={async (items, orderId) => {
@@ -1357,13 +1370,13 @@ const App: React.FC = () => {
               networkSyncService.sync();
             }}
             onAddSupplier={async (s) => {
-              const updated = [...suppliers, s];
-              setSuppliers(updated);
+              setSuppliers(prev => [...prev, s]);
+              await db.saveDocument('suppliers', s);
+              syncManager.broadcastChange('suppliers', s, 'CREATE').catch(console.error);
             }}
             onUpdateSupplier={async (s) => {
-              const updated = suppliers.map(sup => sup.id === s.id ? s : sup);
-              setSuppliers(updated);
-              await db.save('suppliers', updated);
+              setSuppliers(prev => prev.map(sup => sup.id === s.id ? s : sup));
+              await db.saveDocument('suppliers', s);
               syncManager.broadcastChange('suppliers', s, 'UPDATE').catch(console.error);
             }}
           />
