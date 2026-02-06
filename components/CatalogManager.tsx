@@ -33,6 +33,7 @@ interface CatalogManagerProps {
    isAdminMode?: boolean;
    terminalId?: string;
    initialProductId?: string;
+   initialTab?: any;
    transfers?: StockTransfer[];
    purchaseOrders?: any[];
    suppliers?: Supplier[];
@@ -197,6 +198,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    isAdminMode,
    terminalId,
    initialProductId,
+   initialTab,
    transfers = [],
    purchaseOrders = [],
    suppliers = []
@@ -355,7 +357,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    };
 
    if (viewMode === 'VARIANTS') return <VariantManager onClose={() => setViewMode('PRODUCTS')} />;
-   if (editingProduct) return <ProductForm initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={warehouses} availableTariffs={tariffs} hasHistory={transactions.some(t => t.items.some(item => item.id === (editingProduct as any).id))} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} transfers={transfers} purchaseOrders={purchaseOrders} suppliers={suppliers} seasons={config.seasons || []} />;
+   if (editingProduct) return <ProductForm key={editingProduct === 'NEW' ? 'NEW' : editingProduct.id} initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={warehouses} availableTariffs={tariffs} hasHistory={transactions.some(t => t.items.some(item => item.id === (editingProduct as any).id))} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} transfers={transfers} purchaseOrders={purchaseOrders} suppliers={suppliers} seasons={config.seasons || []} initialTab={initialTab} allProducts={products} />
    if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={products} config={config} availableTariffs={tariffs} onSave={handleSaveTariff} onUpdateProducts={onUpdateProducts} onClose={() => setEditingTariff(null)} />;
    if (editingGroup) return <GroupForm initialData={editingGroup === 'NEW' ? null : editingGroup} products={products} onSave={handleSaveGroup} onClose={() => setEditingGroup(null)} />;
    if (editingSeason) return <SeasonForm initialData={editingSeason === 'NEW' ? null : editingSeason} products={products} onSave={handleSaveSeason} onClose={() => setEditingSeason(null)} />;

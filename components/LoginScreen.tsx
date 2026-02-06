@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { Delete, KeyRound, Lock, User, UserCircle, Globe, ChevronDown, Fingerprint } from 'lucide-react';
 import { User as UserType, TerminalConfig } from '../types';
 import { biometricService } from '../services/BiometricAuthService';
+import AccessibilityToggle from './AccessibilityToggle';
 
 interface LoginScreenProps {
   onLogin: (user: UserType) => void;
@@ -118,6 +119,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
       <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-500 rounded-full blur-[100px]"></div>
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-500 rounded-full blur-[100px]"></div>
+      </div>
+
+      <div className="absolute top-4 right-4 z-50">
+        <AccessibilityToggle />
       </div>
 
       <div className="max-w-md w-full bg-gray-800/80 backdrop-blur-md rounded-3xl border border-gray-700 shadow-2xl p-8 z-10 flex flex-col relative">

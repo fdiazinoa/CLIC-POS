@@ -9,14 +9,15 @@ import {
    ChevronDown, Check, AlertCircle, Layers,
    ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle,
    MessageSquare, PlayCircle, Download, Lock, ArrowUpRight, Landmark,
-   UserCheck, StickyNote, Inbox, Printer, QrCode, Box,
-   Cloud, RefreshCw, CloudOff
+   UserCheck, StickyNote, Inbox, Printer, QrCode, Box, Package,
+   Cloud, RefreshCw, CloudOff, Layout, ChefHat
+
 } from 'lucide-react';
 import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType,
-   PaymentEntry
+   PaymentEntry, Table
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import UnifiedPaymentModal from './PaymentModal';
@@ -50,6 +51,9 @@ import ProductQuickActions from './ProductQuickActions';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import SupervisorAuthModal from './SupervisorAuthModal';
 
+import VirtualKeyboard from './VirtualKeyboard';
+// Hooks removed: Managed globally in App.tsx
+
 interface POSInterfaceProps {
    config: BusinessConfig;
    currentUser: UserType;
@@ -70,10 +74,15 @@ interface POSInterfaceProps {
    onOpenCustomers: () => void;
    onOpenHistory: () => void;
    onOpenFinance: () => void;
+   onOpenInventoryTracking: (productId?: string) => void;
+   onOpenTableMap?: () => void;
    onTransactionComplete: (txn: Transaction) => void;
    onAddCustomer: (customer: Customer) => void;
    onUpdateConfig: (newConfig: BusinessConfig) => void;
    activeTerminalId: string;
+   activeTable?: Table | null;
+   onClearActiveTable?: () => void;
+   onKioskPay?: () => void;
 }
 
 const POSInterface: React.FC<POSInterfaceProps> = ({
@@ -96,9 +105,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onOpenCustomers,
    onOpenHistory,
    onOpenFinance,
+   onOpenInventoryTracking,
+   onOpenTableMap,
    onTransactionComplete,
+   onAddCustomer,
    onUpdateConfig,
-   activeTerminalId
+   activeTerminalId,
+   activeTable,
+   onClearActiveTable,
+   onKioskPay
 }) => {
    const cartEndRef = useRef<HTMLDivElement>(null);
    const [quickActionData, setQuickActionData] = useState<{ product: Product; x: number; y: number } | null>(null);
@@ -127,6 +142,120 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          document.documentElement.classList.remove('dark');
       }
    }, [uxConfig.theme]);
+
+
+
+   // --- DETECT KIOSK / SELF CHECKOUT ---
+   const isKioskMode = activeTerminalConfig?.deviceRole?.role === 'SELF_CHECKOUT';
+
+   // --- KIOSK MODE & GLOBAL SCANNER ---
+   // Managed globally in App.tsx (if currentView !== 'POS').
+   // However, when in POS view, we need local scanning for Returns/etc.
+   useBarcodeScanner({
+      onScan: (code) => {
+         // 1. Try JSON/Smart QR first
+         const trimmed = code.trim();
+         try {
+            if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+               const data = JSON.parse(trimmed);
+               if (data.type === 'INVOICE_RETURN' && data.id) {
+                  setReturnInvoiceId(data.id);
+                  setShowReturnModal(true);
+                  setSuccessToast('Factura Identificada');
+                  return;
+               }
+            }
+         } catch (e) { }
+
+         // 2. Try Transaction Search via ID
+         const txnFound = (transactions || []).find(t => t.displayId === trimmed || t.id === trimmed);
+         if (txnFound) {
+            setReturnInvoiceId(txnFound.id);
+            setShowReturnModal(true);
+            setSuccessToast('Factura Identificada');
+            return;
+         }
+
+         // 3. Try Product Search (Barcode or ID)
+         const product = (products || []).find(p => p.barcode === trimmed || p.id === trimmed);
+
+         if (product) {
+            // Check availability
+            const isWeighted = product.type === 'SERVICE' || product.name.toLowerCase().includes('(peso)');
+            const hasVariants = product.attributes && product.attributes.length > 0;
+
+            if (isWeighted) {
+               setProductForScale(product);
+            } else if (hasVariants) {
+               setSelectedProductForVariants(product);
+            } else {
+               // Direct add
+               addToCart(product);
+               setSuccessToast(`${product.name} Agregado`);
+            }
+            return;
+         }
+
+         // 4. Try Scale Parser (Weight barcodes)
+         if (config.scaleLabelConfig?.isEnabled) {
+            const scaleItem = parseScaleBarcode(trimmed, config.scaleLabelConfig);
+            if (scaleItem) {
+               const prodScale = (products || []).find(p => p.barcode === scaleItem.plu || p.id === scaleItem.plu);
+               if (prodScale) {
+                  if (scaleItem.type === 'WEIGHT') {
+                     addToCart(prodScale, scaleItem.value);
+                     setSuccessToast(`${prodScale.name} (${scaleItem.value.toFixed(3)}kg)`);
+                  } else {
+                     const unitPrice = getProductPrice(prodScale);
+                     const weight = unitPrice > 0 ? scaleItem.value / unitPrice : 1;
+                     addToCart(prodScale, weight);
+                     setSuccessToast(`${prodScale.name} ($${scaleItem.value})`);
+                  }
+                  return;
+               }
+            }
+         }
+
+         // If nothing found
+         setSuccessToast(`Código no encontrado: ${code}`);
+      }
+   });
+
+   // --- AUTO-HYDRATION FOR TABLES ---
+   // --- SMART TABLE HYDRATION ---
+   // Automatically load order when entering via Table Map
+   useEffect(() => {
+      if (activeTable) {
+         if (activeTable.currentOrderId) {
+            console.log(`🤖 Smart Access: Hydrating table ${activeTable.nombre} (Order ${activeTable.currentOrderId})`);
+            const ticket = parkedTickets.find(t => t.id === activeTable.currentOrderId);
+            if (ticket) {
+               // 1. Load Cart
+               onUpdateCart(ticket.items || []);
+               // 2. Load Customer
+               if (ticket.customerId) {
+                  const customer = customers.find(c => c.id === ticket.customerId);
+                  if (customer) onSelectCustomer(customer);
+               } else {
+                  onSelectCustomer(null);
+               }
+               console.log(`✅ Loaded ${ticket.items.length} items from active table.`);
+            } else {
+               console.warn(`⚠️ Ticket ${activeTable.currentOrderId} not found in parked tickets. Falling back to empty.`);
+               // Ideally trigger a fetch here if missing?
+               // For now, allow manual recovery logic or leave as is to avoid overwriting with empty
+            }
+         } else {
+            // Free table opened directly? Should be empty.
+            // Only clear if cart has items to avoid unnecessary updates
+            if (cart.length > 0) {
+               console.log('🧹 Clearing cart for new table.');
+               onUpdateCart([]);
+               onSelectCustomer(null);
+            }
+         }
+      }
+   }, [activeTable, parkedTickets]); // Re-run if table changes or tickets sync
 
    const gridClass = useMemo(() => {
       if (uxConfig.gridDensity === 'COMPACT') {
@@ -181,6 +310,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return backgroundSyncManager.subscribe(setSyncState);
    }, []);
    const [globalDiscount, setGlobalDiscount] = useState<{ type: 'PERCENT' | 'FIXED', value: number }>({ type: 'PERCENT', value: 0 });
+
+   useEffect(() => {
+      if (activeTable?.currentOrderId && cart.length === 0) {
+         const ord = (transactions || []).find(t => t.id === activeTable.currentOrderId);
+         if (ord && ord.items) {
+            onUpdateCart(ord.items);
+         }
+      }
+   }, [activeTable, transactions, onUpdateCart, cart.length]);
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
    const [selectedProductForVariants, setSelectedProductForVariants] = useState<Product | null>(null);
    const [productForScale, setProductForScale] = useState<Product | null>(null);
@@ -189,6 +327,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [isScannerOpen, setIsScannerOpen] = useState(false);
    const scannerRef = useRef<Html5Qrcode | null>(null);
    const searchInputRef = useRef<HTMLInputElement>(null);
+   const [showVirtualKeyboard, setShowVirtualKeyboard] = useState(false);
 
    const [fiscalStatus, setFiscalStatus] = useState<{
       type: NCFType;
@@ -651,6 +790,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
    const updateCartItem = async (updatedItem: CartItem | null, cartIdToDelete?: string) => {
+      let newCart: CartItem[] = [];
+
       if (cartIdToDelete || updatedItem === null) {
          // Void Line Check
          const authorized = await requestApproval({
@@ -660,7 +801,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          });
          if (!authorized) return;
 
-         onUpdateCart(prev => prev.filter(i => i.cartId !== (cartIdToDelete || editingItem?.cartId)));
+         newCart = cart.filter(i => i.cartId !== (cartIdToDelete || editingItem?.cartId));
       } else {
          // Update Check (Price Override / Discount)
          const originalItem = (cart || []).find(i => i.cartId === updatedItem.cartId);
@@ -684,9 +825,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (!authorized) return;
          }
 
-         onUpdateCart(prev => prev.map(i => i.cartId === updatedItem.cartId ? updatedItem : i));
+         newCart = cart.map(i => i.cartId === updatedItem.cartId ? updatedItem : i);
       }
+
+      // 1. Update UI
+      onUpdateCart(newCart);
       setEditingItem(null);
+
+      // 2. Sync to Backend/Persistence (If Active Table)
+      if (activeTable && activeTable.currentOrderId) {
+         const ticketId = activeTable.currentOrderId;
+         const total = newCart.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+
+         // Update Local Persistence
+         if (onUpdateParkedTickets) {
+            const updatedTickets = parkedTickets.map(p => p.id === ticketId ? { ...p, items: newCart } : p);
+            onUpdateParkedTickets(updatedTickets);
+         }
+
+         // Update KDS
+         try {
+            fetch(`http://localhost:8001/api/ordenes/${ticketId}`, {
+               method: 'PUT',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ items: newCart, total, status: 'OCCUPIED' })
+            });
+         } catch (e) {
+            console.error("Auto-sync delete failed:", e);
+         }
+      }
    };
 
 
@@ -830,6 +997,33 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             });
 
             onTransactionComplete(txn);
+
+            // --- CRITICAL: Ticket Closing Logic ---
+            if (activeTable) {
+               try {
+                  // 1. Free Table in Backend (KDS)
+                  await fetch(`http://localhost:8001/api/mesas/liberar`, {
+                     method: 'POST',
+                     headers: { 'Content-Type': 'application/json' },
+                     body: JSON.stringify({ tableId: activeTable.id })
+                  });
+
+                  // 2. Remove from Parked Tickets (Local Persistence)
+                  if (activeTable.currentOrderId) {
+                     const remaining = parkedTickets.filter(p => p.id !== activeTable.currentOrderId);
+                     onUpdateParkedTickets(remaining);
+                  }
+               } catch (e) {
+                  console.error("Failed to free table:", e);
+               }
+               // 3. Clear Active Table in UI
+               if (onClearActiveTable) onClearActiveTable();
+            } else {
+               // If not a table (e.g. Counter Sale), check if it was a parked ticket we just recovered
+               // Heuristic: If we have a selected customer or just checking if the current cart matches a parked ID?
+               // For now, mostly relevant for Tables.
+            }
+
             onUpdateCart([]);
             onSelectCustomer(null);
             setIsReturnMode(false);
@@ -843,20 +1037,114 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const handleParkCurrentTicket = () => {
+   const handleDispatchCommand = async () => {
+      if (cart.length === 0) return;
+
+      const orderId = activeTable?.currentOrderId || `P-${Date.now()}`;
+
+      try {
+         // 1. We must ensure the items are "parked" (saved to DB) before marchar
+         // in traditional POS systems, 'Marchar' implies saving the order state.
+         if (activeTable) {
+            await handleParkCurrentTicket();
+         } else {
+            // Non-table direct order: Simplified park or just proceed if server can handle it 
+            // from the items in memory (but our server reads from transactions table usually)
+            // For now, only support dispatching for saved orders (Active Table).
+            if (!activeTable) {
+               alert("Para marchar a cocina, inicie un pedido en una mesa.");
+               return;
+            }
+         }
+
+         const response = await fetch(`http://localhost:8001/api/ordenes/enviar-comanda/${orderId}`, {
+            method: 'POST'
+         });
+         const result = await response.json();
+
+         if (result.status === 'success') {
+            setSuccessToast(`Comanda enviada (${result.dispatched} ítems)`);
+         } else if (result.status === 'ignored') {
+            // Already sent or module disabled
+         }
+      } catch (e) {
+         console.error("Dispatch error:", e);
+         alert("Error de comunicación con el servicio de cocina");
+      }
+   };
+
+   const handleParkCurrentTicket = async () => {
       if (cart.length === 0) return;
       const newParked: ParkedTicket = {
-         id: `P-${Date.now()}`,
-         name: selectedCustomer ? selectedCustomer.name : `Ticket #${(Array.isArray(parkedTickets) ? parkedTickets : []).length + 1}`,
+         id: activeTable?.currentOrderId || `P-${Date.now()}`,
+         name: activeTable ? `Mesa: ${activeTable.name}` : (selectedCustomer ? selectedCustomer.name : `Ticket #${(Array.isArray(parkedTickets) ? parkedTickets : []).length + 1}`),
          items: [...cart],
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
          timestamp: new Date().toISOString()
       };
-      onUpdateParkedTickets([...(Array.isArray(parkedTickets) ? parkedTickets : []), newParked]);
+
+      // Remove existing if updating same ID
+      const updatedTickets = [...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(p => p.id !== newParked.id), newParked];
+      onUpdateParkedTickets(updatedTickets);
+
+      if (activeTable) {
+         try {
+            const total = cart.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+
+            // Sync with KDS backend
+            await fetch(`http://localhost:8001/api/ordenes/${newParked.id}`, {
+               method: 'PUT',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({
+                  items: cart,
+                  total: total,
+                  status: 'OCCUPIED'
+               })
+            });
+
+            if (onClearActiveTable) onClearActiveTable();
+
+            // Redirect Logic
+            if (activeTerminalConfig?.tables?.autoRedirectToMap && onOpenTableMap) {
+               onOpenTableMap();
+            } else if (onOpenTableMap) {
+               onOpenTableMap();
+            }
+         } catch (e) {
+            console.error("Failed to sync table status with KDS:", e);
+         }
+      }
+
       onUpdateCart([]); onSelectCustomer(null);
-      setErrorToast("Ticket Guardado");
+      setErrorToast(activeTable ? "Mesa Guardada" : "Ticket Guardado");
       setTimeout(() => setErrorToast(null), 2000);
+   };
+
+   const handleSendAndExit = async () => {
+      // 1. Park/Save the ticket first
+      await handleParkCurrentTicket();
+
+      // 2. Dispatch to kitchen if applicable
+      if (activeTerminalConfig?.operational?.usa_modulos_cocina && cart.length > 0) {
+         try {
+            await handleDispatchCommand();
+         } catch (e) {
+            console.error("Failed to dispatch on exit:", e);
+         }
+      }
+
+      // 3. Navigate back to map
+      if (onOpenTableMap) onOpenTableMap();
+   };
+
+   const handleBackToMap = async () => {
+      // Ensure we park if there's something to park
+      if (cart.length > 0) {
+         await handleParkCurrentTicket();
+      }
+      // Always navigate, even if empty (handleParkCurrentTicket might skip nav if empty/no-table)
+      if (onOpenTableMap) onOpenTableMap();
    };
 
    const handleRestoreTicket = (parked: ParkedTicket) => {
@@ -953,7 +1241,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    return (
-      <div className="flex h-screen bg-gray-100 overflow-hidden font-sans text-gray-900 relative">
+      <div className="fixed inset-0 w-full h-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900">
          {errorToast && (
             <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
                <div className="bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border-2 border-red-400">
@@ -1265,10 +1553,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   })}
                </div>
             </div>
+            {/* VIRTUAL KEYBOARD SLOT */}
+            {showVirtualKeyboard && (
+               <div className="flex-none z-50">
+                  <VirtualKeyboard
+                     onKeyPress={(key) => setSearchTerm(prev => prev + key)}
+                     onDelete={() => setSearchTerm(prev => prev.slice(0, -1))}
+                     onClear={() => setSearchTerm('')}
+                     onClose={() => {
+                        setShowVirtualKeyboard(false);
+                        // Optional: trigger search enter logic if needed
+                     }}
+                  />
+               </div>
+            )}
          </div >
 
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
-         < div className={`w-full ${isRetailMode ? '' : 'md:w-96'} bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
+         <div className={`w-full ${isRetailMode ? '' : 'md:w-96'} h-full bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
 
             {/* MOBILE HEADER */}
             < div className="md:hidden p-4 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
@@ -1320,7 +1622,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             {/* DESKTOP HEADER (HIDDEN ON MOBILE) */}
-            < div className="hidden md:flex p-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0" >
+            <div className="hidden md:flex p-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none" >
                <div className="flex justify-between items-center gap-4">
                   <div className="flex items-center gap-2 shrink-0">
                      <h2 className="font-black text-gray-800 uppercase text-xs tracking-widest whitespace-nowrap">Ticket Actual</h2>
@@ -1332,8 +1634,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                         <input
                            type="text"
+                           readOnly={window.matchMedia('(pointer: coarse)').matches}
                            placeholder="Escanear o buscar..."
                            value={searchTerm}
+                           onFocus={() => {
+                              if (window.matchMedia('(pointer: coarse)').matches) {
+                                 setShowVirtualKeyboard(true);
+                              }
+                           }}
                            onChange={(e) => setSearchTerm(e.target.value)}
                            onKeyDown={(e) => {
                               if (e.key === 'Enter') {
@@ -1537,7 +1845,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             {/* Sidebar Footer */}
-            < div className={`bg-white border-t border-gray-200 p-4 shadow-inner shrink-0 ${isRetailMode ? 'flex flex-row-reverse items-center justify-between gap-6' : 'space-y-3'} ${isMobile ? 'hidden' : ''}`}>
+            <div className={`flex-none bg-white border-t border-gray-200 p-4 shadow-inner ${isRetailMode ? 'flex flex-row-reverse items-center justify-between gap-6' : 'space-y-3'} ${isMobile ? 'hidden' : ''}`}>
                {/* DESKTOP FOOTER CONTENT (UNCHANGED) */}
                {
                   isRetailMode ? (
@@ -1627,6 +1935,29 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <span className="text-[9px] font-black uppercase mt-1">Config</span>
                            </button>
 
+                           <button onClick={() => onOpenInventoryTracking()} title="Rastreo de Inventario" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-indigo-50 border-indigo-200 text-indigo-600 hover:bg-indigo-100 transition-all min-w-[60px]">
+                              <Package size={18} />
+                              <span className="text-[9px] font-black uppercase mt-1">Rastreo</span>
+                           </button>
+
+                           {activeTerminalConfig?.operational?.usa_mesas && (
+                              <button
+                                 onClick={(config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL') ? handleSendAndExit : () => onOpenTableMap?.()}
+                                 title="Mapa de Mesas"
+                                 className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-teal-50 border-teal-200 text-teal-600 hover:bg-teal-100 transition-all min-w-[60px]"
+                              >
+                                 <Layout size={18} />
+                                 <span className="text-[9px] font-black uppercase mt-1">Mesas</span>
+                              </button>
+                           )}
+
+                           {activeTerminalConfig?.operational?.usa_modulos_cocina && (
+                              <button onClick={handleDispatchCommand} title="Marchar a Cocina" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-orange-600 border-orange-500 text-white hover:bg-orange-700 transition-all min-w-[60px]">
+                                 <ChefHat size={18} />
+                                 <span className="text-[9px] font-black uppercase mt-1">Marchar</span>
+                              </button>
+                           )}
+
                            <div className="w-px h-10 bg-gray-200 mx-1 self-center"></div>
 
                            <button
@@ -1670,114 +2001,138 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ) : (
                      // --- VISUAL MODE FOOTER (VERTICAL) ---
                      <>
-                        {/* --- BOTONES DE ACCIÓN --- */}
-                        <div className="grid grid-cols-3 gap-2">
-                           <button
-                              onClick={() => setShowGlobalDiscount(true)}
-                              className={`flex flex-col items-center justify-center py-2 rounded-xl border-2 transition-all ${globalDiscount.value > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-pink-50 border-pink-100 text-pink-600 hover:bg-pink-100 hover:border-pink-200'}`}
-                           >
-                              <Percent size={16} />
-                              <span className="text-[9px] font-black uppercase mt-1">Descuento</span>
-                           </button>
-                           <button
-                              onClick={() => setShowCouponModal(true)}
-                              className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-cyan-50 border-cyan-100 text-cyan-600 hover:bg-cyan-100 hover:border-cyan-200 transition-all"
-                           >
-                              <QrCode size={16} />
-                              <span className="text-[9px] font-black uppercase mt-1">Cupón</span>
-                           </button>
-                           <button
-                              onClick={onOpenFinance}
-                              className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all"
-                           >
-                              <Lock size={16} />
-                              <span className="text-[9px] font-black uppercase mt-1">Cierre Z</span>
-                           </button>
-                           <button
-                              onClick={() => setShowLoyaltyModal(true)}
-                              className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-white border-gray-100 text-blue-500 hover:border-blue-200 hover:bg-blue-50 transition-all"
-                           >
-                              <CreditCard size={16} />
-                              <span className="text-[9px] font-black uppercase mt-1">Tarjeta</span>
-                           </button>
-                           <button
-                              onClick={onLogout}
-                              className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-white border-gray-100 text-gray-400 hover:border-red-100 hover:text-red-500 transition-all"
-                           >
-                              <LogOut size={16} />
-                              <span className="text-[9px] font-black uppercase mt-1">Salir</span>
-                           </button>
-                           <button
-                              onClick={handleParkCurrentTicket}
-                              className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 hover:border-blue-200 transition-all"
-                           >
-                              <Save size={16} />
-                              <span className="text-[9px] font-black uppercase mt-1">Guardar</span>
-                           </button>
-                           <button
-                              onClick={() => setShowParkedList(!showParkedList)}
-                              className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-orange-50 border-orange-100 text-orange-600 hover:bg-orange-100 hover:border-orange-200 transition-all relative"
-                           >
-                              <Inbox size={16} />
-                              <span className="text-[9px] font-black uppercase mt-1">Espera</span>
-                              {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-1 right-2 w-2 h-2 bg-orange-500 rounded-full border border-white"></span>}
-                           </button>
-                        </div>
 
-                        {/* --- BLOQUE DE TOTALES --- */}
-                        <div className="space-y-1.5 pt-1 border-t border-dashed border-gray-200">
-                           <div className="flex justify-between items-center text-xs font-bold text-gray-500">
-                              <span>SUBTOTAL</span>
-                              <span>{baseCurrency.symbol}{cartSubtotal.toFixed(2)}</span>
-                           </div>
-                           {discountAmount > 0 && (
-                              <div className="flex justify-between items-center text-xs font-black text-red-500">
-                                 <span>DESCUENTO</span>
-                                 <span>-{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>
-                              </div>
-                           )}
-                           <div className="flex justify-between items-center text-xs font-bold text-gray-500">
-                              <span>IMPUESTOS</span>
-                              <span>{baseCurrency.symbol}{cartTax.toFixed(2)}</span>
-                           </div>
 
-                           <div className="flex justify-between items-end pt-2">
-                              <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
-                                 {baseCurrency.symbol}{cartTotal.toFixed(2)}
-                              </div>
-                              <div className="text-right">
-                                 <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total General</p>
-                                 {pointsEarned > 0 && <p className="text-[10px] font-bold text-purple-500">+{pointsEarned} Puntos</p>}
-                              </div>
-                           </div>
-                        </div>
 
-                        <button
-                           onClick={() => {
-                              if (cart.length > 0 && fiscalStatus.hasNCF) {
-                                 const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-                                 if (!validation.isValid) {
-                                    alert(validation.error);
-                                    return;
-                                 }
-                                 if (terminalTransactions.length > 0 && activeTerminalConfig) {
-                                    const sessionStartDate = terminalTransactions[0].date;
-                                    if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
-                                       alert("⚠️ CIERRE Z REQUERIDO\n\nLa jornada operativa ha cambiado. Debe realizar el Cierre Z antes de continuar facturando.");
-                                       return;
+
+                        {/* --- CONDITIONAL FOOTER --- */}
+                        {isKioskMode ? (
+                           <div className="mt-auto pt-6 space-y-6">
+                              {/* Simple Kiosk Totals */}
+                              <div className="flex justify-between items-end px-2">
+                                 <span className="text-xl font-bold text-gray-400">Total a Pagar</span>
+                                 <span className="text-6xl font-black text-slate-900 tracking-tighter">{baseCurrency.symbol}{cartTotal.toFixed(2)}</span>
+                              </div>
+
+                              <button
+                                 onClick={() => {
+                                    if (cart.length > 0) {
+                                       if (onKioskPay) onKioskPay();
+                                       else alert("Kiosk Pay Not Implemented");
                                     }
-                                 }
-                                 setShowPaymentModal(true);
-                              } else if (!fiscalStatus.hasNCF) {
-                                 alert("No hay secuencias fiscales disponibles.");
-                              }
-                           }}
-                           disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                           className={`w-full py-4 rounded-2xl font-black text-xl shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
-                        >
-                           <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : 'COBRAR'}</span>
-                           <ArrowRight size={24} />
-                        </button>
+                                 }}
+                                 disabled={cart.length === 0}
+                                 className={`w-full py-8 rounded-3xl font-black text-4xl shadow-2xl hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-6 ${cart.length === 0 ? 'bg-gray-200 text-gray-400' : 'bg-emerald-600 text-white hover:bg-emerald-500 shadow-emerald-200'}`}
+                              >
+                                 <span>PAGAR AHORA</span>
+                                 <ArrowRight size={48} />
+                              </button>
+
+                              <div className="text-center text-gray-400 text-sm font-medium">
+                                 Toca para seleccionar método de pago
+                              </div>
+                           </div>
+                        ) : (
+                           <>
+                              {/* --- BOTONES DE ACCIÓN (POS) --- */}
+                              <div className="grid grid-cols-3 gap-2">
+                                 <button onClick={() => setShowGlobalDiscount(true)} className={`flex flex-col items-center justify-center py-2 rounded-xl border-2 transition-all ${globalDiscount.value > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-pink-50 border-pink-100 text-pink-600 hover:bg-pink-100 hover:border-pink-200'}`}>
+                                    <Percent size={16} />
+                                    <span className="text-[9px] font-black uppercase mt-1">Descuento</span>
+                                 </button>
+                                 <button onClick={() => setShowCouponModal(true)} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-cyan-50 border-cyan-100 text-cyan-600 hover:bg-cyan-100 hover:border-cyan-200 transition-all">
+                                    <QrCode size={16} />
+                                    <span className="text-[9px] font-black uppercase mt-1">Cupón</span>
+                                 </button>
+                                 <button onClick={onOpenFinance} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all">
+                                    <Lock size={16} />
+                                    <span className="text-[9px] font-black uppercase mt-1">Cierre Z</span>
+                                 </button>
+                                 <button onClick={() => setShowLoyaltyModal(true)} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-white border-gray-100 text-blue-500 hover:border-blue-200 hover:bg-blue-50 transition-all">
+                                    <CreditCard size={16} />
+                                    <span className="text-[9px] font-black uppercase mt-1">Tarjeta</span>
+                                 </button>
+                                 <button onClick={onLogout} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-white border-gray-100 text-gray-400 hover:border-red-100 hover:text-red-500 transition-all">
+                                    <LogOut size={16} />
+                                    <span className="text-[9px] font-black uppercase mt-1">Salir</span>
+                                 </button>
+                                 <button onClick={handleParkCurrentTicket} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 hover:border-blue-200 transition-all">
+                                    <Save size={16} />
+                                    <span className="text-[9px] font-black uppercase mt-1">Guardar</span>
+                                 </button>
+                                 <button onClick={() => setShowParkedList(!showParkedList)} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-orange-50 border-orange-100 text-orange-600 hover:bg-orange-100 hover:border-orange-200 transition-all relative">
+                                    <Inbox size={16} />
+                                    <span className="text-[9px] font-black uppercase mt-1">Espera</span>
+                                    {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-1 right-2 w-2 h-2 bg-orange-500 rounded-full border border-white"></span>}
+                                 </button>
+                                 <button onClick={() => onOpenInventoryTracking()} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all">
+                                    <Package size={16} />
+                                    <span className="text-[9px] font-black uppercase mt-1">Rastreo</span>
+                                 </button>
+                                 {activeTerminalConfig?.operational?.usa_mesas && (
+                                    <button onClick={handleBackToMap} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-teal-50 border-teal-100 text-teal-600 hover:bg-teal-100 hover:border-teal-200 transition-all">
+                                       <Layout size={16} />
+                                       <span className="text-[9px] font-black uppercase mt-1">Mesas</span>
+                                    </button>
+                                 )}
+                              </div>
+
+                              {/* --- BLOQUE DE TOTALES --- */}
+                              <div className="space-y-1.5 pt-1 border-t border-dashed border-gray-200 mt-2">
+                                 <div className="flex justify-between items-center text-xs font-bold text-gray-500">
+                                    <span>SUBTOTAL</span>
+                                    <span>{baseCurrency.symbol}{cartSubtotal.toFixed(2)}</span>
+                                 </div>
+                                 {discountAmount > 0 && (
+                                    <div className="flex justify-between items-center text-xs font-black text-red-500">
+                                       <span>DESCUENTO</span>
+                                       <span>-{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>
+                                    </div>
+                                 )}
+                                 <div className="flex justify-between items-center text-xs font-bold text-gray-500">
+                                    <span>IMPUESTOS</span>
+                                    <span>{baseCurrency.symbol}{cartTax.toFixed(2)}</span>
+                                 </div>
+
+                                 <div className="flex justify-between items-end pt-2">
+                                    <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
+                                       {baseCurrency.symbol}{cartTotal.toFixed(2)}
+                                    </div>
+                                    <div className="text-right">
+                                       <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total General</p>
+                                       {pointsEarned > 0 && <p className="text-[10px] font-bold text-purple-500">+{pointsEarned} Puntos</p>}
+                                    </div>
+                                 </div>
+                              </div>
+
+                              <button
+                                 onClick={() => {
+                                    if (cart.length > 0 && fiscalStatus.hasNCF) {
+                                       const validation = validateTerminalDocument(config, terminalId, 'TICKET');
+                                       if (!validation.isValid) {
+                                          alert(validation.error);
+                                          return;
+                                       }
+                                       if (terminalTransactions.length > 0 && activeTerminalConfig) {
+                                          const sessionStartDate = terminalTransactions[0].date;
+                                          if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
+                                             alert("⚠️ CIERRE Z REQUERIDO\n\nLa jornada operativa ha cambiado. Debe realizar el Cierre Z antes de continuar facturando.");
+                                             return;
+                                          }
+                                       }
+                                       setShowPaymentModal(true);
+                                    } else if (!fiscalStatus.hasNCF) {
+                                       alert("No hay secuencias fiscales disponibles.");
+                                    }
+                                 }}
+                                 disabled={cart.length === 0 || !fiscalStatus.hasNCF}
+                                 className={`w-full py-4 rounded-2xl font-black text-xl shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
+                              >
+                                 <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : 'COBRAR'}</span>
+                                 <ArrowRight size={24} />
+                              </button>
+                           </>
+                        )}
                      </>
                   )
                }
@@ -1805,6 +2160,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <Inbox size={18} />
                               <span className="text-[9px] font-bold uppercase">Esp.</span>
                               {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
+                           </button>
+                           {activeTerminalConfig?.operational?.usa_modulos_cocina && (
+                              <button onClick={handleDispatchCommand} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-600">
+                                 <ChefHat size={18} />
+                                 <span className="text-[9px] font-bold uppercase">March.</span>
+                              </button>
+                           )}
+                           <button onClick={() => onOpenInventoryTracking()} className="flex flex-col items-center gap-1 text-gray-400 hover:text-indigo-500">
+                              <Package size={18} />
+                              <span className="text-[9px] font-bold uppercase">Rast.</span>
                            </button>
                         </div>
                         <div className="text-right">
@@ -2021,6 +2386,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      setQuickActionData(null);
                      onOpenSettings('CATALOG', { productId: p.id });
                   }}
+                  onViewHistory={(p) => {
+                     setQuickActionData(null);
+                     // Conditional Navigation logic:
+                     // 1. If product is Serialized or Lotted -> Go to Specific Tracking View
+                     // 2. If standard product -> Go to Kardex Tab in Catalog
+                     if (p.operationalFlags?.usesSerial || p.operationalFlags?.usesLots) {
+                        onOpenInventoryTracking(p.id);
+                     } else {
+                        onOpenSettings('CATALOG', { productId: p.id, tab: 'KARDEX' });
+                     }
+                  }}
                   warehouses={warehouses}
                   config={config}
                   currentUser={currentUser}
@@ -2040,24 +2416,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             )
          }
 
-         {pendingTrackingProduct && (
-            <TrackingSelectionModal
-               product={pendingTrackingProduct.product}
-               warehouseId={defaultSalesWarehouseId || 'wh_central'}
-               quantity={pendingTrackingProduct.quantity}
-               onClose={() => setPendingTrackingProduct(null)}
-               onSelect={(tracking) => {
-                  addToCart(
-                     pendingTrackingProduct.product,
-                     pendingTrackingProduct.quantity,
-                     pendingTrackingProduct.price,
-                     pendingTrackingProduct.modifiers,
-                     tracking
-                  );
-                  setPendingTrackingProduct(null);
-               }}
-            />
-         )}
+         {
+            pendingTrackingProduct && (
+               <TrackingSelectionModal
+                  product={pendingTrackingProduct.product}
+                  warehouseId={defaultSalesWarehouseId || 'wh_central'}
+                  quantity={pendingTrackingProduct.quantity}
+                  onClose={() => setPendingTrackingProduct(null)}
+                  onSelect={(tracking) => {
+                     addToCart(
+                        pendingTrackingProduct.product,
+                        pendingTrackingProduct.quantity,
+                        pendingTrackingProduct.price,
+                        pendingTrackingProduct.modifiers,
+                        tracking
+                     );
+                     setPendingTrackingProduct(null);
+                  }}
+               />
+            )
+         }
       </div >
    );
 };

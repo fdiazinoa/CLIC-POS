@@ -256,6 +256,12 @@ export interface TerminalConfig {
     typeConfigs?: Partial<Record<NCFType, NCFConfig>>;
   };
 
+  tables?: {
+    behavior: 'SIEMPRE_MOSTRAR' | 'A_DEMANDA' | 'NO_MOSTRAR';
+    defaultRoomId?: string;
+    autoRedirectToMap?: boolean; // NEW: Redirect to map after order save
+  };
+
   security: {
     deviceBindingToken: string;
     requirePinForVoid: boolean;
@@ -312,6 +318,14 @@ export interface TerminalConfig {
     printerAssignments?: Record<string, string>; // Roles: TICKET, LABEL, KITCHEN, LOGISTICS
     customerDisplay?: CustomerDisplayConfig;
     scales?: ScaleDevice[];
+  };
+  operational: {
+    vertical_negocio: VerticalType;
+    usa_mesas: boolean;
+    pantalla_inicio: 'VENTA_DIRECTA' | 'MAPA_MESAS';
+    bloqueo_meseros: boolean;
+    pedir_comensales: boolean;
+    usa_modulos_cocina: boolean;
   };
   ux: {
     theme: 'LIGHT' | 'DARK';
@@ -658,6 +672,20 @@ export interface ProductOperationalFlags {
   usesSerial: boolean;
 }
 
+export type ProductType = 'MATERIA_PRIMA' | 'PRODUCTO_TERMINADO' | 'RECETA' | 'KIT' | 'PRODUCT' | 'SERVICE';
+
+export interface RecipeDetail {
+  id: string;
+  parentItemId: string;
+  childItemId: string;
+  childItemName?: string; // For UI display
+  quantity: number;
+  unit: string;
+  wasteFactor: number; // 0.1 = 10%
+  isOptional: boolean;
+  cost?: number; // Calculated dynamic cost
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -667,7 +695,10 @@ export interface Product {
   image?: string;
   barcode?: string;
   cost?: number;
-  type?: 'PRODUCT' | 'SERVICE' | 'KIT';
+  theoreticalCost?: number; // New calculated cost
+  type?: ProductType;
+  isInventoriable?: boolean;
+  recipeDetails?: RecipeDetail[]; // The BOM
   images: string[];
   attributes: ProductAttribute[];
   variants: ProductVariant[];
@@ -689,6 +720,7 @@ export interface Product {
   hasActivePromotion?: boolean; // UI Flag for badges
   returnReason?: string; // For items with qty < 0
   primarySupplierId?: string; // NEW: Preferred supplier for lead time calculation
+  production_area_id?: string; // NEW: For command routing
 }
 
 export interface ProductStock {
@@ -711,6 +743,46 @@ export interface InventoryTracking {
   receivedAt: string;
   receptionId?: string;
   saleId?: string;
+}
+
+// --- FLOOR PLAN TYPES ---
+export type TableShape = 'SQUARE' | 'CIRCLE' | 'OBSTACLE';
+
+export interface Room {
+  id: string;
+  nombre: string;
+  name?: string;
+  consumo_minimo?: number;
+  capacidad_personas?: number;
+  cargo_servicio_pct?: number;
+  orden?: number;
+  data?: {
+    width?: number;
+    height?: number;
+    gridConfig?: any;
+    backgroundImage?: string;
+  };
+}
+
+export interface Table {
+  id: string;
+  roomId: string;
+  nombre: string;
+  name?: string;
+  posX: number;
+  posY: number;
+  width: number;
+  height: number;
+  shape: TableShape;
+  rotation: number;
+  capacity?: number;
+  // Runtime State
+  status?: 'FREE' | 'OCCUPIED' | 'RESERVED';
+  currentOrderId?: string;
+  currentOrderTotal?: number;
+  waiterName?: string;
+  waiterId?: string;
+  timeSeated?: string;
 }
 
 /**
@@ -826,7 +898,11 @@ export type ViewState =
   | 'FINANCE'
   | 'Z_REPORT'
   | 'SUPPLY_CHAIN'
+  | 'INVENTORY_TRACKING'
   | 'FRANCHISE_DASHBOARD'
+  | 'TRACKING' // Added TRACKING view state
+  | 'TABLE_MAP'
+  | 'TABLE_DESIGNER'
   | 'DEVICE_UNAUTHORIZED'
   // Kiosk / Self-Checkout views
   | 'KIOSK_WELCOME'

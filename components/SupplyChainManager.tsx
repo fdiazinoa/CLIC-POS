@@ -33,6 +33,8 @@ interface SupplyChainManagerProps {
    onAddSupplier: (supplier: Supplier) => void;
    onUpdateSupplier: (supplier: Supplier) => void;
    onDeleteSupplier: (id: string) => Promise<void>;
+   onDeleteOrder: (id: string) => Promise<void>;
+   onDeleteReception: (id: string) => Promise<void>;
 }
 
 type Tab = 'ALERTS' | 'CREATE' | 'RECEIVE' | 'INVENTORY' | 'SUPPLIERS';
@@ -52,7 +54,9 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
    onAdjustStock,
    onAddSupplier,
    onUpdateSupplier,
-   onDeleteSupplier
+   onDeleteSupplier,
+   onDeleteOrder,
+   onDeleteReception
 }) => {
    // Defensive Checks
    const safeProducts = Array.isArray(products) ? products : [];
@@ -220,18 +224,27 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
       });
    };
 
-   const updateCartQuantity = (productId: string, delta: number) => {
+   const updateCartQuantity = (productId: string, variantSku: string | undefined, delta: number) => {
       setOrderCart(prev => prev.map(i => {
-         if (i.productId === productId) {
+         if (i.productId === productId && i.variantSku === variantSku) {
             return { ...i, quantityOrdered: Math.max(1, i.quantityOrdered + delta) };
          }
          return i;
       }));
    };
 
-   const updateCartCost = (productId: string, newCost: number) => {
+   const setCartQuantity = (productId: string, variantSku: string | undefined, newValue: number) => {
       setOrderCart(prev => prev.map(i => {
-         if (i.productId === productId) {
+         if (i.productId === productId && i.variantSku === variantSku) {
+            return { ...i, quantityOrdered: Math.max(0, isNaN(newValue) ? 0 : newValue) };
+         }
+         return i;
+      }));
+   };
+
+   const updateCartCost = (productId: string, variantSku: string | undefined, newCost: number) => {
+      setOrderCart(prev => prev.map(i => {
+         if (i.productId === productId && i.variantSku === variantSku) {
             return { ...i, cost: isNaN(newCost) ? 0 : newCost };
          }
          return i;
@@ -255,7 +268,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
       }
 
       const newOrder: PurchaseOrder = {
-         id: `PO-${Date.now().toString().substr(-6)}`,
+         id: `PO-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
          supplierId: selectedSupplier,
          date: new Date().toISOString(),
          dueDate: dueDate.toISOString(),
@@ -328,14 +341,19 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
 
    // --- TOUCH FRIENDLY COMPONENTS ---
 
-   const BigStepper = ({ value, onDecrease, onIncrease }: { value: number; onDecrease: () => void; onIncrease: () => void }) => (
-      <div className="flex items-center bg-gray-100 rounded-2xl p-1 h-14 w-40">
-         <button onClick={onDecrease} className="h-full w-12 flex items-center justify-center bg-white rounded-xl shadow-sm text-gray-600 active:bg-gray-50 active:scale-95 transition-all">
-            <Minus size={24} />
+   const BigStepper = ({ value, onDecrease, onIncrease, onChange }: { value: number; onDecrease: () => void; onIncrease: () => void; onChange?: (val: number) => void }) => (
+      <div className="flex items-center bg-gray-100 rounded-xl p-1">
+         <button onClick={onDecrease} className="w-8 h-8 flex items-center justify-center text-gray-500 hover:bg-white hover:text-indigo-600 rounded-lg transition-colors">
+            <Minus size={16} />
          </button>
-         <span className="flex-1 text-center font-bold text-xl text-gray-800">{value}</span>
-         <button onClick={onIncrease} className="h-full w-12 flex items-center justify-center bg-white rounded-xl shadow-sm text-blue-600 active:bg-gray-50 active:scale-95 transition-all">
-            <Plus size={24} />
+         <input
+            type="number"
+            value={value}
+            onChange={(e) => onChange?.(parseInt(e.target.value) || 0)}
+            className="w-12 bg-transparent text-center font-black text-indigo-600 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+         />
+         <button onClick={onIncrease} className="w-8 h-8 flex items-center justify-center text-gray-500 hover:bg-white hover:text-indigo-600 rounded-lg transition-colors">
+            <Plus size={16} />
          </button>
       </div>
    );
@@ -487,6 +505,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   setActiveTab('RECEIVE');
                }}
                onSendEmail={handleSendEmail}
+               onDeleteOrder={onDeleteOrder}
             />
          );
       }
@@ -616,12 +635,33 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                                  {!isExpanded ? (
                                     <div className="flex items-center justify-between">
                                        <div className="flex flex-col">
-                                          <label className="text-[10px] text-gray-400 font-bold uppercase mb-1">Costo Promedio / Unid.</label>
-                                          <span className="font-bold text-gray-800">{config.currencySymbol}{(group.totalCost / group.totalQty).toFixed(2)}</span>
+                                          <label className="text-[10px] text-gray-400 font-bold uppercase mb-1">{hasVariants ? 'Costo Promedio / Unid.' : 'Precio Compra'}</label>
+                                          {!hasVariants ? (
+                                             <div className="flex items-center gap-1 group/input">
+                                                <span className="text-[10px] text-gray-400 font-bold">{config.currencySymbol}</span>
+                                                <input
+                                                   type="number"
+                                                   value={group.items[0].cost ?? ''}
+                                                   onChange={(e) => updateCartCost(group.productId, undefined, parseFloat(e.target.value))}
+                                                   className="w-24 bg-gray-50 border border-transparent group-hover/input:border-gray-200 rounded-lg px-2 py-0.5 text-sm font-bold text-gray-800 outline-none focus:bg-white focus:border-indigo-500 transition-all"
+                                                />
+                                             </div>
+                                          ) : (
+                                             <span className="font-bold text-gray-800">{config.currencySymbol}{(group.totalCost / (group.totalQty || 1)).toFixed(2)}</span>
+                                          )}
                                        </div>
                                        <div className="flex flex-col items-end">
                                           <label className="text-[10px] text-gray-400 font-bold uppercase mb-1">Total Unidades</label>
-                                          <span className="text-xl font-black text-indigo-600">{group.totalQty}</span>
+                                          {!hasVariants ? (
+                                             <BigStepper
+                                                value={group.totalQty}
+                                                onDecrease={() => updateCartQuantity(group.productId, undefined, -1)}
+                                                onIncrease={() => updateCartQuantity(group.productId, undefined, 1)}
+                                                onChange={(val) => setCartQuantity(group.productId, undefined, val)}
+                                             />
+                                          ) : (
+                                             <span className="text-xl font-black text-indigo-600">{group.totalQty}</span>
+                                          )}
                                        </div>
                                     </div>
                                  ) : (
@@ -637,15 +677,16 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                                                    <span className="text-xs text-gray-500 font-bold">{config.currencySymbol}</span>
                                                    <input
                                                       type="number"
-                                                      value={vItem.cost}
-                                                      onChange={(e) => updateCartCost(vItem.variantSku || vItem.productId, parseFloat(e.target.value))}
+                                                      value={vItem.cost ?? ''}
+                                                      onChange={(e) => updateCartCost(group.productId, vItem.variantSku, parseFloat(e.target.value))}
                                                       className="w-20 bg-white border border-gray-200 rounded-lg px-2 py-1 text-sm font-bold text-gray-800 outline-none"
                                                    />
                                                 </div>
                                                 <BigStepper
                                                    value={vItem.quantityOrdered}
-                                                   onDecrease={() => updateCartQuantity(vItem.variantSku || vItem.productId, -1)}
-                                                   onIncrease={() => updateCartQuantity(vItem.variantSku || vItem.productId, 1)}
+                                                   onDecrease={() => updateCartQuantity(group.productId, vItem.variantSku, -1)}
+                                                   onIncrease={() => updateCartQuantity(group.productId, vItem.variantSku, 1)}
+                                                   onChange={(val) => setCartQuantity(group.productId, vItem.variantSku, val)}
                                                 />
                                              </div>
                                           </div>
@@ -1134,8 +1175,10 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
             <ReceptionHistory
                receptions={safeReceptions}
                config={config}
-               suppliers={suppliers}
-               purchaseOrders={purchaseOrders}
+               suppliers={safeSuppliers}
+               purchaseOrders={safeOrders}
+               onDeleteReception={onDeleteReception}
+               onDeleteOrder={onDeleteOrder}
             />
          </div>
       );

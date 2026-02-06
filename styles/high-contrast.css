@@ -1,0 +1,66 @@
+/* High Contrast Mode for POS Accessibility */
+.high-contrast-mode {
+  --text-primary: #000000;
+  --text-secondary: #000000;
+  --bg-primary: #ffffff;
+  --border-width: 2px;
+  --font-weight-base: 600;
+}
+
+/* Force Text Colors */
+.high-contrast-mode .text-gray-400,
+.high-contrast-mode .text-gray-500,
+.high-contrast-mode .text-gray-600,
+.high-contrast-mode .text-slate-400,
+.high-contrast-mode .text-slate-500,
+.high-contrast-mode .text-slate-600,
+.high-contrast-mode .text-zinc-400,
+.high-contrast-mode .text-zinc-500,
+.high-contrast-mode .text-zinc-600 {
+  color: #000000 !important;
+  font-weight: 600 !important;
+}
+
+/* Buttons */
+.high-contrast-mode button {
+  border: 2px solid #000000 !important;
+  font-weight: 700 !important;
+}
+
+.high-contrast-mode button:focus-visible {
+  outline: 3px solid #000000 !important;
+  outline-offset: 2px;
+}
+
+/* Inputs */
+.high-contrast-mode input,
+.high-contrast-mode select,
+.high-contrast-mode textarea {
+  border: 2px solid #000000 !important;
+  color: #000000 !important;
+  font-weight: 600 !important;
+  background-color: #ffffff !important;
+}
+
+/* Cards & Containers */
+.high-contrast-mode .bg-white,
+.high-contrast-mode .bg-gray-50,
+.high-contrast-mode .bg-slate-50 {
+  border: 1px solid #000000 !important;
+}
+
+/* Badges */
+.high-contrast-mode [class*="bg-"] {
+  border: 1px solid #000000 !important;
+}
+
+/* Icons */
+.high-contrast-mode svg {
+  stroke-width: 2.5px !important;
+}
+
+/* Links */
+.high-contrast-mode a {
+  text-decoration: underline !important;
+  font-weight: 700 !important;
+}

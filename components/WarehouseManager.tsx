@@ -1011,14 +1011,14 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
 
                                     <div className="flex items-center gap-4 w-full md:w-auto">
                                        <div className="flex -space-x-2 overflow-hidden">
-                                          {t.items.slice(0, 3).map(i => (
+                                          {(t.items || []).slice(0, 3).map(i => (
                                              <div key={i.productId} className="w-8 h-8 rounded-full bg-gray-100 border-2 border-white flex items-center justify-center text-[10px] font-bold text-gray-600" title={i.productName}>
                                                 {i.quantity}
                                              </div>
                                           ))}
-                                          {t.items.length > 3 && (
+                                          {(t.items || []).length > 3 && (
                                              <div className="w-8 h-8 rounded-full bg-gray-200 border-2 border-white flex items-center justify-center text-[10px] font-bold text-gray-600">
-                                                +{t.items.length - 3}
+                                                +{(t.items || []).length - 3}
                                              </div>
                                           )}
                                        </div>
@@ -1191,7 +1191,7 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
 
                      <div className="flex-1 overflow-y-auto p-5 space-y-2">
                         <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Items Incluidos</h4>
-                        {viewingTransfer.items.map((item, idx) => {
+                        {(viewingTransfer.items || []).map((item, idx) => {
                            const isPending = viewingTransfer.status === 'IN_TRANSIT';
                            const currentVal = receptionQuantities[item.productId] ?? item.quantity;
 

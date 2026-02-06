@@ -82,11 +82,13 @@ const SEED_DATA = {
   receptions: [] as Reception[],
   productStocks: [] as ProductStock[],
   supplierProductPrices: [] as any[],
-  inventoryTracking: [] as InventoryTracking[]
+  inventoryTracking: [] as InventoryTracking[],
+  rooms: [] as any[],
+  tables: [] as any[]
 };
 
 export const db = {
-  init: async () => {
+  init: async (terminalId?: string) => {
     await dbAdapter.connect();
 
     // Check if seeded
@@ -127,7 +129,9 @@ export const db = {
     // Load all data to return consistent structure (Legacy support)
     // Use Promise.allSettled to ensure one failure doesn't break everything
     const keys = Object.keys(SEED_DATA);
-    const results = await Promise.allSettled(keys.map(key => dbAdapter.getCollection(key)));
+    const results = await Promise.allSettled(keys.map(key =>
+      dbAdapter.getCollection(key, (terminalId && key === 'rooms') ? { terminal_id: terminalId } : undefined)
+    ));
 
     const data: any = {};
     results.forEach((result, index) => {
@@ -342,8 +346,8 @@ export const db = {
     console.log('✅ Selective reset complete');
   },
 
-  get: async (collection: keyof typeof SEED_DATA) => {
-    return await dbAdapter.getCollection(collection as string);
+  get: async (collection: keyof typeof SEED_DATA, queryParams?: Record<string, string>) => {
+    return await dbAdapter.getCollection(collection as string, queryParams);
   },
 
   save: async (collection: keyof typeof SEED_DATA, payload: any) => {

@@ -5,7 +5,7 @@ export interface DatabaseAdapter {
     readonly adapterType: 'local' | 'network';
 
     // Generic CRUD
-    getCollection<T>(collectionName: string): Promise<T[]>;
+    getCollection<T>(collectionName: string, queryParams?: Record<string, string>): Promise<T[]>;
     saveCollection<T>(collectionName: string, data: T[]): Promise<void>;
 
     // Document operations (simulated in LocalStorage, real in SQLite)

@@ -154,7 +154,7 @@ export function getRoleDisplayInfo(role: DeviceRole) {
         },
         [DeviceRole.KITCHEN_DISPLAY]: {
             icon: '👨‍🍳',
-            label: 'Pantalla Cocina',
+            label: 'Pantalla en cocina',
             description: 'Display de órdenes para preparación'
         }
     };

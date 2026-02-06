@@ -105,8 +105,36 @@ CREATE TABLE IF NOT EXISTS products (
     subfamilyId TEXT,
     brandId TEXT,
     operationalFlags TEXT, -- JSON object
+    theoreticalCost REAL DEFAULT 0,
+    recipeDetails TEXT, -- JSON array of RecipeDetail
     createdAt TEXT,
     updatedAt TEXT
+);
+
+CREATE TABLE IF NOT EXISTS rooms (
+    id TEXT PRIMARY KEY,
+    nombre TEXT NOT NULL,
+    consumo_minimo REAL DEFAULT 0,
+    capacidad_personas INTEGER DEFAULT 0,
+    cargo_servicio_pct REAL DEFAULT 0,
+    orden INTEGER DEFAULT 0,
+    data TEXT -- JSON: dimensions, gridConfig, etc.
+);
+
+CREATE TABLE IF NOT EXISTS tables (
+    id TEXT PRIMARY KEY,
+    roomId TEXT NOT NULL,
+    nombre TEXT NOT NULL,
+    data TEXT, -- JSON: x, y, width, height, rotation, shape, seats
+    status TEXT DEFAULT 'FREE',
+    FOREIGN KEY (roomId) REFERENCES rooms(id)
+);
+
+CREATE TABLE IF NOT EXISTS terminals_rooms_visibility (
+    terminal_id TEXT NOT NULL,
+    room_id TEXT NOT NULL,
+    PRIMARY KEY (terminal_id, room_id),
+    FOREIGN KEY (room_id) REFERENCES rooms(id)
 );
 
 -- 4. Inventory & Stocks

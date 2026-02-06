@@ -3,7 +3,7 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   X, Save, Barcode, DollarSign, Box, Plus, Trash2,
   Info, Layers, RefreshCw, CheckCircle2, Tag,
-  Package, LayoutGrid, FileText, Settings2, Upload,
+  Package, LayoutGrid, FileText, Settings2, Upload, Monitor,
   Image as ImageIcon, Percent, ShoppingCart, Calculator, Download,
   ShieldAlert, AlertCircle, Check, LayoutTemplate, ClipboardList, ListTree,
   Truck, ArrowDownToLine, Building2, Search, Filter, AlertTriangle,
@@ -15,6 +15,8 @@ import {
   Product, ProductAttribute, ProductVariant, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse, ProductOperationalFlags, InventoryLedgerEntry, ProductStock, StockTransfer, Season, Supplier
 } from '../types';
 import ProfitCalculator from './ProfitCalculator';
+import RecipeManager from './RecipeManager';
+import ProductionAreaManager from './ProductionAreaManager';
 import { db } from '../utils/db';
 import { permissionService } from '../services/sync/PermissionService';
 import { inventorySyncService } from '../services/sync/InventorySyncService';
@@ -33,9 +35,11 @@ interface ProductFormProps {
   onClose: () => void;
   suppliers?: Supplier[];
   seasons?: Season[];
+  initialTab?: ProductTab;
+  allProducts?: Product[]; // For recipe search
 }
 
-type ProductTab = 'GENERAL' | 'CLASSIFICATION' | 'OPERATIVE' | 'TAXES' | 'PRICING' | 'VARIANTS' | 'LOGISTICS' | 'STOCKS' | 'KARDEX';
+type ProductTab = 'GENERAL' | 'CLASSIFICATION' | 'OPERATIVE' | 'TAXES' | 'PRICING' | 'VARIANTS' | 'LOGISTICS' | 'STOCKS' | 'KARDEX' | 'RECIPE';
 
 const DEFAULT_OPERATIONAL_FLAGS: ProductOperationalFlags = {
   isWeighted: false,
@@ -58,8 +62,8 @@ const VARIANT_TEMPLATES = [
   { name: 'Capacidad', attr: 'Memoria', opts: ['64GB', '128GB', '256GB'] }
 ];
 
-const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], transfers = [], purchaseOrders = [], hasHistory = false, currentUser, roles = [], onSave, onClose, suppliers = [], seasons = [] }) => {
-  const [activeTab, setActiveTab] = useState<ProductTab>('GENERAL');
+const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], transfers = [], purchaseOrders = [], hasHistory = false, currentUser, roles = [], onSave, onClose, suppliers = [], seasons = [], initialTab = 'GENERAL', allProducts = [] }) => {
+  const [activeTab, setActiveTab] = useState<ProductTab>(initialTab);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // --- STATE ---
@@ -108,6 +112,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   // Kardex Ledger Data (Fetched from DB)
   const [productLedger, setProductLedger] = useState<InventoryLedgerEntry[]>([]);
   const [detailedStocks, setDetailedStocks] = useState<ProductStock[]>([]);
+  const [productionAreas, setProductionAreas] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch('http://localhost:8001/api/produccion/areas')
+      .then(r => r.json())
+      .then(setProductionAreas)
+      .catch(console.error);
+  }, []);
 
   // --- SYNC STATE WITH PROPS (For Real-time Sync Updates) ---
   useEffect(() => {
@@ -453,6 +465,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             { id: 'VARIANTS', label: 'Variantes', icon: Layers },
             { id: 'STOCKS', label: 'Existencias', icon: ClipboardList },
             { id: 'KARDEX', label: 'Kardex', icon: BookOpen },
+            { id: 'RECIPE', label: 'Receta / Kit', icon: Layers }, // Using Layers or similar
             { id: 'LOGISTICS', label: 'Logística', icon: Truck },
             { id: 'TAXES', label: 'Impuestos', icon: Percent },
           ].map(tab => (
@@ -1097,6 +1110,33 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                 <OperationalSwitch label="Usa Lotes / Vencimiento" description="Trazabilidad por lote y fecha de expiración." checked={formData.operationalFlags?.usesLots} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, usesLots: v } })} icon={Calendar} />
                 <OperationalSwitch label="Usa Números de Serie" description="Trazabilidad por código único por unidad." checked={formData.operationalFlags?.usesSerial} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, usesSerial: v } })} icon={ScanBarcode} />
               </div>
+
+              {/* ROUTING SECTION */}
+              <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm space-y-4 mt-6">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="p-2 bg-blue-100 text-blue-600 rounded-xl">
+                    <Monitor size={18} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">Ruteo de Producción</h4>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Enrutamiento de Comanda</p>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-gray-500 uppercase mb-2 ml-1">Centro de Producción Destino</label>
+                  <select
+                    value={formData.production_area_id || ''}
+                    onChange={e => setFormData({ ...formData, production_area_id: e.target.value })}
+                    className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl text-sm font-bold text-gray-800 focus:bg-white focus:border-blue-200 transition-all outline-none"
+                  >
+                    <option value="">Ninguno (No enviar a cocina)</option>
+                    {productionAreas.map(pa => (
+                      <option key={pa.id} value={pa.id}>{pa.nombre} ({pa.modo_salida})</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1407,6 +1447,15 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                 </table>
               </div>
             </div>
+          )}
+
+          {activeTab === 'RECIPE' && (
+            <RecipeManager
+              product={formData}
+              allProducts={allProducts}
+              onUpdate={(updates) => setFormData(prev => ({ ...prev, ...updates }))}
+              currencySymbol={config.currencySymbol}
+            />
           )}
 
           {activeTab === 'TAXES' && (

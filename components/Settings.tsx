@@ -3,9 +3,9 @@ import React, { useState } from 'react';
 import {
   Settings as SettingsIcon, X, CreditCard, Receipt,
   Monitor, Users, Truck, ShieldCheck, FileText,
-  Globe, Database, Activity, Mail, Coins,
+  Globe, Database, Activity, Mail, Coins, Grid,
   Cpu, HardDrive, Smartphone, Cloud, Lock, Package, Building2,
-  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw
+  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw, Layers, ChefHat
 } from 'lucide-react';
 import { BusinessConfig, User, RoleDefinition, Transaction, Product, Warehouse, StockTransfer, Supplier, Customer, PurchaseOrder, Reception } from '../types';
 
@@ -28,6 +28,7 @@ import { ImportWizard } from './ImportWizard/ImportWizard';
 import LoyaltySettings from './LoyaltySettings';
 import WalletIntegrations from './WalletIntegrations';
 import SyncSettings from './SyncSettings';
+import ProductionAreaManager from './ProductionAreaManager';
 
 interface SettingsProps {
   config: BusinessConfig;
@@ -54,6 +55,7 @@ interface SettingsProps {
   onOpenZReport: () => void;
   onOpenSupplyChain: () => void;
   onOpenFranchise: () => void;
+  onOpenTableDesigner: () => void;
   onClose: () => void;
   isAdminMode?: boolean;
   currentDeviceId?: string;
@@ -62,7 +64,7 @@ interface SettingsProps {
   initialData?: any;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS';
 
 const Settings: React.FC<SettingsProps> = (props) => {
   const [currentView, setCurrentView] = useState<SettingsView>(props.initialView || 'HOME');
@@ -121,6 +123,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
             isAdminMode={props.isAdminMode}
             terminalId={props.terminalId}
             initialProductId={props.initialData?.productId}
+            initialTab={props.initialData?.tab}
             transfers={props.transfers}
             purchaseOrders={props.purchaseOrders}
             suppliers={props.suppliers}
@@ -270,6 +273,21 @@ const Settings: React.FC<SettingsProps> = (props) => {
           />
         );
 
+      case 'PRODUCTION_AREAS':
+        return (
+          <div className="relative h-full">
+            <button
+              onClick={() => setCurrentView('HOME')}
+              className="absolute top-4 right-4 z-50 p-2 bg-white rounded-full shadow-md hover:bg-gray-100"
+            >
+              <X size={24} />
+            </button>
+            <ProductionAreaManager
+              terminals={props.config.terminals}
+            />
+          </div>
+        );
+
       case 'SYNC':
         return (
           <SyncSettings
@@ -323,6 +341,14 @@ const Settings: React.FC<SettingsProps> = (props) => {
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Inventario y Catálogo</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                   <SettingsCard
+                    icon={ChefHat}
+                    label="Centros de Producción"
+                    description="Ruteo: Cocina, Barra, Monitor"
+                    color="bg-orange-600"
+                    onClick={() => setCurrentView('PRODUCTION_AREAS')}
+                    locked={!hasPermission('SETTINGS_ACCESS')}
+                  />
+                  <SettingsCard
                     icon={Package}
                     label="Artículos y Tarifas"
                     description="Catálogo, Precios, Variantes"
@@ -371,6 +397,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Configuración Local</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                   <SettingsCard icon={Monitor} label="Terminales POS" description="Perfiles de Caja, Inventario" color="bg-blue-500" onClick={() => setCurrentView('TERMINALS')} locked={!hasPermission('SETTINGS_HARDWARE')} />
+                  <SettingsCard icon={Grid} label="Diseñador de Mesas" description="Plano, Salas y Distribución" color="bg-slate-700" onClick={props.onOpenTableDesigner} locked={!hasPermission('CATALOG_MANAGE')} />
                   <SettingsCard icon={Printer} label="Hardware" description="Impresoras, Balanzas, VFD" color="bg-gray-700" onClick={() => setCurrentView('HARDWARE')} locked={!hasPermission('SETTINGS_HARDWARE')} />
                   <SettingsCard icon={Coins} label="Propinas" description="Cargos por Servicio y Tips" color="bg-yellow-500" onClick={() => setCurrentView('TIPS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                 </div>

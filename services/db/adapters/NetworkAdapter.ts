@@ -98,13 +98,18 @@ export class NetworkAdapter implements DatabaseAdapter {
         // No persistent connection to close
     }
 
-    async getCollection<T>(collectionName: string): Promise<T[]> {
+    async getCollection<T>(collectionName: string, queryParams?: Record<string, string>): Promise<T[]> {
         if (!collectionName) {
             console.warn('⚠️ NetworkAdapter: getCollection called with undefined collectionName');
             return [];
         }
 
-        const url = this.getUrl(collectionName);
+        let url = this.getUrl(collectionName);
+        if (queryParams) {
+            const params = new URLSearchParams(queryParams);
+            url += `${url.includes('?') ? '&' : '?'}${params.toString()}`;
+        }
+
         console.log(`📡 Fetching collection: ${url}`);
 
         if (url.includes('undefined')) {
@@ -155,46 +160,28 @@ export class NetworkAdapter implements DatabaseAdapter {
         // If data is an array, we must iterate and saveDocument for each item
         // because json-server does not support bulk POST/PUT for collections.
         if (Array.isArray(data)) {
-            if (data.length === 0) {
-                console.log(`🗑️ NetworkAdapter: Clearing collection ${collectionName}...`);
-                try {
-                    // Method 1: Try standard DELETE on collection (Fastest, but often unsupported)
-                    const url = this.getUrl(collectionName);
-                    const res = await fetch(url, {
-                        method: 'DELETE',
-                        mode: 'cors',
-                        headers: { 'Connection': 'keep-alive' }
-                    });
+            console.log(`📦 NetworkAdapter: Replacing collection ${collectionName} with ${data.length} items...`);
 
-                    if (!res.ok) {
-                        throw new Error('Bulk DELETE not supported');
-                    }
-                } catch (e) {
-                    console.warn(`⚠️ Bulk DELETE failed for ${collectionName}, falling back to iterative delete.`);
-                    // Fallback: Fetch all and delete one by one
-                    try {
-                        const items = await this.getCollection<any>(collectionName);
-                        if (Array.isArray(items) && items.length > 0) {
-                            console.log(`Iteratively deleting ${items.length} items from ${collectionName}...`);
-                            // Limit concurrency
-                            const chunks = [];
-                            const chunkSize = 10;
-                            for (let i = 0; i < items.length; i += chunkSize) {
-                                chunks.push(items.slice(i, i + chunkSize));
-                            }
+            // 1. Clear existing collection first to ensure "Replace" semantics
+            try {
+                const clearUrl = this.getUrl(collectionName);
+                const clearRes = await fetch(clearUrl, {
+                    method: 'DELETE',
+                    mode: 'cors',
+                    headers: { 'Connection': 'keep-alive' }
+                });
 
-                            for (const chunk of chunks) {
-                                await Promise.all(chunk.map(item => this.deleteDocument(collectionName, item.id)));
-                            }
-                        }
-                    } catch (err) {
-                        console.error(`❌ Iterative delete failed for ${collectionName}:`, err);
-                    }
+                if (!clearRes.ok && clearRes.status !== 404) {
+                    throw new Error('Bulk clear failed');
                 }
-                return;
+            } catch (e) {
+                console.warn(`⚠️ Bulk clear failed for ${collectionName}, fallthrough to save might leave orphans.`);
             }
 
-            console.log(`📦 NetworkAdapter: Saving ${data.length} items to ${collectionName}...`);
+            // 2. If data is empty, we are done
+            if (data.length === 0) return;
+
+            // 3. Save new items
             // Use Promise.all with concurrency limit to avoid flooding
             const chunks = [];
             const chunkSize = 5;
@@ -240,42 +227,35 @@ export class NetworkAdapter implements DatabaseAdapter {
             return;
         }
         try {
-            // Try to update first (PUT)
-            const checkUrl = this.getUrl(`${collectionName}/${doc.id}`);
-            const check = await fetch(checkUrl);
+            // Optimistic Upsert: Server now handles PUT as Update-or-Insert
+            const url = this.getUrl(`${collectionName}/${doc.id}`);
+            const res = await fetch(url, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Connection': 'keep-alive'
+                },
+                mode: 'cors',
+                body: JSON.stringify(doc)
+            });
 
-            if (check.ok) {
-                // Update
-                const res = await fetch(checkUrl, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Connection': 'keep-alive'
-                    },
-                    mode: 'cors',
-                    body: JSON.stringify(doc)
-                });
-                if (!res.ok) {
-                    throw new Error(`Failed to update ${collectionName}/${doc.id}: ${res.statusText}`);
+            if (!res.ok) {
+                // Fallback to legacy POST if PUT fails with 404 (in case server isn't updated)
+                if (res.status === 404) {
+                    const createUrl = this.getUrl(collectionName);
+                    const postRes = await fetch(createUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Connection': 'keep-alive'
+                        },
+                        mode: 'cors',
+                        body: JSON.stringify(doc)
+                    });
+                    if (!postRes.ok) throw new Error(`Failed to create in ${collectionName}: ${postRes.statusText}`);
+                    return;
                 }
-            } else {
-                // Create
-                const createUrl = this.getUrl(collectionName);
-                const res = await fetch(createUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Connection': 'keep-alive'
-                    },
-                    mode: 'cors',
-                    body: JSON.stringify(doc)
-                });
-
-                if (!res.ok) {
-                    const errorText = await res.text().catch(() => 'Unknown Error');
-                    console.error(`❌ NetworkAdapter POST Failed:`, { url: createUrl, status: res.status, error: errorText });
-                    throw new Error(`Failed to create in ${collectionName}: ${res.statusText} (${errorText})`);
-                }
+                throw new Error(`Failed to save ${collectionName}/${doc.id}: ${res.statusText}`);
             }
         } catch (error) {
             console.error(`Error saving document to ${collectionName}:`, error);

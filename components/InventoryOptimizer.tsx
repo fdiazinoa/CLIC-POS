@@ -173,9 +173,9 @@ const InventoryOptimizer: React.FC<InventoryOptimizerProps> = ({
     };
 
     return (
-        <div className="h-full flex flex-col bg-gray-50/50">
+        <div className="h-full flex flex-col bg-gray-50/50 overflow-y-auto">
             {/* Top Toolbar: Filter Toggle & Title */}
-            <div className="flex justify-between items-center mb-6 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+            <div className="flex-none flex justify-between items-center mb-6 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
                 <div className="flex items-center gap-3">
                     <div className="p-2 bg-indigo-100 text-indigo-600 rounded-xl">
                         <Zap size={24} />
@@ -365,7 +365,7 @@ const InventoryOptimizer: React.FC<InventoryOptimizerProps> = ({
             )}
 
             {/* Smart Decision Grid Placeholder */}
-            <div className="flex-1 bg-white rounded-[2.5rem] border border-gray-100 shadow-sm overflow-hidden flex flex-col">
+            <div className="flex-1 min-h-[500px] flex-shrink-0 bg-white rounded-[2.5rem] border border-gray-100 shadow-sm overflow-hidden flex flex-col mb-6">
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center">
                     <div className="flex items-center gap-4 flex-1 max-w-md relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />

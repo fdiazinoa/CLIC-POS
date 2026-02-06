@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Package, Calendar, User, ArrowRight, Clock, X, Hash, Box } from 'lucide-react';
+import { Search, Package, Calendar, User, ArrowRight, Clock, X, Hash, Box, Trash2 } from 'lucide-react';
 import { Reception, BusinessConfig, Supplier, PurchaseOrder } from '../types';
 import { formatSafeDate, formatSafeTime } from '../utils/dateUtils';
 import { Landmark, CreditCard, Receipt } from 'lucide-react';
@@ -9,9 +9,11 @@ interface ReceptionHistoryProps {
     config: BusinessConfig;
     suppliers: Supplier[];
     purchaseOrders: PurchaseOrder[];
+    onDeleteReception: (id: string) => void;
+    onDeleteOrder?: (id: string) => void;
 }
 
-const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config, suppliers, purchaseOrders }) => {
+const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config, suppliers, purchaseOrders, onDeleteReception, onDeleteOrder }) => {
     const [search, setSearch] = useState('');
     const [selectedReception, setSelectedReception] = useState<Reception | null>(null);
 
@@ -93,11 +95,30 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config,
 
                                     <div className="text-right min-w-[80px]">
                                         <p className="text-[10px] uppercase text-gray-400 font-bold">Items</p>
-                                        <p className="text-sm font-black text-gray-800">{r.items.length}</p>
+                                        <p className="text-sm font-black text-gray-800">{(r.items || []).length}</p>
                                     </div>
 
-                                    <button className="px-4 py-2 bg-green-50 text-green-700 rounded-lg font-bold text-xs hover:bg-green-100 transition-colors flex items-center gap-2">
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            // View Details
+                                            setSelectedReception(r);
+                                        }}
+                                        className="px-4 py-2 bg-green-50 text-green-700 rounded-lg font-bold text-xs hover:bg-green-100 transition-colors flex items-center gap-2"
+                                    >
                                         Ver Detalle <ArrowRight size={14} />
+                                    </button>
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (window.confirm('¿Estás seguro de que deseas anular esta recepción? Esta acción revertirá el inventario si el stock lo permite.')) {
+                                                onDeleteReception(r.id);
+                                            }
+                                        }}
+                                        className="p-2 bg-gray-50 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                        title="Anular Recepción"
+                                    >
+                                        <Trash2 size={16} />
                                     </button>
                                 </div>
                             </div>
@@ -178,7 +199,7 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config,
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-50">
-                                    {selectedReception.items.map((item, idx) => (
+                                    {(selectedReception.items || []).map((item, idx) => (
                                         <tr key={idx} className="group">
                                             <td className="py-4">
                                                 <p className="font-bold text-gray-800">{item.productName}</p>

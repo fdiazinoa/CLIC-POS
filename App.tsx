@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { Layout } from 'lucide-react';
 import {
   User,
   RoleDefinition,
@@ -22,7 +23,9 @@ import {
   Reception,
   ProductStock,
   LedgerConcept,
-  DocumentSeries
+  DocumentSeries,
+  Room,
+  Table
 } from './types';
 import {
   DEFAULT_ROLES,
@@ -30,6 +33,9 @@ import {
   RETAIL_PRODUCTS,
   getInitialConfig
 } from './constants';
+import { parseScaleBarcode } from './utils/barcodeParser';
+import { useKioskMode } from './hooks/useKioskMode';
+import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 import { db } from './utils/db'; // Import Local DB
 import { dbAdapter } from './services/db'; // Import Adapter for Healthcheck
 import { syncManager } from './services/sync/SyncManager';
@@ -60,6 +66,8 @@ import SelfCheckoutLayout from './components/layouts/SelfCheckoutLayout';
 import PriceCheckerLayout from './components/layouts/PriceCheckerLayout';
 import HandheldLayout from './components/layouts/HandheldLayout';
 import KitchenDisplayLayout from './components/layouts/KitchenDisplayLayout';
+import TableMap from './components/TableMap';
+import TableLayoutDesigner from './components/TableLayoutDesigner';
 
 // View imports for device roles
 import KioskWelcome from './components/kiosk/KioskWelcome';
@@ -68,6 +76,8 @@ import KioskPayment from './components/kiosk/KioskPayment';
 import PriceCheckerDisplay from './components/price-checker/PriceCheckerDisplay';
 import InventoryHome from './components/inventory/InventoryHome';
 import InventoryCount from './components/inventory/InventoryCount';
+import InventoryTracking from './components/InventoryTracking';
+import KitchenDisplay from './components/kds/KitchenDisplay';
 
 
 import { networkSyncService } from './services/sync/NetworkSyncService';
@@ -76,11 +86,22 @@ import { permissionService } from './services/sync/PermissionService';
 import { terminalRouter } from './services/routing/TerminalRouter';
 import { authLevelService } from './services/auth/AuthLevelService';
 import { transactionService } from './services/transactionService';
+import './styles/high-contrast.css';
+import { ThemeProvider } from './components/ThemeContext';
 import { transactionSyncService } from './services/sync/TransactionSyncService';
 import { inventorySyncService } from './services/sync/InventorySyncService';
 
 const App: React.FC = () => {
+  return (
+    <ThemeProvider>
+      <AppContent />
+    </ThemeProvider>
+  );
+};
+
+const AppContent: React.FC = () => {
   // --- GLOBAL STATE ---
+  const [activeTable, setActiveTable] = useState<Table | null>(null); // New state for selected table context
   const [currentView, setCurrentView] = useState<ViewState>('LOGIN');
   const [restoringHistory, setRestoringHistory] = useState(false);
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any));
@@ -89,6 +110,18 @@ const App: React.FC = () => {
   // --- SECURITY & DEVICE HANDSHAKE ---
   const [deviceId, setDeviceId] = useState<string>('');
   const [isDataLoaded, setIsDataLoaded] = useState<boolean>(false);
+
+  const fetchTables = async () => {
+    try {
+      const res = await fetch('http://localhost:8001/api/mesas');
+      if (res.ok) {
+        const data = await res.json();
+        setTables(data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch tables from KDS:", e);
+    }
+  };
 
   // --- DATA STORES ---
   const [users, setUsers] = useState<User[]>([]);
@@ -106,22 +139,60 @@ const App: React.FC = () => {
   const [internalSequences, setInternalSequences] = useState<any[]>([]);
   const [receptions, setReceptions] = useState<Reception[]>([]);
   const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [tables, setTables] = useState<Table[]>([]);
+  const [activeRoomId, setActiveRoomId] = useState<string>('');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [supplierProductPrices, setSupplierProductPrices] = useState<any[]>([]);
   const [isAdminMode, setIsAdminMode] = useState(false); // Temporary admin elevation
 
+  useKioskMode(true);
+  useBarcodeScanner({
+    onScan: (code) => {
+      // Defer to POSInterface local handler if active to support advanced features (Returns, etc.)
+      if ((currentView as any) === 'POS') return;
+
+      console.log('🔫 Global Scan:', code);
+      const trimmed = code.trim();
+      const product = products.find(p => p.barcode === trimmed || p.id === trimmed);
+      if (product) {
+        setCart(prev => {
+          const existing = prev.find(item => item.id === product.id);
+          if (existing) {
+            return prev.map(item => item.id === product.id
+              ? { ...item, quantity: item.quantity + 1 }
+              : item
+            );
+          }
+          // Correctly construct CartItem (flat structure)
+          const newItem: CartItem = {
+            ...product,
+            cartId: `scan-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+            quantity: 1
+          };
+          return [...prev, newItem];
+        });
+
+        if (currentView !== 'POS') setCurrentView('POS');
+      }
+    }
+  });
+
   // Settings Deep Linking state
   const [settingsInitialView, setSettingsInitialView] = useState<string | undefined>(undefined);
   const [settingsInitialData, setSettingsInitialData] = useState<any>(undefined);
+  // Generic View Data (for passing params between views)
+  const [viewData, setViewData] = useState<any>(null);
 
   // --- NAVIGATION GUARD ---
   /**
    * Guarded view change handler that uses terminal router to validate navigation
    */
-  const handleViewChange = (targetView: ViewState) => {
+  const handleViewChange = (targetView: ViewState, data?: any) => {
     // If terminal router is not initialized, allow navigation (backward compatibility)
     if (!terminalRouter.isInitialized()) {
       setCurrentView(targetView);
+      if (data !== undefined) setViewData(data);
       return;
     }
 
@@ -129,6 +200,18 @@ const App: React.FC = () => {
     const decision = terminalRouter.beforeNavigate(targetView, currentView);
 
     if (decision.allowed) {
+      // Data Refresh Logic based on View
+      if (targetView === 'TABLE_MAP') {
+        db.get('tables').then((latestTables: any) => {
+          if (Array.isArray(latestTables)) setTables(latestTables);
+        }).catch(err => console.error("Failed to refresh tables on nav:", err));
+
+        // Also refresh parked tickets to ensure sync
+        db.get('parkedTickets').then((pt: any) => {
+          if (Array.isArray(pt)) setParkedTickets(pt);
+        }).catch(console.error);
+      }
+
       setCurrentView(targetView);
     } else {
       // Navigation blocked
@@ -299,6 +382,9 @@ const App: React.FC = () => {
           setInternalSequences(data.internalSequences || []);
           setReceptions(data.receptions || []);
           setProductStocks(data.productStocks || []);
+          setRooms(data.rooms || []);
+          setTables(data.tables || []);
+          if (data.rooms && data.rooms.length > 0) setActiveRoomId(data.rooms[0].id);
           setSupplierProductPrices(data.supplierProductPrices || []);
 
           // 1.5 Repair sequences (ensure counters are correct)
@@ -453,7 +539,20 @@ const App: React.FC = () => {
 
     // Start Sync Worker
     backgroundSyncManager.initialize().catch(console.error);
+  }, []); // Dependencies for checking terminal role
 
+  useEffect(() => {
+    // Poll tables if in restaurant mode OR retail with tables enabled
+    const usesTables = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.config?.operational?.usa_mesas;
+
+    if (config.vertical === 'RESTAURANT' || usesTables) {
+      fetchTables();
+      const interval = setInterval(fetchTables, 10000); // Poll every 10s
+      return () => clearInterval(interval);
+    }
+  }, [config.vertical, config.terminals, deviceId]);
+
+  useEffect(() => {
     // --- SYNC EVENT LISTENERS (For Slave Terminals) ---
     const handleSyncUpdate = async (event: Event) => {
       const collection = event.type.replace('Updated', '');
@@ -478,7 +577,7 @@ const App: React.FC = () => {
       }
     };
 
-    const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'productStocksUpdated'];
+    const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'productStocksUpdated', 'tablesUpdated'];
     syncEvents.forEach(e => window.addEventListener(e, handleSyncUpdate));
 
     return () => {
@@ -507,6 +606,7 @@ const App: React.FC = () => {
           const pin = prompt('🔐 Ingrese PIN de Administrador:');
           if (pin && authLevelService.validateEscapeHatch(pin)) {
             console.log('✅ PIN correcto - Navegando a Settings');
+            setIsAdminMode(true);  // Enable admin mode to prevent auto-redirect
             setCurrentView('SETTINGS');
           } else if (pin) {
             alert('❌ PIN incorrecto');
@@ -622,6 +722,13 @@ const App: React.FC = () => {
     setConfig(newConfig);
     await db.save('config', newConfig);
 
+    // Initial Startup Logic for Floor Plan
+    const activeTerminal = (newConfig.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+    const tableBehavior = activeTerminal?.config?.tables?.behavior;
+    if (tableBehavior === 'SIEMPRE_MOSTRAR' && currentView === 'LOGIN') {
+      // Only valid if we are transitioning from login, but handled in renderView or logic
+    }
+
     // Re-initialize services with new config
     const currentTerminal = (newConfig.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     if (currentTerminal) {
@@ -656,6 +763,13 @@ const App: React.FC = () => {
       console.warn("Could not sync config to local server", e);
       alert(`Error de conexión con ${serverUrl}. Asegúrate de que 'npm run server' esté corriendo.`);
     }
+  };
+
+  // --- PERSISTENCE HANDLER FOR PARKED TICKETS ---
+  const handleUpdateParkedTickets = async (tickets: ParkedTicket[]) => {
+    setParkedTickets(tickets);
+    // Persist to DB immediately
+    await db.save('parkedTickets', tickets); // Uses 'settings' table logic or collection
   };
 
   const handleTransactionComplete = async (txn: Transaction) => {
@@ -767,12 +881,60 @@ const App: React.FC = () => {
     backgroundSyncManager.triggerSync().catch(console.error);
   };
 
+  const handleSaveFloorPlan = async (newRooms: Room[], newTables: Table[]) => {
+    console.log('💾 Saving Floor Plan:', { rooms: newRooms.length, tables: newTables.length });
+
+    // 1. Save Rooms (Overwrite is fine for config)
+    await db.save('rooms', newRooms);
+    setRooms(newRooms);
+
+    // 2. Save Tables (Merge operational state AND Delete removed tables)
+    // First, fetch all existing tables from DB to identify deletions
+    const existingDbTables = await db.get('tables') as Table[] || [];
+    const newTableIds = new Set(newTables.map(t => t.id));
+
+    // Identify tables to delete (present in DB but not in new layout)
+    const tablesToDelete = existingDbTables.filter(t => !newTableIds.has(t.id));
+
+    if (tablesToDelete.length > 0) {
+      console.log(`🗑️ Pruning ${tablesToDelete.length} removed tables from DB...`);
+      for (const t of tablesToDelete) {
+        await db.deleteDocument('tables', t.id);
+      }
+    }
+
+    // Save Tables (Merge operational state)
+    const mergedTables = newTables.map(newT => {
+      const existing = tables.find(t => t.id === newT.id);
+      return {
+        ...newT,
+        // Operational fields usually not present in newT if it came from Designer state only,
+        // but Designer state initialized from 'tables' prop which has them.
+        // However, if 'setTables' updates local state in Designer and loses keys, we restore them here.
+        status: existing?.status || newT.status || 'FREE',
+        currentOrderId: existing?.currentOrderId || newT.currentOrderId,
+        currentOrderTotal: existing?.currentOrderTotal || newT.currentOrderTotal,
+        timeSeated: existing?.timeSeated || newT.timeSeated,
+        waiterName: existing?.waiterName || newT.waiterName
+      };
+    });
+
+    await db.save('tables', mergedTables);
+    setTables(mergedTables);
+    console.log('✅ Floor Plan saved to DB with robustness.');
+    // Optional: Sync Trigger
+    if (syncManager) {
+      // syncManager.broadcastChange('tables', null, 'UPDATE').catch(console.error);
+    }
+  };
+
   const handleZReport = async (cashCounted: number, notes: string, reportData?: any) => {
     // 1. Robust Terminal ID Discovery
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     const terminalId = currentTerminal?.id || 'T1';
 
     console.log(`📊 Z-Report: Starting closure for terminal ${terminalId} (Device: ${deviceId})`);
+
 
     // 2. Identify Transactions for closure
     // STRICT MODE: Only include transactions explicitly tagged with this terminalId.
@@ -832,6 +994,8 @@ const App: React.FC = () => {
     console.log(`🗄️ Archiving ${terminalTransactions.length} transactions to history...`);
     for (const tx of terminalTransactions) {
       await db.saveDocument('transactionHistory', { ...tx, zReportId: newZReport.id });
+      // NEW: Explicitly delete from active table to avoid orphans
+      await db.deleteDocument('transactions', tx.id);
     }
 
     // 7. Update states by removing ONLY what was closed
@@ -841,6 +1005,9 @@ const App: React.FC = () => {
     setTransactions(remainingTransactions);
     setCashMovements(remainingCashMovements);
 
+    // Note: We don't strictly need db.save('transactions', ...) anymore because we deleted them one by one, 
+    // but we keep it for other non-terminal-specific items if they existed (unlikely here).
+    // Actually, save() as "Replace" is now robust via NetworkAdapter fix.
     await db.save('transactions', remainingTransactions);
     await db.save('cashMovements', remainingCashMovements);
 
@@ -885,14 +1052,127 @@ const App: React.FC = () => {
             subVertical={config.subVertical}
             onLogin={(u) => {
               setCurrentUser(u);
-              const role = getCurrentDeviceRole();
+              const terminal = getCurrentTerminal();
+              const role = terminal?.config?.deviceRole?.role || DeviceRole.STANDARD_POS;
+
               if (role === DeviceRole.HANDHELD_INVENTORY) setCurrentView('INVENTORY_HOME');
               else if (role === DeviceRole.KITCHEN_DISPLAY) setCurrentView('KITCHEN_ORDERS');
-              else if (role === DeviceRole.SELF_CHECKOUT) setCurrentView('KIOSK_WELCOME'); // Rare for login
-              else if (role === DeviceRole.PRICE_CHECKER) setCurrentView('CHECKER_SCAN'); // Rare for login
-              else setCurrentView('POS');
+              else if (role === DeviceRole.SELF_CHECKOUT) setCurrentView('KIOSK_WELCOME');
+              else if (role === DeviceRole.PRICE_CHECKER) setCurrentView('CHECKER_SCAN');
+              else {
+                // Multi-Vertical Startup Flow
+                const pantalla = terminal?.config?.operational?.pantalla_inicio;
+                const isRetail = terminal?.config?.ux?.viewMode === 'RETAIL';
+                const usaMesas = terminal?.config?.operational?.usa_mesas;
+
+                if (pantalla === 'MAPA_MESAS' && !isRetail && usaMesas) {
+                  setCurrentView('TABLE_MAP');
+                } else {
+                  setCurrentView('POS');
+                }
+              }
             }}
           />
+        );
+
+
+
+      case 'TABLE_MAP':
+        return (
+          <div className="h-screen flex flex-col bg-slate-50">
+            <div className="bg-white border-b p-4 flex justify-between items-center z-20 shrink-0 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-slate-900 text-white rounded-lg shadow-lg">
+                  <Layout size={20} />
+                </div>
+                <h2 className="font-black text-slate-800 tracking-tight uppercase text-sm">Mapa de Mesas</h2>
+              </div>
+              <button
+                onClick={() => setCurrentView('POS')}
+                className="px-6 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold transition-all flex items-center gap-2 border border-slate-200"
+              >
+                Cerrar
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden relative">
+              <TableMap
+                rooms={rooms}
+                currentRoomId={activeRoomId}
+                tables={tables}
+                onTableClick={async (table) => {
+                  console.log('Mesa seleccionada:', table.name);
+                  setActiveTable(table);
+
+                  // If table has an order, try to load it
+                  if (table.currentOrderId) {
+                    // The order might be in transactions or parkedTiles. 
+                    // In restaurant mode, we usually keep them 'ABIERTA'.
+                    const found = (transactions || []).find(t => t.id === table.currentOrderId);
+                    if (found && found.items) {
+                      setCart(found.items);
+                    }
+                  } else {
+                    setCart([]);
+                  }
+
+                  setCurrentView('POS');
+                }}
+                onRefreshTables={fetchTables}
+                currencySymbol={config.currencySymbol}
+                currentUser={currentUser!}
+                isAdmin={currentUser?.role === 'ADMIN'}
+                bloqueoMeseros={getCurrentTerminal()?.config?.operational?.bloqueo_meseros}
+                isRestaurantMode={config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL'}
+              />
+            </div>
+          </div>
+        );
+
+      case 'TABLE_DESIGNER':
+        return (
+          <div className="h-screen flex flex-col bg-slate-50">
+            <div className="bg-white border-b p-4 flex justify-between items-center z-20 shrink-0 shadow-sm text-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-600 text-white rounded-lg shadow-lg">
+                  <Layout size={20} />
+                </div>
+                <h2 className="font-black tracking-tight uppercase text-sm">Diseñador de Planos</h2>
+              </div>
+              <button
+                onClick={async () => {
+                  // Auto-save on exit to prevent data loss
+                  await handleSaveFloorPlan(rooms, tables);
+                  setSettingsInitialView('LAYOUT');
+                  setCurrentView('SETTINGS');
+                }}
+                className="px-6 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold transition-all border border-slate-200"
+              >
+                Guardar y Volver
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <TableLayoutDesigner
+                rooms={rooms}
+                currentRoomId={activeRoomId || rooms[0]?.id || ''}
+                tables={tables}
+                onSave={(newTables) => handleSaveFloorPlan(rooms, newTables)}
+                onUpdateTables={(newTables) => setTables(newTables)}
+                onChangeRoom={(roomId) => setActiveRoomId(roomId)}
+                onCreateRoom={(name) => {
+                  const newRoom: Room = { id: 'R-' + Date.now(), name, nombre: name }; // Ensure 'nombre' is set for types
+                  const updatedRooms = [...rooms, newRoom];
+                  setRooms(updatedRooms);
+                  handleSaveFloorPlan(updatedRooms, tables);
+                }}
+                onUpdateRoom={(updatedRoom) => {
+                  const newRooms = rooms.map(r => r.id === updatedRoom.id ? updatedRoom : r);
+                  setRooms(newRooms);
+                  handleSaveFloorPlan(newRooms, tables);
+                }}
+              />
+
+            </div>
+          </div>
         );
 
       case 'POS':
@@ -925,8 +1205,12 @@ const App: React.FC = () => {
             }}
             onOpenCustomers={() => setCurrentView('CUSTOMERS')}
             onOpenHistory={() => setCurrentView('HISTORY')}
-            onOpenFinance={() => setCurrentView('FINANCE')}
+            onOpenFinance={() => handleViewChange('FINANCE')}
+            onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
+            onOpenTableMap={() => handleViewChange('TABLE_MAP')}
             onTransactionComplete={handleTransactionComplete}
+            activeTable={activeTable}
+            onClearActiveTable={() => setActiveTable(null)}
             onAddCustomer={async (c) => {
               const updated = [...customers, c];
               setCustomers(updated);
@@ -934,6 +1218,7 @@ const App: React.FC = () => {
               syncManager.broadcastChange('customers', c, 'CREATE').catch(console.error);
             }}
             onUpdateConfig={handleConfigUpdate}
+            onKioskPay={() => handleViewChange('KIOSK_PAYMENT' as any)}
             activeTerminalId={(config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1'}
           />
         );
@@ -965,6 +1250,7 @@ const App: React.FC = () => {
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
+            onOpenTableDesigner={() => setCurrentView('TABLE_DESIGNER')}
             initialView={settingsInitialView as any}
             initialData={settingsInitialData}
             isAdminMode={isAdminMode}
@@ -1008,6 +1294,7 @@ const App: React.FC = () => {
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
+            onOpenTableDesigner={() => setCurrentView('TABLE_DESIGNER')}
             isAdminMode={isAdminMode}
             initialView="SYNC"
             onClose={() => {
@@ -1379,9 +1666,68 @@ const App: React.FC = () => {
               await db.saveDocument('suppliers', s);
               syncManager.broadcastChange('suppliers', s, 'UPDATE').catch(console.error);
             }}
+            onDeleteOrder={async (orderId) => {
+              const updated = purchaseOrders.filter(o => o.id !== orderId);
+              setPurchaseOrders(updated);
+              await db.deleteDocument('purchaseOrders', orderId);
+            }}
+            onDeleteReception={async (receptionId) => {
+              const reception = receptions.find(r => r.id === receptionId);
+              if (!reception) return;
+
+              // Validation: Check if stock is sufficient to reverse
+              const insufficientStockItems = reception.items.filter(item => {
+                const product = products.find(p => p.id === item.productId);
+                return !product || (product.stock || 0) < item.quantityReceived;
+              });
+
+              if (insufficientStockItems.length > 0) {
+                const names = insufficientStockItems.map(i => i.productName).join(', ');
+                alert(`No se puede anular la recepción. El inventario de los siguientes productos ya ha sido utilizado o vendido: ${names}`);
+                return;
+              }
+
+              // Reverse Stock
+              let updatedProducts = [...products];
+              for (const item of reception.items) {
+                const productIndex = updatedProducts.findIndex(p => p.id === item.productId);
+                if (productIndex >= 0) {
+                  const currentStock = updatedProducts[productIndex].stock || 0;
+                  const newStock = currentStock - item.quantityReceived;
+
+                  const updatedProduct = { ...updatedProducts[productIndex], stock: newStock };
+                  updatedProducts[productIndex] = updatedProduct;
+
+                  await db.saveDocument('products', updatedProduct);
+
+                  // Record Adjustment
+                  await db.recordInventoryMovement(
+                    config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central',
+                    item.productId,
+                    'AJUSTE_SALIDA', // Correction
+                    `VOID-${receptionId}`,
+                    -item.quantityReceived,
+                    item.cost,
+                    getCurrentTerminal()?.id || 'T1',
+                    item.variantSku,
+                    item.variantInfo
+                  );
+                }
+              }
+              setProducts(updatedProducts);
+
+              // Remove Reception
+              const updatedReceptions = receptions.filter(r => r.id !== receptionId);
+              setReceptions(updatedReceptions);
+              await db.deleteDocument('receptions', receptionId);
+              alert("Recepción anulada y stock revertido correctamente.");
+            }}
           />
         );
 
+      // Inventory Tracking
+      case 'TRACKING':
+        return <InventoryTracking onClose={() => handleViewChange('POS')} initialProductId={viewData?.productId} />;
       case 'FRANCHISE_DASHBOARD':
         return <FranchiseDashboard onBack={() => setCurrentView('POS')} />;
 
@@ -1528,6 +1874,9 @@ const App: React.FC = () => {
       case 'VISOR' as any:
         return <CustomerVisor />;
 
+      case 'KITCHEN_ORDERS':
+        return <KitchenDisplay />;
+
       default:
         return <div className="h-screen flex items-center justify-center">Vista no implementada.</div>;
     }
@@ -1564,10 +1913,10 @@ const App: React.FC = () => {
     };
 
     // Handle navigation for handheld
-    const handleHandheldNavigate = (view: string) => {
+    const handleHandheldNavigate = (view: string, data?: any) => {
       const decision = terminalRouter.beforeNavigate(view, currentView);
       if (decision.allowed) {
-        setCurrentView(view as ViewState);
+        handleViewChange(view as ViewState, data);
       } else {
         alert(decision.message || 'Navegación no permitida');
       }
@@ -1624,9 +1973,20 @@ const App: React.FC = () => {
     }
   };
 
+  if (!isDataLoaded) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-slate-50 text-slate-900">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
+          <p className="font-bold animate-pulse">Cargando CLIC POS...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <ErrorBoundary componentName="App Root">
-      <div className="h-screen w-screen overflow-hidden">
+      <div className="fixed inset-0 w-full h-full overflow-hidden bg-gray-50 flex flex-col font-sans select-none text-gray-900">
         {renderWithLayout()}
       </div>
     </ErrorBoundary>

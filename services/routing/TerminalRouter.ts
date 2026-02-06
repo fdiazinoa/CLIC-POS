@@ -43,8 +43,10 @@ const VIEW_TO_MODULE_MAP: Record<string, string> = {
     'INVENTORY_RECEPTION': 'inventory',
     'INVENTORY_LABELS': 'inventory',
 
-    // Kitchen display routes
-    'KITCHEN_ORDERS': 'kitchen'
+    'KITCHEN_ORDERS': 'kitchen',
+
+    // Table Management
+    'TABLE_MAP': 'sales'
 };
 
 class TerminalRouter {

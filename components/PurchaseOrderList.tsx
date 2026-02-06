@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Plus, FileText, Calendar, ArrowRight, Mail, Clock, Check } from 'lucide-react';
+import { Search, Plus, FileText, Calendar, ArrowRight, Mail, Clock, Check, Trash2 } from 'lucide-react';
 import { PurchaseOrder, Supplier, BusinessConfig } from '../types';
 import { formatSafeDate } from '../utils/dateUtils';
 
@@ -10,6 +10,7 @@ interface PurchaseOrderListProps {
     onNewOrder: () => void;
     onViewDetail: (orderId: string) => void;
     onSendEmail: (order: PurchaseOrder) => void;
+    onDeleteOrder: (orderId: string) => void;
 }
 
 const PurchaseOrderList: React.FC<PurchaseOrderListProps> = ({
@@ -18,7 +19,8 @@ const PurchaseOrderList: React.FC<PurchaseOrderListProps> = ({
     config,
     onNewOrder,
     onViewDetail,
-    onSendEmail
+    onSendEmail,
+    onDeleteOrder
 }) => {
     const [search, setSearch] = useState('');
 
@@ -129,7 +131,7 @@ const PurchaseOrderList: React.FC<PurchaseOrderListProps> = ({
 
                                         <div className="text-center md:text-left">
                                             <p className="text-[10px] uppercase text-gray-400 font-bold mb-1">Monto Total</p>
-                                            <p className="text-gray-800 font-black">{config.currencySymbol}{po.totalCost.toLocaleString()}</p>
+                                            <p className="text-gray-800 font-black">{config.currencySymbol}{(po.totalCost || 0).toLocaleString()}</p>
                                         </div>
 
                                         <div className="min-w-[100px] flex justify-center md:justify-start">
@@ -143,6 +145,18 @@ const PurchaseOrderList: React.FC<PurchaseOrderListProps> = ({
                                                 title="Enviar por Email"
                                             >
                                                 <Mail size={20} />
+                                            </button>
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (window.confirm('¿Estás seguro de que deseas eliminar esta orden?')) {
+                                                        onDeleteOrder(po.id);
+                                                    }
+                                                }}
+                                                className="p-2 bg-gray-50 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                                title="Eliminar Orden"
+                                            >
+                                                <Trash2 size={20} />
                                             </button>
                                             <div className="p-2 text-gray-300 group-hover:text-purple-600 transition-colors">
                                                 <ArrowRight size={24} />

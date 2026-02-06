@@ -21,67 +21,66 @@ export const getCollection = (name: string): any[] => {
         if (tableExists) {
             const columns = db.prepare(`PRAGMA table_info(${name})`).all() as any[];
             const hasDataColumn = columns.some(c => c.name === 'data');
+            const rows = db.prepare(`SELECT * FROM ${name}`).all() as any[];
 
-            if (hasDataColumn) {
-                const rows = db.prepare(`SELECT data FROM ${name}`).all() as any[];
-                return rows.map(r => JSON.parse(r.data));
-            } else {
-                const rows = db.prepare(`SELECT * FROM ${name}`).all() as any[];
+            // Define JSON fields for each table
+            const jsonFields: Record<string, string[]> = {
+                products: ['images', 'attributes', 'variants', 'tariffs', 'stockBalances', 'activeInWarehouses', 'appliedTaxIds', 'warehouseSettings', 'availableModifiers', 'operationalFlags', 'recipeDetails'],
+                roles: ['permissions', 'zReportConfig'],
+                customers: ['tags', 'addresses'],
+                transactions: ['items', 'payments', 'customerSnapshot', 'relatedTransactions'],
+                receptions: ['items'],
+                z_reports: ['totalsByMethod', 'cashExpected', 'cashCounted', 'cashDiscrepancy', 'stats'],
+                users: [], // No JSON fields
+                transaction_history: ['items', 'payments', 'customerSnapshot', 'relatedTransactions'],
+                rooms: ['data'],
+                tables: ['data']
+            };
 
-                // Define JSON fields for each table
-                const jsonFields: Record<string, string[]> = {
-                    products: ['images', 'attributes', 'variants', 'tariffs', 'stockBalances', 'activeInWarehouses', 'appliedTaxIds', 'warehouseSettings', 'availableModifiers', 'operationalFlags'],
-                    roles: ['permissions', 'zReportConfig'],
-                    customers: ['tags', 'addresses'],
-                    transactions: ['items', 'payments', 'customerSnapshot', 'relatedTransactions'],
-                    receptions: ['items'],
-                    z_reports: ['totalsByMethod', 'cashExpected', 'cashCounted', 'cashDiscrepancy', 'stats'],
-                    users: [], // No JSON fields
-                    transaction_history: ['items', 'payments', 'customerSnapshot', 'relatedTransactions']
-                };
+            // Boolean conversion for dedicated tables
+            const booleanFields: Record<string, string[]> = {
+                roles: ['isSystem'],
+                warehouses: ['allowPosSale', 'allowNegativeStock', 'isMain'],
+                customers: ['requiresFiscalInvoice', 'prefersEmail', 'isTaxExempt', 'applyChainedTax'],
+                transactions: ['isTaxIncluded'],
+                transaction_history: ['isTaxIncluded'],
+                products: ['hasActivePromotion'], // UI flag if present
+                parametros_operativos: ['usa_mesas', 'bloqueo_meseros', 'pedir_comensales']
+            };
 
-                // Boolean conversion for dedicated tables
-                const booleanFields: Record<string, string[]> = {
-                    roles: ['isSystem'],
-                    warehouses: ['allowPosSale', 'allowNegativeStock', 'isMain'],
-                    customers: ['requiresFiscalInvoice', 'prefersEmail', 'isTaxExempt', 'applyChainedTax'],
-                    transactions: ['isTaxIncluded'],
-                    transaction_history: ['isTaxIncluded'],
-                    products: ['hasActivePromotion'] // UI flag if present
-                };
-
+            return rows.map(row => {
+                const newRow = { ...row };
                 const fieldsToParse = jsonFields[name] || [];
-                const fieldsToConvert = booleanFields[name] || [];
 
-                if (fieldsToParse.length > 0 || fieldsToConvert.length > 0) {
-                    return rows.map(row => {
-                        const newRow = { ...row };
-
-                        // Parse JSON fields
-                        fieldsToParse.forEach(field => {
-                            if (field in newRow && typeof newRow[field] === 'string') {
-                                try {
-                                    newRow[field] = JSON.parse(newRow[field]);
-                                } catch (e) {
-                                    console.warn(`Failed to parse JSON for ${name}.${field} (id=${newRow.id}):`, e);
-                                    newRow[field] = []; // Fallback
-                                }
-                            }
-                        });
-
-                        // Convert Booleans
-                        fieldsToConvert.forEach(field => {
-                            if (field in newRow) {
-                                newRow[field] = newRow[field] === 1;
-                            }
-                        });
-
-                        return newRow;
-                    });
+                // Always try to parse 'data' if it exists in schema but not in our explicit map
+                if (hasDataColumn && !fieldsToParse.includes('data')) {
+                    fieldsToParse.push('data');
                 }
 
-                return rows;
-            }
+                // Parse JSON fields
+                fieldsToParse.forEach(field => {
+                    if (field in newRow && typeof newRow[field] === 'string' && newRow[field] !== null) {
+                        try {
+                            newRow[field] = JSON.parse(newRow[field]);
+                        } catch (e) {
+                            console.warn(`Failed to parse JSON for ${name}.${field} (id=${newRow.id}):`, e);
+                            newRow[field] = null;
+                        }
+                    } else if (field in newRow && newRow[field] === null) {
+                        newRow[field] = null;
+                    }
+                });
+
+                // Convert Booleans
+                const fieldsToConvert = booleanFields[name] || [];
+                fieldsToConvert.forEach(field => {
+                    if (field in newRow) {
+                        newRow[field] = newRow[field] === 1;
+                    }
+                });
+
+                return newRow;
+            });
         } else {
             const setting = db.prepare("SELECT value FROM settings WHERE key=?").get(name) as any;
             return setting ? JSON.parse(setting.value) : [];
@@ -91,7 +90,6 @@ export const getCollection = (name: string): any[] => {
         return [];
     }
 };
-
 
 /**
  * Helper to get a single object (mimics lowdb .get().value() for objects)
@@ -112,4 +110,3 @@ export const getSetting = (key: string): any => {
 export const saveSetting = (key: string, value: any) => {
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(key, JSON.stringify(value));
 };
-

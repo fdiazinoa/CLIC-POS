@@ -119,7 +119,171 @@ server.use('/api/email', emailRoutes);
 server.use('/api/suppliers', supplierRoutes);
 server.use('/api/currencies', currencyRoutes);
 server.use('/api/maintenance', maintenanceRoutes);
-server.use('/api/dgii', dgiiRoutes); // Mount new route
+server.use('/api/dgii', dgiiRoutes);
+
+// --- Mesas & Salas Endpoints ---
+server.get('/api/mesas', (req, res) => {
+    const { terminal_id } = req.query;
+    try {
+        let rooms;
+        if (terminal_id) {
+            // Filter by terminal visibility
+            const hasVisibilityConfig = db.prepare("SELECT 1 FROM terminals_rooms_visibility WHERE terminal_id = ?").get(terminal_id);
+            if (hasVisibilityConfig) {
+                rooms = db.prepare(`
+                    SELECT r.* FROM rooms r
+                    JOIN terminals_rooms_visibility v ON r.id = v.room_id
+                    WHERE v.terminal_id = ?
+                    ORDER BY r.orden ASC
+                `).all(terminal_id);
+            } else {
+                rooms = db.prepare("SELECT * FROM rooms ORDER BY orden ASC").all();
+            }
+        } else {
+            rooms = db.prepare("SELECT * FROM rooms ORDER BY orden ASC").all();
+        }
+
+        const tables = db.prepare("SELECT * FROM tables").all();
+
+        // Format for frontend (parse JSON 'data' field)
+        const formattedRooms = rooms.map((r: any) => ({
+            ...r,
+            data: r.data ? JSON.parse(r.data) : {}
+        }));
+
+        const formattedTables = tables.map((t: any) => ({
+            ...t,
+            data: t.data ? JSON.parse(t.data) : {}
+        }));
+
+        res.json({ rooms: formattedRooms, tables: formattedTables });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Mover mesa
+server.post('/api/mesas/mover', (req, res) => {
+    const { fromTableId, toTableId } = req.body;
+    try {
+        const moveTransaction = db.transaction(() => {
+            const fromTable = db.prepare("SELECT * FROM tables WHERE id = ?").get(fromTableId) as any;
+            const toTable = db.prepare("SELECT * FROM tables WHERE id = ?").get(toTableId) as any;
+
+            if (!fromTable || !toTable) throw new Error("Table not found");
+            if (fromTable.status !== 'OCCUPIED') throw new Error("Origin table is not occupied");
+            if (toTable.status !== 'FREE') throw new Error("Destination table is not free");
+
+            // Update Destination
+            db.prepare(`
+                UPDATE tables 
+                SET status = 'OCCUPIED', 
+                    currentOrderId = ?, 
+                    currentOrderTotal = ?, 
+                    timeSeated = ?,
+                    waiterName = ?
+                WHERE id = ?
+            `).run(fromTable.currentOrderId, fromTable.currentOrderTotal, fromTable.timeSeated, fromTable.waiterName, toTableId);
+
+            // Clear Origin
+            db.prepare(`
+                UPDATE tables 
+                SET status = 'FREE', 
+                    currentOrderId = NULL, 
+                    currentOrderTotal = NULL, 
+                    timeSeated = NULL, 
+                    waiterName = NULL 
+                WHERE id = ?
+            `).run(fromTableId);
+        });
+
+        moveTransaction();
+        res.json({ success: true, message: 'Table moved successfully' });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+// Custom GET /api/tables implementation for Dynamic Status (LEFT JOIN)
+server.get('/api/tables', (req, res) => {
+    try {
+        // 1. Get Parked Tickets (simulated 'orders' table)
+        // We use a CTE or complex query to join JSON data from settings
+        // Note: In a real SQL environment, 'orders' would be a table. Here 'parkedTickets' is a JSON blob in settings.
+
+        const allTables = db.prepare(`SELECT * FROM tables`).all() as any[];
+        const parkedTicketsBlob = db.prepare(`SELECT value FROM settings WHERE key = 'parkedTickets'`).get() as any;
+        const parkedTickets = parkedTicketsBlob ? JSON.parse(parkedTicketsBlob.value) : [];
+
+        // We manually join because SQLite JSON support varies by version/compilation and simple array join is efficient enough for cache
+
+        // Map to requested structure
+        const enrichedTables = allTables.map(t => {
+            // Parse internal data if it exists
+            const data = t.data ? (typeof t.data === 'string' ? JSON.parse(t.data) : t.data) : {};
+
+            // Dynamic Status Lookup
+            // User Request: LEFT JOIN with orders where status='OPEN'
+            const associatedOrder = parkedTickets.find((p: any) => p.id === t.currentOrderId);
+
+            const dynamicStatus = associatedOrder ? 'OCCUPIED' : 'FREE';
+
+            // Calculate total from order items if available, or fallback to stored total
+            const total = associatedOrder
+                ? associatedOrder.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0)
+                : 0;
+
+            return {
+                ...t,
+                data,
+                // Derived fields overriding static ones
+                status: dynamicStatus,
+                currentOrderTotal: total, // Real-time calculation from ticket
+                orden_activa_id: t.currentOrderId, // Alias requested
+                total_actual: total, // Alias requested
+                mesero_nombre: t.waiterName // Alias requested
+            };
+        });
+
+        res.json(enrichedTables);
+    } catch (error: any) {
+        console.error("Error fetching tables:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Generic Table Update (for POS status updates) handled by generic /api/:collection/:id
+
+server.post('/api/mesas/unir', (req, res) => {
+    const { mainTableId, secondaryTableIds } = req.body;
+    // Stub
+    try {
+        res.json({ success: true, message: 'Tables joined successfully' });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Liberar mesa (Clear Order)
+server.post('/api/mesas/liberar', (req, res) => {
+    const { tableId } = req.body;
+    try {
+        db.prepare(`
+            UPDATE tables 
+            SET status = 'FREE', 
+                currentOrderId = NULL, 
+                currentOrderTotal = 0, 
+                timeSeated = NULL, 
+                waiterName = NULL,
+                waiterId = NULL
+            WHERE id = ?
+        `).run(tableId);
+        res.json({ success: true });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
 // Helper to process json-server style queries
 const processQuery = (data: any[], query: any) => {
@@ -198,7 +362,36 @@ const mapCollectionName = (name: string): string => {
 server.get('/api/:collection', (req, res) => {
     const { collection } = req.params;
     const dbName = mapCollectionName(collection);
-    const data = getCollection(dbName);
+
+    let data;
+    if (collection === 'rooms' && req.query.terminal_id) {
+        try {
+            const terminalId = req.query.terminal_id;
+            const hasVisibilityConfig = db.prepare("SELECT 1 FROM terminals_rooms_visibility WHERE terminal_id = ?").get(terminalId);
+
+            let rooms;
+            if (hasVisibilityConfig) {
+                rooms = db.prepare(`
+                    SELECT r.* FROM rooms r
+                    JOIN terminals_rooms_visibility v ON r.id = v.room_id
+                    WHERE v.terminal_id = ?
+                    ORDER BY r.orden ASC
+                `).all(terminalId);
+            } else {
+                rooms = db.prepare("SELECT * FROM rooms ORDER BY orden ASC").all();
+            }
+
+            data = rooms.map((r: any) => ({
+                ...r,
+                data: r.data ? JSON.parse(r.data) : {}
+            }));
+        } catch (error) {
+            console.error('Error fetching filtered rooms:', error);
+            data = getCollection(dbName);
+        }
+    } else {
+        data = getCollection(dbName);
+    }
 
     const { result, totalCount } = processQuery(data, req.query);
 
@@ -231,25 +424,22 @@ server.post('/api/:collection', (req, res) => {
 
         if (tableExists) {
             const columns = db.prepare(`PRAGMA table_info(${dbName})`).all() as any[];
-            const hasDataColumn = columns.some(c => c.name === 'data');
+            const colNames = columns.map(c => c.name);
+            const placeholders = colNames.map(() => '?').join(',');
 
-            if (hasDataColumn) {
-                db.prepare(`INSERT INTO ${dbName} (id, data) VALUES (?, ?)`).run(item.id, JSON.stringify(item));
-            } else {
-                // Structured table
-                const colNames = columns.map(c => c.name);
-                const placeholders = colNames.map(() => '?').join(',');
+            const values = colNames.map(col => {
+                // Hybrid logic: If the column is 'data', we stringify the whole item.
+                // This creates a catch-all backup while populating structured columns.
+                if (col === 'data') {
+                    return JSON.stringify(item);
+                }
+                const val = item[col];
+                if (typeof val === 'object' && val !== null) return JSON.stringify(val);
+                if (typeof val === 'boolean') return val ? 1 : 0;
+                return val !== undefined ? val : null;
+            });
 
-                // Filter item keys to match columns
-                const values = colNames.map(col => {
-                    const val = item[col];
-                    if (typeof val === 'object') return JSON.stringify(val);
-                    if (typeof val === 'boolean') return val ? 1 : 0;
-                    return val;
-                });
-
-                db.prepare(`INSERT INTO ${dbName} (${colNames.join(',')}) VALUES (${placeholders})`).run(...values);
-            }
+            db.prepare(`INSERT INTO ${dbName} (${colNames.join(',')}) VALUES (${placeholders})`).run(...values);
         } else {
             // Fallback to settings for non-table collections
             const current = getSetting(dbName);
@@ -303,24 +493,34 @@ server.put('/api/:collection/:id', (req, res) => {
 
         if (tableExists) {
             const columns = db.prepare(`PRAGMA table_info(${dbName})`).all() as any[];
-            const hasDataColumn = columns.some(c => c.name === 'data');
+            const colNames = columns.map(c => c.name).filter(c => c !== 'id');
+            const sets = colNames.map(c => `${c} = ?`).join(',');
 
-            if (hasDataColumn) {
-                db.prepare(`UPDATE ${dbName} SET data = ? WHERE id = ?`).run(JSON.stringify(item), id);
-            } else {
-                // Structured table
-                const colNames = columns.map(c => c.name).filter(c => c !== 'id'); // Don't update ID
-                const setClause = colNames.map(c => `${c} = ?`).join(',');
+            const values = colNames.map(col => {
+                if (col === 'data') return JSON.stringify(item);
+                const val = item[col];
+                if (typeof val === 'object' && val !== null) return JSON.stringify(val);
+                if (typeof val === 'boolean') return val ? 1 : 0;
+                return val !== undefined ? val : null;
+            });
 
-                const values = colNames.map(col => {
+            const result = db.prepare(`UPDATE ${dbName} SET ${sets} WHERE id = ?`).run(...values, id);
+
+            if (result.changes === 0) {
+                // Item not found, perform INSERT (Upsert behavior)
+                const allCols = db.prepare(`PRAGMA table_info(${dbName})`).all() as any[];
+                const allColNames = allCols.map(c => c.name);
+                const placeholders = allColNames.map(() => '?').join(',');
+
+                const insertValues = allColNames.map(col => {
+                    if (col === 'data') return JSON.stringify(item);
                     const val = item[col];
-                    if (val === undefined) return null; // FIX: Better-sqlite3 throws on undefined
                     if (typeof val === 'object' && val !== null) return JSON.stringify(val);
                     if (typeof val === 'boolean') return val ? 1 : 0;
-                    return val;
+                    return val !== undefined ? val : null;
                 });
 
-                db.prepare(`UPDATE ${dbName} SET ${setClause} WHERE id = ?`).run(...values, id);
+                db.prepare(`INSERT INTO ${dbName} (${allColNames.join(',')}) VALUES (${placeholders})`).run(...insertValues);
             }
         } else {
             const current = getSetting(dbName) || [];
@@ -329,7 +529,9 @@ server.put('/api/:collection/:id', (req, res) => {
                 current[index] = { ...current[index], ...item };
                 saveSetting(dbName, current);
             } else {
-                return res.status(404).json({ error: 'Not found' });
+                // Upsert for settings-based collections
+                current.push(item);
+                saveSetting(dbName, current);
             }
         }
 
@@ -454,5 +656,160 @@ const ensureTransactionHistoryTable = () => {
     }
 }
 
+const ensureOperationalConfigTable = () => {
+    try {
+        const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='parametros_operativos'").get();
+        if (!tableExists) {
+            console.log('📦 Migrating operational configuration...');
+            db.prepare(`
+                CREATE TABLE IF NOT EXISTS parametros_operativos (
+                    id TEXT PRIMARY KEY,
+                    vertical_negocio TEXT DEFAULT 'RETAIL',
+                    usa_mesas INTEGER DEFAULT 0,
+                    pantalla_inicio TEXT DEFAULT 'VENTA_DIRECTA',
+                    bloqueo_meseros INTEGER DEFAULT 0,
+                    pedir_comensales INTEGER DEFAULT 1
+                );
+            `).run();
+
+            // Insert default row
+            db.prepare(`
+                INSERT INTO parametros_operativos (id, vertical_negocio, usa_mesas, pantalla_inicio, bloqueo_meseros, pedir_comensales)
+                VALUES ('DEFAULT', 'RETAIL', 0, 'VENTA_DIRECTA', 0, 1);
+            `).run();
+            console.log('✅ operational configuration table created.');
+        }
+    } catch (error) {
+        console.error('❌ Failed to ensure operational config table:', error);
+    }
+}
+
+const ensureFloorPlanTables = () => {
+    try {
+        const roomsExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='rooms'").get();
+        if (!roomsExists) {
+            console.log('📦 Migrating rooms and tables...');
+            db.prepare(`
+                CREATE TABLE IF NOT EXISTS rooms (
+                    id TEXT PRIMARY KEY,
+                    nombre TEXT NOT NULL,
+                    consumo_minimo REAL DEFAULT 0,
+                    capacidad_personas INTEGER DEFAULT 0,
+                    cargo_servicio_pct REAL DEFAULT 0,
+                    orden INTEGER DEFAULT 0,
+                    data TEXT
+                );
+            `).run();
+            db.prepare(`
+                CREATE TABLE IF NOT EXISTS tables (
+                    id TEXT PRIMARY KEY,
+                    roomId TEXT NOT NULL,
+                    nombre TEXT NOT NULL,
+                    status TEXT DEFAULT 'FREE',
+                    data TEXT,
+                    FOREIGN KEY (roomId) REFERENCES rooms(id)
+                );
+            `).run();
+            db.prepare(`
+                CREATE TABLE IF NOT EXISTS terminals_rooms_visibility (
+                    terminal_id TEXT NOT NULL,
+                    room_id TEXT NOT NULL,
+                    PRIMARY KEY (terminal_id, room_id),
+                    FOREIGN KEY (room_id) REFERENCES rooms(id)
+                );
+            `).run();
+            console.log('✅ Rooms and Tables created.');
+        } else {
+            // Schema check/migration for existing tables
+            const columns = db.prepare("PRAGMA table_info(rooms)").all() as any[];
+            const hasNombre = columns.some(c => c.name === 'nombre');
+            const hasConsumo = columns.some(c => c.name === 'consumo_minimo');
+
+
+            // Check for missing layout columns in 'tables'
+            const tableColumns = db.prepare("PRAGMA table_info(tables)").all() as any[];
+            const hasPosX = tableColumns.some(c => c.name === 'posX');
+
+            if (!hasPosX) {
+                console.log('📦 Migrating tables: Adding layout columns...');
+                try {
+                    db.prepare("ALTER TABLE tables ADD COLUMN posX REAL DEFAULT 0").run();
+                    db.prepare("ALTER TABLE tables ADD COLUMN posY REAL DEFAULT 0").run();
+                    db.prepare("ALTER TABLE tables ADD COLUMN width REAL DEFAULT 80").run();
+                    db.prepare("ALTER TABLE tables ADD COLUMN height REAL DEFAULT 80").run();
+                    db.prepare("ALTER TABLE tables ADD COLUMN shape TEXT DEFAULT 'SQUARE'").run();
+                    db.prepare("ALTER TABLE tables ADD COLUMN rotation REAL DEFAULT 0").run();
+                    console.log('✅ Tables layout columns added.');
+                } catch (e) {
+                    console.error('❌ Failed to add layout columns to tables:', e);
+                }
+            }
+
+            if (!hasNombre) {
+                console.log('📦 Migrating rooms: Adding new columns and renaming name->nombre...');
+                // SQLite doesn't support renaming and adding col in one go easily if we want to preserve data
+                // but here we can just add the missing ones.
+                db.prepare("ALTER TABLE rooms ADD COLUMN nombre TEXT NOT NULL DEFAULT 'Sala'").run();
+                db.prepare("UPDATE rooms SET nombre = name WHERE name IS NOT NULL").run();
+                // We'll keep 'name' for compatibility if needed, but 'nombre' is preferred now.
+            }
+            if (!hasConsumo) {
+                db.prepare("ALTER TABLE rooms ADD COLUMN consumo_minimo REAL DEFAULT 0").run();
+                db.prepare("ALTER TABLE rooms ADD COLUMN capacidad_personas INTEGER DEFAULT 0").run();
+                db.prepare("ALTER TABLE rooms ADD COLUMN cargo_servicio_pct REAL DEFAULT 0").run();
+                db.prepare("ALTER TABLE rooms ADD COLUMN orden INTEGER DEFAULT 0").run();
+            }
+
+            // Tables rename name -> nombre
+            const tableCols = db.prepare("PRAGMA table_info(tables)").all() as any[];
+            if (!tableCols.some(c => c.name === 'nombre')) {
+                db.prepare("ALTER TABLE tables ADD COLUMN nombre TEXT").run();
+                db.prepare("UPDATE tables SET nombre = name WHERE name IS NOT NULL").run();
+            }
+            if (!tableCols.some(c => c.name === 'currentOrderId')) {
+                console.log('📦 Migrating tables: Adding runtime columns...');
+                db.prepare("ALTER TABLE tables ADD COLUMN currentOrderId TEXT").run();
+                db.prepare("ALTER TABLE tables ADD COLUMN currentOrderTotal REAL DEFAULT 0").run();
+                db.prepare("ALTER TABLE tables ADD COLUMN timeSeated TEXT").run();
+                db.prepare("ALTER TABLE tables ADD COLUMN waiterName TEXT").run();
+            }
+
+            // Ensure terminals_rooms_visibility
+            db.prepare(`
+                CREATE TABLE IF NOT EXISTS terminals_rooms_visibility (
+                    terminal_id TEXT NOT NULL,
+                    room_id TEXT NOT NULL,
+                    PRIMARY KEY (terminal_id, room_id),
+                    FOREIGN KEY (room_id) REFERENCES rooms(id)
+                );
+            `).run();
+        }
+    } catch (error) {
+        console.error('❌ Failed to migrate Floor Plan tables:', error);
+    }
+}
+
+const ensureRecipeColumns = () => {
+    try {
+        const columns = db.prepare("PRAGMA table_info(products)").all() as any[];
+        const hasTheoreticalCost = columns.some(c => c.name === 'theoreticalCost');
+        const hasRecipeDetails = columns.some(c => c.name === 'recipeDetails');
+
+        if (!hasTheoreticalCost) {
+            console.log('📦 Migrating products: Adding theoreticalCost...');
+            db.prepare("ALTER TABLE products ADD COLUMN theoreticalCost REAL DEFAULT 0").run();
+        }
+        if (!hasRecipeDetails) {
+            console.log('📦 Migrating products: Adding recipeDetails...');
+            db.prepare("ALTER TABLE products ADD COLUMN recipeDetails TEXT").run();
+        }
+    } catch (error) {
+        console.error('❌ Failed to ensure Recipe columns:', error);
+    }
+}
+
 // Run migration on startup
 ensureTransactionHistoryTable();
+ensureOperationalConfigTable();
+ensureFloorPlanTables();
+ensureRecipeColumns();

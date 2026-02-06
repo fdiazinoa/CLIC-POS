@@ -12,6 +12,7 @@ interface QuickActionsProps {
     onClose: () => void;
     onUpdateProduct: (updatedProduct: Product) => void;
     onAdvancedEdit: (product: Product) => void;
+    onViewHistory: (product: Product) => void;
     warehouses: Warehouse[];
     config: BusinessConfig;
     currentUser: User;
@@ -24,6 +25,7 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
     onClose,
     onUpdateProduct,
     onAdvancedEdit,
+    onViewHistory,
     warehouses,
     config,
     currentUser,
@@ -158,6 +160,9 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
                     <div className="py-1">
                         <button onClick={() => setActiveModal('STOCK')} className="w-full flex items-center gap-3 px-3 py-2 text-sm font-bold text-gray-700 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl transition-all">
                             <Globe size={18} /> Ver Stock Global
+                        </button>
+                        <button onClick={() => { onViewHistory(product); onClose(); }} className="w-full flex items-center gap-3 px-3 py-2 text-sm font-bold text-gray-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-xl transition-all">
+                            <Box size={18} /> Ver Historial
                         </button>
                         <button className="w-full flex items-center gap-3 px-3 py-2 text-sm font-bold text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700/50 rounded-xl transition-all opacity-50 cursor-not-allowed">
                             <Printer size={18} /> Imprimir Etiqueta

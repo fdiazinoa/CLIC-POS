@@ -3,14 +3,15 @@ import React, { useState, useMemo, useEffect } from 'react';
 import {
    ArrowLeft, Search, Calendar, ChevronDown, ChevronUp,
    Printer, RotateCcw, AlertCircle, Check, X, FileText,
-   User as UserIcon, DollarSign, Box, Filter, Gift, QrCode, StickyNote
+   User as UserIcon, DollarSign, Box, Filter, Gift, QrCode, StickyNote,
+   MoreVertical, CreditCard, Banknote, Wallet, TrendingUp, Hash, Percent
 } from 'lucide-react';
 import { Transaction, BusinessConfig, CartItem, RoleDefinition } from '../types';
 import { validateTerminalDocument } from '../utils/validation';
 import { printTicket } from '../utils/printer';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
-import { User } from '../types';
+import { User, DeviceRole } from '../types';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -32,9 +33,234 @@ const REASONS: { id: ReturnReason; label: string }[] = [
    { id: 'EXPIRED', label: 'Producto Vencido' },
 ];
 
+// --- SUB-COMPONENTS ---
+
+const SalesSummaryBar: React.FC<{ kpis: any; config: BusinessConfig }> = ({ kpis, config }) => (
+   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      {[
+         { label: 'Ventas Totales', value: kpis.totalSales, icon: <TrendingUp className="text-green-500" />, isCurrency: true },
+         { label: 'Cantidad Tickets', value: kpis.ticketCount, icon: <Hash className="text-blue-500" />, isCurrency: false },
+         { label: 'Ticket Promedio', value: kpis.avgTicket, icon: <Percent className="text-purple-500" />, isCurrency: true },
+         { label: 'Devoluciones', value: kpis.refunds, icon: <RotateCcw className="text-red-500" />, isCurrency: true, isRed: true },
+      ].map((stat, i) => (
+         <div key={i} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center gap-4">
+            <div className="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center">
+               {stat.icon}
+            </div>
+            <div>
+               <p className="text-[10px] font-bold uppercase text-gray-400 tracking-wider">{stat.label}</p>
+               <p className={`text-lg font-black ${stat.isRed ? 'text-red-600' : 'text-gray-900'}`}>
+                  {stat.isCurrency ? `${config.currencySymbol}${stat.value.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : stat.value}
+               </p>
+            </div>
+         </div>
+      ))}
+   </div>
+);
+
+const SalesHistoryTable: React.FC<{
+   transactions: Transaction[];
+   config: BusinessConfig;
+   onRowClick: (id: string) => void;
+   themeBg: string;
+   themeText: string;
+}> = ({ transactions, config, onRowClick, themeBg, themeText }) => {
+   const getStatusBadge = (tx: Transaction) => {
+      if (tx.status === 'REFUNDED') return <span className="px-2 py-0.5 bg-red-100 text-red-600 rounded-full text-[10px] font-bold">ANULADO</span>;
+      if (tx.status === 'PARTIAL_REFUND') return <span className="px-2 py-0.5 bg-orange-100 text-orange-600 rounded-full text-[10px] font-bold">PARTIAL</span>;
+      return <span className="px-2 py-0.5 bg-green-100 text-green-600 rounded-full text-[10px] font-bold">COMPLETADO</span>;
+   };
+
+   const getPaymentIcon = (method: string) => {
+      switch (method?.toUpperCase()) {
+         case 'CASH':
+         case 'EFECTIVO': return <Banknote size={14} className="text-green-600" />;
+         case 'CARD':
+         case 'TARJETA': return <CreditCard size={14} className="text-blue-600" />;
+         case 'TRANSFER':
+         case 'TRANSFERENCIA': return <Wallet size={14} className="text-purple-600" />;
+         default: return <DollarSign size={14} className="text-gray-400" />;
+      }
+   };
+
+   return (
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+         <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm border-collapse">
+               <thead className="bg-gray-50 sticky top-0 z-10 border-b border-gray-100">
+                  <tr>
+                     <th className="px-4 py-3 font-bold text-gray-400 uppercase text-[10px] tracking-widest">Estado</th>
+                     <th className="px-4 py-3 font-bold text-gray-400 uppercase text-[10px] tracking-widest">Folio</th>
+                     <th className="px-4 py-3 font-bold text-gray-400 uppercase text-[10px] tracking-widest">Fecha / Hora</th>
+                     <th className="px-4 py-3 font-bold text-gray-400 uppercase text-[10px] tracking-widest">Cliente</th>
+                     <th className="px-4 py-3 font-bold text-gray-400 uppercase text-[10px] tracking-widest text-center">Pago</th>
+                     <th className="px-4 py-3 font-bold text-gray-400 uppercase text-[10px] tracking-widest text-right">Total</th>
+                     <th className="px-4 py-3 font-bold text-gray-400 uppercase text-[10px] tracking-widest text-right"></th>
+                  </tr>
+               </thead>
+               <tbody className="divide-y divide-gray-50">
+                  {transactions.map((tx) => (
+                     <tr
+                        key={tx.id}
+                        onClick={() => onRowClick(tx.id)}
+                        className="hover:bg-gray-50 transition-colors cursor-pointer group"
+                     >
+                        <td className="px-4 py-3">{getStatusBadge(tx)}</td>
+                        <td className="px-4 py-3 text-xs font-medium text-gray-500">{tx.displayId || tx.id.slice(-8).toUpperCase()}</td>
+                        <td className="px-4 py-3">
+                           <p className="font-bold text-gray-800">{new Date(tx.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                           <p className="text-[10px] text-gray-400 font-medium">{new Date(tx.date).toLocaleDateString()}</p>
+                        </td>
+                        <td className="px-4 py-3">
+                           {tx.customerName && tx.customerName !== 'null' ? (
+                              <p className="font-bold text-gray-700">{tx.customerName}</p>
+                           ) : (
+                              <p className="text-gray-400 italic">Cliente General</p>
+                           )}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                           <div className="flex justify-center">
+                              {getPaymentIcon(tx.payments?.[0]?.method || 'CASH')}
+                           </div>
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono font-bold text-gray-900">
+                           {config.currencySymbol}{tx.total.toFixed(2)}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                           <button className="p-1 hover:bg-gray-200 rounded-md transition-colors text-gray-400">
+                              <MoreVertical size={16} />
+                           </button>
+                        </td>
+                     </tr>
+                  ))}
+               </tbody>
+            </table>
+         </div>
+      </div>
+   );
+};
+
+const TicketDetailDrawer: React.FC<{
+   tx: Transaction | null;
+   config: BusinessConfig;
+   onClose: () => void;
+   onPrint: (tx: Transaction) => void;
+   onVoid: (tx: Transaction) => void;
+   themeText: string;
+   themeBg: string;
+   users: User[];
+}> = ({ tx, config, onClose, onPrint, onVoid, themeText, themeBg, users }) => {
+   if (!tx) return null;
+
+   return (
+      <div className="fixed inset-0 z-[100] overflow-hidden">
+         <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+         <div className="absolute inset-y-0 right-0 max-w-md w-full bg-white shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
+            <header className="p-5 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+               <div>
+                  <h3 className="text-lg font-black text-gray-900">Detalle de Ticket</h3>
+                  <p className="text-xs text-gray-400 font-medium tracking-wider">#{tx.displayId || tx.id}</p>
+               </div>
+               <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition-all">
+                  <X size={20} className="text-gray-500" />
+               </button>
+            </header>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+               <section className="space-y-4">
+                  <div className="flex justify-between items-start p-4 rounded-2xl bg-gray-50 border border-gray-100">
+                     <div>
+                        <p className="text-[10px] font-bold text-gray-400 uppercase">Total Venta</p>
+                        <p className="text-3xl font-black text-gray-900">{config.currencySymbol}{tx.total.toFixed(2)}</p>
+                     </div>
+                     <div className="text-right">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase">Estado</p>
+                        <div className="mt-1">
+                           {tx.status === 'REFUNDED' ? (
+                              <span className="bg-red-100 text-red-600 px-3 py-1 rounded-full text-xs font-black italic">ANULADO</span>
+                           ) : (
+                              <span className="bg-green-100 text-green-600 px-3 py-1 rounded-full text-xs font-black">PAGADO</span>
+                           )}
+                        </div>
+                     </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                     <div className="p-3 bg-white border border-gray-100 rounded-xl">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase">Fecha / Hora</p>
+                        <p className="text-xs font-bold text-gray-700">{new Date(tx.date).toLocaleString()}</p>
+                     </div>
+                     <div className="p-3 bg-white border border-gray-100 rounded-xl">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase">Cajero</p>
+                        <p className="text-xs font-bold text-gray-700">{tx.userName || 'Sistema'}</p>
+                     </div>
+                  </div>
+               </section>
+
+               <section>
+                  <h4 className="text-[10px] font-black uppercase text-gray-400 tracking-widest mb-3">Artículos del Ticket</h4>
+                  <div className="space-y-2">
+                     {tx.items.map((item, i) => (
+                        <div key={i} className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
+                           <div className="flex-1">
+                              <p className="text-sm font-bold text-gray-800">{item.name}</p>
+                              <p className="text-xs text-gray-400 font-medium">{item.quantity} x {config.currencySymbol}{item.price.toFixed(2)}</p>
+                           </div>
+                           <p className="text-sm font-black text-gray-900">{config.currencySymbol}{(item.price * item.quantity).toFixed(2)}</p>
+                        </div>
+                     ))}
+                  </div>
+               </section>
+
+               <section className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-2">
+                  <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                     <span>Subtotal</span>
+                     <span>{config.currencySymbol}{(tx.total / (1 + config.taxRate)).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                     <span>Impuestos ({config.taxRate * 100}%)</span>
+                     <span>{config.currencySymbol}{(tx.total - (tx.total / (1 + config.taxRate))).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-lg font-black text-blue-900 border-t border-blue-100 pt-2 mt-2">
+                     <span>Total Final</span>
+                     <span>{config.currencySymbol}{tx.total.toFixed(2)}</span>
+                  </div>
+               </section>
+            </div>
+
+            <footer className="p-6 border-t border-gray-100 bg-gray-50 grid grid-cols-2 gap-3">
+               <button
+                  onClick={() => onPrint(tx)}
+                  className="flex items-center justify-center gap-2 py-3 bg-white border border-gray-200 text-gray-700 rounded-2xl font-bold hover:bg-gray-100 transition-all shadow-sm"
+               >
+                  <Printer size={18} /> Reimprimir
+               </button>
+               {tx.status !== 'REFUNDED' && (
+                  <button
+                     onClick={() => onVoid(tx)}
+                     className="flex items-center justify-center gap-2 py-3 bg-red-600 text-white rounded-2xl font-bold hover:bg-red-700 transition-all shadow-lg"
+                  >
+                     <RotateCcw size={18} /> Anular
+                  </button>
+               )}
+            </footer>
+         </div>
+      </div>
+   );
+};
+
 const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, onRefundTransaction }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [expandedId, setExpandedId] = useState<string | null>(null);
+   const [showFilters, setShowFilters] = useState(false);
+
+   // Filters State
+   const [filterDateStart, setFilterDateStart] = useState('');
+   const [filterDateEnd, setFilterDateEnd] = useState('');
+   const [filterTerminal, setFilterTerminal] = useState('');
+   const [filterCashier, setFilterCashier] = useState('');
+   const [filterCustomer, setFilterCustomer] = useState('');
+   const [filterNcfType, setFilterNcfType] = useState('');
 
    // Return Mode State
    const [returnModeId, setReturnModeId] = useState<string | null>(null);
@@ -46,6 +272,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const [giftReceiptTx, setGiftReceiptTx] = useState<Transaction | null>(null);
 
    const [historyTransactions, setHistoryTransactions] = useState<Transaction[]>([]);
+   const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
 
    // Load History on Mount
    useEffect(() => {
@@ -76,37 +303,87 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       const allTransactions = [...transactions, ...historyTransactions];
       const uniqueMap = new Map();
       allTransactions.forEach(t => uniqueMap.set(t.id, t));
-      const merged = Array.from(uniqueMap.values());
+      let data = Array.from(uniqueMap.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()); // Newest first
 
-      let data = merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()); // Newest first
+      // 1. Apply Search Term / Predictive Tag
       const lowerTerm = searchTerm.toLowerCase().trim();
-
-      if (!lowerTerm) return data;
-
-      // Predictive Filters
-      if (lowerTerm === 'ayer' || lowerTerm === 'yesterday') {
-         const yesterday = new Date();
-         yesterday.setDate(yesterday.getDate() - 1);
-         return data.filter(t => new Date(t.date).toDateString() === yesterday.toDateString());
+      if (lowerTerm) {
+         if (lowerTerm === 'ayer' || lowerTerm === 'yesterday') {
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            data = data.filter(t => new Date(t.date).toDateString() === yesterday.toDateString());
+         } else if (lowerTerm === 'hoy' || lowerTerm === 'today') {
+            const today = new Date();
+            data = data.filter(t => new Date(t.date).toDateString() === today.toDateString());
+         } else if (lowerTerm.startsWith('#')) {
+            data = data.filter(t => (t.id || '').toLowerCase().includes(lowerTerm.replace('#', '')));
+         } else {
+            data = data.filter(t =>
+               t.customerName?.toLowerCase().includes(lowerTerm) ||
+               (t.userName || '').toLowerCase().includes(lowerTerm) ||
+               (t.id || '').toLowerCase().includes(lowerTerm) ||
+               t.displayId?.toLowerCase().includes(lowerTerm) ||
+               t.total.toString().includes(lowerTerm)
+            );
+         }
       }
 
-      if (lowerTerm === 'hoy' || lowerTerm === 'today') {
-         const today = new Date();
-         return data.filter(t => new Date(t.date).toDateString() === today.toDateString());
+      // 2. Apply Dimensional Filters (Cumulative)
+      if (filterDateStart) {
+         const start = new Date(filterDateStart + 'T00:00:00');
+         data = data.filter(t => new Date(t.date) >= start);
       }
 
-      if (lowerTerm.startsWith('#')) {
-         return data.filter(t => (t.id || '').toLowerCase().includes(lowerTerm.replace('#', '')));
+      if (filterDateEnd) {
+         const end = new Date(filterDateEnd + 'T23:59:59.999');
+         data = data.filter(t => new Date(t.date) <= end);
       }
 
-      return data.filter(t =>
-         t.customerName?.toLowerCase().includes(lowerTerm) ||
-         (t.userName || '').toLowerCase().includes(lowerTerm) ||
-         (t.id || '').toLowerCase().includes(lowerTerm) ||
-         t.displayId?.toLowerCase().includes(lowerTerm) ||
-         t.total.toString().includes(lowerTerm)
-      );
-   }, [transactions, historyTransactions, searchTerm]);
+      if (filterTerminal) {
+         data = data.filter(t => t.terminalId === filterTerminal);
+      }
+
+      if (filterCashier) {
+         const term = filterCashier.toLowerCase();
+         data = data.filter(t =>
+            t.userId === filterCashier ||
+            (t.userName || '').toLowerCase().includes(term)
+         );
+      }
+
+      if (filterCustomer) {
+         const term = filterCustomer.toLowerCase();
+         data = data.filter(t =>
+            (t.customerId || '').toLowerCase().includes(term) ||
+            (t.customerName || '').toLowerCase().includes(term)
+         );
+      }
+
+      if (filterNcfType && filterNcfType !== 'ALL') {
+         data = data.filter(t => t.ncf?.startsWith(filterNcfType));
+      }
+
+      return data;
+   }, [transactions, historyTransactions, searchTerm, filterDateStart, filterDateEnd, filterTerminal, filterCashier, filterCustomer, filterNcfType]);
+
+   // --- KPI CALCULATIONS ---
+   const kpis = useMemo(() => {
+      const totalSales = filteredTransactions.reduce((acc, tx) => acc + (tx.status !== 'REFUNDED' ? tx.total : 0), 0);
+      const ticketCount = filteredTransactions.length;
+      const avgTicket = ticketCount > 0 ? totalSales / ticketCount : 0;
+      const refunds = filteredTransactions.reduce((acc, tx) => {
+         if (tx.status === 'REFUNDED' || tx.status === 'PARTIAL_REFUND') {
+            return acc + tx.total;
+         }
+         return acc;
+      }, 0);
+
+      return { totalSales, ticketCount, avgTicket, refunds };
+   }, [filteredTransactions]);
+
+   const selectedTx = useMemo(() =>
+      filteredTransactions.find(t => t.id === selectedTxId) || null
+      , [filteredTransactions, selectedTxId]);
 
    // --- SUPERVISOR AUTH ---
    const { requestApproval, supervisorModalProps } = useSupervisorAuth({ config, currentUser, roles, onUpdateConfig });
@@ -212,269 +489,156 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const themeRing = config.themeColor === 'orange' ? 'focus:ring-orange-500' : 'focus:ring-blue-500';
 
    return (
-      <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden relative">
+      <div className="h-screen w-full bg-gray-100 flex flex-col overflow-hidden relative">
 
-         {/* Header */}
-         <header className="bg-white border-b border-gray-200 p-4 shadow-sm z-20">
-            <div className="flex items-center gap-4 mb-4">
-               <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition-colors">
-                  <ArrowLeft size={24} />
-               </button>
-               <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                  <FileText size={20} className={themeText} />
-                  Historial de Ventas
-               </h1>
-            </div>
-
-            {/* Smart Search Bar */}
-            <div className="relative max-w-2xl mx-auto">
-               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-               <input
-                  type="text"
-                  placeholder="Buscar 'Ayer', 'Juan Pérez', '#1234'..."
-                  className={`w-full pl-12 pr-4 py-3 bg-gray-100 border-none rounded-2xl focus:bg-white focus:ring-2 ${themeRing} focus:shadow-md outline-none transition-all text-gray-700 placeholder:text-gray-400`}
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-               />
-            </div>
-         </header>
-
-         {/* Transactions List */}
-         <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 max-w-4xl mx-auto w-full">
-            {filteredTransactions.length === 0 ? (
-               <div className="text-center py-20 opacity-50">
-                  <Box size={48} className="mx-auto mb-2 text-gray-400" />
-                  <p className="text-gray-500 font-medium">No se encontraron tickets</p>
+         {/* Header & Compact Filters */}
+         <header className="bg-white border-b border-gray-200 p-3 shadow-sm z-20">
+            <div className="max-w-[1600px] mx-auto w-full flex flex-wrap items-center justify-between gap-3">
+               <div className="flex items-center gap-3">
+                  <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition-all active:scale-95">
+                     <ArrowLeft size={18} />
+                  </button>
+                  <h1 className="text-sm font-black text-gray-800 flex items-center gap-2 uppercase tracking-tighter">
+                     <FileText size={16} className={themeText} />
+                     Historial
+                  </h1>
                </div>
-            ) : (
-               filteredTransactions.map((tx, idx) => {
-                  const isExpanded = expandedId === tx.id;
-                  const isReturnActive = returnModeId === tx.id;
-                  const isRefunded = tx.status === 'REFUNDED' || tx.status === 'PARTIAL_REFUND';
-                  const isClosed = !!tx.zReportId || !!(tx as any)._isArchived;
 
-                  return (
-                     <div
-                        key={tx.id || `tx-${idx}`}
-                        className={`bg-white rounded-2xl shadow-sm border transition-all duration-300 overflow-hidden ${isReturnActive ? 'ring-2 ring-red-400 border-red-200 shadow-xl scale-[1.01] z-10' : 'border-gray-100 hover:shadow-md'
-                           } ${isClosed ? 'bg-gray-100 border-gray-300' : ''}`}
+               <div className="flex flex-1 items-center gap-2 min-w-[300px] max-w-4xl">
+                  <div className="relative flex-1">
+                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+                     <input
+                        type="text"
+                        placeholder="Buscar ticket, cliente..."
+                        className={`w-full pl-9 pr-3 py-1.5 bg-gray-50 border border-gray-100 rounded-lg focus:bg-white focus:ring-1 ${themeRing} outline-none transition-all text-sm text-gray-700 placeholder:text-gray-400`}
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                     />
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                     <div className="flex items-center bg-gray-50 border border-gray-100 rounded-lg px-2 py-1.5">
+                        <Calendar size={12} className="text-gray-400 mr-1.5" />
+                        <input
+                           type="date"
+                           value={filterDateStart}
+                           onChange={e => setFilterDateStart(e.target.value)}
+                           className="bg-transparent border-none text-[11px] font-bold text-gray-600 outline-none w-28"
+                        />
+                     </div>
+                     <select
+                        value={filterTerminal}
+                        onChange={e => setFilterTerminal(e.target.value)}
+                        className="px-2 py-1.5 bg-gray-50 border border-gray-100 rounded-lg text-[11px] font-bold text-gray-600 outline-none hover:bg-white transition-colors"
                      >
-                        {/* Card Header */}
-                        <div
-                           onClick={() => toggleExpand(tx.id)}
-                           className="p-5 flex items-center justify-between cursor-pointer active:bg-gray-50"
-                        >
-                           <div className="flex items-center gap-4">
-                              <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-white shadow-sm ${isRefunded ? 'bg-red-500' : isClosed ? 'bg-gray-500' : themeBg}`}>
-                                 {isRefunded ? <RotateCcw size={20} /> : isClosed ? <Check size={24} strokeWidth={3} className="opacity-75" /> : <Check size={24} strokeWidth={3} />}
-                              </div>
-                              <div>
-                                 <div className="flex items-center gap-2">
-                                    <h3 className={`font-bold text-lg ${isClosed ? 'text-gray-600' : 'text-gray-900'}`}>Ticket #{tx.displayId || tx.id}</h3>
-                                    {isRefunded && (
-                                       <span className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded-md ${tx.status === 'PARTIAL_REFUND' ? 'bg-orange-100 text-orange-600' : 'bg-red-100 text-red-600'
-                                          }`}>
-                                          {tx.status === 'PARTIAL_REFUND' ? 'Parcialmente Reembolsado' : 'Reembolsado'}
-                                       </span>
-                                    )}
-                                    {isClosed && <span className="px-2 py-0.5 bg-gray-200 text-gray-600 text-[10px] font-bold uppercase rounded-md border border-gray-300">Cerrado</span>}
-                                 </div>
-                                 <div className="flex items-center gap-3 text-sm text-gray-500 mt-1">
-                                    <span className="flex items-center gap-1"><Calendar size={14} /> {new Date(tx.date).toLocaleDateString()}</span>
-                                    <span className="flex items-center gap-1"><UserIcon size={14} /> {tx.customerName || 'Cliente General'}</span>
-                                    <span className="flex items-center gap-1 bg-gray-100 px-1.5 rounded text-[10px] uppercase font-bold text-gray-500 border border-gray-200">
-                                       Terminal {tx.terminalId || 'N/A'}
-                                    </span>
-                                 </div>
-                              </div>
-                           </div>
-                           <div className="text-right">
-                              <p className={`text-xl font-black ${isRefunded ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
-                                 {config.currencySymbol}{tx.total.toFixed(2)}
-                              </p>
-                              {isRefunded && (
-                                 <p className="text-[10px] font-black text-red-500 bg-red-50 px-1.5 py-0.5 rounded-md border border-red-100 mt-1">
-                                    Reembolsado: {config.currencySymbol}{((tx.relatedTransactions || []).reduce((acc, relId) => acc + (transactions.find(t => t.id === relId)?.total || 0), 0)).toFixed(2)}
-                                 </p>
-                              )}
-                              <p className="text-xs text-gray-400 font-medium">{new Date(tx.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-                           </div>
-                        </div>
-
-                        {/* Expanded Content */}
-                        {(isExpanded || isReturnActive) && (
-                           <div className="border-t border-gray-100 bg-gray-50/50 animate-in slide-in-from-top-2 duration-200">
-                              <div className="p-3 space-y-1">
-                                 {tx.items.map((item, idx) => {
-                                    const isSelected = selectedItemsQty.has(item.cartId);
-                                    const returnQty = selectedItemsQty.get(item.cartId) || 0;
-                                    return (
-                                       <div
-                                          key={item.cartId || `item-${idx}`}
-                                          className={`p-3 rounded-xl transition-all ${isReturnActive ? 'border border-transparent' : ''}
-                                          ${isSelected ? 'bg-red-50 border-red-200 shadow-sm' : ''}`}
-                                       >
-                                          <div className="flex justify-between items-start">
-                                             <div className="flex items-center gap-3 flex-1">
-                                                {isReturnActive && (
-                                                   <div className="flex items-center gap-2">
-                                                      <button
-                                                         onClick={() => decrementReturnQty(item.cartId)}
-                                                         className="w-7 h-7 rounded-lg bg-white border-2 border-gray-300 hover:border-red-500 hover:bg-red-50 text-gray-600 hover:text-red-600 font-black flex items-center justify-center transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                                                         disabled={!isSelected}
-                                                      >
-                                                         −
-                                                      </button>
-                                                      <div className="w-10 text-center font-black text-lg text-gray-800">
-                                                         {returnQty}
-                                                      </div>
-                                                      <button
-                                                         onClick={() => incrementReturnQty(item.cartId, item.quantity)}
-                                                         className="w-7 h-7 rounded-lg bg-red-500 border-2 border-red-500 text-white font-black flex items-center justify-center hover:bg-red-600 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                                                         disabled={returnQty >= item.quantity}
-                                                      >
-                                                         +
-                                                      </button>
-                                                   </div>
-                                                )}
-                                                <div>
-                                                   <p className="font-bold text-gray-800 text-sm leading-tight">{item.name}</p>
-                                                   <p className="text-[10px] text-gray-500 font-bold uppercase mt-1">
-                                                      {item.quantity}x {config.currencySymbol}{item.price.toFixed(2)}
-                                                   </p>
-                                                   {item.salespersonId && (
-                                                      <p className="text-[10px] text-blue-500 font-bold uppercase mt-0.5">
-                                                         Vendedor: {users.find(u => u.id === item.salespersonId)?.name || 'Desconocido'}
-                                                      </p>
-                                                   )}
-                                                   {item.note && (
-                                                      <div className="mt-1 flex items-start gap-1 text-[10px] text-yellow-700 font-medium italic">
-                                                         <StickyNote size={10} className="mt-0.5" />
-                                                         <span>Nota: {item.note}</span>
-                                                      </div>
-                                                   )}
-                                                   {/* Properties visiblity in history */}
-                                                   {item.modifiers && item.modifiers.length > 0 && (
-                                                      <div className="flex gap-1 mt-1">
-                                                         {item.modifiers.map((m, mi) => (
-                                                            <span key={mi} className="text-[9px] font-black uppercase text-blue-500 bg-blue-50 px-1 rounded border border-blue-100">{m}</span>
-                                                         ))}
-                                                      </div>
-                                                   )}
-                                                </div>
-                                             </div>
-                                             <div className="text-right">
-                                                <span className="font-bold text-gray-700 text-sm">{config.currencySymbol}{(item.price * item.quantity).toFixed(2)}</span>
-                                                {isReturnActive && isSelected && (
-                                                   <p className="text-[10px] font-black text-red-600 mt-1">
-                                                      A devolver: {config.currencySymbol}{(item.price * returnQty).toFixed(2)}
-                                                   </p>
-                                                )}
-                                             </div>
-                                          </div>
-                                       </div>
-                                    );
-                                 })}
-                              </div>
-
-                              {/* Linked Documents Section */}
-                              {tx.relatedTransactions && tx.relatedTransactions.length > 0 && (
-                                 <div className="mx-3 mt-1 mb-3 p-3 bg-white rounded-xl border border-gray-100 shadow-sm">
-                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1">
-                                       <FileText size={10} /> Documentos Vinculados
-                                    </p>
-                                    <div className="space-y-2">
-                                       {tx.relatedTransactions.map(relId => {
-                                          const relTx = (transactions || []).find(t => t.id === relId);
-                                          if (!relTx) return null;
-                                          return (
-                                             <div key={relId} className="flex items-center justify-between text-xs">
-                                                <div className="flex items-center gap-2 text-gray-700">
-                                                   <span className="text-gray-400">📄</span>
-                                                   <span className="font-bold">Nota de Crédito #{relTx.displayId || relTx.id}</span>
-                                                   {relTx.ncf && <span className="text-[10px] text-gray-400 bg-gray-50 px-1 rounded border border-gray-100 font-mono">{relTx.ncf}</span>}
-                                                </div>
-                                                <span className="font-black text-red-500">-{config.currencySymbol}{relTx.total.toFixed(2)}</span>
-                                             </div>
-                                          );
-                                       })}
-                                    </div>
-                                 </div>
-                              )}
-
-                              {/* Controls Footer */}
-                              <div className="p-4 bg-white border-t border-gray-200 flex justify-between items-center gap-4">
-                                 {!isReturnActive ? (
-                                    <div className="flex gap-2 w-full">
-                                       <button onClick={() => printTicket(tx, config)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-100 text-gray-600 rounded-xl font-bold text-sm hover:bg-gray-200 transition-colors">
-                                          <Printer size={16} /> Re-imprimir
-                                       </button>
-                                       <button onClick={(e) => handlePrintGiftReceipt(e, tx)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-50 text-purple-600 border border-purple-100 rounded-xl font-bold text-sm hover:bg-purple-100 transition-colors">
-                                          <Gift size={16} /> Regalo
-                                       </button>
-                                       {!isRefunded && (
-                                          <button onClick={(e) => startReturnMode(e, tx.id)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 border border-red-100 rounded-xl font-bold text-sm hover:bg-red-100 transition-colors">
-                                             <RotateCcw size={16} /> Devolución
-                                          </button>
-                                       )}
-                                    </div>
-                                 ) : (
-                                    <div className="w-full">
-                                       <div className="flex items-center justify-between mb-4 bg-red-50 p-4 rounded-2xl border border-red-100">
-                                          <div className="flex items-center gap-2 text-red-700 font-bold text-sm"><AlertCircle size={18} /><span>Reembolso Activo</span></div>
-                                          <div className="text-right"><p className="text-[10px] text-red-400 uppercase font-bold tracking-widest">A Devolver</p><p className="text-2xl font-black text-red-600">{config.currencySymbol}{currentRefundTotal.toFixed(2)}</p></div>
-                                       </div>
-                                       <div className="grid grid-cols-2 gap-3">
-                                          <button onClick={cancelReturnMode} className="py-3 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200">Cancelar</button>
-                                          <button onClick={() => confirmRefund(tx)} disabled={selectedItemsQty.size === 0} className="py-3 bg-red-600 text-white rounded-xl font-bold shadow-lg disabled:opacity-50 flex items-center justify-center gap-2"><Check size={18} /> Confirmar</button>
-                                       </div>
-                                    </div>
-                                 )}
-                              </div>
-                           </div>
-                        )}
-                     </div>
-                  );
-               })
-            )}
-         </div>
-
-         {/* GIFT RECEIPT MODAL */}
-         {
-            giftReceiptTx && (
-               <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-                  <div className="bg-white rounded-2xl shadow-2xl overflow-hidden w-full max-w-sm flex flex-col">
-                     <div className="p-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
-                        <h3 className="font-bold text-gray-800 flex items-center gap-2"><Gift className="text-purple-600" size={20} /> Ticket Regalo</h3>
-                        <button onClick={() => setGiftReceiptTx(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
-                     </div>
-                     <div className="p-6 bg-white overflow-y-auto max-h-[60vh] font-mono text-sm leading-relaxed text-gray-700">
-                        <div className="text-center mb-6"><h2 className="font-bold text-lg uppercase">{config.companyInfo.name}</h2><p className="text-xs">{config.companyInfo.address}</p><p className="text-xs mt-2 font-bold">*** TICKET DE REGALO ***</p></div>
-                        <div className="border-b-2 border-dashed border-gray-300 pb-2 mb-2 text-xs"><p>Fecha: {new Date(giftReceiptTx.date).toLocaleString()}</p><p>Ref: {giftReceiptTx.displayId || giftReceiptTx.id}</p></div>
-                        <table className="w-full text-xs mb-4">
-                           <thead><tr className="border-b border-gray-800"><th className="text-left py-1">Cant</th><th className="text-left py-1">Descripción</th></tr></thead>
-                           <tbody>
-                              {giftReceiptTx.items.map((item, i) => (
-                                 <tr key={i}><td className="py-1 align-top w-8">{item.quantity}</td><td className="py-1 align-top">{item.name} {item.modifiers && <span className="text-[9px] uppercase opacity-50 block">{item.modifiers.join(' • ')}</span>}</td></tr>
-                              ))}
-                           </tbody>
-                        </table>
-                        <div className="border-t-2 border-dashed border-gray-300 pt-4 text-center space-y-4">
-                           <p className="text-xs">Válido para cambios por 30 días.</p>
-                           <div className="flex flex-col items-center"><QrCode size={64} className="text-gray-800" /><span className="text-[10px] mt-1">{giftReceiptTx.displayId || giftReceiptTx.id}</span></div>
-                        </div>
-                     </div>
-                     <div className="p-4 bg-gray-50 border-t border-gray-200">
-                        <button onClick={() => { alert("Imprimiendo..."); setGiftReceiptTx(null); }} className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold shadow-lg hover:bg-purple-700 transition-transform active:scale-95 flex items-center justify-center gap-2"><Printer size={20} /> Imprimir Ticket</button>
-                     </div>
+                        <option value="">Terminal</option>
+                        {(config.terminals || []).map(t => <option key={t.id} value={t.id}>{t.id}</option>)}
+                     </select>
+                     <button
+                        onClick={() => setShowFilters(!showFilters)}
+                        className={`p-2 rounded-lg text-gray-400 hover:bg-gray-100 transition-colors ${showFilters ? 'bg-blue-50 text-blue-600' : ''}`}
+                     >
+                        <Filter size={16} />
+                     </button>
                   </div>
                </div>
-            )
-         }
+            </div>
 
-         {/* Supervisor Modal */}
+            {showFilters && (
+               <div className="mt-2 p-3 bg-gray-50 rounded-xl border border-gray-100 flex flex-wrap gap-4 max-w-[1600px] mx-auto animate-in fade-in slide-in-from-top-1">
+                  <div className="flex items-center gap-2">
+                     <span className="text-[10px] font-bold text-gray-400 uppercase">Hasta:</span>
+                     <input type="date" value={filterDateEnd} onChange={e => setFilterDateEnd(e.target.value)} className="px-2 py-1 bg-white border border-gray-200 rounded text-[11px] font-bold" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                     <span className="text-[10px] font-bold text-gray-400 uppercase">Cajero:</span>
+                     <select value={filterCashier} onChange={e => setFilterCashier(e.target.value)} className="px-2 py-1 bg-white border border-gray-200 rounded text-[11px] font-bold">
+                        <option value="">Todos</option>
+                        {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                     </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                     <span className="text-[10px] font-bold text-gray-400 uppercase">NCF:</span>
+                     <select value={filterNcfType} onChange={e => setFilterNcfType(e.target.value)} className="px-2 py-1 bg-white border border-gray-200 rounded text-[11px] font-bold">
+                        <option value="ALL">Cualquiera</option>
+                        <option value="B01">Crédito Fiscal</option>
+                        <option value="B02">Consumo Final</option>
+                     </select>
+                  </div>
+                  <button onClick={() => { setSearchTerm(''); setFilterDateStart(''); setFilterDateEnd(''); setFilterTerminal(''); setFilterCashier(''); setFilterNcfType(''); }} className="text-[10px] font-bold text-red-500 ml-auto hover:underline uppercase">Reset</button>
+               </div>
+            )}
+         </header>
+
+         <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 max-w-[1600px] mx-auto w-full">
+            <SalesSummaryBar kpis={kpis} config={config} />
+
+            <SalesHistoryTable
+               transactions={filteredTransactions}
+               config={config}
+               onRowClick={(id) => setSelectedTxId(id)}
+               themeBg={themeBg}
+               themeText={themeText}
+            />
+
+            {filteredTransactions.length === 0 && (
+               <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-gray-200 mt-4">
+                  <Box size={32} className="mx-auto mb-2 text-gray-300" />
+                  <p className="text-gray-400 font-bold text-xs uppercase tracking-widest">Sin resultados</p>
+               </div>
+            )}
+         </main>
+
+         {/* Detail Drawer */}
+         <TicketDetailDrawer
+            tx={selectedTx}
+            config={config}
+            onClose={() => setSelectedTxId(null)}
+            onPrint={(tx) => printTicket(tx, config)}
+            onVoid={(tx) => {
+               if (confirm("¿Confirmar anulación completa de este ticket?")) {
+                  onRefundTransaction(tx, tx.items, "Anulación Administrativa");
+                  setSelectedTxId(null);
+               }
+            }}
+            themeText={themeText}
+            themeBg={themeBg}
+            users={users}
+         />
+
+         {/* Gift Modal (Keep same structure but adjusted style) */}
+         {giftReceiptTx && (
+            <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+               <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs flex flex-col overflow-hidden animate-in zoom-in-95">
+                  <div className="p-3 bg-gray-50 border-b flex justify-between items-center text-sm font-bold">
+                     <span className="flex items-center gap-2"><Gift size={16} className="text-purple-600" /> Ticket Regalo</span>
+                     <button onClick={() => setGiftReceiptTx(null)}><X size={16} /></button>
+                  </div>
+                  <div className="p-4 overflow-y-auto max-h-[50vh] font-mono text-[11px] text-gray-700 leading-tight">
+                     <div className="text-center mb-4 uppercase">
+                        <p className="font-bold">{config.companyInfo.name}</p>
+                        <p className="opacity-50 tracking-tighter">* REGALO *</p>
+                     </div>
+                     <div className="border-y border-dashed py-2 mb-2">
+                        {giftReceiptTx.items.map((item, i) => (
+                           <div key={i} className="flex justify-between">
+                              <span>{item.name}</span>
+                              <span className="font-bold">x{item.quantity}</span>
+                           </div>
+                        ))}
+                     </div>
+                     <div className="text-center opacity-30 mt-4">
+                        <QrCode size={40} className="mx-auto" />
+                     </div>
+                  </div>
+                  <div className="p-3 bg-gray-50 border-t">
+                     <button onClick={() => { alert("Imprimiendo..."); setGiftReceiptTx(null); }} className="w-full py-2 bg-purple-600 text-white rounded-lg font-bold text-sm">Imprimir</button>
+                  </div>
+               </div>
+            </div>
+         )}
+
          <SupervisorModal {...supervisorModalProps} users={users} />
-
       </div>
    );
 };

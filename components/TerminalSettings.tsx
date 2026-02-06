@@ -15,10 +15,12 @@ import {
    // Added Sun to fix "Cannot find name 'Sun'" error
    Sun, ScanBarcode, Layout, Minus, ArrowDownCircle, ArrowUpCircle, Wallet, UserCheck, User, CreditCard, Fingerprint
 } from 'lucide-react';
-import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice, Product, DeviceRole, AuthLevel } from '../types';
+import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice, Product, DeviceRole, AuthLevel, Room } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG } from '../constants';
 import { db } from '../utils/db';
 import { getDefaultRoleConfig, getRoleDisplayInfo, getAllModules } from '../utils/deviceRoleHelpers';
+import AccessibilityToggle from './AccessibilityToggle';
+import SettingsOperational from './SettingsOperational';
 
 interface TerminalSettingsProps {
    config: BusinessConfig;
@@ -98,11 +100,15 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    const [masterSequences, setMasterSequences] = useState<DocumentSeries[]>([]);
    const [isSyncing, setIsSyncing] = useState(false);
    const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+   const [allRooms, setAllRooms] = useState<Room[]>([]);
 
    useEffect(() => {
       const loadSequences = async () => {
          const seqs = (await db.get('internalSequences') || []) as DocumentSeries[];
          setMasterSequences(seqs);
+
+         const rooms = (await db.get('rooms') || []) as Room[];
+         setAllRooms(rooms);
       };
       loadSequences();
 
@@ -678,235 +684,224 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                         </div>
                      )}
 
-                     {/* 1. OPERATIONAL SECTION */}
-                     {activeTab === 'OPERATIONAL' && (
-                        <div className="space-y-6">
-                           <div className="bg-indigo-50 border-2 border-indigo-200 p-6 rounded-3xl shadow-sm space-y-4">
-                              <Toggle
-                                 label="Es Terminal Principal / Servidor Local"
-                                 description="Esta terminal consolidará los cierres y transacciones de la tienda."
-                                 checked={activeTerminal.config.isPrimaryNode}
-                                 onChange={handleToggleMasterNode}
-                                 icon={Crown}
-                                 disabled={activeTerminal.config.governedByMaster || isReadOnly}
-                              />
+{/* 1. OPERATIONAL SECTION */ }
+{
+    activeTab === 'OPERATIONAL' && (
+        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            {/* Network Identity (Master/Slave) */}
+            <div className="bg-indigo-50/50 border-2 border-indigo-100 p-8 rounded-[2.5rem] shadow-sm space-y-4">
+                <h3 className="text-lg font-black flex items-center gap-2 text-indigo-800"><Server size={24} /> Identidad de Red</h3>
+                <Toggle
+                    label="Es Terminal Principal / Servidor Local"
+                    description="Esta terminal consolidará los cierres y transacciones de la tienda."
+                    checked={activeTerminal.config.isPrimaryNode}
+                    onChange={handleToggleMasterNode}
+                    icon={Crown}
+                    disabled={activeTerminal.config.governedByMaster || isReadOnly}
+                />
 
-                              {!activeTerminal.config.isPrimaryNode && (
-                                 <Toggle
-                                    label="Gobernado por Maestra"
-                                    description="Esta terminal seguirá estrictamente la configuración definida por la Maestra."
-                                    checked={activeTerminal.config.governedByMaster}
-                                    onChange={(v: boolean) => handleUpdateActiveConfig('', 'governedByMaster', v)}
-                                    icon={ShieldCheck}
+                {!activeTerminal.config.isPrimaryNode && (
+                    <Toggle
+                        label="Gobernado por Maestra"
+                        description="Esta terminal seguirá estrictamente la configuración definida por la Maestra."
+                        checked={activeTerminal.config.governedByMaster}
+                        onChange={(v: boolean) => handleUpdateActiveConfig('', 'governedByMaster', v)}
+                        icon={ShieldCheck}
+                        disabled={isReadOnly}
+                    />
+                )}
+
+                <p className="text-[10px] font-bold text-indigo-410 uppercase tracking-widest ml-2">
+                    Nota: Solo puede haber una terminal principal por establecimiento.
+                </p>
+            </div>
+
+            <SettingsOperational
+                config={activeTerminal.config}
+                onUpdate={handleUpdateActiveConfig}
+                isReadOnly={isReadOnly}
+            />
+
+            {activeTerminal.config.operational?.usa_mesas && (
+                <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-8 animate-in slide-in-from-top-4 duration-300">
+                    <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><Layout size={24} className="text-emerald-600" /> Salas Visibles</h3>
+                    <p className="text-sm text-gray-500 font-medium leading-relaxed">Configura qué áreas son accesibles desde esta terminal específica (ej: Barra, Terraza, VIP).</p>
+                    <div className="flex flex-wrap gap-2">
+                        {allRooms.map(room => {
+                            const visibility = (activeTerminal.config as any).tables?.visibility || [];
+                            const isVisible = visibility.includes(room.id);
+                            return (
+                                <button
+                                    key={room.id}
+                                    onClick={() => {
+                                        const currentVisibility = (activeTerminal.config as any).tables?.visibility || [];
+                                        const updated = isVisible
+                                            ? currentVisibility.filter((id: string) => id !== room.id)
+                                            : [...currentVisibility, room.id];
+
+                                        handleUpdateActiveConfig('tables', 'visibility', updated);
+                                    }}
+                                    className={`px-4 py-3 rounded-2xl text-sm font-bold border-2 transition-all flex items-center gap-3 ${isVisible ? 'bg-emerald-50 border-emerald-500 text-emerald-700 shadow-sm' : 'bg-white border-slate-100 text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                     disabled={isReadOnly}
-                                 />
-                              )}
-
-                              <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest ml-2">
-                                 Nota: Solo puede haber una terminal principal por establecimiento.
-                              </p>
-                           </div>
-
-                           <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
-                              <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><Tag size={24} className="text-purple-600" /> Precios y Tarifas</h3>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                 <div>
-                                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Tarifa Predeterminada</label>
-                                    <select
-                                       value={activeTerminal.config.pricing.defaultTariffId}
-                                       onChange={(e) => handleUpdateActiveConfig('pricing', 'defaultTariffId', e.target.value)}
-                                       disabled={isReadOnly}
-                                       className={`w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-100 transition-all ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                    >
-                                       {config.tariffs.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                                    </select>
-                                 </div>
-                                 <div>
-                                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Tarifas Autorizadas en esta Caja</label>
-                                    <div className="flex flex-wrap gap-2 mt-2">
-                                       {config.tariffs.map(t => {
-                                          const isAllowed = activeTerminal.config.pricing.allowedTariffIds.includes(t.id);
-                                          return (
-                                             <button
-                                                key={t.id}
-                                                onClick={() => {
-                                                   const current = activeTerminal.config.pricing.allowedTariffIds;
-                                                   const updated = isAllowed ? current.filter(id => id !== t.id) : [...current, t.id];
-                                                   handleUpdateActiveConfig('pricing', 'allowedTariffIds', updated);
-                                                }}
-                                                className={`px-3 py-2 rounded-xl text-xs font-bold border-2 transition-all ${isAllowed ? 'bg-purple-600 border-purple-600 text-white shadow-md' : 'bg-white border-slate-100 text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                                disabled={isReadOnly}
-                                             >
-                                                {t.name}
-                                             </button>
-                                          )
-                                       })}
+                                >
+                                    <div className={`w-5 h-5 rounded-md flex items-center justify-center ${isVisible ? 'bg-emerald-500 text-white shadow-inner' : 'bg-gray-100'}`}>
+                                        {isVisible && <Check size={12} strokeWidth={4} />}
                                     </div>
-                                 </div>
-                              </div>
-                           </div>
+                                    {room.nombre}
+                                </button>
+                            );
+                        })}
+                        {allRooms.length === 0 && (
+                            <div className="p-4 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-center w-full">
+                                <span className="text-xs text-slate-400 font-bold">No hay salas configuradas en el sistema</span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
 
-                           <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
-                              <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><HardDrive size={24} className="text-indigo-600" /> Hardware Asignado</h3>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                 {PRINTER_ROLES.map(role => (
-                                    <div key={role.id} className="p-4 bg-slate-50 rounded-2xl border space-y-2 transition-all hover:bg-white hover:border-indigo-200">
-                                       <div className="flex items-center gap-2 text-slate-600"><role.icon size={16} /><span className="text-xs font-bold uppercase">{role.label}</span></div>
-                                       <select
-                                          value={activeTerminal.config.hardware?.printerAssignments?.[role.id] || ''}
-                                          onChange={(e) => {
-                                             const current = activeTerminal.config.hardware?.printerAssignments || {};
-                                             handleUpdateActiveConfig('hardware', 'printerAssignments', { ...current, [role.id]: e.target.value });
-                                          }}
-                                          className="w-full p-3 bg-white border rounded-xl font-bold text-sm outline-none"
-                                       >
-                                          <option value="">-- No asignada --</option>
-                                          {(config.availablePrinters || []).map(p => <option key={p.id} value={p.id}>{p.name} ({p.connection})</option>)}
-                                       </select>
-                                    </div>
-                                 ))}
-                              </div>
-                           </div>
-
-                           <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
-                              <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><MousePointer2 size={24} className="text-blue-600" /> Experiencia de Usuario (UX)</h3>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                 <div className="space-y-4">
-                                    <Toggle
-                                       label="Mostrar Imágenes de Productos"
-                                       description="Visualiza las miniaturas en la grilla del POS."
-                                       checked={activeTerminal.config.ux.showProductImages}
-                                       onChange={(v: boolean) => handleUpdateActiveConfig('ux', 'showProductImages', v)}
-                                       icon={ImageIcon}
-                                       disabled={isReadOnly}
-                                    />
-                                    <div>
-                                       <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Densidad de Grilla</label>
-                                       <div className="flex bg-slate-100 p-1 rounded-2xl">
-                                          <button
-                                             onClick={() => handleUpdateActiveConfig('ux', 'gridDensity', 'COMFORTABLE')}
-                                             disabled={isReadOnly}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.gridDensity === 'COMFORTABLE' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                          >
-                                             Cómoda
-                                          </button>
-                                          <button
-                                             onClick={() => handleUpdateActiveConfig('ux', 'gridDensity', 'COMPACT')}
-                                             disabled={isReadOnly}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.gridDensity === 'COMPACT' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                          >
-                                             Compacta
-                                          </button>
-                                       </div>
-                                    </div>
-                                 </div>
-
-                                 <div className="space-y-4">
-                                    <div>
-                                       <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Modo de Visualización</label>
-                                       <div className="flex bg-slate-100 p-1 rounded-2xl">
-                                          <button
-                                             onClick={() => handleUpdateActiveConfig('ux', 'viewMode', 'VISUAL')}
-                                             disabled={isReadOnly}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.viewMode === 'VISUAL' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                          >
-                                             <LayoutGrid size={14} /> Visual / Touch
-                                          </button>
-                                          <button
-                                             onClick={() => handleUpdateActiveConfig('ux', 'viewMode', 'RETAIL')}
-                                             disabled={isReadOnly}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.viewMode === 'RETAIL' ? 'bg-white text-purple-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                          >
-                                             <ScanBarcode size={14} /> Retail / Scanner
-                                          </button>
-                                       </div>
-                                       <p className="text-[10px] text-gray-400 mt-2 ml-1">
-                                          {activeTerminal.config.ux.viewMode === 'RETAIL'
-                                             ? "Optimizado para supermercados. Oculta la grilla de productos y prioriza el escaneo."
-                                             : "Diseño clásico con grilla de productos y categorías visuales."}
-                                       </p>
-                                    </div>
-                                    <div>
-                                       <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Tema Visual</label>
-                                       <div className="flex bg-slate-100 p-1 rounded-2xl">
-                                          <button
-                                             onClick={() => handleUpdateActiveConfig('ux', 'theme', 'LIGHT')}
-                                             disabled={isReadOnly}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.theme === 'LIGHT' ? 'bg-white text-orange-500 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                          >
-                                             <Sun size={14} /> Claro
-                                          </button>
-                                          <button
-                                             onClick={() => handleUpdateActiveConfig('ux', 'theme', 'DARK')}
-                                             disabled={isReadOnly}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${activeTerminal.config.ux.theme === 'DARK' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                          >
-                                             <RefreshCw size={14} /> Oscuro
-                                          </button>
-                                       </div>
-                                    </div>
-                                    <div>
-                                       <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Layout de Teclas Rápidas</label>
-                                       <div className="flex bg-slate-100 p-1 rounded-2xl">
-                                          <button
-                                             onClick={() => handleUpdateActiveConfig('ux', 'quickKeysLayout', 'A')}
-                                             disabled={isReadOnly}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.quickKeysLayout === 'A' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                          >
-                                             Modelo A
-                                          </button>
-                                          <button
-                                             onClick={() => handleUpdateActiveConfig('ux', 'quickKeysLayout', 'B')}
-                                             disabled={isReadOnly}
-                                             className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.quickKeysLayout === 'B' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                          >
-                                             Modelo B
-                                          </button>
-                                       </div>
-                                    </div>
-                                 </div>
-                              </div>
-                           </div>
-
-                           <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
-                              <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><Calculator size={24} className="text-emerald-600" /> Criterios Financieros</h3>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                 <div className="space-y-4">
-                                    <Toggle
-                                       label="Precios con ITBIS Incluido"
-                                       description="Muestra el PVP final en las baldosas y búsqueda."
-                                       checked={activeTerminal.config.financial.taxInclusivePrices}
-                                       onChange={(v: boolean) => handleUpdateActiveConfig('financial', 'taxInclusivePrices', v)}
-                                       icon={Percent}
-                                       disabled={isReadOnly}
-                                    />
-                                    <Toggle
-                                       label="Desglose de Impuestos en Ticket"
-                                       description="Imprime ITBIS 18/16/0 detallado al final."
-                                       checked={activeTerminal.config.financial.printTaxBreakdown}
-                                       onChange={(v: boolean) => handleUpdateActiveConfig('financial', 'printTaxBreakdown', v)}
-                                       icon={FileText}
-                                       disabled={isReadOnly}
-                                    />
-                                 </div>
-                                 <div>
-                                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Método de Redondeo</label>
-                                    <select
-                                       value={activeTerminal.config.financial.roundingMethod}
-                                       onChange={(e) => handleUpdateActiveConfig('financial', 'roundingMethod', e.target.value)}
-                                       disabled={isReadOnly}
-                                       className={`w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-100 transition-all ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                    >
-                                       <option value="ROUND_HALF_UP">Matemático Estándar (0.5+)</option>
-                                       <option value="ROUND_FLOOR">Truncar Centavos</option>
-                                       <option value="NONE">Sin Redondeo</option>
-                                    </select>
-                                    <p className="text-[10px] text-gray-400 mt-2 ml-1">Afecta el cálculo del cambio y totales globales.</p>
-                                 </div>
-                              </div>
-                           </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6">
+                    <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><Tag size={24} className="text-purple-600" /> Precios y Tarifas</h3>
+                    <div className="space-y-6">
+                        <div>
+                            <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Tarifa Predeterminada</label>
+                            <select
+                                value={activeTerminal.config.pricing.defaultTariffId}
+                                onChange={(e) => handleUpdateActiveConfig('pricing', 'defaultTariffId', e.target.value)}
+                                disabled={isReadOnly}
+                                className={`w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-100 transition-all ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                            >
+                                {config.tariffs.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                            </select>
                         </div>
-                     )}
+                        <div>
+                            <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Tarifas Autorizadas</label>
+                            <div className="flex flex-wrap gap-2 mt-2">
+                                {config.tariffs.map(t => {
+                                    const isAllowed = activeTerminal.config.pricing.allowedTariffIds.includes(t.id);
+                                    return (
+                                        <button
+                                            key={t.id}
+                                            onClick={() => {
+                                                const current = activeTerminal.config.pricing.allowedTariffIds;
+                                                const updated = isAllowed ? current.filter(id => id !== t.id) : [...current, t.id];
+                                                handleUpdateActiveConfig('pricing', 'allowedTariffIds', updated);
+                                            }}
+                                            className={`px-3 py-2 rounded-xl text-xs font-bold border-2 transition-all ${isAllowed ? 'bg-purple-600 border-purple-600 text-white shadow-md' : 'bg-white border-slate-100 text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                            disabled={isReadOnly}
+                                        >
+                                            {t.name}
+                                        </button>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6">
+                    <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><MousePointer2 size={24} className="text-blue-600" /> UX</h3>
+                    <div className="space-y-4">
+                        <Toggle
+                            label="Imágenes de Productos"
+                            description="Visualiza miniaturas en el POS."
+                            checked={activeTerminal.config.ux.showProductImages}
+                            onChange={(v: boolean) => handleUpdateActiveConfig('ux', 'showProductImages', v)}
+                            icon={ImageIcon}
+                            disabled={isReadOnly}
+                        />
+                        <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 flex justify-between items-center h-[72px]">
+                            <div className="flex flex-col">
+                                <span className="font-bold text-gray-700 text-sm">Alto Contraste</span>
+                            </div>
+                            <AccessibilityToggle showLabel={false} />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Densidad</label>
+                            <div className="flex bg-slate-100 p-1 rounded-2xl">
+                                <button
+                                    onClick={() => handleUpdateActiveConfig('ux', 'gridDensity', 'COMFORTABLE')}
+                                    disabled={isReadOnly}
+                                    className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.gridDensity === 'COMFORTABLE' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                >
+                                    Cómoda
+                                </button>
+                                <button
+                                    onClick={() => handleUpdateActiveConfig('ux', 'gridDensity', 'COMPACT')}
+                                    disabled={isReadOnly}
+                                    className={`flex-1 py-3 rounded-xl text-xs font-black uppercase transition-all ${activeTerminal.config.ux.gridDensity === 'COMPACT' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                >
+                                    Compacta
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-8">
+                <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><HardDrive size={24} className="text-indigo-600" /> Hardware Asignado</h3>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    {PRINTER_ROLES.map(role => (
+                        <div key={role.id} className="p-4 bg-slate-50 rounded-2xl border space-y-2 transition-all hover:bg-white hover:border-indigo-200">
+                            <div className="flex items-center gap-2 text-slate-600"><role.icon size={16} /><span className="text-xs font-bold uppercase">{role.label}</span></div>
+                            <select
+                                value={activeTerminal.config.hardware?.printerAssignments?.[role.id] || ''}
+                                onChange={(e) => {
+                                    const current = activeTerminal.config.hardware?.printerAssignments || {};
+                                    handleUpdateActiveConfig('hardware', 'printerAssignments', { ...current, [role.id]: e.target.value });
+                                }}
+                                className="w-full p-2 bg-white border rounded-lg font-bold text-[10px] outline-none"
+                            >
+                                <option value="">-- No asignada --</option>
+                                {(config.availablePrinters || []).map(p => <option key={p.id} value={p.id}>{p.name} ({p.connection})</option>)}
+                            </select>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-8">
+                <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><Calculator size={24} className="text-emerald-600" /> Criterios Financieros</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="space-y-4">
+                        <Toggle
+                            label="Precios con ITBIS Incluido"
+                            description="Muestra el PVP final en las baldosas y búsqueda."
+                            checked={activeTerminal.config.financial.taxInclusivePrices}
+                            onChange={(v: boolean) => handleUpdateActiveConfig('financial', 'taxInclusivePrices', v)}
+                            icon={Percent}
+                            disabled={isReadOnly}
+                        />
+                        <Toggle
+                            label="Desglose de Impuestos en Ticket"
+                            description="Imprime ITBIS 18/16/0 detallado al final."
+                            checked={activeTerminal.config.financial.printTaxBreakdown}
+                            onChange={(v: boolean) => handleUpdateActiveConfig('financial', 'printTaxBreakdown', v)}
+                            icon={FileText}
+                            disabled={isReadOnly}
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Método de Redondeo</label>
+                        <select
+                            value={activeTerminal.config.financial.roundingMethod}
+                            onChange={(e) => handleUpdateActiveConfig('financial', 'roundingMethod', e.target.value)}
+                            disabled={isReadOnly}
+                            className={`w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-100 transition-all ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                        >
+                            <option value="ROUND_HALF_UP">Matemático Estándar (0.5+)</option>
+                            <option value="ROUND_FLOOR">Truncar Centavos</option>
+                            <option value="NONE">Sin Redondeo</option>
+                        </select>
+                        <p className="text-[10px] text-gray-400 mt-2 ml-1">Afecta el cálculo del cambio y totales globales.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    )
+}
 
                      {/* 2. DOCUMENTS / ASSIGNMENTS SECTION */}
                      {activeTab === 'DOCUMENTS' && (
@@ -1473,7 +1468,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                </div>
             )
          }
-      </div >
+      </div>
    );
 };
 

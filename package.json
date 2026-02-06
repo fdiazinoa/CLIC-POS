@@ -9,9 +9,10 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "server": "nodemon",
+    "kds": "python3 server/kds_service.py",
     "db:seed": "node server/seed.js",
     "db:reset": "node server/seed.js && echo 'Base de datos reiniciada correctamente.'",
-    "start:dev": "concurrently \"npm run server\" \"npm run dev\"",
+    "start:dev": "concurrently \"npm run server\" \"npm run dev\" \"npm run kds\"",
     "start": "npm run start:dev"
   },
   "dependencies": {

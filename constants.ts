@@ -105,6 +105,13 @@ export const DEFAULT_TERMINAL_CONFIG = {
     printerAssignments: {},
     scales: []
   },
+  operational: {
+    vertical_negocio: 'RETAIL' as const,
+    usa_mesas: false,
+    pantalla_inicio: 'VENTA_DIRECTA' as const,
+    bloqueo_meseros: false,
+    pedir_comensales: true
+  },
   ux: {
     theme: 'LIGHT' as const,
     gridDensity: 'COMFORTABLE' as const,
