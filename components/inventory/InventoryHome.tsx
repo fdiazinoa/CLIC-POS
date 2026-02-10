@@ -5,18 +5,24 @@
  * Quick access to common inventory tasks.
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Package, ListChecks, Truck, Tag as TagIcon, BarChart3, RefreshCw } from 'lucide-react';
+import { Warehouse } from '../../types';
+import WarehouseSelectionModal from './WarehouseSelectionModal';
 
 interface InventoryHomeProps {
-    onNavigate: (view: string) => void;
+    onNavigate: (view: string, data?: any) => void;
     userName?: string;
+    warehouses: Warehouse[];
 }
 
 const InventoryHome: React.FC<InventoryHomeProps> = ({
     onNavigate,
-    userName = 'Usuario'
+    userName = 'Usuario',
+    warehouses = []
 }) => {
+    const [isWarehouseModalOpen, setIsWarehouseModalOpen] = useState(false);
+
     const menuItems = [
         {
             id: 'INVENTORY_COUNT',
@@ -52,6 +58,19 @@ const InventoryHome: React.FC<InventoryHomeProps> = ({
         }
     ];
 
+    const handleItemClick = (id: string) => {
+        if (id === 'INVENTORY_COUNT') {
+            setIsWarehouseModalOpen(true);
+        } else {
+            onNavigate(id);
+        }
+    };
+
+    const handleWarehouseSelect = (warehouse: Warehouse) => {
+        setIsWarehouseModalOpen(false);
+        onNavigate('INVENTORY_COUNT', { warehouseId: warehouse.id, warehouseName: warehouse.name });
+    };
+
     return (
         <div className="min-h-screen bg-gray-50 p-4">
             {/* Welcome Header */}
@@ -83,7 +102,7 @@ const InventoryHome: React.FC<InventoryHomeProps> = ({
                     return (
                         <button
                             key={item.id}
-                            onClick={() => onNavigate(item.id)}
+                            onClick={() => handleItemClick(item.id)}
                             className="w-full bg-white p-6 rounded-2xl shadow-sm border-2 border-gray-100 hover:border-blue-300 hover:shadow-md transition-all active:scale-98 text-left"
                         >
                             <div className="flex items-center gap-4">
@@ -130,6 +149,14 @@ const InventoryHome: React.FC<InventoryHomeProps> = ({
                     </div>
                 </div>
             </div>
+
+            {/* Modals */}
+            <WarehouseSelectionModal
+                isOpen={isWarehouseModalOpen}
+                onClose={() => setIsWarehouseModalOpen(false)}
+                warehouses={warehouses}
+                onSelect={handleWarehouseSelect}
+            />
         </div>
     );
 };

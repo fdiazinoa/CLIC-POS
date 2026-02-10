@@ -517,6 +517,12 @@ export interface LoyaltyConfig {
 
 
 
+export interface UnitDefinition {
+  code: string;
+  name: string;
+  type?: 'MASS' | 'VOLUME' | 'UNIT';
+}
+
 export interface BusinessConfig {
   vertical: VerticalType;
   subVertical: SubVertical;
@@ -527,6 +533,7 @@ export interface BusinessConfig {
   features: {
     stockTracking: boolean;
   };
+  units?: UnitDefinition[]; // NEW: Centralized units list
   loyalty?: LoyaltyConfig;
   companyInfo: CompanyInfo;
   currencies: CurrencyConfig[];
@@ -695,6 +702,7 @@ export interface Product {
   image?: string;
   barcode?: string;
   cost?: number;
+  is_sellable?: boolean;
   theoreticalCost?: number; // New calculated cost
   type?: ProductType;
   isInventoriable?: boolean;
@@ -721,6 +729,12 @@ export interface Product {
   returnReason?: string; // For items with qty < 0
   primarySupplierId?: string; // NEW: Preferred supplier for lead time calculation
   production_area_id?: string; // NEW: For command routing
+
+  // UOM & Yield
+  measurementUnit?: string; // e.g. 'gr', 'ml', 'oz'
+  purchaseUnit?: string;    // e.g. 'Saco', 'Caja', 'Botella'
+  conversionFactor?: number; // e.g. 1 Saco = 50,000 gr. Default: 1
+  batchYield?: number;      // e.g. Recipe produces 50 units. Default: 1
 }
 
 export interface ProductStock {
@@ -917,7 +931,9 @@ export type ViewState =
   | 'INVENTORY_RECEPTION'
   | 'INVENTORY_LABELS'
   // Kitchen Display views
-  | 'KITCHEN_ORDERS';
+  | 'KITCHEN_ORDERS'
+  // Customer Visor views
+  | 'VISOR';
 
 export interface TariffPriceOverride {
   productId: string;

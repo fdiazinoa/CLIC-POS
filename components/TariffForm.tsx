@@ -6,6 +6,7 @@ import {
    Search, Filter, Wand2, Tag, ChevronDown, CheckCircle2, Plus
 } from 'lucide-react';
 import { Tariff, Product, PricingStrategyType, RoundingRule, BusinessConfig } from '../types';
+import { db } from '../utils/db';
 
 interface TariffFormProps {
    initialData?: Tariff | null;
@@ -135,6 +136,11 @@ const TariffForm: React.FC<TariffFormProps> = ({
 
       setFormData(prev => ({ ...prev, items: newItems }));
 
+      // Persist changes to DB (Granular Update)
+      if (updatedProducts.length > 0) {
+         db.saveDocuments('products', updatedProducts).catch(console.error);
+      }
+
       // Update base prices if callback provided
       if (onUpdateProducts && updatedProducts.length > 0) {
          // Merge with non-filtered products
@@ -162,8 +168,13 @@ const TariffForm: React.FC<TariffFormProps> = ({
 
       // If this is the general tariff, also update the base product price to keep them in sync
       if (formData.id === 'trf-gen' && onUpdateProducts) {
+         const updatedProduct = { ...products.find(p => p.id === productId)!, price, updatedAt: new Date().toISOString() };
+
+         // Persist single product change
+         db.saveDocument('products', updatedProduct).catch(console.error);
+
          const updatedProducts = products.map(p =>
-            p.id === productId ? { ...p, price, updatedAt: new Date().toISOString() } : p
+            p.id === productId ? updatedProduct : p
          );
          onUpdateProducts(updatedProducts);
       }

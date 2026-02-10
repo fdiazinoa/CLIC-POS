@@ -97,6 +97,9 @@ class BackgroundSyncManager {
                 hasError: false,
                 lastSyncTime: new Date().toISOString()
             });
+
+            // 5. Prune old data to keep the database small
+            await this.pruneSyncedItems();
         } catch (error) {
             console.error('❌ BackgroundSyncManager: Sync failed:', error);
             this.updateState({ isSyncing: false, hasError: true });
@@ -193,6 +196,51 @@ class BackgroundSyncManager {
         await this.updatePendingCount();
         // Don't await the sync itself to avoid blocking UI
         this.sync();
+    }
+
+    /**
+     * Prune old COMPLETED items to keep the local database healthy
+     */
+    private async pruneSyncedItems() {
+        const RETENTION_DAYS = 30;
+        const now = new Date();
+        const cutoff = new Date(now.getTime() - (RETENTION_DAYS * 24 * 60 * 60 * 1000));
+
+        console.log(`🧹 BackgroundSyncManager: Pruning synced items older than ${RETENTION_DAYS} days (Cutoff: ${cutoff.toISOString()})`);
+
+        const collections = ['transactions', 'inventoryLedger', 'cashMovements', 'zReports'];
+
+        for (const colName of collections) {
+            try {
+                const data = await db.get(colName as any) as any[];
+                if (!Array.isArray(data)) continue;
+
+                const toKeep: any[] = [];
+                const toPruneIds: string[] = [];
+
+                data.forEach(item => {
+                    const itemDate = new Date(item.createdAt || item.timestamp || item.date || 0);
+                    const isOld = itemDate < cutoff;
+                    const isSynced = item.syncStatus === 'COMPLETED';
+
+                    if (isSynced && isOld) {
+                        toPruneIds.push(item.id);
+                    } else {
+                        toKeep.push(item);
+                    }
+                });
+
+                if (toPruneIds.length > 0) {
+                    console.log(`🗑️ Pruning ${toPruneIds.length} items from ${colName}`);
+                    // Use saveCollection (expensive but correct for mass delete in legacy db.ts)
+                    // Or call deleteDocument for each. Since we just migrated to IDB, 
+                    // saveCollection with the new array will rewrite the store.
+                    await db.save(colName as any, toKeep);
+                }
+            } catch (error) {
+                console.error(`❌ Failed to prune ${colName}:`, error);
+            }
+        }
     }
 }
 

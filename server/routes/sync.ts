@@ -198,6 +198,12 @@ router.get('/delta/:collection', async (req, res) => {
 
     try {
         const items = getCollection(collection);
+
+        // SPECIAL CASE: 'config' is a singleton object, not an array
+        if (collection === 'config') {
+            return res.json({ success: true, data: items, serverTime: new Date().toISOString(), isFullDownload: true });
+        }
+
         if (!since) {
             return res.json({ success: true, items, serverTime: new Date().toISOString(), isFullDownload: true });
         }
@@ -235,7 +241,7 @@ router.post('/collections/:collection/push', async (req, res) => {
 
         // Define JSON fields (must match db.ts)
         const jsonFields: Record<string, string[]> = {
-            products: ['images', 'attributes', 'variants', 'tariffs', 'stockBalances', 'activeInWarehouses', 'appliedTaxIds', 'warehouseSettings', 'availableModifiers', 'operationalFlags'],
+            products: ['images', 'attributes', 'variants', 'tariffs', 'stockBalances', 'activeInWarehouses', 'appliedTaxIds', 'warehouseSettings', 'availableModifiers', 'operationalFlags', 'recipeDetails'],
             roles: ['permissions', 'zReportConfig'],
             customers: ['tags', 'addresses'],
             transactions: ['items', 'payments', 'customerSnapshot', 'relatedTransactions'],
@@ -298,7 +304,9 @@ router.post('/collections/:collection/push', async (req, res) => {
         res.json({ success: true, version: Date.now(), itemCount: items.length });
     } catch (error: any) {
         console.error(`❌ Error pushing to ${collection}:`, error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error(`❌ Error stack:`, error.stack);
+        console.error(`❌ Sample item causing error:`, items && items[0]);
+        res.status(500).json({ success: false, message: error.message, details: error.stack });
     }
 });
 
@@ -521,11 +529,12 @@ router.get('/history/:terminalId', async (req, res) => {
         const transactions = getCollection('transactions').filter((t: any) => t.terminalId === terminalId);
         const inventoryLedger = getCollection('inventory_ledger').filter((m: any) => m.terminalId === terminalId);
         const zReports = getCollection('z_reports').filter((r: any) => r.terminalId === terminalId);
+        const cashMovements = getCollection('cash_movements').filter((c: any) => c.terminalId === terminalId);
 
         res.json({
             success: true,
             terminalId,
-            data: { transactions, inventoryLedger, zReports }
+            data: { transactions, inventoryLedger, zReports, cashMovements }
         });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
@@ -716,10 +725,20 @@ router.post('/reset/:terminalId', async (req, res) => {
         db.transaction(() => {
             const tables = ['transactions', 'inventory_ledger', 'z_reports', 'cash_movements', 'receptions'];
             for (const table of tables) {
-                if (isFullReset) {
-                    db.prepare(`DELETE FROM ${table}`).run();
-                } else {
-                    db.prepare(`DELETE FROM ${table} WHERE terminalId = ?`).run(terminalId);
+                try {
+                    if (isFullReset) {
+                        db.prepare(`DELETE FROM ${table}`).run();
+                    } else {
+                        // Check if terminalId column exists before deleting
+                        const columns = db.prepare(`PRAGMA table_info(${table})`).all() as any[];
+                        if (columns.some(c => c.name === 'terminalId')) {
+                            db.prepare(`DELETE FROM ${table} WHERE terminalId = ?`).run(terminalId);
+                        } else {
+                            console.warn(`[Reset] Table ${table} does not have terminalId column. Skipping.`);
+                        }
+                    }
+                } catch (e: any) {
+                    console.error(`[Reset] Error clearing table ${table}:`, e.message);
                 }
             }
 

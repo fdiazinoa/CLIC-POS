@@ -12,15 +12,20 @@ interface TerminalBindingScreenProps {
   adminUsers: UserType[];
   onPair: (terminalId: string) => void;
   onConfigUpdate?: (newConfig: BusinessConfig) => void;
+  onUsersUpdate?: (users: UserType[]) => void;
+  initialError?: string | null;
+  initialMasterIp?: string;
 }
 
-const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, deviceId, adminUsers, onPair, onConfigUpdate }) => {
-  const [step, setStep] = useState<'MODE_SELECT' | 'SLAVE_CONNECT' | 'AUTH' | 'SELECT' | 'CONFLICT'>('MODE_SELECT');
+const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, deviceId, adminUsers, onPair, onConfigUpdate, onUsersUpdate, initialError, initialMasterIp }) => {
+  const [step, setStep] = useState<'MODE_SELECT' | 'SLAVE_CONNECT' | 'AUTH' | 'SELECT' | 'CONFLICT'>(initialError ? 'SLAVE_CONNECT' : 'MODE_SELECT');
   const [adminPin, setAdminPin] = useState('');
   const [selectedTerminalId, setSelectedTerminalId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [masterIp, setMasterIp] = useState('');
+  const [error, setError] = useState<string | null>(initialError || null);
+  const [masterIp, setMasterIp] = useState(initialMasterIp || '');
   const [isConnecting, setIsConnecting] = useState(false);
+  const [masterAdmins, setMasterAdmins] = useState<UserType[]>([]); // NEW: Local cache of master admins
+  const [localIps, setLocalIps] = useState<string[]>([]); // NEW: For diagnostics
 
   // MODE SELECTION
   const handleModeSelect = (mode: 'MASTER' | 'SLAVE') => {
@@ -28,6 +33,11 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, d
       setStep('AUTH');
     } else {
       setStep('SLAVE_CONNECT');
+      // Proactive IP discovery for the user
+      fetch('/api/network')
+        .then(res => res.json())
+        .then(data => data.addresses && setLocalIps(data.addresses))
+        .catch(() => { });
     }
   };
 
@@ -40,21 +50,18 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, d
     try {
       console.log(`Connecting to Master at ${masterIp}...`);
 
-      // REAL SYNC: Fetch config from Master Node's proxy (port 3000) to avoid Mixed Content
-      // We assume the Master is also running the frontend on port 3000 which proxies /api to 3001
-      const protocol = window.location.protocol; // http: or https:
-      const port = window.location.port || (protocol === 'https:' ? '443' : '80');
+      // Sanitize input: Remove protocol if entered, and check for existing port
+      let host = masterIp.trim().replace(/^https?:\/\//, '');
 
-      // If we are on the same network, we should try to hit the Master's IP on the frontend port
-      // The frontend (Vite) proxies /api -> localhost:3001
-      // So we fetch: protocol//masterIp:3000/api/config
-      // NOTE: This requires the Master to be running the frontend dev server.
+      const port = window.location.port;
+      const finalHost = host.includes(':') ? host : (port ? `${host}:${port}` : host);
 
-      const targetUrl = `${protocol}//${masterIp}:${port}/api/config`;
+      const protocol = window.location.protocol;
+      const targetUrl = `${protocol}//${finalHost}/api/config`;
       console.log(`Fetching config from: ${targetUrl}`);
 
       const response = await fetch(targetUrl);
-      if (!response.ok) throw new Error("Connection failed");
+      if (!response.ok) throw new Error(`El servidor respondió con error ${response.status}`);
 
       const fetchedConfig = await response.json();
 
@@ -79,11 +86,49 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, d
         onConfigUpdate(fetchedConfig);
       }
 
+
+      // FETCH USERS FROM MASTER
+      const usersUrl = `${protocol}//${finalHost}/api/users`;
+      console.log(`Fetching users from: ${usersUrl}`);
+
+      try {
+        const usersResponse = await fetch(usersUrl);
+        if (usersResponse.ok) {
+          const fetchedUsers = await usersResponse.json();
+          console.log(`Fetched ${fetchedUsers.length} users from master.`);
+
+          // Case-insensitive filtering for ADMIN role
+          const fetchedAdmins = fetchedUsers.filter((u: any) =>
+            u.role?.toUpperCase() === 'ADMIN' || u.role?.toUpperCase() === 'ADMINISTRADOR'
+          );
+
+          console.log(`Found ${fetchedAdmins.length} admins in master list.`);
+          setMasterAdmins(fetchedAdmins);
+
+          if (onUsersUpdate) onUsersUpdate(fetchedUsers);
+        } else {
+          console.warn(`Failed to fetch users from Master: ${usersResponse.status}`);
+        }
+      } catch (userErr) {
+        console.error("Error fetching users during binding:", userErr);
+      }
+
       localStorage.setItem('pos_master_ip', masterIp);
       setStep('AUTH');
     } catch (err) {
       console.error(err);
-      setError(`No se pudo conectar a la Maestra (${masterIp}).\nError: ${(err as Error).message}`);
+      const isHttps = window.location.protocol === 'https:';
+      const isNetworkError = (err as Error).message.includes('fetch') || (err as Error).name === 'TypeError';
+
+      let cleanError = `No se pudo conectar a la Maestra (${masterIp}).`;
+
+      if (isNetworkError && isHttps) {
+        cleanError += "\n\n⚠️ Posible error de Certificado SSL detectado:\nAl usar HTTPS, debes 'Aceptar el riesgo' visitando la IP de la Maestra en el navegador primero.";
+      } else {
+        cleanError += `\nError: ${(err as Error).message}`;
+      }
+
+      setError(cleanError);
     } finally {
       setIsConnecting(false);
     }
@@ -91,23 +136,38 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, d
 
   // AUTH LOGIC
   const handleAuth = () => {
+    // Combine local adminUsers with freshly fetched ones
+    const allAvailableAdmins = [...adminUsers];
+
+    // Add master admins avoiding duplicates by ID
+    masterAdmins.forEach(ma => {
+      if (!allAvailableAdmins.some(a => a.id === ma.id)) {
+        allAvailableAdmins.push(ma);
+      }
+    });
+
     // FALLBACK: Allow '1234' if no admin users loaded (Safety net for setup)
-    if (adminPin === '1234' && (!adminUsers || adminUsers.length === 0)) {
+    if (adminPin === '1234' && allAvailableAdmins.length === 0) {
       console.warn("⚠️ Using Fallback Admin PIN (1234) because no admin users loaded.");
       setStep('SELECT');
       setError(null);
       return;
     }
 
-    const admin = (adminUsers || []).find(u => u.pin === adminPin && u.role === 'ADMIN');
+    // Find admin by PIN, ensuring role is ADMIN (case-insensitive)
+    const admin = allAvailableAdmins.find(u =>
+      u.pin === adminPin && (u.role?.toUpperCase() === 'ADMIN' || u.role?.toUpperCase() === 'ADMINISTRADOR')
+    );
+
     if (admin) {
       setStep('SELECT');
       setError(null);
     } else {
-      setError(`PIN de Administrador inválido (Loaded: ${adminUsers?.length || 0})`);
+      setError(`PIN de Administrador inválido (Loaded: ${allAvailableAdmins.length} admins)`);
       setAdminPin('');
     }
   };
+
 
 
   const handleSelectTerminal = (tId: string) => {
@@ -118,6 +178,27 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, d
     } else {
       onPair(tId);
     }
+  };
+
+  // Helper function to construct the SSL certificate acceptance URL
+  const getCertificateUrl = (): string => {
+    if (!masterIp) return '#';
+
+    // Remove any existing protocol prefix
+    let cleanIp = masterIp.trim().replace(/^https?:\/\//, '');
+
+    // Add port if not already present
+    if (!cleanIp.includes(':')) {
+      const port = window.location.port || '3000';
+      cleanIp = `${cleanIp}:${port}`;
+    }
+
+    // Construct full URL
+    const protocol = window.location.protocol;
+    const url = `${protocol}//${cleanIp}/api/status`;
+
+    console.log('SSL Certificate URL:', url);
+    return url;
   };
 
   return (
@@ -189,7 +270,42 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, d
                 onChange={e => setMasterIp(e.target.value)}
                 className="w-full p-4 bg-white border-2 border-purple-200 rounded-xl font-mono text-lg outline-none focus:border-purple-500 transition-all text-purple-900 placeholder:text-purple-200"
               />
-              {error && <p className="text-red-500 text-xs mt-3 font-bold text-center">{error}</p>}
+
+              {localIps.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="text-[9px] font-bold text-purple-400 uppercase">IP de este equipo:</span>
+                  {localIps.map(ip => (
+                    <button
+                      key={ip}
+                      onClick={() => setMasterIp(ip)}
+                      className="text-[9px] bg-purple-100 text-purple-600 px-2 py-0.5 rounded-full font-bold hover:bg-purple-200 transition-colors"
+                    >
+                      {ip}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {error && (
+                <div className="mt-4 p-4 bg-red-50 border border-red-100 rounded-xl">
+                  <p className="text-red-500 text-xs font-bold text-center whitespace-pre-line">{error}</p>
+                  {error.includes('SSL') && (
+                    <div className="mt-3 p-3 bg-white rounded-lg border border-red-200">
+                      <p className="text-[10px] text-red-700 leading-relaxed font-medium">
+                        <strong>Para solucionar:</strong><br />
+                        1. Abre <a
+                          href={getCertificateUrl()}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="underline text-red-600"
+                        >este enlace</a> en una pestaña nueva.<br />
+                        2. Haz clic en "Configuración avanzada" y "Continuar a {masterIp} (no seguro)".<br />
+                        3. Regresa aquí e intenta conectar de nuevo.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <button
@@ -277,30 +393,58 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({ config, d
           </div>
         )}
 
-        {/* STEP 3: CONFLICT RESOLUTION */}
+        {/* STEP 3: CONFLICT RESOLUTION (Takeover) */}
         {step === 'CONFLICT' && (
-          <div className="space-y-6 animate-in zoom-in-95">
-            <div className="bg-orange-50 border-2 border-orange-100 p-6 rounded-3xl">
-              <AlertCircle className="text-orange-500 mx-auto mb-4" size={48} />
-              <h3 className="text-center font-bold text-orange-800">Terminal ya en uso</h3>
-              <p className="text-center text-orange-700 text-xs mt-2 leading-relaxed">
-                La terminal <strong>{selectedTerminalId}</strong> está vinculada a otro hardware.
-                Si continúas, desvincularás el dispositivo anterior.
+          <div className="space-y-8 animate-in zoom-in-95 duration-500">
+            <div className="relative">
+              <div className="w-24 h-24 bg-orange-50 rounded-[2rem] flex items-center justify-center mx-auto mb-6 shadow-xl shadow-orange-100/50">
+                <AlertCircle className="text-orange-500" size={48} />
+              </div>
+              <div className="absolute -top-2 -right-2 w-8 h-8 bg-orange-500 rounded-full border-4 border-white flex items-center justify-center animate-pulse">
+                <ShieldCheck className="text-white" size={14} />
+              </div>
+            </div>
+
+            <div className="text-center space-y-3">
+              <h3 className="text-2xl font-black text-slate-800 tracking-tight">Terminal en Uso</h3>
+              <p className="text-slate-500 text-sm leading-relaxed px-4">
+                La terminal <strong className="text-orange-600 px-2 py-0.5 bg-orange-50 rounded-md">{selectedTerminalId}</strong> ya está vinculada a otro hardware en el sistema.
               </p>
             </div>
 
-            <div className="flex flex-col gap-3">
+            <div className="bg-slate-50 rounded-3xl p-6 border-2 border-slate-100/50 space-y-4">
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center text-blue-600 shrink-0">
+                  <CheckCircle2 size={20} />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest mb-1">Migración Automática</h4>
+                  <p className="text-[11px] text-slate-400 leading-tight">
+                    Si tomas el control, migraremos automáticamente:
+                    <br />
+                    <span className="text-slate-500 font-bold">•</span> Ventas e Historial
+                    <br />
+                    <span className="text-slate-500 font-bold">•</span> Secuencias de Documentos
+                    <br />
+                    <span className="text-slate-500 font-bold">•</span> Movimientos de Caja
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3">
               <button
                 onClick={() => onPair(selectedTerminalId!)}
-                className="w-full py-4 bg-orange-500 text-white rounded-2xl font-black shadow-lg hover:bg-orange-600 transition-all"
+                className="w-full py-5 bg-gradient-to-br from-orange-500 to-orange-600 text-white rounded-2xl font-black text-lg shadow-xl shadow-orange-200 hover:shadow-orange-300 active:scale-95 transition-all flex items-center justify-center gap-3"
               >
-                Desvincular anterior y Tomar Control
+                Tomar Control y Migrar <ChevronRight size={22} />
               </button>
+
               <button
                 onClick={() => setStep('SELECT')}
-                className="w-full py-4 text-slate-500 font-bold hover:bg-slate-100 rounded-2xl"
+                className="w-full py-4 text-slate-400 font-bold text-sm hover:text-slate-800 hover:bg-slate-50 rounded-2xl transition-all"
               >
-                Elegir otra terminal
+                Elegir otra posición
               </button>
             </div>
           </div>

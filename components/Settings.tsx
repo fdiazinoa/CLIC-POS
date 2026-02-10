@@ -195,6 +195,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
             products={props.products}
             onUpdateConfig={props.onUpdateConfig}
             onClose={() => setCurrentView('HOME')}
+            terminalId={props.terminalId}
           />
         );
 

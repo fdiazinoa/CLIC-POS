@@ -50,7 +50,17 @@ class SyncManager {
 
         // Get sync configuration from terminal config
         const terminal = (config.terminals || []).find(t => t.id === terminalId);
-        const savedMasterUrl = localStorage.getItem('CLIC_POS_MASTER_URL');
+        let savedMasterUrl = localStorage.getItem('CLIC_POS_MASTER_URL');
+
+        // Fallback: Check for 'pos_master_ip' (set by TerminalBindingScreen)
+        if (!savedMasterUrl) {
+            const legacyIp = localStorage.getItem('pos_master_ip');
+            if (legacyIp) {
+                // Assume standard port 3001 or infer from location if local
+                savedMasterUrl = `http://${legacyIp}:3001`;
+                console.log(`ℹ️ SyncManager: Inferred Master URL from IP: ${savedMasterUrl}`);
+            }
+        }
 
         this.syncConfig = terminal?.config.syncConfig || {
             mode: this.isMaster ? 'MASTER' : 'SLAVE',
@@ -209,8 +219,12 @@ class SyncManager {
             }
 
             console.log(`✅ SyncManager: Pushed ${items.length} items from ${collection}`);
-        } catch (error) {
-            console.error(`❌ SyncManager: Error pushing ${collection}:`, error);
+        } catch (error: any) {
+            if (error.message === 'Cannot push while offline') {
+                console.warn(`⚠️ SyncManager: Pushing ${collection} deferred (Offline)`);
+            } else {
+                console.error(`❌ SyncManager: Error pushing ${collection}:`, error);
+            }
             throw error;
         }
     }
@@ -326,11 +340,9 @@ class SyncManager {
         // 1. Sync Catalogs
         for (const collection of catalogs) {
             try {
-                if (permissionService.isMasterTerminal()) {
-                    await this.pushCatalog(collection);
-                } else {
-                    await this.pullCatalog(collection);
-                }
+                // Always PULL to get updates from Server/Other Terminals
+                // (Master pushes changes via broadcastChange immediately)
+                await this.pullCatalog(collection);
 
                 const metadata = await apiSyncAdapter.getMetadata(collection);
                 const localVersion = this.syncVersions.get(collection) || 0;
@@ -391,7 +403,16 @@ class SyncManager {
      * Check for catalog updates without pulling
      */
     async checkForUpdates(): Promise<string[]> {
-        const collections: SyncableCollection[] = ['products', 'customers', 'suppliers', 'internalSequences'];
+        const collections: SyncableCollection[] = [
+            'products',
+            'customers',
+            'suppliers',
+            'internalSequences',
+            'transactions',
+            'productStocks',
+            'transfers',
+            'receptions'
+        ];
         const updatesAvailable: string[] = [];
 
         for (const collection of collections) {
@@ -569,14 +590,13 @@ class SyncManager {
         }
 
         this.autoSyncInterval = setInterval(async () => {
-            if (!permissionService.isMasterTerminal()) {
-                console.log('🔄 Auto-sync: Checking for updates...');
-                const updates = await this.checkForUpdates();
+            // Auto-sync for ALL terminals (including Master w/ LocalStorage)
+            // console.log('🔄 Auto-sync: Checking for updates...');
+            const updates = await this.checkForUpdates();
 
-                if (updates.length > 0) {
-                    console.log(`📥 Auto-sync: Found updates for ${updates.join(', ')}`);
-                    await this.syncAllCatalogs();
-                }
+            if (updates.length > 0) {
+                console.log(`📥 Auto-sync: Found updates for ${updates.join(', ')}`);
+                await this.syncAllCatalogs();
             }
         }, intervalMs);
 
@@ -599,7 +619,10 @@ class SyncManager {
      * Used when individual items are created/updated
      */
     async broadcastChange(collection: SyncableCollection, item: any, action: 'CREATE' | 'UPDATE' | 'DELETE') {
-        if (this.isDisabled) return;
+        if (this.isDisabled || !this.syncConfig) {
+            console.warn(`⚠️ SyncManager: Broadcast for ${collection} skipped (Not initialized)`);
+            return;
+        }
 
         if (!permissionService.isMasterTerminal()) {
             console.warn('⚠️  Only master terminal can broadcast changes');
@@ -608,9 +631,17 @@ class SyncManager {
 
         // For now, we'll just push the entire collection
         // In the future, we can optimize to send only the changed item
-        await this.pushCatalog(collection);
-
-        console.log(`📡 Broadcasted ${action} for ${collection}`);
+        try {
+            await this.pushCatalog(collection);
+            console.log(`📡 Broadcasted ${action} for ${collection}`);
+        } catch (error: any) {
+            if (error.message === 'Cannot push while offline') {
+                // Suppress unnecessary error logging, as local save succeeded
+                console.warn(`⚠️ Broadcast for ${collection} deferred (Offline)`);
+            } else {
+                throw error;
+            }
+        }
     }
 
     /**
@@ -735,14 +766,26 @@ class SyncManager {
                 await db.save('zReports', history.zReports);
             }
 
-            // 4. Update local sync versions to match Master
-            // This prevents the terminal from trying to pull these items again via standard sync
+            // 4. Restore Cash Movements
+            if (history.cashMovements?.length > 0) {
+                console.log(`📥 SyncManager: Restoring ${history.cashMovements.length} cash movements...`);
+                await db.save('cashMovements', history.cashMovements);
+            }
+
+            // 5. Update local sync versions and FORCE Pull critical catalogs (especially sequences)
+            // This ensures document numbering continues correctly
             const collections: SyncableCollection[] = ['products', 'customers', 'suppliers', 'internalSequences'];
             for (const col of collections) {
                 const metadata = await apiSyncAdapter.getMetadata(col);
                 if (metadata) {
                     this.syncVersions.set(col, metadata.version);
                     localStorage.setItem(`sync_version_${col}`, metadata.version.toString());
+                }
+
+                // Force a pull of internalSequences specifically to ensure we have the latest from Master
+                if (col === 'internalSequences') {
+                    console.log('📥 SyncManager: Force pulling internalSequences for numbering continuity...');
+                    await this.pullCatalog('internalSequences');
                 }
             }
 

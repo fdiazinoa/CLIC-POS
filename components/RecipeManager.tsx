@@ -71,11 +71,8 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
     };
 
     // Calculations
-    const totalCost = useMemo(() => {
+    const totalIngredientsCost = useMemo(() => {
         return (product.recipeDetails || []).reduce((sum, detail) => {
-            // Simple cost calc: (Cost * Qty) / (1 - Waste)
-            // We use the cost stored in detail (snapshot) or find it again from allProducts?
-            // Better to find fresh cost
             const ing = allProducts.find(p => p.id === detail.childItemId);
             const baseCost = ing?.cost || 0;
 
@@ -87,16 +84,17 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
         }, 0);
     }, [product.recipeDetails, allProducts]);
 
-    const foodCostPct = product.price > 0 ? (totalCost / product.price) * 100 : 0;
+    const batchYield = product.batchYield || 1;
+    const unitCost = totalIngredientsCost / batchYield;
+
+    const foodCostPct = product.price > 0 ? (unitCost / product.price) * 100 : 0;
 
     // Sync cost to parent product theoretical cost
     useEffect(() => {
-        // Avoid infinite loop, only update if significant diff?
-        // Or just display it. Updating the actual Product object prop is good for saving.
-        if (Math.abs((product.theoreticalCost || 0) - totalCost) > 0.01) {
-            onUpdate({ theoreticalCost: totalCost });
+        if (Math.abs((product.theoreticalCost || 0) - unitCost) > 0.01) {
+            onUpdate({ theoreticalCost: unitCost });
         }
-    }, [totalCost]);
+    }, [unitCost]);
 
     return (
         <div className="space-y-6 animate-in fade-in">
@@ -114,19 +112,38 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
                     </p>
                 </div>
 
-                <div className="flex bg-white p-1 rounded-xl border border-slate-200 h-fit">
-                    <button
-                        onClick={() => onUpdate({ type: 'RECETA' })}
-                        className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${product.type === 'RECETA' ? 'bg-orange-100 text-orange-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-                    >
-                        <ChefHat size={16} /> Receta
-                    </button>
-                    <button
-                        onClick={() => onUpdate({ type: 'KIT' })}
-                        className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${product.type === 'KIT' ? 'bg-blue-100 text-blue-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-                    >
-                        <Package size={16} /> Kit
-                    </button>
+                <div className="flex items-center gap-4">
+                    {/* BATCH YIELD INPUT */}
+                    {recipeType === 'RECETA' && (
+                        <div className="bg-white p-2 rounded-xl border border-orange-200 flex flex-col items-center min-w-[100px]">
+                            <label className="text-[10px] font-black text-orange-400 uppercase tracking-wide mb-1">Rendimiento</label>
+                            <div className="flex items-baseline gap-1">
+                                <input
+                                    type="number"
+                                    min="1"
+                                    value={product.batchYield || 1}
+                                    onChange={(e) => onUpdate({ batchYield: parseFloat(e.target.value) || 1 })}
+                                    className="w-12 text-center font-black text-lg text-slate-800 outline-none border-b border-transparent focus:border-orange-300"
+                                />
+                                <span className="text-[10px] font-bold text-slate-400">unids.</span>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="flex bg-white p-1 rounded-xl border border-slate-200 h-fit">
+                        <button
+                            onClick={() => onUpdate({ type: 'RECETA' })}
+                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${product.type === 'RECETA' ? 'bg-orange-100 text-orange-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                        >
+                            <ChefHat size={16} /> Receta
+                        </button>
+                        <button
+                            onClick={() => onUpdate({ type: 'KIT' })}
+                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${product.type === 'KIT' ? 'bg-blue-100 text-blue-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                        >
+                            <Package size={16} /> Kit
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -252,8 +269,18 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
 
                         <div className="space-y-4 mb-6">
                             <div className="flex justify-between items-end border-b border-slate-700 pb-2">
-                                <span className="text-slate-400 text-sm">Costo Teórico</span>
-                                <span className="text-2xl font-black">{formatCurrency(totalCost, currencySymbol)}</span>
+                                <span className="text-slate-400 text-sm">Costo Ingredientes</span>
+                                <span className="text-lg font-bold text-slate-300">{formatCurrency(totalIngredientsCost, currencySymbol)}</span>
+                            </div>
+                            {batchYield > 1 && (
+                                <div className="flex justify-between items-end border-b border-slate-700 pb-2">
+                                    <span className="text-orange-400 text-sm">Yield Divider</span>
+                                    <span className="text-sm font-bold text-orange-400">÷ {batchYield}</span>
+                                </div>
+                            )}
+                            <div className="flex justify-between items-end border-b border-slate-700 pb-2">
+                                <span className="text-slate-100 text-sm font-bold">Costo Unitario</span>
+                                <span className="text-2xl font-black">{formatCurrency(unitCost, currencySymbol)}</span>
                             </div>
                             <div className="flex justify-between items-end pb-2">
                                 <span className="text-slate-400 text-sm">Precio Venta</span>

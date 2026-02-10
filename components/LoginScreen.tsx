@@ -33,6 +33,64 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
     initBiometrics();
   }, [config.security?.allowBiometrics, biometricFailCount]);
 
+  const checkLogin = React.useCallback((inputPin: string) => {
+    console.log(`🔐 Login Attempt: PIN=${inputPin}, AvailableUsers=${availableUsers.length}`);
+    const user = availableUsers.find(u => u.pin === inputPin);
+    if (user) {
+      console.log(`✅ Login Success: User=${user.name}`);
+      setTimeout(() => onLogin(user), 200);
+    } else {
+      console.warn(`❌ Login Failed: PIN ${inputPin} not found in available users.`);
+      setTimeout(() => {
+        setError(true);
+        setPin('');
+      }, 300);
+    }
+  }, [availableUsers, onLogin]);
+
+  const handleKeyPress = React.useCallback((key: string) => {
+    setError(false);
+    if (key === 'C') {
+      setPin('');
+    } else if (key === 'BACK') {
+      setPin(prev => prev.slice(0, -1));
+    } else {
+      setPin(prev => {
+        if (prev.length < 4) {
+          return prev + key;
+        }
+        return prev;
+      });
+    }
+  }, []);
+
+  // Use Effect for auto-check when PIN reaches 4 digits
+  React.useEffect(() => {
+    if (pin.length === 4) {
+      checkLogin(pin);
+    }
+  }, [pin, checkLogin]);
+
+  // Handle physical keyboard input
+  const handleKeyDown = React.useCallback((e: KeyboardEvent) => {
+    if (['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(e.key)) {
+      handleKeyPress(e.key);
+    } else if (e.key === 'Backspace') {
+      handleKeyPress('BACK');
+    } else if (e.key === 'Escape' || e.key === 'c' || e.key === 'C') {
+      handleKeyPress('C');
+    } else if (e.key === 'Enter') {
+      // Enter is redundant but good for UX if they type 4 digits and hit enter
+      if (pin.length === 4) checkLogin(pin);
+    }
+  }, [pin, handleKeyPress, checkLogin]);
+
+  React.useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
+
+
   const handleBiometricLogin = async () => {
     if (biometricFailCount >= 3) {
       setBiometricError(true);
@@ -75,37 +133,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
     setBiometricFailCount(prev => prev + 1);
     setBiometricError(true);
     setTimeout(() => setBiometricError(false), 2000);
-  };
-
-  const handleKeyPress = (key: string) => {
-    setError(false);
-    if (key === 'C') {
-      setPin('');
-    } else if (key === 'BACK') {
-      setPin(prev => prev.slice(0, -1));
-    } else {
-      if (pin.length < 4) {
-        const newPin = pin + key;
-        setPin(newPin);
-
-        // Auto-check on 4 digits
-        if (newPin.length === 4) {
-          checkLogin(newPin);
-        }
-      }
-    }
-  };
-
-  const checkLogin = (inputPin: string) => {
-    const user = availableUsers.find(u => u.pin === inputPin);
-    if (user) {
-      setTimeout(() => onLogin(user), 200);
-    } else {
-      setTimeout(() => {
-        setError(true);
-        setPin('');
-      }, 300);
-    }
   };
 
   const handleUserClick = (userPin: string) => {

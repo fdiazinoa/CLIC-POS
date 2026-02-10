@@ -10,6 +10,7 @@ import supplierRoutes from './routes/supplierRoutes.js';
 import currencyRoutes from './routes/currencies.js';
 import maintenanceRoutes from './routes/maintenance.js'; // Restore missing import
 import dgiiRoutes from './routes/dgiiRoutes.js'; // Import new route
+import os from 'os';
 
 import { db, getCollection, getSetting, saveSetting } from './db';
 
@@ -40,6 +41,21 @@ server.use((req, res, next) => {
 // Healthcheck
 server.get('/api/status', (req, res) => {
     res.json({ status: 'ok', database: 'sqlite', timestamp: Date.now() });
+});
+
+// NEW: Network info for diagnostics
+server.get('/api/network', (req, res) => {
+    const interfaces = os.networkInterfaces();
+    const addresses: string[] = [];
+    for (const k in interfaces) {
+        for (const k2 in interfaces[k]!) {
+            const address = interfaces[k]![k2];
+            if (address.family === 'IPv4' && !address.internal) {
+                addresses.push(address.address);
+            }
+        }
+    }
+    res.json({ addresses });
 });
 
 // Root route
@@ -392,12 +408,25 @@ server.get('/api/:collection', (req, res) => {
     } else {
         data = getCollection(dbName);
     }
+    try {
+        const { result, totalCount } = processQuery(data, req.query);
 
-    const { result, totalCount } = processQuery(data, req.query);
-
-    res.set('X-Total-Count', totalCount.toString());
-    res.set('Access-Control-Expose-Headers', 'X-Total-Count');
-    res.json(result);
+        if (Array.isArray(data)) {
+            res.set('X-Total-Count', totalCount.toString());
+            res.set('Access-Control-Expose-Headers', 'X-Total-Count');
+            res.json(result);
+        } else {
+            // Singleton: Return directly
+            res.json(result);
+        }
+    } catch (error: any) {
+        console.error(`Error processing /api/${collection}:`, error);
+        // Log to file for debugging
+        import('fs').then(fs => {
+            fs.appendFileSync('server/custom_error.log', `[${new Date().toISOString()}] Error in /api/${collection}: ${error.stack}\n`);
+        });
+        res.status(500).json({ error: error.message });
+    }
 });
 
 server.get('/api/:collection/:id', (req, res) => {
@@ -593,19 +622,59 @@ server.use((err: any, req: any, res: any, next: any) => {
     res.status(500).json({ success: false, message: 'Internal Server Error', error: err.message });
 });
 
-const PORT = 3001;
-const HOST = '0.0.0.0';
-const appInstance = server.listen(PORT, HOST, () => {
-    console.log(`🚀 SQLite Server is running on http://${HOST}:${PORT}`);
-});
+// Server Configuration
+const CLOUD_MODE = process.env.CLOUD_MODE === 'true';
+const PORT = parseInt(process.env.PORT || '3001');
+const HOST = process.env.HOST || '0.0.0.0';
 
-appInstance.on('error', (e: any) => {
-    if (e.code === 'EADDRINUSE') {
-        console.error(`❌ Port ${PORT} is already in use.`);
-    } else {
-        console.error('❌ Server startup error:', e);
-    }
-});
+// Start server based on mode
+if (CLOUD_MODE) {
+    console.log('🔒 Starting in CLOUD MODE (HTTPS)...');
+
+    import('https').then(https => {
+        import('fs').then(fs => {
+            const SSL_KEY_PATH = process.env.SSL_KEY_PATH;
+            const SSL_CERT_PATH = process.env.SSL_CERT_PATH;
+
+            if (!SSL_KEY_PATH || !SSL_CERT_PATH) {
+                console.error('❌ CLOUD_MODE requires SSL_KEY_PATH and SSL_CERT_PATH in .env');
+                process.exit(1);
+            }
+
+            const httpsOptions = {
+                key: fs.readFileSync(SSL_KEY_PATH),
+                cert: fs.readFileSync(SSL_CERT_PATH)
+            };
+
+            const appInstance = https.createServer(httpsOptions, server).listen(PORT, HOST, () => {
+                console.log(`🔒 Cloud Server (HTTPS) running on https://${HOST}:${PORT}`);
+            });
+
+            appInstance.on('error', (e: any) => {
+                if (e.code === 'EADDRINUSE') {
+                    console.error(`❌ Port ${PORT} is already in use.`);
+                } else {
+                    console.error('❌ Server startup error:', e);
+                }
+            });
+        });
+    });
+} else {
+    console.log('🚀 Starting in LOCAL MODE (HTTP)...');
+
+    const appInstance = server.listen(PORT, HOST, () => {
+        console.log(`🚀 Local Server (HTTP) running on http://${HOST}:${PORT}`);
+        console.log(`💡 For cloud deployment, set CLOUD_MODE=true in .env`);
+    });
+
+    appInstance.on('error', (e: any) => {
+        if (e.code === 'EADDRINUSE') {
+            console.error(`❌ Port ${PORT} is already in use.`);
+        } else {
+            console.error('❌ Server startup error:', e);
+        }
+    });
+}
 
 // Helper to auto-migrate transaction_history if missing
 const ensureTransactionHistoryTable = () => {
@@ -808,8 +877,33 @@ const ensureRecipeColumns = () => {
     }
 }
 
+const ensureProductUomColumns = () => {
+    try {
+        const columns = db.prepare("PRAGMA table_info(products)").all() as any[];
+        const missingCols = [
+            { name: 'measurementUnit', type: 'TEXT' },
+            { name: 'purchaseUnit', type: 'TEXT' },
+            { name: 'conversionFactor', type: 'REAL', default: '1' },
+            { name: 'batchYield', type: 'REAL', default: '1' },
+            { name: 'primarySupplierId', type: 'TEXT' }
+        ];
+
+        for (const col of missingCols) {
+            if (!columns.some(c => c.name === col.name)) {
+                console.log(`📦 Migrating products: Adding ${col.name}...`);
+                let query = `ALTER TABLE products ADD COLUMN ${col.name} ${col.type}`;
+                if (col.default) query += ` DEFAULT ${col.default}`;
+                db.prepare(query).run();
+            }
+        }
+    } catch (error) {
+        console.error('❌ Failed to ensure Product UOM columns:', error);
+    }
+}
+
 // Run migration on startup
 ensureTransactionHistoryTable();
 ensureOperationalConfigTable();
 ensureFloorPlanTables();
 ensureRecipeColumns();
+ensureProductUomColumns();

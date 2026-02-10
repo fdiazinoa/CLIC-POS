@@ -5,8 +5,7 @@ const getApiUrl = () => {
     const masterIp = localStorage.getItem('pos_master_ip');
     if (masterIp) {
         const protocol = window.location.protocol;
-        const port = window.location.port || (protocol === 'https:' ? '443' : '80');
-        return `${protocol}//${masterIp}:${port}/api`;
+        return `${protocol}//${masterIp}:3001/api`;
     }
     return '/api';
 };
@@ -184,12 +183,19 @@ class NetworkSyncService {
             await this.pushPendingTransactions();
             await this.pushPendingInventory();
 
-            // 3. Pull Data (Downstream)
+            // 3. Pull Data (Downstream) - CRITICAL: Pull users and config FIRST for authentication
+            await this.pullCollection('config');
+            await this.pullCollection('users');
+            await this.pullCollection('roles');
+            await this.pullCollection('warehouses');
             await this.pullCollection('products');
             await this.pullCollection('productStocks'); // Sync Detailed Stocks
             await this.pullCollection('customers');
             await this.pullCollection('suppliers');
             await this.pullCollection('internalSequences');
+            await this.pullCollection('fiscalRanges');
+            await this.pullCollection('fiscalAllocations');
+            await this.pullCollection('localFiscalBuffer');
             await this.pullCollection('inventoryLedger'); // Sync Kardex
             await this.pullCollection('purchaseOrders');  // Sync Orders
             await this.pullCollection('transfers');       // Sync Stock Transfers
@@ -273,6 +279,15 @@ class NetworkSyncService {
         const data = await res.json();
 
         if (data.success) {
+            // SPECIAL CASE: 'config' is a singleton object, not an array
+            if (collection === 'config') {
+                if (data.data && typeof data.data === 'object') {
+                    await dbAdapter.saveCollection('config', data.data);
+                    console.log('📥 Pulled config (singleton)');
+                }
+                return;
+            }
+
             const items = data.items || [];
 
             if (items.length === 0 && !data.isFullDownload) {
@@ -298,7 +313,19 @@ class NetworkSyncService {
                     });
                 }
 
-                for (const item of items) {
+                for (let item of items) {
+                    // FIX: Recursion/Wrapping detection
+                    // Use a loop to unwrap arbitrarily deep nesting
+                    let depth = 0;
+                    // INCREASED LIMIT: 10 was not enough. 1000 should cover any accidental infinite loop while allowing deep recovery.
+                    while (item.data && typeof item.data === 'object' && item.data.id === item.id && depth < 1000) {
+                        if (depth % 10 === 0) {
+                            console.warn(`📦 Unwrapping nested data (depth ${depth + 1}) for ${collection} item ${item.id}`);
+                        }
+                        item = item.data;
+                        depth++;
+                    }
+
                     // FIX: If productStocks, check if we already have this stock locally
                     if (collection === 'productStocks' && item.productId && item.warehouseId) {
                         const key = `${item.productId}|${item.warehouseId}`;
@@ -329,25 +356,32 @@ class NetworkSyncService {
                     }
 
                     if (!item.id) {
-                        console.warn(`⚠️ Skipping ${collection} item without ID`);
+                        console.warn(`⚠️ Skipping ${collection} item without ID:`, item);
                         continue;
                     }
 
-                    await dbAdapter.saveDocument(collection, item);
+                    if (collection === 'transfers') {
+                        console.log(`🔍 saving transfer item:`, JSON.stringify(item));
+                    }
+
+                    try {
+                        await dbAdapter.saveDocument(collection, item);
+                    } catch (err: any) {
+                        console.error(`❌ Error saving ${collection} item ${item.id}:`, err);
+                        if (collection === 'transfers') {
+                            console.error(`❌ Failed Transfer Item Structure:`, JSON.stringify(item, null, 2));
+                        }
+                    }
                 }
             } else {
                 // Delta Sync: Upsert or Delete
                 for (const item of items) {
-                    if (item.deletedAt || item.isActive === false) {
-                        // Handle Soft Delete
-                        // Check if we should actually delete or just update the flag.
-                        // For now, let's assume we keep it but update it, unless it's explicitly deletedAt?
-                        // If the backend sends it in delta, we should update our local copy.
-                        // If it has 'deletedAt', maybe we remove it from local DB to save space?
-                        // Let's stick to "Update" so local DB reflects server state exactly, 
-                        // unless it's a hard delete.
-                        // But wait, the requirement said: "SI item.deletedAt != null -> db.collection.delete(item.id)"
+                    if (!item.id) {
+                        console.warn(`⚠️ Skipping ${collection} delta item without ID:`, item);
+                        continue;
+                    }
 
+                    if (item.deletedAt || item.isActive === false) {
                         if (item.deletedAt) {
                             await dbAdapter.deleteDocument(collection, item.id);
                         } else {

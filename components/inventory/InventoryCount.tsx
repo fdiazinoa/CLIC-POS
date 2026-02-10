@@ -20,12 +20,16 @@ interface CountedItem {
 
 interface InventoryCountProps {
     products: Product[];
+    warehouseId?: string;
+    warehouseName?: string;
     onSave: (counts: CountedItem[]) => void;
     onCancel: () => void;
 }
 
 const InventoryCount: React.FC<InventoryCountProps> = ({
     products,
+    warehouseId,
+    warehouseName,
     onSave,
     onCancel
 }) => {
@@ -33,6 +37,12 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
     const [scanInput, setScanInput] = useState('');
     const [selectedItem, setSelectedItem] = useState<string | null>(null);
     const [showCameraScanner, setShowCameraScanner] = useState(false);
+
+    // Get expected qty for a product in the selected warehouse
+    const getExpectedQty = (product: Product) => {
+        if (!warehouseId) return product.stock || 0;
+        return product.stockBalances?.[warehouseId] ?? 0;
+    };
 
     // Handle scan
     const handleScan = () => {
@@ -44,6 +54,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
 
         if (product) {
             const existing = counts.find(c => c.productId === product.id);
+            const expected = getExpectedQty(product);
 
             if (existing) {
                 // Increment count
@@ -57,9 +68,9 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                 setCounts([...counts, {
                     productId: product.id,
                     productName: product.name,
-                    expectedQty: product.stock || 0,
+                    expectedQty: expected,
                     countedQty: 1,
-                    difference: 1 - (product.stock || 0)
+                    difference: 1 - expected
                 }]);
             }
 
@@ -79,6 +90,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
 
         if (product) {
             const existing = counts.find(c => c.productId === product.id);
+            const expected = getExpectedQty(product);
 
             if (existing) {
                 // Increment count
@@ -92,9 +104,9 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                 setCounts([...counts, {
                     productId: product.id,
                     productName: product.name,
-                    expectedQty: product.stock || 0,
+                    expectedQty: expected,
                     countedQty: 1,
-                    difference: 1 - (product.stock || 0)
+                    difference: 1 - expected
                 }]);
             }
 
@@ -129,8 +141,12 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
             return;
         }
 
-        if (confirm(`¿Guardar conteo de ${counts.length} productos?`)) {
-            onSave(counts);
+        if (confirm(`¿Guardar conteo de ${counts.length} productos para ${warehouseName || 'el almacén seleccionado'}?`)) {
+            // Tag with warehouseId if provided
+            const finalCounts = warehouseId
+                ? counts.map(c => ({ ...c, warehouseId }))
+                : counts;
+            onSave(finalCounts as any);
         }
     };
 
@@ -138,8 +154,16 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
         <div className="min-h-screen bg-gray-50 flex flex-col">
             {/* Header */}
             <div className="bg-blue-600 text-white p-4 shadow-md">
-                <div className="flex items-center justify-between mb-3">
-                    <h1 className="text-xl font-black">Conteo de Inventario</h1>
+                <div className="flex items-center justify-between mb-1">
+                    <div>
+                        <h1 className="text-xl font-black leading-tight">Conteo de Inventario</h1>
+                        {warehouseName && (
+                            <div className="flex items-center gap-1.5 text-blue-100 font-bold text-sm bg-black/10 px-2 py-0.5 rounded-lg w-fit">
+                                <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
+                                {warehouseName}
+                            </div>
+                        )}
+                    </div>
                     <button
                         onClick={onCancel}
                         className="p-2 bg-white/20 rounded-lg hover:bg-white/30 transition-colors"
@@ -149,7 +173,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                 </div>
 
                 {/* Scan Input */}
-                <div className="flex gap-2">
+                <div className="flex gap-2 mt-4">
                     <div className="flex-1 relative">
                         <ScanBarcode className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200" size={20} />
                         <input

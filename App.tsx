@@ -42,6 +42,7 @@ import { syncManager } from './services/sync/SyncManager';
 import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
 import { calculateZReportStats } from './utils/analytics';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
+import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 
 // Component Imports
 import LoginScreen from './components/LoginScreen';
@@ -90,6 +91,7 @@ import './styles/high-contrast.css';
 import { ThemeProvider } from './components/ThemeContext';
 import { transactionSyncService } from './services/sync/TransactionSyncService';
 import { inventorySyncService } from './services/sync/InventorySyncService';
+import { processInventoryDeduction } from './utils/inventoryEngine';
 
 const App: React.FC = () => {
   return (
@@ -102,7 +104,10 @@ const App: React.FC = () => {
 const AppContent: React.FC = () => {
   // --- GLOBAL STATE ---
   const [activeTable, setActiveTable] = useState<Table | null>(null); // New state for selected table context
-  const [currentView, setCurrentView] = useState<ViewState>('LOGIN');
+  const [currentView, setCurrentView] = useState<ViewState>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('view') === 'VISOR' ? 'VISOR' : 'LOGIN';
+  });
   const [restoringHistory, setRestoringHistory] = useState(false);
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any));
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -110,18 +115,19 @@ const AppContent: React.FC = () => {
   // --- SECURITY & DEVICE HANDSHAKE ---
   const [deviceId, setDeviceId] = useState<string>('');
   const [isDataLoaded, setIsDataLoaded] = useState<boolean>(false);
+  const [initialConnError, setInitialConnError] = useState<string | null>(null);
+  const [failedMasterIp, setFailedMasterIp] = useState<string>('');
 
-  const fetchTables = async () => {
-    try {
-      const res = await fetch('http://localhost:8001/api/mesas');
-      if (res.ok) {
-        const data = await res.json();
-        setTables(data);
-      }
-    } catch (e) {
-      console.error("Failed to fetch tables from KDS:", e);
-    }
-  };
+  // Helper: Get current terminal configuration
+  const getCurrentTerminal = React.useCallback(() => {
+    return (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+  }, [config.terminals, deviceId]);
+
+  // Helper: Get current device role
+  const getCurrentDeviceRole = React.useCallback((): DeviceRole => {
+    const terminal = getCurrentTerminal();
+    return terminal?.config?.deviceRole?.role || DeviceRole.STANDARD_POS;
+  }, [getCurrentTerminal]);
 
   // --- DATA STORES ---
   const [users, setUsers] = useState<User[]>([]);
@@ -134,7 +140,6 @@ const AppContent: React.FC = () => {
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [parkedTickets, setParkedTickets] = useState<ParkedTicket[]>([]);
-  const [cart, setCart] = useState<CartItem[]>([]);
   const [transfers, setTransfers] = useState<StockTransfer[]>([]);
   const [internalSequences, setInternalSequences] = useState<any[]>([]);
   const [receptions, setReceptions] = useState<Reception[]>([]);
@@ -142,148 +147,63 @@ const AppContent: React.FC = () => {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [tables, setTables] = useState<Table[]>([]);
   const [activeRoomId, setActiveRoomId] = useState<string>('');
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [activeRoomId2, setActiveRoomId2] = useState<string>(''); // For backward compatibility if needed
   const [supplierProductPrices, setSupplierProductPrices] = useState<any[]>([]);
-  const [isAdminMode, setIsAdminMode] = useState(false); // Temporary admin elevation
-
-  useKioskMode(true);
-  useBarcodeScanner({
-    onScan: (code) => {
-      // Defer to POSInterface local handler if active to support advanced features (Returns, etc.)
-      if ((currentView as any) === 'POS') return;
-
-      console.log('🔫 Global Scan:', code);
-      const trimmed = code.trim();
-      const product = products.find(p => p.barcode === trimmed || p.id === trimmed);
-      if (product) {
-        setCart(prev => {
-          const existing = prev.find(item => item.id === product.id);
-          if (existing) {
-            return prev.map(item => item.id === product.id
-              ? { ...item, quantity: item.quantity + 1 }
-              : item
-            );
-          }
-          // Correctly construct CartItem (flat structure)
-          const newItem: CartItem = {
-            ...product,
-            cartId: `scan-${Date.now()}-${Math.random().toString(36).substring(7)}`,
-            quantity: 1
-          };
-          return [...prev, newItem];
-        });
-
-        if (currentView !== 'POS') setCurrentView('POS');
-      }
-    }
-  });
-
-  // Settings Deep Linking state
-  const [settingsInitialView, setSettingsInitialView] = useState<string | undefined>(undefined);
-  const [settingsInitialData, setSettingsInitialData] = useState<any>(undefined);
-  // Generic View Data (for passing params between views)
+  const [isAdminMode, setIsAdminMode] = useState(false);
+  const [settingsInitialView, setSettingsInitialView] = useState<string | undefined>();
+  const [settingsInitialData, setSettingsInitialData] = useState<any>();
   const [viewData, setViewData] = useState<any>(null);
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
 
-  // --- NAVIGATION GUARD ---
-  /**
-   * Guarded view change handler that uses terminal router to validate navigation
-   */
-  const handleViewChange = (targetView: ViewState, data?: any) => {
-    // If terminal router is not initialized, allow navigation (backward compatibility)
-    if (!terminalRouter.isInitialized()) {
-      setCurrentView(targetView);
-      if (data !== undefined) setViewData(data);
-      return;
-    }
-
-    // Check if navigation is allowed
-    const decision = terminalRouter.beforeNavigate(targetView, currentView);
-
-    if (decision.allowed) {
-      // Data Refresh Logic based on View
-      if (targetView === 'TABLE_MAP') {
-        db.get('tables').then((latestTables: any) => {
-          if (Array.isArray(latestTables)) setTables(latestTables);
-        }).catch(err => console.error("Failed to refresh tables on nav:", err));
-
-        // Also refresh parked tickets to ensure sync
-        db.get('parkedTickets').then((pt: any) => {
-          if (Array.isArray(pt)) setParkedTickets(pt);
-        }).catch(console.error);
+  const fetchTables = async () => {
+    try {
+      const res = await fetch('/api/mesas');
+      if (res.ok) {
+        const data = await res.json();
+        setTables(data);
       }
-
-      setCurrentView(targetView);
-    } else {
-      // Navigation blocked
-      console.warn(`🚫 Navigation blocked: ${currentView} → ${targetView}`, decision.message);
-
-      if (decision.message) {
-        alert(decision.message);
-      }
-
-      // If there's a redirect suggestion, apply it
-      if (decision.redirect) {
-        setCurrentView(decision.redirect as ViewState);
-      }
+    } catch (e) {
+      console.error("Failed to fetch tables:", e);
     }
   };
 
-  // --- VISOR SYNC (MOVED TO POSINTERFACE FOR ACCURACY) ---
-  useEffect(() => {
-    // No longer handled here to preserve accurate tax/discount calculations
-  }, []);
+  useKioskMode(getCurrentDeviceRole() === DeviceRole.SELF_CHECKOUT);
+  useBarcodeScanner({
+    onScan: (barcode) => {
+      window.dispatchEvent(new CustomEvent('barcodeScanned', { detail: { barcode } }));
+    }
+  });
 
-  // Handle Visor view from URL
   useEffect(() => {
+    // Detect if we should start in Visor Mode (HDMI Display)
     const params = new URLSearchParams(window.location.search);
-    if (params.get('view') === 'VISOR') {
-      setCurrentView('VISOR' as any);
+    const forcedView = params.get('view');
+    if (forcedView === 'VISOR') {
+      console.log("📺 VISOR MODE DETECTED: Initialization bypass.");
+      setCurrentView('VISOR');
     }
   }, []);
 
-  // Update currentUser in terminal router when it changes
-  useEffect(() => {
-    if (terminalRouter.isInitialized()) {
-      terminalRouter.setCurrentUser(currentUser);
-    }
-  }, [currentUser]);
+  const handleViewChange = (view: ViewState, data?: any) => {
+    console.log(`🚀 View Change: ${currentView} -> ${view}`, data);
+    setViewData(data);
+    setCurrentView(view);
+  };
 
-  // --- INITIAL DATA LOAD & DEVICE CHECK ---
+  // --- INITIAL DATA LOAD ---
   useEffect(() => {
     const loadData = async () => {
       try {
-        // Initialize network sync service early
-        networkSyncService.init();
+        const data = await db.init();
+        let currentConfig = data.config;
+        const masterIp = localStorage.getItem('pos_master_ip');
 
-        // 0. VALIDACIÓN INICIAL DE RED (Slave Mode)
-        // Check if we are configured as Slave but missing IP
-        const isSlaveConfig = localStorage.getItem('pos_master_ip'); // Presence implies slave intent
-        if (!isSlaveConfig && !localStorage.getItem('pos_device_id')) {
-          // First run, or reset.
-          // If we are not Master (no local DB seeded yet), we might need config.
-          // But let's assume if no IP, we might be Master OR unconfigured Slave.
-          // The user said: "Si no la tiene, debe mostrar un modal".
-          // We can force a check here.
-        }
-
-        if (isSlaveConfig) {
-          console.log("🔍 Verifying Master Connection...");
-          const isHealthy = await (dbAdapter as any).checkHealth(); // Cast because interface might not have it yet
-
-          if (!isHealthy) {
-            console.error("❌ Master Unreachable. Aborting startup to prevent 404 floods.");
-            alert("⚠️ No se puede conectar con la Caja Maestra. Verifique la red o la IP.");
-            setCurrentView('DEVICE_UNAUTHORIZED'); // Redirect to config
-            return;
-          }
-
-          // FETCH LATEST CONFIG FROM MASTER (Always, not just recovery)
-          // This ensures terminal configuration (including deviceRole) persists across devices
+        if (masterIp) {
           console.log("🔄 Slave Mode: Fetching latest config from Master...");
           try {
-            const protocol = window.location.protocol;
-            const port = window.location.port || (protocol === 'https:' ? '443' : '80');
-            const targetUrl = `${protocol}//${isSlaveConfig}:${port}/api/config`;
+            const currentProtocol = window.location.protocol;
+            const targetUrl = `${currentProtocol}//${masterIp}:3001/api/config`;
 
             const res = await fetch(targetUrl);
             if (res.ok) {
@@ -291,29 +211,20 @@ const AppContent: React.FC = () => {
               if (fetchedConfig && fetchedConfig.terminals) {
                 console.log("✅ Config fetched from Master. Saving to local DB...");
                 await db.save('config', fetchedConfig);
-                setConfig(fetchedConfig); // Update state immediately
+                currentConfig = fetchedConfig;
               }
-            } else {
-              console.warn(`⚠️ Failed to fetch config from Master (HTTP ${res.status}). Using cached config.`);
-              // Fall back to local cached config
             }
           } catch (e) {
             console.error("❌ Failed to fetch config from Master:", e);
-            console.warn("⚠️ Using cached local config as fallback.");
-            // Fall back to local cached config - will be loaded in the next step
           }
+        }
 
-          // CLEAN SYNC CACHE if recovering from error
-          const lastStatus = localStorage.getItem('pos_sync_status');
-          if (lastStatus === 'ERROR') {
-            console.warn("⚠️ Detectado reinicio tras error. Forzando Snapshot fresco.");
-            localStorage.removeItem('pos_sync_status');
-            // Force full pull logic is handled by NetworkSyncService if we clear metadata
-            // But we can also do it here manually if needed.
-            // NetworkSyncService hard-reset logic (IP change) covers one case.
-            // This covers the "Same IP but previous crash" case.
-            await dbAdapter.saveCollection('syncMetadata', {} as any);
-          }
+        // CLEAN SYNC CACHE if recovering from error
+        const lastStatus = localStorage.getItem('pos_sync_status');
+        if (lastStatus === 'ERROR') {
+          console.warn("⚠️ Detectado reinicio tras error. Forzando Snapshot fresco.");
+          localStorage.removeItem('pos_sync_status');
+          await dbAdapter.saveCollection('syncMetadata', {} as any);
         }
 
         // EMERGENCY CLEANUP: Detect if we switched from localhost to IP (or vice versa)
@@ -323,35 +234,13 @@ const AppContent: React.FC = () => {
         if (lastOrigin && lastOrigin !== currentOrigin) {
           console.warn(`🚨 Origin changed (${lastOrigin} -> ${currentOrigin}). NUKING LOCAL DB.`);
           localStorage.setItem('pos_last_origin', currentOrigin);
-
-          // Delete IndexedDB and Reload
-          const DB_NAME = 'clic_pos_db_v1'; // From utils/db.ts
-          // Also delete any other potential DBs if known, or just the main one
-
-          // We need to close connections first? dbAdapter might be open.
-          // But we are at the start of loadData, db.init() is called next.
-          // Let's try to delete before db.init()
-
+          const DB_NAME = 'clic_pos_db_v1';
           try {
-            // Clear localStorage keys related to sync state
             localStorage.removeItem('sync_tokens');
             localStorage.removeItem('connected_terminals');
-            // Keep pos_master_ip and pos_device_id
-
             const req = indexedDB.deleteDatabase(DB_NAME);
-            req.onsuccess = () => {
-              console.log("💥 Database deleted successfully.");
-              window.location.reload();
-            };
-            req.onerror = () => {
-              console.error("❌ Failed to delete database.");
-              // Proceed anyway?
-            };
-            req.onblocked = () => {
-              console.warn("⚠️ Database delete blocked. Reloading to force close.");
-              window.location.reload();
-            };
-            return; // Stop execution to wait for reload
+            req.onsuccess = () => window.location.reload();
+            return;
           } catch (e) {
             console.error("Error clearing DB:", e);
           }
@@ -359,16 +248,17 @@ const AppContent: React.FC = () => {
           localStorage.setItem('pos_last_origin', currentOrigin);
         }
 
-        const data = await db.init();
         if (data) {
-          // 1. Cargar persistencia
-          const loadedConfig = (data.config && !Array.isArray(data.config) && Object.keys(data.config).length > 0) ? data.config : config;
+          // 1. Cargar persistencia - PRIORITIZE currentConfig (which might be from Master)
+          const finalConfig = (currentConfig && !Array.isArray(currentConfig) && Object.keys(currentConfig).length > 0) ? currentConfig : config;
+
           setConfig({
-            ...config, // Start with initial config
-            ...loadedConfig, // Overwrite with loaded config
-            campaigns: (data.campaigns && data.campaigns.length > 0) ? data.campaigns : (loadedConfig.campaigns || config.campaigns || []),
-            coupons: (data.coupons && data.coupons.length > 0) ? data.coupons : (loadedConfig.coupons || config.coupons || [])
+            ...config,
+            ...finalConfig,
+            campaigns: (data.campaigns && data.campaigns.length > 0) ? data.campaigns : (finalConfig.campaigns || config.campaigns || []),
+            coupons: (data.coupons && data.coupons.length > 0) ? data.coupons : (finalConfig.coupons || config.coupons || [])
           });
+
           setUsers(data.users || []);
           setCustomers(data.customers || []);
           setTransactions(data.transactions || []);
@@ -387,14 +277,20 @@ const AppContent: React.FC = () => {
           if (data.rooms && data.rooms.length > 0) setActiveRoomId(data.rooms[0].id);
           setSupplierProductPrices(data.supplierProductPrices || []);
 
-          // 1.5 Repair sequences (ensure counters are correct)
+          // 1.5 Repair sequences
           try {
-            await transactionService.repairSequences();
+            const repairResult = await transactionService.repairSequences();
+            if (repairResult.fixed.length > 0) {
+              console.log("🔧 Sequences repaired on startup:", repairResult.details);
+              // RELOAD sequences into state to reflect repairs
+              const repairedSequences = await db.get('internalSequences');
+              setInternalSequences(repairedSequences || []);
+            }
           } catch (error) {
             console.error('Error repairing sequences:', error);
           }
 
-          // 2. Gestión de Identidad de Dispositivo (Persistente)
+          // 2. Gestión de Identidad de Dispositivo
           let storedDeviceId = localStorage.getItem('pos_device_id');
           if (!storedDeviceId) {
             storedDeviceId = 'DEV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -402,59 +298,42 @@ const AppContent: React.FC = () => {
           }
           setDeviceId(storedDeviceId);
 
-          // 3. Verificación de Vinculación
-          const terminals = loadedConfig.terminals || [];
-          const isDevicePaired = terminals.some(
+          // 3. Verificación de Vinculación - USE finalConfig (Master prioritized)
+          const terminals = finalConfig.terminals || [];
+          const pairedTerminal = terminals.find(
             (t: any) => t.config?.currentDeviceId === storedDeviceId
           );
 
-          if (!isDevicePaired) {
+          // CRITICAL FIX: Check URL params directly here as well to avoid closure staleness
+          const isVisorMode = new URLSearchParams(window.location.search).get('view') === 'VISOR';
+
+          if (!pairedTerminal && !isVisorMode && currentView !== 'VISOR') {
             setCurrentView('DEVICE_UNAUTHORIZED');
           }
 
           // 4. Initialize Sync Manager
-          const pairedTerminal = terminals.find(
-            (t: any) => t.config?.currentDeviceId === storedDeviceId
-          );
           if (pairedTerminal) {
-            // MASTER GOVERNANCE: If this is a slave and is governed by master, 
-            // ensure we use the config defined in the global terminals array
             if (pairedTerminal.config.isPrimaryNode === false && pairedTerminal.config.governedByMaster) {
               console.log(`🛡️ Master Governance active for ${pairedTerminal.id}. Enforcing Master config.`);
-              // Update local config state with the one from the global terminals array
-              // This ensures that assignments and other settings match the Master's intent
-              setConfig(prev => ({
-                ...prev,
-                terminals: data.config.terminals
-              }));
+              // We already have finalConfig from Master if IP was set, but we re-enforce the terminals part
             }
 
-            await syncManager.initialize(data.config, pairedTerminal.id);
+            await syncManager.initialize(finalConfig, pairedTerminal.id);
             networkSyncService.setTerminalId(pairedTerminal.id);
 
-            // Start auto-sync for slave terminals (every 30 seconds)
             if (pairedTerminal.config.isPrimaryNode === false) {
               syncManager.startAutoSync(30000);
               console.log('🔄 Auto-sync enabled for slave terminal');
             }
 
-            // 5. Initialize Terminal Router and Auth Level Service
-            permissionService.initialize(data.config, pairedTerminal.id);
-            authLevelService.init(data.config, pairedTerminal.id);
-            terminalRouter.init(data.config, pairedTerminal.id, pairedTerminal.config.deviceRole || null);
+            permissionService.initialize(finalConfig, pairedTerminal.id);
+            authLevelService.init(finalConfig, pairedTerminal.id);
+            terminalRouter.init(finalConfig, pairedTerminal.id, pairedTerminal.config.deviceRole || null);
 
-            console.log(`🎯 Terminal Role: ${authLevelService.getRoleLabel()}`);
-            console.log(`🔐 Auth Level: ${authLevelService.shouldRequireUserLogin() ? 'User Required' : 'Headless'}`);
-
-            // 6. Auto-authenticate headless terminals
             if (!authLevelService.shouldRequireUserLogin()) {
               const authResult = await authLevelService.authenticateHeadless();
               if (authResult.success) {
-                // Redirect to default route for this role
                 const defaultRoute = authLevelService.getDefaultRoute();
-                console.log(`✅ Headless auth successful, routing to: ${defaultRoute}`);
-
-                // Map route to ViewState (temporary until we fully migrate to React Router)
                 const routeToViewMap: Record<string, ViewState> = {
                   '/pos': 'POS',
                   '/kiosk/welcome': 'KIOSK_WELCOME',
@@ -462,84 +341,112 @@ const AppContent: React.FC = () => {
                   '/inventory/home': 'INVENTORY_HOME',
                   '/kitchen/orders': 'KITCHEN_ORDERS'
                 };
-
                 setCurrentView(routeToViewMap[defaultRoute] || 'POS');
               }
             }
 
-            // 7. Start polling for pending items if Master
             if (permissionService.isMasterTerminal()) {
-              console.log('📡 Master Terminal: Starting polling for pending items...');
               transactionSyncService.startTransactionPolling(15000, async (txns) => {
                 if (txns.length === 0) return;
-                console.log(`📡 Processing ${txns.length} pulled transactions...`);
-
                 for (const txn of txns) {
                   await transactionSyncService.processReceivedTransaction(txn, async (t) => {
                     await db.saveDocument('transactions', t);
                   });
                 }
-
-                // Refresh state once
                 const updatedTransactions = await db.get('transactions') as Transaction[];
                 setTransactions(updatedTransactions);
-
-                window.dispatchEvent(new CustomEvent('transactionSynced', {
-                  detail: { transactions: txns }
-                }));
               });
 
               inventorySyncService.startInventoryPolling(15000, async (movements) => {
                 if (movements.length === 0) return;
-
-                console.log(`📥 Processing ${movements.length} pulled inventory movements...`);
-
                 const affectedProducts = new Set<string>();
                 const affectedWarehouses = new Set<string>();
-
                 for (const move of movements) {
                   await db.saveDocument('inventoryLedger', move);
                   affectedProducts.add(move.productId);
                   affectedWarehouses.add(move.warehouseId);
                 }
-
-                // Recalculate stock for all affected combinations
                 for (const productId of affectedProducts) {
                   for (const warehouseId of affectedWarehouses) {
                     await db.recalculateProductStock(productId, warehouseId);
                   }
                 }
-
-                // Refresh products in state once
                 const updatedProducts = await db.get('products') as Product[];
                 setProducts(updatedProducts);
-
-                // Refresh transactions in state (in case any were pulled)
-                const updatedTransactions = await db.get('transactions') as Transaction[];
-                setTransactions(updatedTransactions);
-
-                // Dispatch event for UI refresh (e.g. Kardex in ProductForm)
-                window.dispatchEvent(new CustomEvent('ledgerSynced', {
-                  detail: { movements }
-                }));
-
-                console.log('✅ Batch processing complete.');
               });
             }
-          }
 
-          setIsDataLoaded(true);
+            networkSyncService.init();
+            backgroundSyncManager.initialize().catch(console.error);
+
+            // RECOVERY: Check for lost Z-Reports (due to schema issues)
+            // This will reconstruct them from transaction history
+            await ZReportRecoveryService.recoverOrphanedReports();
+
+            setIsDataLoaded(true);
+          }
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('CRITICAL: Failed to load initial data:', error);
-        setIsDataLoaded(true); // Still set to true to allow app to render with initial state
+        setInitialConnError(error.message || 'Error inicializando base de datos local');
+        // Do NOT set isDataLoaded(true) here to prevent POSInterface from rendering and crashing
       }
     };
     loadData();
-
-    // Start Sync Worker
-    backgroundSyncManager.initialize().catch(console.error);
   }, []); // Dependencies for checking terminal role
+
+  // CRITICAL: Listen for NetworkSyncService completion to refresh users for remote terminals
+  useEffect(() => {
+    const refreshDataAfterSync = async () => {
+      // CRITICAL: Don't try to access DB before it's initialized
+      if (!isDataLoaded) return;
+
+      try {
+        // Refresh users
+        const syncedUsers = await db.get('users') as User[];
+        if (syncedUsers && syncedUsers.length > 0 && syncedUsers.length !== users.length) {
+          console.log(`🔄 Refreshing users list after sync: ${syncedUsers.length} users found`);
+          setUsers(syncedUsers);
+        }
+
+        // Refresh products
+        const syncedProducts = await db.get('products') as Product[];
+        if (syncedProducts && syncedProducts.length > 0 && syncedProducts.length !== products.length) {
+          console.log(`🔄 Refreshing products list after sync: ${syncedProducts.length} products found`);
+          setProducts(syncedProducts);
+        }
+
+        // Refresh warehouses
+        const syncedWarehouses = await db.get('warehouses') as Warehouse[];
+        if (syncedWarehouses && syncedWarehouses.length > 0 && syncedWarehouses.length !== warehouses.length) {
+          console.log(`🔄 Refreshing warehouses list after sync: ${syncedWarehouses.length} warehouses found`);
+          setWarehouses(syncedWarehouses);
+        }
+
+        // Refresh internal sequences
+        const syncedSequences = await db.get('internalSequences') as any[];
+        if (syncedSequences && syncedSequences.length > 0 && syncedSequences.length !== internalSequences.length) {
+          console.log(`🔄 Refreshing internal sequences after sync: ${syncedSequences.length} items found`);
+          setInternalSequences(syncedSequences);
+        }
+      } catch (error: any) {
+        // Silently ignore DB connection errors - they're expected during initialization
+        if (!error?.message?.includes('DB not connected')) {
+          console.error('Error refreshing data after sync:', error);
+        }
+      }
+    };
+
+    // Poll for data every 5 seconds if we don't have any yet (for remote terminals)
+    // Increased from 3s to give NetworkSyncService more time to complete
+    const interval = setInterval(() => {
+      if (isDataLoaded && (users.length === 0 || products.length === 0 || internalSequences.length === 0)) {
+        refreshDataAfterSync();
+      }
+    }, 5000); // Check every 5 seconds
+
+    return () => clearInterval(interval);
+  }, [users.length, products.length, warehouses.length, isDataLoaded]);
 
   useEffect(() => {
     // Poll tables if in restaurant mode OR retail with tables enabled
@@ -658,22 +565,8 @@ const AppContent: React.FC = () => {
     if (masterIp) {
       console.log(`📤 Slave Binding: Pushing updated config to Master at ${masterIp}...`);
       try {
-        const protocol = window.location.protocol;
-        const port = window.location.port || (protocol === 'https:' ? '443' : '80');
-        // We hit the Master's API directly. 
-        // NOTE: If Master is on a different IP, we must use that IP, not localhost.
-        // The 'masterIp' variable holds the IP.
-        // We assume Master API is on port 3001 (backend) or proxied via 3000 (frontend).
-        // Let's try the frontend proxy port first (usually same as current if we are on same network/setup)
-        // OR better: Use the IP we have.
-
-        // If we are a slave, 'masterIp' is the IP of the Master.
-        // We should try to hit the Master's API.
-        // If Master is serving frontend on 3000 and backend on 3001:
-        // We can try 3000/api/config (proxied) or 3001/api/config (direct).
-        // Direct 3001 might have CORS issues if not configured, but server/index.ts has CORS enabled.
-
-        const targetUrl = `http://${masterIp}:3001/api/config`; // Direct to backend
+        const currentProtocol = window.location.protocol;
+        const targetUrl = `${currentProtocol}//${masterIp}:3001/api/config`;
 
         await fetch(targetUrl, {
           method: 'PUT',
@@ -712,6 +605,12 @@ const AppContent: React.FC = () => {
       } finally {
         setRestoringHistory(false);
       }
+    } else {
+      // CRITICAL: Even if not a slave (Master mode), we MUST re-initialize services
+      // with the new terminal ID and updated config, otherwise they stay uninitialized.
+      console.log("🛠️ Re-initializing services for Master/Local terminal...");
+      permissionService.initialize(updatedConfig, terminalId);
+      await syncManager.initialize(updatedConfig, terminalId);
     }
 
     setCurrentView('LOGIN');
@@ -732,16 +631,24 @@ const AppContent: React.FC = () => {
     // Re-initialize services with new config
     const currentTerminal = (newConfig.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     if (currentTerminal) {
+      console.log(`🔄 Re-initializing services for terminal ${currentTerminal.id} after config update...`);
       permissionService.initialize(newConfig, currentTerminal.id);
       authLevelService.init(newConfig, currentTerminal.id);
       terminalRouter.init(newConfig, currentTerminal.id, currentTerminal.config.deviceRole || null);
+
+      // CRITICAL: Re-initialize SyncManager to avoid "Sync configuration missing"
+      try {
+        await syncManager.initialize(newConfig, currentTerminal.id);
+        await backgroundSyncManager.initialize();
+      } catch (e) {
+        console.error("❌ Failed to re-initialize sync services:", e);
+      }
     }
 
     // REAL SYNC: Push to json-server on the same host (via proxy to avoid Mixed Content)
     // We use the current protocol/port because the frontend proxies /api to the backend
-    const protocol = window.location.protocol;
-    const port = window.location.port || (protocol === 'https:' ? '443' : '80');
-    const serverUrl = `${protocol}//${window.location.hostname}:${port}/api/config`;
+    const currentProtocol = window.location.protocol;
+    const serverUrl = `${currentProtocol}//${window.location.hostname}:3001/api/config`;
 
     console.log(`Attempting to sync to: ${serverUrl}`);
 
@@ -762,6 +669,15 @@ const AppContent: React.FC = () => {
     } catch (e) {
       console.warn("Could not sync config to local server", e);
       alert(`Error de conexión con ${serverUrl}. Asegúrate de que 'npm run server' esté corriendo.`);
+    }
+  };
+
+  const handleUsersUpdate = async (newUsers: User[]) => {
+    console.log(`handleUsersUpdate: Saving ${newUsers.length} users discovered during binding.`);
+    setUsers(newUsers);
+    // Persist to DB so it survives reload if they get disconnected
+    for (const user of newUsers) {
+      await db.save('users', user);
     }
   };
 
@@ -793,11 +709,12 @@ const AppContent: React.FC = () => {
 
     txn.terminalId = terminalId;
 
+    // Calculate and Record Inventory Deductions (Recursive & UOM Aware)
     for (const item of txn.items) {
       // 1. Traceability Status Update (Mark as SOLD)
       if (item.trackingData && item.trackingData.length > 0) {
         const allTracking = await db.get('inventoryTracking') as any[] || [];
-        const updatedTracking = allTracking.map(t => {
+        const updatedTracking = allTracking.map((t: any) => {
           if (item.trackingData?.some((sel: any) => sel.id === t.id)) {
             return { ...t, status: 'SOLD', saleId: txn.id };
           }
@@ -806,61 +723,58 @@ const AppContent: React.FC = () => {
         await db.save('inventoryTracking', updatedTracking);
       }
 
-      // 2. Record Inventory Ledger Entry
-      if (item.trackingData && item.trackingData.length > 0) {
-        // Batch movements for LOTS vs SERIALS
-        if (item.trackingData.length === 1 && item.quantity > 1) {
-          // LOT
-          await db.recordInventoryMovement(
-            defaultWarehouseId,
-            item.id,
-            'VENTA',
-            txn.displayId || txn.id,
-            -item.quantity,
-            item.price,
-            terminalId,
-            item.variantSku,
-            item.variantInfo,
-            item.trackingData[0].id,
-            item.trackingData[0].trackingCode
-          );
-        } else {
-          // SERIALS or single tracked item
-          for (const track of item.trackingData) {
-            await db.recordInventoryMovement(
-              defaultWarehouseId,
-              item.id,
-              'VENTA',
-              txn.displayId || txn.id,
-              -1,
-              item.price,
-              terminalId,
-              item.variantSku,
-              item.variantInfo,
-              track.id,
-              track.trackingCode
-            );
-          }
-        }
-      } else {
-        // NORMAL ITEM
-        await db.recordInventoryMovement(
-          defaultWarehouseId,
-          item.id,
-          'VENTA',
-          txn.displayId || txn.id,
-          -item.quantity,
-          item.price,
-          terminalId,
-          item.variantSku,
-          item.variantInfo
-        );
+      // 2. Process Deduction (Handles Recipes, Yields, and Simple Items)
+      const ledgerEntries = await processInventoryDeduction(
+        txn.displayId || txn.id,
+        item,
+        defaultWarehouseId,
+        terminalId,
+        products // Pass current products list for recipe lookups
+      );
+
+      // 3. Save Entries
+      for (const entry of ledgerEntries) {
+        await db.saveDocument('inventoryLedger', entry);
       }
     }
 
     // Refresh products to reflect changes made by recordInventoryMovement
     const refreshedDb = await db.init();
     setProducts(refreshedDb.products || []);
+
+    // --- CRITICAL: Increment Document Series Sequence in Internal Sequences ---
+    // This is the global source of truth for sequences, synced with Settings.
+    const seriesId = txn.seriesId;
+    if (seriesId && internalSequences) {
+      const seriesIndex = internalSequences.findIndex(s => s.id === seriesId);
+
+      if (seriesIndex !== undefined && seriesIndex >= 0) {
+        // Create a deep copy
+        const updatedSequences = [...internalSequences];
+
+        // Increment
+        updatedSequences[seriesIndex].nextNumber++;
+
+        // Update State
+        setInternalSequences(updatedSequences);
+
+        // Persist local first
+        await db.save('internalSequences', updatedSequences);
+
+        // SYNC: Push to Server immediately if Master to prevent overwrite
+        if (permissionService.isMasterTerminal()) {
+          console.log(`📤 [App.tsx] Pushing updated sequences to Server...`);
+          try {
+            await syncManager.pushCatalog('internalSequences');
+            console.log(`✅ [App.tsx] Sequences pushed to Server.`);
+          } catch (e) {
+            console.error(`❌ [App.tsx] Failed to push sequences to Server:`, e);
+          }
+        }
+
+        console.log(`✅ Sequence ${seriesId} incremented to ${updatedSequences[seriesIndex].nextNumber}`);
+      }
+    }
   };
 
   const handleRegisterMovement = async (type: 'IN' | 'OUT', amount: number, reason: string) => {
@@ -1021,6 +935,23 @@ const AppContent: React.FC = () => {
 
   // --- VIEW RENDERING LOGIC ---
   if (!isDataLoaded || restoringHistory) {
+    if (initialConnError && !restoringHistory) {
+      return (
+        <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-white p-8 text-center">
+          <div className="bg-red-500/20 p-4 rounded-full mb-4">
+            <Layout size={48} className="text-red-500" />
+          </div>
+          <h2 className="text-xl font-bold mb-2">Error de Inicialización</h2>
+          <p className="text-slate-400 mb-6 max-w-md">{initialConnError}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-6 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg font-medium transition-colors"
+          >
+            Reintentar
+          </button>
+        </div>
+      );
+    }
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-white">
         <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
@@ -1038,9 +969,12 @@ const AppContent: React.FC = () => {
           <TerminalBindingScreen
             config={config}
             deviceId={deviceId}
-            adminUsers={users.filter(u => u.role === 'ADMIN')}
+            adminUsers={users.filter(u => u.role?.toUpperCase() === 'ADMIN' || u.role?.toUpperCase() === 'ADMINISTRADOR')}
             onPair={handlePairTerminal}
             onConfigUpdate={handleConfigUpdate}
+            onUsersUpdate={handleUsersUpdate}
+            initialError={initialConnError}
+            initialMasterIp={failedMasterIp}
           />
         );
 
@@ -1245,7 +1179,7 @@ const AppContent: React.FC = () => {
             onUpdateConfig={handleConfigUpdate}
             onUpdateUsers={async (u) => { setUsers(u); await db.save('users', u); }}
             onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
-            onUpdateProducts={async (p) => { setProducts(p); await db.save('products', p); syncManager.broadcastChange('products', null, 'UPDATE').catch(console.error); }}
+            onUpdateProducts={async (p) => { setProducts(p); /* db.save('products', p) removed for efficiency */ syncManager.broadcastChange('products', null, 'UPDATE').catch(console.error); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
@@ -1254,6 +1188,7 @@ const AppContent: React.FC = () => {
             initialView={settingsInitialView as any}
             initialData={settingsInitialData}
             isAdminMode={isAdminMode}
+            terminalId={(config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1'}
             onClose={() => {
               setSettingsInitialView(undefined);
               setSettingsInitialData(undefined);
@@ -1268,7 +1203,6 @@ const AppContent: React.FC = () => {
               else setCurrentView('POS');
             }}
             currentDeviceId={deviceId}
-            terminalId={(config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1'}
           />
         );
 
@@ -1757,11 +1691,13 @@ const AppContent: React.FC = () => {
               } else {
                 newCart = [...cart, { ...product, quantity }];
               }
-              setCart(applyPromotions(newCart, config));
+              const currentTerminalId = getCurrentTerminal()?.id || 'T1';
+              setCart(applyPromotions(newCart, config, currentTerminalId));
             }}
             onRemoveFromCart={(productId) => {
               const newCart = cart.filter(item => item.id !== productId);
-              setCart(applyPromotions(newCart, config));
+              const currentTerminalId = getCurrentTerminal()?.id || 'T1';
+              setCart(applyPromotions(newCart, config, currentTerminalId));
             }}
             onCheckout={() => handleViewChange('KIOSK_PAYMENT')}
             onCancel={() => {
@@ -1769,6 +1705,7 @@ const AppContent: React.FC = () => {
               handleViewChange('KIOSK_WELCOME');
             }}
             config={config}
+            terminalId={getCurrentTerminal()?.id || 'T1'}
           />
         );
 
@@ -1855,6 +1792,7 @@ const AppContent: React.FC = () => {
           <InventoryHome
             onNavigate={handleViewChange}
             userName={currentUser?.name}
+            warehouses={warehouses}
           />
         );
 
@@ -1862,6 +1800,8 @@ const AppContent: React.FC = () => {
         return (
           <InventoryCount
             products={products}
+            warehouseId={viewData?.warehouseId}
+            warehouseName={viewData?.warehouseName}
             onSave={(counts) => {
               console.log('Inventory counts saved:', counts);
               alert(`Conteo guardado: ${counts.length} productos`);
@@ -1871,7 +1811,7 @@ const AppContent: React.FC = () => {
           />
         );
 
-      case 'VISOR' as any:
+      case 'VISOR':
         return <CustomerVisor />;
 
       case 'KITCHEN_ORDERS':
@@ -1882,16 +1822,6 @@ const AppContent: React.FC = () => {
     }
   };
 
-  // Get current terminal configuration
-  const getCurrentTerminal = () => {
-    return (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
-  };
-
-  // Get current device role
-  const getCurrentDeviceRole = (): DeviceRole => {
-    const terminal = getCurrentTerminal();
-    return terminal?.config?.deviceRole?.role || DeviceRole.STANDARD_POS;
-  };
 
   // Render with appropriate layout based on device role
   const renderWithLayout = () => {

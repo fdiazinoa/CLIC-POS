@@ -14,6 +14,7 @@ interface MobileConfigModalProps {
     }) => void;
     config: BusinessConfig;
     warehouses: Warehouse[];
+    terminalId: string;
     currentWarehouseId?: string;
     currentTariffId?: string;
     currentCategory?: string;
@@ -25,10 +26,14 @@ const MobileConfigModal: React.FC<MobileConfigModalProps> = ({
     onSave,
     config,
     warehouses,
+    terminalId,
     currentWarehouseId,
     currentTariffId,
     currentCategory
 }) => {
+    const currentTerminal = (config.terminals || []).find(t => t.id === terminalId);
+    const terminalConfig = currentTerminal?.config;
+
     const [warehouseId, setWarehouseId] = useState(currentWarehouseId || (warehouses || [])[0]?.id || '');
     const [tariffId, setTariffId] = useState(currentTariffId || (config?.tariffs || [])[0]?.id || '');
     const [categoryId, setCategoryId] = useState(currentCategory || 'ALL');
@@ -36,13 +41,13 @@ const MobileConfigModal: React.FC<MobileConfigModalProps> = ({
 
     // Initialize series based on default assignment if available
     useEffect(() => {
-        const defaultSeries = config?.terminals?.[0]?.config?.documentAssignments?.['TICKET'];
+        const defaultSeries = terminalConfig?.documentAssignments?.['TICKET'];
         if (defaultSeries) setSeriesId(defaultSeries);
         else {
-            const ticketSeries = config?.terminals?.[0]?.config?.documentSeries?.find(s => s.id === 'TICKET' || s.documentType === 'TICKET');
+            const ticketSeries = terminalConfig?.documentSeries?.find(s => s.id === 'TICKET' || s.documentType === 'TICKET');
             if (ticketSeries) setSeriesId(ticketSeries.id);
         }
-    }, [config]);
+    }, [terminalConfig]);
 
     // Sync internal state when props change
     useEffect(() => {
@@ -72,7 +77,7 @@ const MobileConfigModal: React.FC<MobileConfigModalProps> = ({
     // For this specific requirement "Modal de Selección de Almacén, tarifas, categorias, serie/documento, cierre z",
     // we will implement the selectors.
 
-    const ticketSeriesList = config?.terminals?.[0]?.config?.documentSeries?.filter(s => s.documentType === 'TICKET' || s.id === 'TICKET') || [];
+    const ticketSeriesList = terminalConfig?.documentSeries?.filter(s => s.documentType === 'TICKET' || s.id === 'TICKET') || [];
 
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">

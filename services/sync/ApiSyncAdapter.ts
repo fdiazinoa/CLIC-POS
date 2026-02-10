@@ -196,7 +196,7 @@ class ApiSyncAdapter {
      */
     async push(collection: string, items: any[], action: SyncChange['action'] = 'BULK_UPDATE'): Promise<void> {
         if (!this.config) {
-            throw new Error('Sync configuration missing');
+            throw new Error('Sync configuration missing in ApiSyncAdapter. Ensure SyncManager is initialized.');
         }
 
         if (!this.authToken) {

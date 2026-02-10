@@ -41,7 +41,7 @@ export const INITIAL_TARIFFS: Tariff[] = [
 
 export const DEFAULT_TERMINAL_CONFIG = {
   deviceBindingToken: 'dev_token_init',
-  isPrimaryNode: false,
+  isPrimaryNode: true,
   fiscal: {
     batchSize: 100,
     lowBatchThreshold: 20,
@@ -110,7 +110,8 @@ export const DEFAULT_TERMINAL_CONFIG = {
     usa_mesas: false,
     pantalla_inicio: 'VENTA_DIRECTA' as const,
     bloqueo_meseros: false,
-    pedir_comensales: true
+    pedir_comensales: true,
+    usa_modulos_cocina: false
   },
   ux: {
     theme: 'LIGHT' as const,
@@ -406,7 +407,12 @@ export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
       { id: 'card', name: 'Tarjeta', type: 'CARD', isEnabled: true, icon: 'CreditCard', color: 'bg-blue-500', opensDrawer: false, requiresSignature: false, integration: 'NONE' }
     ],
     tariffs: INITIAL_TARIFFS,
-    terminals: [{ id: 't1', config: DEFAULT_TERMINAL_CONFIG }],
+    terminals: [
+      { id: 't1', config: { ...DEFAULT_TERMINAL_CONFIG, isPrimaryNode: true } },
+      { id: 't2', config: { ...DEFAULT_TERMINAL_CONFIG, isPrimaryNode: false, currentDeviceId: undefined } },
+      { id: 't3', config: { ...DEFAULT_TERMINAL_CONFIG, isPrimaryNode: false, currentDeviceId: undefined } },
+      { id: 't4', config: { ...DEFAULT_TERMINAL_CONFIG, isPrimaryNode: false, currentDeviceId: undefined } }
+    ],
     availablePrinters: [],
     scales: []
   };

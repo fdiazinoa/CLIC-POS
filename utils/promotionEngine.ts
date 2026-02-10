@@ -1,6 +1,6 @@
 import { CartItem, BusinessConfig, Promotion, Customer } from '../types';
 
-export const applyPromotions = (cart: CartItem[], config: BusinessConfig, customer?: Customer): CartItem[] => {
+export const applyPromotions = (cart: CartItem[], config: BusinessConfig, terminalId: string, customer?: Customer): CartItem[] => {
     const activePromotions = config.promotions?.filter(p => {
         // 1. Check Active Status
         if (!p.schedule.isActive) return false;
@@ -20,9 +20,8 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, custom
         if (now < start || now > end) return false;
 
         // 4. Check Terminal Scope
-        const currentTerminalId = config.terminals?.[0]?.id; // Simplified for prototype
-        if (p.terminalIds && p.terminalIds.length > 0 && currentTerminalId) {
-            if (!p.terminalIds.includes(currentTerminalId)) return false;
+        if (p.terminalIds && p.terminalIds.length > 0 && terminalId) {
+            if (!p.terminalIds.includes(terminalId)) return false;
         }
 
         // 5. Check Loyalty Conditions (NEW)
@@ -196,7 +195,7 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, custom
  * Checks if a product has any active promotion applicable.
  * Used for UI badges.
  */
-export const hasProductPromotion = (product: any, config: BusinessConfig): boolean => {
+export const hasProductPromotion = (product: any, config: BusinessConfig, terminalId: string): boolean => {
     if (!config.promotions) return false;
 
     // 1. Filter Active Promotions (Same logic as above)
@@ -214,6 +213,11 @@ export const hasProductPromotion = (product: any, config: BusinessConfig): boole
         const start = startH * 60 + startM;
         const end = endH * 60 + endM;
         if (now < start || now > end) return false;
+
+        // Terminal scope check
+        if (p.terminalIds && p.terminalIds.length > 0 && terminalId) {
+            if (!p.terminalIds.includes(terminalId)) return false;
+        }
 
         return true;
     });

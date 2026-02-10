@@ -19,6 +19,7 @@ interface KioskProductBrowserProps {
     onCheckout: () => void;
     onCancel: () => void;
     config: BusinessConfig;
+    terminalId?: string;
 }
 
 const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
@@ -28,7 +29,8 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
     onRemoveFromCart,
     onCheckout,
     onCancel,
-    config
+    config,
+    terminalId
 }) => {
     const [searchQuery, setSearchQuery] = useState('');
     const [lastScanned, setLastScanned] = useState<string | null>(null);
@@ -112,11 +114,24 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
         }
     };
 
-    // Extract categories
-    const categories = ['Todos', ...Array.from(new Set(products.map(p => p.category)))];
+    // Terminal Config for Filtering
+    const terminal = (config.terminals || []).find(t => t.id === terminalId);
+    const allowedCats = terminal?.config?.catalog?.allowedCategories || [];
 
-    // Filter products by search and category
+    // Extract categories based on sellable and allowed status
+    const categories = ['Todos', ...Array.from(new Set(
+        products.filter(p => {
+            if (!p || p.is_sellable === false) return false;
+            if (allowedCats.length > 0 && !allowedCats.includes(p.category)) return false;
+            return true;
+        }).map(p => p.category)
+    )).sort()];
+
+    // Filter products by search, category, sellable status and terminal restrictions
     const filteredProducts = products.filter(p => {
+        if (!p || p.is_sellable === false) return false;
+        if (allowedCats.length > 0 && !allowedCats.includes(p.category)) return false;
+
         const matchesSearch = (p.name || '').toLowerCase().includes(searchQuery.toLowerCase()) || p.barcode?.includes(searchQuery);
         const matchesCategory = selectedCategory === 'Todos' || p.category === selectedCategory;
         return matchesSearch && matchesCategory;
@@ -214,7 +229,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
                                     )}
 
                                     {/* PROMO BADGE (Kiosk) */}
-                                    {hasProductPromotion(product, config) && (
+                                    {hasProductPromotion(product, config, terminalId || 'T1') && (
                                         <div
                                             className="absolute top-0 right-0 cursor-pointer z-20"
                                             onClick={(e) => {

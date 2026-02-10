@@ -20,6 +20,8 @@ import ProductionAreaManager from './ProductionAreaManager';
 import { db } from '../utils/db';
 import { permissionService } from '../services/sync/PermissionService';
 import { inventorySyncService } from '../services/sync/InventorySyncService';
+import { UnitSelector } from './UnitSelector';
+import { ConversionHelper } from './ConversionHelper';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -63,7 +65,11 @@ const VARIANT_TEMPLATES = [
 ];
 
 const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], transfers = [], purchaseOrders = [], hasHistory = false, currentUser, roles = [], onSave, onClose, suppliers = [], seasons = [], initialTab = 'GENERAL', allProducts = [] }) => {
-  const [activeTab, setActiveTab] = useState<ProductTab>(initialTab);
+  const [activeTab, setActiveTab] = useState<ProductTab>(initialTab || 'GENERAL');
+  const [showConversionHelper, setShowConversionHelper] = useState(false);
+  const [kardexWarehouse, setKardexWarehouse] = useState<string>(
+    config.inventoryScope?.visibleWarehouseIds?.[0] || 'ALL'
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // --- STATE ---
@@ -72,7 +78,6 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [pendingOption, setPendingOption] = useState<Record<string, string>>({});
 
   // Kardex Filter State
-  const [kardexWarehouse, setKardexWarehouse] = useState<string>('ALL');
   const [kardexTerminal, setKardexTerminal] = useState<string>('ALL');
 
   // Transit Popover state (warehouseId or null)
@@ -584,7 +589,13 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                             {entry.qtyOut > 0 ? `-${entry.qtyOut}` : '-'}
                           </td>
                           <td className="p-4 text-center">
-                            <span className="px-2 py-1 bg-gray-100 rounded-lg font-black text-gray-700">{entry.dynamicBalance}</span>
+                            <span className="px-2 py-1 bg-gray-100 rounded-lg font-black text-gray-700">{entry.dynamicBalance} {formData.measurementUnit}</span>
+                            {/* SMART VIEW: Show purchase unit equivalent */}
+                            {formData.conversionFactor && formData.conversionFactor > 1 && formData.purchaseUnit && (
+                              <p className="text-[9px] text-gray-400 mt-1 font-medium">
+                                ≈ {(entry.dynamicBalance / formData.conversionFactor).toFixed(2)} {formData.purchaseUnit}
+                              </p>
+                            )}
                           </td>
                           {canViewCost && (
                             <td className="p-4 text-right font-mono text-gray-600">
@@ -762,6 +773,93 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       </div>
                     </div>
                   </div>
+
+                  {/* UOM Configuration */}
+                  <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-4">
+                    <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2">
+                      <Scale size={16} className="text-blue-600" />
+                      Unidades y Medidas
+                    </h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <UnitSelector
+                          label="Unidad de Compra"
+                          value={formData.purchaseUnit || ''}
+                          onChange={val => setFormData({ ...formData, purchaseUnit: val })}
+                          config={config}
+                          onConfigUpdate={newConfig => {
+                            // In a real app we might want to lift this state up or save globally immediately
+                            // But since ProductForm receives config as prop, we can verify if we need to call a parent handler.
+                            // For now, we trust UnitSelector's internal fetch, but we should ideally update the local config context if possible.
+                            console.log('Config updated with new unit:', newConfig.units);
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <UnitSelector
+                          label="Unidad de Inventario (Base)"
+                          value={formData.measurementUnit || ''}
+                          onChange={val => setFormData({ ...formData, measurementUnit: val })}
+                          config={config}
+                          onConfigUpdate={newConfig => {
+                            console.log('Config updated with new unit:', newConfig.units);
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Factor de Conversión</label>
+                        <div className="flex gap-2 items-center">
+                          <div className="relative flex-1">
+                            <input
+                              type="number"
+                              placeholder="1"
+                              value={formData.conversionFactor || ''}
+                              onChange={e => setFormData({ ...formData, conversionFactor: parseFloat(e.target.value) })}
+                              className="w-full p-3 bg-gray-50 border-2 border-transparent rounded-xl text-sm font-medium focus:bg-white focus:border-blue-200"
+                            />
+                            <div className="absolute right-3 top-3 text-xs text-gray-400 font-bold">Base / Compra</div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setShowConversionHelper(true);
+                            }}
+                            className="p-3 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded-xl transition-colors cursor-pointer shadow-sm border border-blue-200 h-full aspect-square flex items-center justify-center"
+                            title="Calculadora de Conversión"
+                          >
+                            <Calculator size={18} />
+                          </button>
+                        </div>
+                        {formData.purchaseUnit && formData.measurementUnit && formData.conversionFactor && (formData.conversionFactor > 1) && (
+                          <p className="text-[10px] text-blue-600 mt-1 pl-1">
+                            1 {formData.purchaseUnit} = {formData.conversionFactor} {formData.measurementUnit}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Yield Field for Recipes */}
+                      {formData.type === 'RECETA' && (
+                        <div>
+                          <label className="block text-[10px] font-black text-gray-500 uppercase mb-1 ml-1">Rendimiento de Bachada</label>
+                          <input
+                            type="number"
+                            placeholder="1"
+                            value={formData.batchYield || ''}
+                            onChange={e => setFormData({ ...formData, batchYield: parseFloat(e.target.value) })}
+                            className="w-full p-3 bg-blue-50 border-2 border-blue-100 rounded-xl text-sm font-bold text-blue-800 focus:border-blue-300"
+                          />
+                          <p className="text-[10px] text-gray-400 mt-1 pl-1">Unidades producidas por esta receta</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
                 </div>
               </div>
             </div>
@@ -1098,6 +1196,13 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
           {activeTab === 'OPERATIVE' && (
             <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <OperationalSwitch
+                  label="Disponible para la Venta"
+                  description="Muestra este producto en el POS para facturación."
+                  checked={formData.is_sellable !== false}
+                  onChange={(v: boolean) => setFormData({ ...formData, is_sellable: v })}
+                  icon={ShoppingCart}
+                />
                 <OperationalSwitch label="¿Es Producto Pesado?" description="Activa lectura de Balanza y etiquetas." checked={formData.operationalFlags?.isWeighted} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, isWeighted: v } })} icon={Scale} />
                 <OperationalSwitch label="Controlar Stock" description="Valida existencias y descuenta del almacén." checked={formData.operationalFlags?.trackInventory} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, trackInventory: v } })} icon={Box} />
                 <OperationalSwitch label="Generar Etiqueta al Recibir" description="Imprime ticket al entrar mercancía." checked={formData.operationalFlags?.autoPrintLabel} onChange={(v: boolean) => setFormData({ ...formData, operationalFlags: { ...formData.operationalFlags!, autoPrintLabel: v } })} icon={Zap} />
@@ -1516,6 +1621,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
               }));
               setShowProfitCalc(null);
             }}
+          />
+        )}
+
+        {/* CONVERSION HELPER MODAL */}
+        {showConversionHelper && (
+          <ConversionHelper
+            fromUnit={formData.purchaseUnit || ''}
+            toUnit={formData.measurementUnit || ''}
+            currentFactor={formData.conversionFactor || 0}
+            onApply={factor => setFormData({ ...formData, conversionFactor: factor })}
+            onClose={() => setShowConversionHelper(false)}
           />
         )}
       </div>

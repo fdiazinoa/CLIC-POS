@@ -41,16 +41,18 @@ const MOCK_DISCOVERY: Record<string, Partial<PrinterDevice>[]> = {
    'NETWORK': [{ name: 'Impresora Cocina 1', address: '192.168.1.50' }]
 };
 
+
 interface HardwareSettingsProps {
    config: BusinessConfig;
    products: Product[];
    onUpdateConfig: (cfg: BusinessConfig) => void;
    onClose: () => void;
+   terminalId?: string;
 }
 
 type HardwareTab = 'PERIPHERALS' | 'SCALES' | 'DISPLAY' | 'CASHDRO' | 'LABELS';
 
-const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfig, products, onUpdateConfig, onClose }) => {
+const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfig, products, onUpdateConfig, onClose, terminalId }) => {
    const [activeTab, setActiveTab] = useState<HardwareTab>('PERIPHERALS');
 
    // -- Local State synced with Config --
@@ -65,8 +67,16 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    const [manualData, setManualData] = useState({ name: '', address: '' });
 
    // -- Customer Display State --
+   const currentTerminalConfig = useMemo(() => {
+      // If terminalId is provided, look it up. Otherwise fallback to first terminal or default.
+      if (terminalId) {
+         return globalConfig.terminals?.find(t => t.id === terminalId) || globalConfig.terminals?.[0];
+      }
+      return globalConfig.terminals?.[0];
+   }, [globalConfig.terminals, terminalId]);
+
    const [displayConfig, setDisplayConfig] = useState<CustomerDisplayConfig>(
-      globalConfig.terminals?.[0]?.config?.hardware?.customerDisplay || DEFAULT_DISPLAY_CONFIG
+      currentTerminalConfig?.config?.hardware?.customerDisplay || DEFAULT_DISPLAY_CONFIG
    );
    const [previewMode, setPreviewMode] = useState<'IDLE' | 'CHECKOUT'>('CHECKOUT');
 
@@ -89,7 +99,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    const [testBarcode, setTestBarcode] = useState('');
    const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
-   const selectedTerminalId = globalConfig.terminals?.[0]?.id || 'T1';
+   const selectedTerminalId = terminalId || globalConfig.terminals?.[0]?.id || 'T1';
 
    // --- ACTIONS ---
 
@@ -130,8 +140,23 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
 
    const handleSaveAllHardware = () => {
       const newConfig = { ...globalConfig, scales, availablePrinters: printers, scaleLabelConfig };
-      if (newConfig.terminals?.[0]) {
-         newConfig.terminals[0].config.hardware.customerDisplay = displayConfig;
+      if (newConfig.terminals) {
+         // Update the specific terminal config
+         newConfig.terminals = newConfig.terminals.map(t => {
+            if (t.id === selectedTerminalId) {
+               return {
+                  ...t,
+                  config: {
+                     ...t.config,
+                     hardware: {
+                        ...t.config.hardware,
+                        customerDisplay: displayConfig
+                     }
+                  }
+               };
+            }
+            return t;
+         });
       }
       onUpdateConfig(newConfig);
       alert("Configuración de hardware sincronizada con éxito.");

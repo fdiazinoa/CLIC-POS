@@ -366,16 +366,17 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       const oldProduct = products.find(p => p.id === savedProduct.id);
       const exists = !!oldProduct;
 
-      // 1. Persist the product fields (image, name, etc.) to the database first
-      // This is crucial because recordInventoryMovement only updates stock/cost
-      const currentProducts = (await db.get('products') || []) as Product[];
+      // 1. Persist ONLY the modified product
+      await db.saveDocument('products', savedProduct);
+
+      // Update local state for UI
+      const currentProducts = products;
       let updatedProductsList;
       if (exists) {
          updatedProductsList = currentProducts.map(p => p.id === savedProduct.id ? { ...p, ...savedProduct } : p);
       } else {
          updatedProductsList = [...currentProducts, savedProduct];
       }
-      await db.save('products', updatedProductsList);
 
       // Detect stock changes and record movements
       if (exists) {

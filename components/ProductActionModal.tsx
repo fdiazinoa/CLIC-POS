@@ -16,6 +16,7 @@ interface ProductActionModalProps {
     warehouses: Warehouse[];
     currentUser: User;
     config: BusinessConfig;
+    terminalId: string;
     existingCartItem?: { price: number; note?: string };
 }
 
@@ -30,6 +31,7 @@ const ProductActionModal: React.FC<ProductActionModalProps> = ({
     warehouses,
     currentUser,
     config,
+    terminalId,
     existingCartItem
 }) => {
     const [activeTab, setActiveTab] = useState<Tab>('STOCK');
@@ -73,7 +75,7 @@ const ProductActionModal: React.FC<ProductActionModalProps> = ({
 
     if (!isOpen || !product) return null;
 
-    const hasPromo = hasProductPromotion(product, config);
+    const hasPromo = hasProductPromotion(product, config, terminalId);
     const canChangePrice = product.operationalFlags?.promptPrice ||
         currentUser.role === 'ADMIN' ||
         currentUser.role === 'MANAGER'; // Simplified role check

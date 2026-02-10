@@ -83,6 +83,7 @@ interface POSInterfaceProps {
    activeTable?: Table | null;
    onClearActiveTable?: () => void;
    onKioskPay?: () => void;
+   internalSequences?: any[]; // Passed from App.tsx (Source of Truth)
 }
 
 const POSInterface: React.FC<POSInterfaceProps> = ({
@@ -113,7 +114,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    activeTerminalId,
    activeTable,
    onClearActiveTable,
-   onKioskPay
+   onKioskPay,
+   internalSequences
 }) => {
    const cartEndRef = useRef<HTMLDivElement>(null);
    const [quickActionData, setQuickActionData] = useState<{ product: Product; x: number; y: number } | null>(null);
@@ -412,6 +414,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [customers, onSelectCustomer]);
 
    const canAddItemToCart = useCallback((product: Product, quantityToAdd: number = 1): boolean => {
+      // 0. Sellable check
+      if (product.is_sellable === false) {
+         setErrorToast(`Artículo no disponible para la venta (Insumo)`);
+         setTimeout(() => setErrorToast(null), 3500);
+         return false;
+      }
+
       // 1. Warehouse enablement check
       if (!defaultSalesWarehouseId) return true;
       const isEnabled = product.activeInWarehouses?.includes(defaultSalesWarehouseId);
@@ -680,7 +689,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const allowedCats = activeTerminalConfig?.catalog?.allowedCategories || [];
          const matchAllowedCat = allowedCats.length === 0 || allowedCats.includes(p.category);
 
-         return matchSearch && matchCat && isAvailableInWarehouse && matchAllowedCat;
+         const isSellable = p.is_sellable !== false;
+
+         return matchSearch && matchCat && isAvailableInWarehouse && matchAllowedCat && isSellable;
       });
 
       // Defensive: Ensure unique IDs to prevent React key warnings
@@ -694,9 +705,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const categories = useMemo(() => {
       const allowedCats = activeTerminalConfig?.catalog?.allowedCategories || [];
-      const availableProducts = allowedCats.length > 0
-         ? products.filter(p => p && allowedCats.includes(p.category))
-         : products;
+      const availableProducts = products.filter(p => {
+         if (!p || p.is_sellable === false) return false;
+         if (allowedCats.length > 0 && !allowedCats.includes(p.category)) return false;
+         return true;
+      });
 
       const cats = ['ALL', ...Array.from(new Set(availableProducts.map(p => p?.category).filter(Boolean))).sort()];
       console.log('[POS] Categories:', cats);
@@ -708,8 +721,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    // --- PROMOTION ENGINE INTEGRATION ---
    const processedCart = useMemo(() => {
-      return applyPromotions(cart, config, selectedCustomer || undefined);
-   }, [cart, config, selectedCustomer]);
+      return applyPromotions(cart, config, activeTerminalId, selectedCustomer || undefined);
+   }, [cart, config, activeTerminalId, selectedCustomer]);
 
    const isTaxIncluded = activeTariff?.taxIncluded || false;
    const grossLineTotal = processedCart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
@@ -776,7 +789,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          discountAmount: discountAmount,
          total: cartTotal,
          welcomeMessage: displayConfig?.welcomeMessage || '¡Bienvenidos!',
-         ads: displayConfig?.ads || [],
+         ads: (displayConfig?.ads || []).filter(ad => ad.active),
          currencySymbol: baseCurrency.symbol
       });
    }, [processedCart, cartSubtotal, cartTax, discountAmount, cartTotal, activeTerminalConfig, baseCurrency]);
@@ -996,7 +1009,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                authorizedByName: hasReturns ? refundAuthorizedBy?.name : undefined
             });
 
-            onTransactionComplete(txn);
+            // Ensure seriesId is preserved (Backend might not return it in the root object)
+            const finalTxn = {
+               ...txn,
+               seriesId: txn.seriesId || assignedSequenceId
+            };
+
+            onTransactionComplete(finalTxn);
 
             // --- CRITICAL: Ticket Closing Logic ---
             if (activeTable) {
@@ -1314,6 +1333,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }}
             config={config}
             warehouses={warehouses}
+            terminalId={activeTerminalId}
             currentWarehouseId={defaultSalesWarehouseId}
             currentTariffId={activeTariffId}
             currentCategory={categoryFilter}
@@ -1526,7 +1546,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  )}
 
                                  {/* PROMO BADGE */}
-                                 {hasProductPromotion(product, config) && (
+                                 {hasProductPromotion(product, config, activeTerminalId) && (
                                     <div
                                        className="absolute top-0 right-0 cursor-pointer z-20"
                                        onClick={(e) => {
@@ -1625,7 +1645,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             <div className="hidden md:flex p-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none" >
                <div className="flex justify-between items-center gap-4">
                   <div className="flex items-center gap-2 shrink-0">
-                     <h2 className="font-black text-gray-800 uppercase text-xs tracking-widest whitespace-nowrap">Ticket Actual</h2>
+                     <div className="flex flex-col">
+                        <h2 className="font-black text-gray-800 uppercase text-xs tracking-widest whitespace-nowrap">Ticket Actual</h2>
+                        {
+                           (() => {
+                              const ticketSeriesId = activeTerminalConfig?.documentAssignments?.['TICKET'];
+                              const ticketSeries = activeTerminalConfig?.documentSeries?.find(s => s.id === ticketSeriesId);
+                              if (ticketSeries) {
+                                 return (
+                                    <span className="text-[10px] text-gray-400 font-mono font-bold">
+                                       {ticketSeries.prefix}{String(ticketSeries.nextNumber).padStart(ticketSeries.padding, '0')}
+                                    </span>
+                                 );
+                              }
+                              return null;
+                           })()
+                        }
+                     </div>
                   </div>
 
                   {/* RETAIL MODE SEARCH BAR */}
@@ -1807,18 +1843,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <div className="flex items-center gap-3 mt-1">
                               <div className="flex flex-col">
                                  <span className={`bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-black uppercase tracking-tighter ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>
-                                    {(item.quantity || 0).toFixed(item.type === 'SERVICE' ? 3 : 0)}x {baseCurrency.symbol}{(item.price || 0).toFixed(2)}
+                                    {(item.quantity || 0).toFixed(item.type === 'SERVICE' ? 3 : 0)}x {baseCurrency.symbol}{(item.originalPrice || item.price).toFixed(2)}
                                  </span>
+                                 {hasDiscount && (
+                                    <div className="flex flex-col mt-1">
+                                       <span className={`text-red-600 font-black flex items-center gap-1 animate-in zoom-in-95 ${isRetailMode ? 'text-[11px]' : 'text-[9px]'}`}>
+                                          <Tag size={10} className="fill-red-600" />
+                                          {config.promotions?.find(p => p.id === item.appliedPromotionId)?.name || 'Descuento Aplicado'}
+                                          <span className="ml-1 px-1 bg-red-100 rounded text-red-700 text-[8px]">-{discountPct}%</span>
+                                       </span>
+                                       <span className="text-gray-400 text-[8px] font-bold uppercase tracking-tighter line-through opacity-60">
+                                          Original: {baseCurrency.symbol}{(item.originalPrice! * item.quantity).toFixed(2)}
+                                       </span>
+                                    </div>
+                                 )}
                                  <span className={`text-gray-400 font-bold uppercase tracking-tighter ml-1 ${isRetailMode ? 'text-[10px]' : 'text-[8px]'}`}>
                                     ITBIS: {baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)}
                                  </span>
                               </div>
-                              {hasDiscount && (
-                                 <div className="flex flex-col items-end">
-                                    <span className={`bg-red-50 text-red-600 px-1.5 py-0.5 rounded font-black border border-red-100 ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>-{discountPct}%</span>
-                                    <span className={`text-gray-400 line-through decoration-red-400 ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>{baseCurrency.symbol}{item.originalPrice?.toFixed(2)}</span>
-                                 </div>
-                              )}
                            </div>
                            {item.salespersonId && (
                               <p className="text-[10px] text-blue-500 font-bold uppercase mt-0.5">

@@ -48,6 +48,13 @@ class PermissionService {
      */
     isSlaveTerminal(): boolean {
         const terminal = this.getCurrentTerminal();
+
+        // FALLBACK: If config not yet loaded/initialized, we check localStorage
+        // Presence of 'pos_master_ip' implies this terminal is intended to be a Slave
+        if (!terminal) {
+            return !!localStorage.getItem('pos_master_ip');
+        }
+
         return !terminal?.config.isPrimaryNode;
     }
 

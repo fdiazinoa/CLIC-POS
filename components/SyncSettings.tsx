@@ -4,6 +4,7 @@ import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
 import { BusinessConfig } from '../types';
 import SyncProgressModal from './SyncProgressModal';
+import { db } from '../utils/db';
 
 interface SyncSettingsProps {
     config: BusinessConfig;
@@ -394,6 +395,35 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                         ✓ Configurado: {connectionStatus.masterUrl}
                                     </p>
                                 )}
+
+                                <div className="mt-10 pt-6 border-t border-blue-100">
+                                    <button
+                                        onClick={async () => {
+                                            if (confirm('⚠️ ¿Deseas REALIZAR UN RESET TOTAL de la red en esta terminal?\n\nAl hacerlo:\n- Se borrará la IP de la Maestra guardada.\n- Se reseteará la configuración local (se restaurarán valores por defecto).\n- Regresarás a la pantalla de vinculación para elegir si eres Maestra o Esclava.')) {
+                                                try {
+                                                    // 1. Clear LocalStorage identifiers
+                                                    localStorage.removeItem('pos_device_id');
+                                                    localStorage.removeItem('pos_master_ip');
+                                                    localStorage.removeItem('CLIC_POS_MASTER_URL');
+                                                    localStorage.removeItem('pos_sync_status');
+
+                                                    // 2. Wipe Local DB Config to avoid stale Slave/Master role mismatch
+                                                    await db.deleteDocument('config', 'config' as any); // Delete whole config document
+
+                                                    console.log("🧺 Terminal Unbound & Local Config Wiped.");
+                                                    window.location.reload();
+                                                } catch (err) {
+                                                    console.error("Error during reset:", err);
+                                                    alert("Error al resetear. Se recomienda limpiar el caché del navegador manualmente.");
+                                                }
+                                            }
+                                        }}
+                                        className="w-full py-3 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 border border-red-100"
+                                    >
+                                        <Monitor size={18} />
+                                        Desvincular y Resetear Identidad de Terminal
+                                    </button>
+                                </div>
                             </div>
                         )}
 

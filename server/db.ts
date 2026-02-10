@@ -44,7 +44,7 @@ export const getCollection = (name: string): any[] => {
                 customers: ['requiresFiscalInvoice', 'prefersEmail', 'isTaxExempt', 'applyChainedTax'],
                 transactions: ['isTaxIncluded'],
                 transaction_history: ['isTaxIncluded'],
-                products: ['hasActivePromotion'], // UI flag if present
+                products: ['hasActivePromotion', 'is_sellable'], // UI flag if present
                 parametros_operativos: ['usa_mesas', 'bloqueo_meseros', 'pedir_comensales']
             };
 

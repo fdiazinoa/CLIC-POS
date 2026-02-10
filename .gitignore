@@ -27,3 +27,15 @@ dist-ssr
 *.db
 *.sqlite*
 *.tsbuildinfo
+
+# Large config and data files
+config.json
+items.json
+ticket_details.txt
+clic_pos.db
+
+# Debug files
+debug*.ts
+debug*.log
+debug*.txt
+debug*.cjs

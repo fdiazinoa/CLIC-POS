@@ -48,7 +48,25 @@ const SEED_DATA = {
   parkedTickets: [] as ParkedTicket[],
   purchaseOrders: [] as PurchaseOrder[],
   suppliers: [] as Supplier[],
-  inventoryLedger: [] as InventoryLedgerEntry[],
+  inventoryLedger: RETAIL_PRODUCTS.map(p => ({
+    id: `LEG-INIT-${p.id}-wh_central`,
+    createdAt: new Date().toISOString(),
+    date: new Date().toISOString(),
+    warehouseId: 'wh_central',
+    productId: p.id,
+    concept: 'CARGA_INICIAL' as LedgerConcept,
+    documentRef: 'SEED',
+    qtyIn: 100,
+    qtyOut: 0,
+    price: p.price,
+    cost: p.cost,
+    unitCost: p.cost,
+    balanceQty: 100,
+    avgCost: p.cost,
+    balanceAvgCost: p.cost,
+    terminalId: 't1',
+    status: 'COMPLETED'
+  })) as InventoryLedgerEntry[],
   watchlists: [] as Watchlist[],
   internalSequences: DEFAULT_DOCUMENT_SERIES as DocumentSeries[],
   fiscalRanges: [
@@ -80,7 +98,13 @@ const SEED_DATA = {
   ] as Coupon[],
   zReports: [] as ZReport[],
   receptions: [] as Reception[],
-  productStocks: [] as ProductStock[],
+  productStocks: RETAIL_PRODUCTS.map(p => ({
+    id: `${p.id}_wh_central`,
+    productId: p.id,
+    warehouseId: 'wh_central',
+    quantity: 100,
+    updatedAt: new Date().toISOString()
+  })) as ProductStock[],
   supplierProductPrices: [] as any[],
   inventoryTracking: [] as InventoryTracking[],
   rooms: [] as any[],
@@ -357,6 +381,12 @@ export const db = {
 
   saveDocument: async (collection: keyof typeof SEED_DATA, doc: any) => {
     await dbAdapter.saveDocument(collection as string, doc);
+  },
+
+  saveDocuments: async (collection: keyof typeof SEED_DATA, docs: any[]) => {
+    for (const doc of docs) {
+      await dbAdapter.saveDocument(collection as string, doc);
+    }
   },
 
   deleteDocument: async (collection: keyof typeof SEED_DATA, id: string) => {

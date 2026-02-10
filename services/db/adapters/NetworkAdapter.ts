@@ -9,31 +9,27 @@ export class NetworkAdapter implements DatabaseAdapter {
         this.initializeBaseUrl();
     }
 
+    private lastCheckedMasterIp: string | null = null;
+
     private initializeBaseUrl() {
-        // Check if we are explicitly in Slave mode (via localStorage flag from Binding Screen)
         const masterIp = localStorage.getItem('pos_master_ip');
-        const protocol = window.location.protocol.replace(':', ''); // http or https
-        const port = '3000'; // Assuming master runs frontend on 3000 which proxies to 3001
+        const protocol = window.location.protocol.replace(':', '');
 
         if (masterIp) {
-            // Use configured Master IP
-            // We use the frontend port (3000) because of the proxy setup in vite.config.ts
-            // If we hit 3001 directly from browser, we might hit CORS issues if not configured
-            // But NetworkAdapter usually hits /api. 
-            // If we are slave, we want to hit the Master's IP.
-            // The Master's frontend (Vite) proxies /api to its local backend.
-            this.baseUrl = `${protocol}://${masterIp}:${port}/api`;
+            // FORCE PORT 3001 FOR BACKEND
+            this.baseUrl = `${protocol}://${masterIp}:3001/api`;
+            this.lastCheckedMasterIp = masterIp;
             console.log(`🔒 NetworkAdapter configured for SLAVE mode. Master: ${this.baseUrl}`);
         } else {
-            // Master/Local Mode
             this.baseUrl = '/api';
+            this.lastCheckedMasterIp = null;
             console.log(`🔗 NetworkAdapter configured for LOCAL mode. Base: ${this.baseUrl}`);
         }
     }
 
-
     private getUrl(path: string): string {
-        if (!this.baseUrl) {
+        const currentMasterIp = localStorage.getItem('pos_master_ip');
+        if (!this.baseUrl || currentMasterIp !== this.lastCheckedMasterIp) {
             this.initializeBaseUrl();
         }
 

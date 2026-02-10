@@ -8,6 +8,12 @@ const CustomerVisor: React.FC = () => {
     const listEndRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
+        // Recover initial state from localStorage if available
+        const initialState = visorSync.getLastState();
+        if (initialState) {
+            setState(initialState);
+        }
+
         const unsubscribe = visorSync.onStateUpdate((newState) => {
             setState(newState);
         });
@@ -24,11 +30,13 @@ const CustomerVisor: React.FC = () => {
 
     // Ads Rotation Logic
     useEffect(() => {
-        if (state?.ads && state.ads.length > 0) {
+        if (state?.ads && state.ads.length > 1) {
             const interval = setInterval(() => {
                 setCurrentAdIndex((prev) => (prev + 1) % state.ads!.length);
             }, 5000); // 5 seconds per ad
             return () => clearInterval(interval);
+        } else {
+            setCurrentAdIndex(0); // Reset to 0 if only one or no ads
         }
     }, [state?.ads]);
 
