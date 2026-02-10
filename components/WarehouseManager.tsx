@@ -4,9 +4,9 @@ import {
    Building2, Plus, ArrowRightLeft, MapPin,
    Check, X, Search, Package, AlertTriangle,
    Trash2, Save, ArrowRight, History, Calendar, Truck, Minus,
-   Eye, Filter, ChevronRight, Sparkles, LayoutGrid, ChevronDown, Zap, ShoppingBag
+   Eye, Filter, ChevronRight, Sparkles, LayoutGrid, ChevronDown, Zap, ShoppingBag, ClipboardList
 } from 'lucide-react';
-import { Warehouse, Product, StockTransfer, StockTransferItem, BusinessConfig, LedgerConcept } from '../types';
+import { Warehouse, Product, StockTransfer, StockTransferItem, BusinessConfig, LedgerConcept, RoleDefinition, User } from '../types';
 import { validateTerminalDocument } from '../utils/validation';
 import { db } from '../utils/db';
 
@@ -19,6 +19,8 @@ interface WarehouseManagerProps {
    parkedTickets: any[];
    config: BusinessConfig;
    internalSequences: any[];
+   currentUser: User | null;
+   roles: RoleDefinition[];
    onUpdateWarehouses: (warehouses: Warehouse[]) => void;
    onUpdateProducts: (products: Product[]) => void;
    onUpdateTransfers: (transfers: StockTransfer[]) => void;
@@ -27,12 +29,13 @@ interface WarehouseManagerProps {
    terminalId?: string;
 }
 
-type Tab = 'LOCATIONS' | 'TRANSFERS' | 'HISTORY' | 'OPTIMIZER' | 'FORECASTING';
+type Tab = 'LOCATIONS' | 'TRANSFERS' | 'HISTORY' | 'OPTIMIZER' | 'FORECASTING' | 'AUDIT_CLOSURE';
 type HistoryFilter = 'ALL' | 'IN_TRANSIT' | 'COMPLETED';
 
 import InventoryOptimizer from './InventoryOptimizer';
 import SmartReplenishment from './SmartReplenishment';
 import { Supplier, PurchaseOrder } from '../types';
+import InventoryAuditClosure from './inventory/InventoryAuditClosure';
 
 const WarehouseManager: React.FC<WarehouseManagerProps> = ({
    warehouses,
@@ -48,7 +51,9 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
    onUpdateTransfers,
    onUpdateSequences,
    onClose,
-   terminalId
+   terminalId,
+   currentUser,
+   roles
 }) => {
    const [activeTab, setActiveTab] = useState<Tab>('LOCATIONS');
 
@@ -659,6 +664,12 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                >
                   <ShoppingBag size={18} /> Reabastecimiento
                </button>
+               <button
+                  onClick={() => setActiveTab('AUDIT_CLOSURE')}
+                  className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'AUDIT_CLOSURE' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+               >
+                  <ClipboardList size={18} /> Auditoría & Cierre
+               </button>
             </div>
 
             <div className="flex-1 overflow-hidden p-8">
@@ -1074,6 +1085,17 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                         // Notify refresh
                         window.dispatchEvent(new CustomEvent('reFreshWarehouseData'));
                      }}
+                  />
+               )}
+
+               {activeTab === 'AUDIT_CLOSURE' && (
+                  <InventoryAuditClosure
+                     warehouses={warehouses}
+                     products={products}
+                     config={config}
+                     currentUser={currentUser}
+                     roles={roles}
+                     terminalId={terminalId}
                   />
                )}
             </div>

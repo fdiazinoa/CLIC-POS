@@ -141,6 +141,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
             parkedTickets={props.parkedTickets || []}
             config={props.config}
             terminalId={props.terminalId}
+            currentUser={props.currentUser}
+            roles={props.roles}
             internalSequences={props.internalSequences || []}
             onUpdateWarehouses={props.onUpdateWarehouses}
             onUpdateProducts={props.onUpdateProducts}

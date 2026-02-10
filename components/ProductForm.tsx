@@ -118,13 +118,27 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [productLedger, setProductLedger] = useState<InventoryLedgerEntry[]>([]);
   const [detailedStocks, setDetailedStocks] = useState<ProductStock[]>([]);
   const [productionAreas, setProductionAreas] = useState<any[]>([]);
+  const [productionAreasLoaded, setProductionAreasLoaded] = useState(false);
 
   useEffect(() => {
+    const shouldLoadProductionAreas =
+      config?.operational?.usa_modulos_cocina === true &&
+      activeTab === 'OPERATIVE' &&
+      !productionAreasLoaded;
+
+    if (!shouldLoadProductionAreas) return;
+
     fetch('http://localhost:8001/api/produccion/areas')
       .then(r => r.json())
-      .then(setProductionAreas)
-      .catch(console.error);
-  }, []);
+      .then(data => {
+        setProductionAreas(Array.isArray(data) ? data : []);
+        setProductionAreasLoaded(true);
+      })
+      .catch((err) => {
+        console.warn('⚠️ Producción: servicio no disponible. No se cargaron áreas.', err);
+        setProductionAreasLoaded(true);
+      });
+  }, [config?.operational?.usa_modulos_cocina, activeTab, productionAreasLoaded]);
 
   // --- SYNC STATE WITH PROPS (For Real-time Sync Updates) ---
   useEffect(() => {
@@ -1217,31 +1231,33 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
               </div>
 
               {/* ROUTING SECTION */}
-              <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm space-y-4 mt-6">
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="p-2 bg-blue-100 text-blue-600 rounded-xl">
-                    <Monitor size={18} />
+              {config?.operational?.usa_modulos_cocina && (
+                <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm space-y-4 mt-6">
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className="p-2 bg-blue-100 text-blue-600 rounded-xl">
+                      <Monitor size={18} />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">Ruteo de Producción</h4>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Enrutamiento de Comanda</p>
+                    </div>
                   </div>
-                  <div>
-                    <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">Ruteo de Producción</h4>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Enrutamiento de Comanda</p>
-                  </div>
-                </div>
 
-                <div>
-                  <label className="block text-[10px] font-black text-gray-500 uppercase mb-2 ml-1">Centro de Producción Destino</label>
-                  <select
-                    value={formData.production_area_id || ''}
-                    onChange={e => setFormData({ ...formData, production_area_id: e.target.value })}
-                    className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl text-sm font-bold text-gray-800 focus:bg-white focus:border-blue-200 transition-all outline-none"
-                  >
-                    <option value="">Ninguno (No enviar a cocina)</option>
-                    {productionAreas.map(pa => (
-                      <option key={pa.id} value={pa.id}>{pa.nombre} ({pa.modo_salida})</option>
-                    ))}
-                  </select>
+                  <div>
+                    <label className="block text-[10px] font-black text-gray-500 uppercase mb-2 ml-1">Centro de Producción Destino</label>
+                    <select
+                      value={formData.production_area_id || ''}
+                      onChange={e => setFormData({ ...formData, production_area_id: e.target.value })}
+                      className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl text-sm font-bold text-gray-800 focus:bg-white focus:border-blue-200 transition-all outline-none"
+                    >
+                      <option value="">Ninguno (No enviar a cocina)</option>
+                      {productionAreas.map(pa => (
+                        <option key={pa.id} value={pa.id}>{pa.nombre} ({pa.modo_salida})</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 

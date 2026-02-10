@@ -317,6 +317,42 @@ CREATE TABLE IF NOT EXISTS receptions (
     data TEXT -- JSON object
 );
 
+-- 8. Inventory Audit & Close
+CREATE TABLE IF NOT EXISTS inventory_snapshots (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    warehouseId TEXT NOT NULL,
+    categoryId TEXT,
+    createdAt TEXT NOT NULL,
+    closedAt TEXT NOT NULL,
+    status TEXT NOT NULL, -- CLOSED | REOPENED
+    createdBy TEXT,
+    createdByName TEXT,
+    items TEXT NOT NULL, -- JSON array
+    totalValue REAL DEFAULT 0,
+    reopenedAt TEXT,
+    reopenedBy TEXT,
+    reopenedByName TEXT,
+    reopenReason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id TEXT PRIMARY KEY,
+    sessionId TEXT NOT NULL,
+    warehouseId TEXT NOT NULL,
+    productId TEXT,
+    productName TEXT,
+    category TEXT,
+    systemQty REAL,
+    countedQty REAL,
+    diffQty REAL,
+    action TEXT NOT NULL, -- COUNT | APPLY | CLOSE | REOPEN
+    createdAt TEXT NOT NULL,
+    createdBy TEXT,
+    createdByName TEXT,
+    reason TEXT
+);
+
 -- 7. Wallets & Advances
 CREATE TABLE IF NOT EXISTS wallets (
     id TEXT PRIMARY KEY,

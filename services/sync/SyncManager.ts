@@ -651,8 +651,14 @@ class SyncManager {
         }
 
         try {
+            if (!item || !item.id) {
+                console.warn(`⚠️ SyncManager: Missing item for ${collection} broadcast. Falling back to full push.`);
+                await this.pushCatalog(collection);
+                return;
+            }
+
             await apiSyncAdapter.push(collection, [item], action, 'UPSERT');
-            console.log(`📡 Broadcasted ${action} for ${collection} (item ${item?.id || 'unknown'})`);
+            console.log(`📡 Broadcasted ${action} for ${collection} (item ${item.id})`);
         } catch (error: any) {
             if (error.message === 'Cannot push while offline') {
                 // Suppress unnecessary error logging, as local save succeeded

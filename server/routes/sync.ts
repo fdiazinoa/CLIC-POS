@@ -377,6 +377,10 @@ router.post('/collections/:collection/push', async (req, res) => {
                     }
 
                     for (const rawItem of items) {
+                        if (!rawItem || !rawItem.id) {
+                            console.warn(`[Sync] Skipping ${collection} item without id`, rawItem);
+                            continue;
+                        }
                         const item = { ...rawItem };
                         const op = item._op === 'DELETE' || item.deletedAt || item.isActive === false ? 'DELETE' : 'UPSERT';
 

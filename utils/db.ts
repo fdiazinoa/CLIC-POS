@@ -107,6 +107,8 @@ const SEED_DATA = {
   })) as ProductStock[],
   supplierProductPrices: [] as any[],
   inventoryTracking: [] as InventoryTracking[],
+  inventorySnapshots: [] as any[],
+  inventoryAuditLogs: [] as any[],
   rooms: [] as any[],
   tables: [] as any[]
 };
@@ -500,6 +502,17 @@ export const db = {
     trackingId?: string,
     trackingCode?: string
   ): Promise<InventoryLedgerEntry | undefined> => {
+    const snapshots = await dbAdapter.getCollection<any>('inventorySnapshots') || [];
+    const closedSnapshots = snapshots.filter((s: any) => s.status === 'CLOSED');
+    const lastClosed = closedSnapshots.sort((a: any, b: any) => new Date(b.closedAt || b.createdAt).getTime() - new Date(a.closedAt || a.createdAt).getTime())[0];
+    if (lastClosed) {
+      const closeDate = new Date(lastClosed.closedAt || lastClosed.createdAt).getTime();
+      const movementDate = new Date().getTime();
+      if (movementDate <= closeDate) {
+        throw new Error(`Error: Periodo Cerrado. No se permiten movimientos antes del ${new Date(closeDate).toLocaleString()} por auditoría contable.`);
+      }
+    }
+
     // 1. Create Ledger Entry (Temporary balance, will be recalculated)
     const qtyIn = qty > 0 ? qty : 0;
     const qtyOut = qty < 0 ? Math.abs(qty) : 0;
@@ -552,6 +565,17 @@ export const db = {
     trackingId?: string,
     trackingCode?: string
   }[]): Promise<InventoryLedgerEntry[]> => {
+    const snapshots = await dbAdapter.getCollection<any>('inventorySnapshots') || [];
+    const closedSnapshots = snapshots.filter((s: any) => s.status === 'CLOSED');
+    const lastClosed = closedSnapshots.sort((a: any, b: any) => new Date(b.closedAt || b.createdAt).getTime() - new Date(a.closedAt || a.createdAt).getTime())[0];
+    if (lastClosed) {
+      const closeDate = new Date(lastClosed.closedAt || lastClosed.createdAt).getTime();
+      const movementDate = new Date().getTime();
+      if (movementDate <= closeDate) {
+        throw new Error(`Error: Periodo Cerrado. No se permiten movimientos antes del ${new Date(closeDate).toLocaleString()} por auditoría contable.`);
+      }
+    }
+
     const newEntries: InventoryLedgerEntry[] = [];
 
     for (const move of movements) {
@@ -710,4 +734,3 @@ export const db = {
     return nextNumber;
   }
 };
-
