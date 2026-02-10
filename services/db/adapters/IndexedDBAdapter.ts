@@ -1,7 +1,7 @@
 import { DatabaseAdapter } from '../DatabaseAdapter';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 7; // Incremented to fix zReports schema
+const DB_VERSION = 8; // Incremented to add inventory audit/close stores
 const OLD_DB_KEY = 'clic_pos_db_v1';
 
 export class IndexedDBAdapter implements DatabaseAdapter {
@@ -45,7 +45,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                     'localFiscalBuffer', 'campaigns', 'coupons', 'zReports',
                     'receptions', 'productStocks', 'supplierProductPrices',
                     'inventoryTracking', 'rooms', 'tables', 'globalSequenceCounter',
-                    'watchlists', 'syncMetadata'
+                    'watchlists', 'syncMetadata', 'inventorySnapshots', 'inventoryAuditLogs'
                 ];
 
                 stores.forEach(store => {
