@@ -173,22 +173,21 @@ class SyncManager {
                 this.syncTimestamps.set(collection, savedTimestamp);
             }
 
-            // Try to get metadata from API if slave
+            // Load local version cursor (authoritative for delta)
+            const savedVersion = localStorage.getItem(`sync_version_${collection}`);
+            if (savedVersion) {
+                this.syncVersions.set(collection, parseInt(savedVersion));
+            } else {
+                this.syncVersions.set(collection, 0);
+            }
+
+            // Optionally warm metadata for UI (does not overwrite local cursor)
             if (!this.isMaster && this.syncConfig?.masterUrl) {
                 try {
-                    const metadata = await apiSyncAdapter.getMetadata(collection);
-                    if (metadata) {
-                        this.syncVersions.set(collection, metadata.version);
-                    } else {
-                        this.syncVersions.set(collection, 0);
-                    }
-                } catch (error) {
-                    console.warn(`Could not load version for ${collection}, defaulting to 0`);
-                    this.syncVersions.set(collection, 0);
+                    await apiSyncAdapter.getMetadata(collection);
+                } catch {
+                    // Ignore metadata errors on init
                 }
-            } else {
-                // Master terminal - versions are managed by the server
-                this.syncVersions.set(collection, 0);
             }
         }
     }
@@ -210,7 +209,7 @@ class SyncManager {
             const items = Array.isArray(data) ? data : [];
 
             // Push to server API
-            await apiSyncAdapter.push(collection, items);
+            await apiSyncAdapter.push(collection, items, 'BULK_UPDATE', 'FULL_REPLACE');
 
             // Update local version tracking
             const metadata = await apiSyncAdapter.getMetadata(collection);
@@ -232,36 +231,48 @@ class SyncManager {
     async pullCatalog(collection: SyncableCollection): Promise<number> {
         if (this.isDisabled) return 0;
 
-        const lastSync = this.syncTimestamps.get(collection) || null;
-        console.log(`🔽 SyncManager.pullCatalog('${collection}') - Last Sync: ${lastSync || 'Never'}`);
+        const lastVersion = this.syncVersions.get(collection) || 0;
+        console.log(`🔽 SyncManager.pullCatalog('${collection}') - Last Version: ${lastVersion}`);
 
         try {
             // Pull Delta from API
-            const response = await apiSyncAdapter.pullDelta(collection, lastSync || undefined);
-            const { items, serverTime, isFullDownload } = response;
+            const response = await apiSyncAdapter.pullDelta(collection, lastVersion || undefined);
+            const { items, serverTime, isFullDownload, latestVersion } = response;
 
             console.log(`📦 SyncManager: Received ${items.length} items for ${collection} (${isFullDownload ? 'Full' : 'Delta'})`);
 
             if (items.length === 0 && !isFullDownload) {
                 console.log(`ℹ️  SyncManager: No updates for ${collection}`);
-                this.syncTimestamps.set(collection, serverTime);
-                localStorage.setItem(`sync_timestamp_${collection}`, serverTime);
+                if (serverTime) {
+                    this.syncTimestamps.set(collection, serverTime);
+                    localStorage.setItem(`sync_timestamp_${collection}`, serverTime);
+                }
+                if (typeof latestVersion === 'number') {
+                    this.syncVersions.set(collection, latestVersion);
+                    localStorage.setItem(`sync_version_${collection}`, latestVersion.toString());
+                }
                 return 0;
             }
 
             if (isFullDownload) {
                 // Legacy behavior for first load or force pull
                 console.log(`💾 SyncManager: Performing FULL save for ${collection}...`);
-                await db.save(collection, items);
+                const cleanItems = items.map((item: any) => {
+                    const { _op, ...rest } = item;
+                    return rest;
+                });
+                await db.save(collection, cleanItems);
             } else {
                 // Incremental update (Upsert / Delete)
                 console.log(`💾 SyncManager: Performing INCREMENTAL update for ${collection}...`);
                 for (const item of items) {
-                    if (item.deletedAt || item.isActive === false) {
+                    const op = item._op;
+                    const { _op, ...cleanItem } = item;
+                    if (op === 'DELETE' || item.deletedAt || item.isActive === false) {
                         console.log(`🗑️ SyncManager: Deleting item ${item.id} from ${collection}`);
                         await db.deleteDocument(collection, item.id);
                     } else {
-                        await db.saveDocument(collection, item);
+                        await db.saveDocument(collection, cleanItem);
                     }
                 }
             }
@@ -290,16 +301,25 @@ class SyncManager {
             }
 
             // Update local sync timestamp
-            this.syncTimestamps.set(collection, serverTime);
-            localStorage.setItem(`sync_timestamp_${collection}`, serverTime);
-
-            // Also update legacy version if available in metadata
-            const metadata = await apiSyncAdapter.getMetadata(collection);
-            if (metadata) {
-                this.syncVersions.set(collection, metadata.version);
+            if (serverTime) {
+                this.syncTimestamps.set(collection, serverTime);
+                localStorage.setItem(`sync_timestamp_${collection}`, serverTime);
             }
 
-            console.log(`✅ SyncManager: Pulled ${items.length} items for ${collection}. New timestamp: ${serverTime}`);
+            // Also update legacy version if available in metadata
+            let newVersion = typeof latestVersion === 'number' ? latestVersion : undefined;
+            if (newVersion === undefined) {
+                const metadata = await apiSyncAdapter.getMetadata(collection);
+                if (metadata) {
+                    newVersion = metadata.version;
+                }
+            }
+            if (typeof newVersion === 'number') {
+                this.syncVersions.set(collection, newVersion);
+                localStorage.setItem(`sync_version_${collection}`, newVersion.toString());
+            }
+
+            console.log(`✅ SyncManager: Pulled ${items.length} items for ${collection}. New version: ${newVersion ?? 'unknown'}`);
 
             // Dispatch event for UI to refresh
             window.dispatchEvent(new CustomEvent(`${collection}Updated`));
@@ -491,6 +511,7 @@ class SyncManager {
                 } else {
                     // Standard collection sync
                     this.syncVersions.set(module.id as SyncableCollection, 0); // Reset local version to force full pull
+                    localStorage.setItem(`sync_version_${module.id}`, '0');
                     count = await this.pullCatalog(module.id as SyncableCollection);
                 }
 
@@ -629,11 +650,9 @@ class SyncManager {
             return;
         }
 
-        // For now, we'll just push the entire collection
-        // In the future, we can optimize to send only the changed item
         try {
-            await this.pushCatalog(collection);
-            console.log(`📡 Broadcasted ${action} for ${collection}`);
+            await apiSyncAdapter.push(collection, [item], action, 'UPSERT');
+            console.log(`📡 Broadcasted ${action} for ${collection} (item ${item?.id || 'unknown'})`);
         } catch (error: any) {
             if (error.message === 'Cannot push while offline') {
                 // Suppress unnecessary error logging, as local save succeeded
@@ -798,4 +817,3 @@ class SyncManager {
 }
 
 export const syncManager = new SyncManager();
-

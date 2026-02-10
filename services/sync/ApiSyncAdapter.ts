@@ -19,6 +19,7 @@ export interface SyncMetadata {
     lastSyncedAt: string;
     version: number;
     itemCount: number;
+    fullSyncVersion?: number;
 }
 
 interface SyncConfig {
@@ -194,7 +195,12 @@ class ApiSyncAdapter {
     /**
      * Push changes to Master (called by Master terminal only)
      */
-    async push(collection: string, items: any[], action: SyncChange['action'] = 'BULK_UPDATE'): Promise<void> {
+    async push(
+        collection: string,
+        items: any[],
+        action: SyncChange['action'] = 'BULK_UPDATE',
+        mode: 'UPSERT' | 'FULL_REPLACE' = 'UPSERT'
+    ): Promise<void> {
         if (!this.config) {
             throw new Error('Sync configuration missing in ApiSyncAdapter. Ensure SyncManager is initialized.');
         }
@@ -214,13 +220,13 @@ class ApiSyncAdapter {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': this.authToken
                 },
-                body: JSON.stringify({ items })
+                body: JSON.stringify({ items, mode })
             });
 
             if (response.status === 401) {
                 // Token expired, re-authenticate
                 await this.authenticate();
-                return this.push(collection, items, action);
+                return this.push(collection, items, action, mode);
             }
 
             if (!response.ok) {
@@ -301,7 +307,7 @@ class ApiSyncAdapter {
     /**
      * Pull incremental changes from Master (Delta Sync)
      */
-    async pullDelta(collection: string, since?: string): Promise<{ items: any[], serverTime: string, isFullDownload: boolean }> {
+    async pullDelta(collection: string, sinceVersion?: number): Promise<{ items: any[], serverTime: string, isFullDownload: boolean, latestVersion?: number }> {
         if (!this.config) {
             throw new Error('Sync configuration missing');
         }
@@ -312,8 +318,8 @@ class ApiSyncAdapter {
 
         try {
             const url = new URL(`${this.config.masterUrl}/api/sync/delta/${collection}`);
-            if (since) {
-                url.searchParams.set('since', since);
+            if (sinceVersion !== undefined) {
+                url.searchParams.set('sinceVersion', sinceVersion.toString());
             }
 
             const response = await this.fetchWithRetry(url.toString(), {
@@ -325,7 +331,7 @@ class ApiSyncAdapter {
 
             if (response.status === 401) {
                 await this.authenticate();
-                return this.pullDelta(collection, since);
+                return this.pullDelta(collection, sinceVersion);
             }
 
             if (!response.ok) {
@@ -381,7 +387,8 @@ class ApiSyncAdapter {
                 collection,
                 lastSyncedAt: data.metadata.lastUpdated,
                 version: data.metadata.version,
-                itemCount: data.metadata.itemCount
+                itemCount: data.metadata.itemCount,
+                fullSyncVersion: data.metadata.fullSyncVersion
             };
 
         } catch (error) {
@@ -606,6 +613,33 @@ class ApiSyncAdapter {
     }
 
     /**
+     * Acknowledge pending transactions (Master only)
+     */
+    async ackPendingTransactions(ids: string[]): Promise<void> {
+        if (!this.config || !this.isOnline) return;
+        if (!ids || ids.length === 0) return;
+
+        try {
+            await this.ensureAuthenticated();
+            const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/transactions/pending/ack`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Token': this.authToken || ''
+                },
+                body: JSON.stringify({ ids })
+            });
+
+            if (response.status === 401) {
+                await this.authenticate();
+                return this.ackPendingTransactions(ids);
+            }
+        } catch (error) {
+            console.error('❌ ApiSyncAdapter: Error acknowledging pending transactions:', error);
+        }
+    }
+
+    /**
      * Pull pending inventory movements (Master only)
      */
     async pullPendingInventoryMovements(): Promise<any[]> {
@@ -626,6 +660,33 @@ class ApiSyncAdapter {
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pulling pending inventory movements:', error);
             return [];
+        }
+    }
+
+    /**
+     * Acknowledge pending inventory movements (Master only)
+     */
+    async ackPendingInventoryMovements(ids: string[]): Promise<void> {
+        if (!this.config || !this.isOnline) return;
+        if (!ids || ids.length === 0) return;
+
+        try {
+            await this.ensureAuthenticated();
+            const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/inventory/movements/pending/ack`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Token': this.authToken || ''
+                },
+                body: JSON.stringify({ ids })
+            });
+
+            if (response.status === 401) {
+                await this.authenticate();
+                return this.ackPendingInventoryMovements(ids);
+            }
+        } catch (error) {
+            console.error('❌ ApiSyncAdapter: Error acknowledging pending inventory movements:', error);
         }
     }
 

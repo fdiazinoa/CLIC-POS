@@ -12,6 +12,21 @@ export const db = new Database(DB_PATH);
 db.pragma('foreign_keys = ON');
 db.pragma('journal_mode = WAL'); // Better concurrency
 
+// Ensure sync change log exists (for versioned delta sync)
+db.exec(`
+    CREATE TABLE IF NOT EXISTS sync_changes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        collection TEXT NOT NULL,
+        itemId TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        op TEXT NOT NULL,
+        payload TEXT,
+        createdAt TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sync_changes_collection_version
+    ON sync_changes(collection, version);
+`);
+
 /**
  * Helper to get a collection (mimics lowdb .get().value())
  */

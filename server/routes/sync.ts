@@ -26,6 +26,78 @@ const getConnectedTerminals = () => {
     return terminals;
 };
 
+// --- Sync Versioning & Change Log Helpers ---
+const collectionAliasMap: Record<string, string> = {
+    inventoryLedger: 'inventory_ledger',
+    cashMovements: 'cash_movements',
+    zReports: 'z_reports',
+    productStocks: 'product_stocks',
+    purchaseOrders: 'purchase_orders',
+    supplierProductPrices: 'supplier_product_prices'
+};
+
+const resolveCollectionName = (collection: string) => collectionAliasMap[collection] || collection;
+
+const getCollectionForSync = (collection: string): any[] => {
+    const resolved = resolveCollectionName(collection);
+    return getCollection(resolved);
+};
+
+const getItemCount = (collection: string): number => {
+    const data = getCollectionForSync(collection);
+    return Array.isArray(data) ? data.length : 0;
+};
+
+const getSyncVersionKey = (collection: string) => `sync_version_${collection}`;
+
+const getCurrentVersion = (collection: string): number => {
+    const v = getSetting(getSyncVersionKey(collection));
+    if (typeof v === 'number') return v;
+    const syncMetadata = getSetting('syncMetadata') || {};
+    const metaVersion = syncMetadata[collection]?.version;
+    return typeof metaVersion === 'number' ? metaVersion : 0;
+};
+
+const bumpVersion = (collection: string): number => {
+    const next = getCurrentVersion(collection) + 1;
+    saveSetting(getSyncVersionKey(collection), next);
+    return next;
+};
+
+const ensureMetadata = (collection: string) => {
+    const syncMetadata = getSetting('syncMetadata') || {};
+    if (!syncMetadata[collection]) {
+        syncMetadata[collection] = {
+            version: getCurrentVersion(collection),
+            lastUpdated: new Date().toISOString(),
+            itemCount: getItemCount(collection),
+            fullSyncVersion: 0
+        };
+        saveSetting('syncMetadata', syncMetadata);
+    }
+    return syncMetadata[collection];
+};
+
+const updateMetadata = (collection: string, version: number, fullSyncVersion?: number) => {
+    const syncMetadata = getSetting('syncMetadata') || {};
+    syncMetadata[collection] = {
+        version,
+        lastUpdated: new Date().toISOString(),
+        itemCount: getItemCount(collection),
+        fullSyncVersion: fullSyncVersion ?? syncMetadata[collection]?.fullSyncVersion ?? 0
+    };
+    saveSetting('syncMetadata', syncMetadata);
+};
+
+const insertChangeStmt = db.prepare(`
+    INSERT INTO sync_changes (collection, itemId, version, op, payload, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?)
+`);
+
+const clearChangesForCollection = (collection: string) => {
+    db.prepare("DELETE FROM sync_changes WHERE collection = ?").run(collection);
+};
+
 /**
  * GET /api/sync/ping
  */
@@ -106,20 +178,7 @@ router.get('/collections/:collection/metadata', async (req, res) => {
     }
 
     try {
-        const syncMetadata = getSetting('syncMetadata') || {};
-        let metadata = syncMetadata[collection];
-
-        if (!metadata) {
-            const data = getCollection(collection);
-            const itemCount = Array.isArray(data) ? data.length : 0;
-            metadata = {
-                version: Date.now(),
-                lastUpdated: new Date().toISOString(),
-                itemCount
-            };
-            syncMetadata[collection] = metadata;
-            saveSetting('syncMetadata', syncMetadata);
-        }
+        const metadata = ensureMetadata(collection);
 
         res.json({ success: true, metadata });
     } catch (error: any) {
@@ -146,19 +205,8 @@ router.get('/collections/:collection/data', async (req, res) => {
     }
 
     try {
-        const items = getCollection(collection);
-        const syncMetadata = getSetting('syncMetadata') || {};
-        let metadata = syncMetadata[collection];
-
-        if (!metadata) {
-            metadata = {
-                version: Date.now(),
-                lastUpdated: new Date().toISOString(),
-                itemCount: items.length
-            };
-            syncMetadata[collection] = metadata;
-            saveSetting('syncMetadata', syncMetadata);
-        }
+        const items = getCollectionForSync(collection);
+        const metadata = ensureMetadata(collection);
 
         const requestedVersion = sinceVersion ? parseInt(sinceVersion as string) : 0;
         if (requestedVersion >= metadata.version) {
@@ -183,7 +231,7 @@ router.get('/collections/:collection/data', async (req, res) => {
  */
 router.get('/delta/:collection', async (req, res) => {
     const { collection } = req.params;
-    const { since } = req.query;
+    const { since, sinceVersion } = req.query;
     const authToken = req.headers['x-sync-token'] as string;
     const tokens = getTerminalTokens();
 
@@ -197,25 +245,46 @@ router.get('/delta/:collection', async (req, res) => {
     }
 
     try {
-        const items = getCollection(collection);
+        const items = getCollectionForSync(collection);
+        const metadata = ensureMetadata(collection);
+        const latestVersion = metadata.version || 0;
+        const fullSyncVersion = metadata.fullSyncVersion || 0;
+
+        const requestedVersion = sinceVersion ? parseInt(sinceVersion as string) : 0;
 
         // SPECIAL CASE: 'config' is a singleton object, not an array
         if (collection === 'config') {
-            return res.json({ success: true, data: items, serverTime: new Date().toISOString(), isFullDownload: true });
+            if (requestedVersion >= latestVersion && latestVersion > 0) {
+                return res.json({ success: true, items: [], serverTime: new Date().toISOString(), isFullDownload: false, latestVersion });
+            }
+            return res.json({ success: true, items: items ? [items] : [], serverTime: new Date().toISOString(), isFullDownload: true, latestVersion });
         }
 
-        if (!since) {
-            return res.json({ success: true, items, serverTime: new Date().toISOString(), isFullDownload: true });
+        // If no version provided, or a full sync is required, return full download
+        if (!requestedVersion || requestedVersion < fullSyncVersion) {
+            return res.json({ success: true, items, serverTime: new Date().toISOString(), isFullDownload: true, latestVersion });
         }
 
-        const sinceDate = new Date(since as string);
-        const deltaItems = items.filter((item: any) => {
-            const updatedAt = new Date(item.updatedAt || item.createdAt || item.date || 0);
-            const deletedAt = item.deletedAt ? new Date(item.deletedAt) : null;
-            return updatedAt > sinceDate || (deletedAt && deletedAt > sinceDate);
+        // Versioned delta using change log
+        const rows = db.prepare(`
+            SELECT itemId, op, payload, version
+            FROM sync_changes
+            WHERE collection = ? AND version > ?
+            ORDER BY version ASC
+        `).all(collection, requestedVersion) as any[];
+
+        const deltaItems = rows.map(r => {
+            if (r.op === 'DELETE') {
+                let payload: any = {};
+                try { payload = r.payload ? JSON.parse(r.payload) : {}; } catch {}
+                return { id: r.itemId, deletedAt: payload.deletedAt || new Date().toISOString(), _op: 'DELETE' };
+            }
+            let payload: any = {};
+            try { payload = r.payload ? JSON.parse(r.payload) : {}; } catch {}
+            return { ...payload, _op: r.op || 'UPSERT' };
         });
 
-        res.json({ success: true, items: deltaItems, serverTime: new Date().toISOString(), isFullDownload: false });
+        res.json({ success: true, items: deltaItems, serverTime: new Date().toISOString(), isFullDownload: false, latestVersion });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -226,7 +295,7 @@ router.get('/delta/:collection', async (req, res) => {
  */
 router.post('/collections/:collection/push', async (req, res) => {
     const { collection } = req.params;
-    const { items } = req.body;
+    const { items, mode } = req.body;
     const authToken = req.headers['x-sync-token'] as string;
     const tokens = getTerminalTokens();
 
@@ -239,6 +308,8 @@ router.post('/collections/:collection/push', async (req, res) => {
             return res.status(400).json({ success: false, message: 'items must be an array' });
         }
 
+        const pushMode = mode === 'FULL_REPLACE' ? 'FULL_REPLACE' : 'UPSERT';
+
         // Define JSON fields (must match db.ts)
         const jsonFields: Record<string, string[]> = {
             products: ['images', 'attributes', 'variants', 'tariffs', 'stockBalances', 'activeInWarehouses', 'appliedTaxIds', 'warehouseSettings', 'availableModifiers', 'operationalFlags', 'recipeDetails'],
@@ -250,58 +321,129 @@ router.post('/collections/:collection/push', async (req, res) => {
         };
 
         db.transaction(() => {
-            const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(collection);
+            const resolvedCollection = resolveCollectionName(collection);
+            const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(resolvedCollection);
+            const now = new Date().toISOString();
+
             if (tableExists) {
-                const columns = db.prepare(`PRAGMA table_info(${collection})`).all() as any[];
+                const columns = db.prepare(`PRAGMA table_info(${resolvedCollection})`).all() as any[];
                 const hasDataColumn = columns.some(c => c.name === 'data');
 
-                if (hasDataColumn) {
-                    // For data-bag tables, we can wipe and replace (or upsert if we prefer)
-                    // Legacy behavior was delete all. Let's keep it for data-bag tables but maybe upsert is safer?
-                    // Let's stick to delete for data-bag to ensure clean slate, assuming no FKs to data-bag tables.
-                    db.prepare(`DELETE FROM ${collection}`).run();
-                    const stmt = db.prepare(`INSERT INTO ${collection} (id, data) VALUES (?, ?)`);
-                    for (const item of items) stmt.run(item.id, JSON.stringify(item));
-                } else {
-                    // Structured table - UPSERT to avoid FK violations
-                    const colNames = columns.map(c => c.name);
-                    const placeholders = colNames.map(() => '?').join(',');
-                    const stmt = db.prepare(`INSERT OR REPLACE INTO ${collection} (${colNames.join(',')}) VALUES (${placeholders})`);
+                if (pushMode === 'FULL_REPLACE') {
+                    // Full replace (force push)
+                    db.prepare(`DELETE FROM ${resolvedCollection}`).run();
 
-                    const fieldsToStringify = jsonFields[collection] || [];
+                    if (hasDataColumn) {
+                        const stmt = db.prepare(`INSERT INTO ${resolvedCollection} (id, data) VALUES (?, ?)`);
+                        for (const item of items) stmt.run(item.id, JSON.stringify(item));
+                    } else {
+                        const colNames = columns.map(c => c.name);
+                        const placeholders = colNames.map(() => '?').join(',');
+                        const stmt = db.prepare(`INSERT OR REPLACE INTO ${resolvedCollection} (${colNames.join(',')}) VALUES (${placeholders})`);
+                        const fieldsToStringify = jsonFields[collection] || [];
 
-                    for (const item of items) {
-                        const values = colNames.map(col => {
-                            let val = item[col];
-                            // Handle JSON fields
-                            if (fieldsToStringify.includes(col)) {
-                                return typeof val === 'object' ? JSON.stringify(val) : (val || '[]');
-                            }
-                            // Handle Booleans (SQLite uses 0/1)
-                            if (typeof val === 'boolean') return val ? 1 : 0;
-
-                            // Handle missing values for columns that might have defaults or be nullable
-                            if (val === undefined) return null;
-
-                            return val;
-                        });
-                        stmt.run(...values);
+                        for (const item of items) {
+                            const values = colNames.map(col => {
+                                let val = item[col];
+                                if (fieldsToStringify.includes(col)) {
+                                    return typeof val === 'object' ? JSON.stringify(val) : (val || '[]');
+                                }
+                                if (typeof val === 'boolean') return val ? 1 : 0;
+                                if (val === undefined) return null;
+                                return val;
+                            });
+                            stmt.run(...values);
+                        }
                     }
+
+                    // Full replace resets change log and forces full download for slaves
+                    clearChangesForCollection(collection);
+                    const newVersion = bumpVersion(collection);
+                    updateMetadata(collection, newVersion, newVersion);
+                } else {
+                    // UPSERT / DELETE items (delta-friendly)
+                    let dataStmt: any = null;
+                    let structuredStmt: any = null;
+                    let colNames: string[] = [];
+                    let fieldsToStringify: string[] = [];
+
+                    if (hasDataColumn) {
+                        dataStmt = db.prepare(`INSERT OR REPLACE INTO ${resolvedCollection} (id, data) VALUES (?, ?)`);
+                    } else {
+                        colNames = columns.map(c => c.name);
+                        const placeholders = colNames.map(() => '?').join(',');
+                        structuredStmt = db.prepare(`INSERT OR REPLACE INTO ${resolvedCollection} (${colNames.join(',')}) VALUES (${placeholders})`);
+                        fieldsToStringify = jsonFields[collection] || [];
+                    }
+
+                    for (const rawItem of items) {
+                        const item = { ...rawItem };
+                        const op = item._op === 'DELETE' || item.deletedAt || item.isActive === false ? 'DELETE' : 'UPSERT';
+
+                        if (op === 'DELETE') {
+                            if (item.id) {
+                                db.prepare(`DELETE FROM ${resolvedCollection} WHERE id = ?`).run(item.id);
+                            }
+                        } else {
+                            if (hasDataColumn && dataStmt) {
+                                dataStmt.run(item.id, JSON.stringify(item));
+                            } else if (structuredStmt) {
+                                const values = colNames.map(col => {
+                                    let val = item[col];
+                                    if (fieldsToStringify.includes(col)) {
+                                        return typeof val === 'object' ? JSON.stringify(val) : (val || '[]');
+                                    }
+                                    if (typeof val === 'boolean') return val ? 1 : 0;
+                                    if (val === undefined) return null;
+                                    return val;
+                                });
+                                structuredStmt.run(...values);
+                            }
+                        }
+
+                        const version = bumpVersion(collection);
+                        const payload = op === 'DELETE'
+                            ? JSON.stringify({ id: item.id, deletedAt: item.deletedAt || now })
+                            : JSON.stringify(item);
+                        insertChangeStmt.run(collection, item.id, version, op, payload, now);
+                    }
+
+                    updateMetadata(collection, getCurrentVersion(collection));
                 }
             } else {
-                saveSetting(collection, items);
-            }
+                // Settings-based collection (array)
+                if (pushMode === 'FULL_REPLACE') {
+                    saveSetting(collection, items);
+                    clearChangesForCollection(collection);
+                    const newVersion = bumpVersion(collection);
+                    updateMetadata(collection, newVersion, newVersion);
+                } else {
+                    const existing = (getSetting(collection) || []) as any[];
+                    const map = new Map(existing.map((i: any) => [i.id, i]));
 
-            const syncMetadata = getSetting('syncMetadata') || {};
-            syncMetadata[collection] = {
-                version: Date.now(),
-                lastUpdated: new Date().toISOString(),
-                itemCount: items.length // This might be inaccurate if we upserted, but close enough for versioning
-            };
-            saveSetting('syncMetadata', syncMetadata);
+                    for (const rawItem of items) {
+                        const item = { ...rawItem };
+                        const op = item._op === 'DELETE' || item.deletedAt || item.isActive === false ? 'DELETE' : 'UPSERT';
+                        if (op === 'DELETE') {
+                            map.delete(item.id);
+                        } else {
+                            map.set(item.id, item);
+                        }
+
+                        const version = bumpVersion(collection);
+                        const payload = op === 'DELETE'
+                            ? JSON.stringify({ id: item.id, deletedAt: item.deletedAt || now })
+                            : JSON.stringify(item);
+                        insertChangeStmt.run(collection, item.id, version, op, payload, now);
+                    }
+
+                    saveSetting(collection, Array.from(map.values()));
+                    updateMetadata(collection, getCurrentVersion(collection));
+                }
+            }
         })();
 
-        res.json({ success: true, version: Date.now(), itemCount: items.length });
+        res.json({ success: true, version: getCurrentVersion(collection), itemCount: (getCollection(collection) || []).length });
     } catch (error: any) {
         console.error(`❌ Error pushing to ${collection}:`, error);
         console.error(`❌ Error stack:`, error.stack);
@@ -364,23 +506,24 @@ router.post('/transactions', async (req, res) => {
         }
 
         let addedCount = 0;
+        const now = new Date().toISOString();
         db.transaction(() => {
             const stmt = db.prepare(`INSERT OR IGNORE INTO transactions (id, globalSequence, displayId, documentType, seriesId, seriesNumber, date, items, total, payments, userId, userName, terminalId, status, customerId, customerName, customerSnapshot, taxAmount, netAmount, discountAmount, isTaxIncluded, ncf, ncfType, relatedTransactions, originalTransactionId, refundReason, affectedInvoiceNumber, affectedNCF, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
             for (const txn of items) {
                 const result = stmt.run(txn.id, txn.globalSequence, txn.displayId, txn.documentType, txn.seriesId, txn.seriesNumber, txn.date, JSON.stringify(txn.items), txn.total, JSON.stringify(txn.payments), txn.userId, txn.userName, txn.terminalId, txn.status, txn.customerId, txn.customerName, JSON.stringify(txn.customerSnapshot), txn.taxAmount, txn.netAmount, txn.discountAmount, txn.isTaxIncluded ? 1 : 0, txn.ncf, txn.ncfType, JSON.stringify(txn.relatedTransactions), txn.originalTransactionId, txn.refundReason, txn.affectedInvoiceNumber, txn.affectedNCF, txn.syncStatus, txn.syncError);
-                if (result.changes > 0) addedCount++;
+                if (result.changes > 0) {
+                    addedCount++;
+                    const version = bumpVersion('transactions');
+                    insertChangeStmt.run('transactions', txn.id, version, 'UPSERT', JSON.stringify(txn), now);
+                }
             }
 
             const pending = getSetting('pending_transactions') || [];
-            saveSetting('pending_transactions', [...pending, ...items]);
+            const pendingMap = new Map(pending.map((p: any) => [p.id, p]));
+            items.forEach((it: any) => pendingMap.set(it.id, it));
+            saveSetting('pending_transactions', Array.from(pendingMap.values()));
 
-            const syncMetadata = getSetting('syncMetadata') || {};
-            syncMetadata['transactions'] = {
-                version: Date.now(),
-                lastUpdated: new Date().toISOString(),
-                itemCount: (getCollection('transactions')).length
-            };
-            saveSetting('syncMetadata', syncMetadata);
+            updateMetadata('transactions', getCurrentVersion('transactions'));
         })();
 
         res.json({
@@ -407,8 +550,32 @@ router.get('/transactions/pending', async (req, res) => {
 
     try {
         const pending = getSetting('pending_transactions') || [];
-        saveSetting('pending_transactions', []);
         res.json({ success: true, items: pending });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+/**
+ * POST /api/sync/transactions/pending/ack
+ */
+router.post('/transactions/pending/ack', async (req, res) => {
+    const { ids } = req.body;
+    const authToken = req.headers['x-sync-token'] as string;
+    const tokens = getTerminalTokens();
+
+    if (!authToken || !tokens[authToken]) {
+        return res.status(401).json({ success: false, message: 'Invalid or missing sync token' });
+    }
+
+    try {
+        if (!Array.isArray(ids)) {
+            return res.status(400).json({ success: false, message: 'ids must be an array' });
+        }
+        const pending = getSetting('pending_transactions') || [];
+        const remaining = pending.filter((p: any) => !ids.includes(p.id));
+        saveSetting('pending_transactions', remaining);
+        res.json({ success: true, remaining: remaining.length });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -558,21 +725,21 @@ router.post('/cash/movements', async (req, res) => {
             return res.status(400).json({ success: false, message: 'items must be an array' });
         }
 
+        const collectionKey = 'cashMovements';
         let addedCount = 0;
+        const now = new Date().toISOString();
         db.transaction(() => {
             const stmt = db.prepare(`INSERT OR IGNORE INTO cash_movements (id, createdAt, type, amount, concept, userId, userName, terminalId, zReportId, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
             for (const move of items) {
                 const result = stmt.run(move.id, move.createdAt, move.type, move.amount, move.concept, move.userId, move.userName, move.terminalId, move.zReportId, move.syncStatus, move.syncError);
-                if (result.changes > 0) addedCount++;
+                if (result.changes > 0) {
+                    addedCount++;
+                    const version = bumpVersion(collectionKey);
+                    insertChangeStmt.run(collectionKey, move.id, version, 'UPSERT', JSON.stringify(move), now);
+                }
             }
 
-            const syncMetadata = getSetting('syncMetadata') || {};
-            syncMetadata['cashMovements'] = {
-                version: Date.now(),
-                lastUpdated: new Date().toISOString(),
-                itemCount: (getCollection('cash_movements')).length
-            };
-            saveSetting('syncMetadata', syncMetadata);
+            updateMetadata(collectionKey, getCurrentVersion(collectionKey));
         })();
 
         res.json({ success: true, addedCount });
@@ -598,7 +765,9 @@ router.post('/z-reports', async (req, res) => {
             return res.status(400).json({ success: false, message: 'items must be an array' });
         }
 
+        const collectionKey = 'zReports';
         let addedCount = 0;
+        const now = new Date().toISOString();
         db.transaction(() => {
             const stmt = db.prepare(`INSERT OR IGNORE INTO z_reports (id, openedAt, closedAt, terminalId, userId, userName, openingBalance, closingBalance, totalSales, totalTaxes, totalDiscounts, totalCash, totalCard, totalTransfer, totalOther, status, syncStatus, syncError, sequenceNumber, totalsByMethod, cashExpected, cashCounted, cashDiscrepancy, stats, transactionCount, notes, baseCurrency, cashSales, cashIn, cashOut) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
             for (const report of items) {
@@ -625,16 +794,14 @@ router.post('/z-reports', async (req, res) => {
                     report.cashIn || 0,
                     report.cashOut || 0
                 );
-                if (result.changes > 0) addedCount++;
+                if (result.changes > 0) {
+                    addedCount++;
+                    const version = bumpVersion(collectionKey);
+                    insertChangeStmt.run(collectionKey, report.id, version, 'UPSERT', JSON.stringify(report), now);
+                }
             }
 
-            const syncMetadata = getSetting('syncMetadata') || {};
-            syncMetadata['zReports'] = {
-                version: Date.now(),
-                lastUpdated: new Date().toISOString(),
-                itemCount: (getCollection('z_reports')).length
-            };
-            saveSetting('syncMetadata', syncMetadata);
+            updateMetadata(collectionKey, getCurrentVersion(collectionKey));
         })();
 
         res.json({ success: true, addedCount });
@@ -789,8 +956,32 @@ router.get('/inventory/movements/pending', async (req, res) => {
 
     try {
         const pending = getSetting('pending_inventory_movements') || [];
-        saveSetting('pending_inventory_movements', []);
         res.json({ success: true, items: pending });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+/**
+ * POST /api/sync/inventory/movements/pending/ack
+ */
+router.post('/inventory/movements/pending/ack', async (req, res) => {
+    const { ids } = req.body;
+    const authToken = req.headers['x-sync-token'] as string;
+    const tokens = getTerminalTokens();
+
+    if (!authToken || !tokens[authToken]) {
+        return res.status(401).json({ success: false, message: 'Invalid or missing sync token' });
+    }
+
+    try {
+        if (!Array.isArray(ids)) {
+            return res.status(400).json({ success: false, message: 'ids must be an array' });
+        }
+        const pending = getSetting('pending_inventory_movements') || [];
+        const remaining = pending.filter((p: any) => !ids.includes(p.id));
+        saveSetting('pending_inventory_movements', remaining);
+        res.json({ success: true, remaining: remaining.length });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -813,8 +1004,10 @@ router.post('/inventory/movements', async (req, res) => {
             return res.status(400).json({ success: false, message: 'items must be an array' });
         }
 
+        const collectionKey = 'inventoryLedger';
         let addedCount = 0;
         const processedIds: string[] = [];
+        const now = new Date().toISOString();
 
         db.transaction(() => {
             const stmt = db.prepare(`INSERT OR IGNORE INTO inventory_ledger (id, createdAt, warehouseId, productId, concept, documentRef, qtyIn, qtyOut, unitCost, balanceQty, balanceAvgCost, terminalId, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -822,6 +1015,8 @@ router.post('/inventory/movements', async (req, res) => {
                 const result = stmt.run(move.id, move.createdAt, move.warehouseId, move.productId, move.concept, move.documentRef, move.qtyIn, move.qtyOut, move.unitCost, move.balanceQty, move.balanceAvgCost, move.terminalId, move.syncStatus, move.syncError);
                 if (result.changes > 0) {
                     addedCount++;
+                    const version = bumpVersion(collectionKey);
+                    insertChangeStmt.run(collectionKey, move.id, version, 'UPSERT', JSON.stringify(move), now);
                     db.prepare(`
                         INSERT INTO product_stocks (id, productId, warehouseId, quantity, updatedAt)
                         VALUES (?, ?, ?, ?, ?)
@@ -842,15 +1037,11 @@ router.post('/inventory/movements', async (req, res) => {
             }
 
             const pending = getSetting('pending_inventory_movements') || [];
-            saveSetting('pending_inventory_movements', [...pending, ...items]);
+            const pendingMap = new Map(pending.map((p: any) => [p.id, p]));
+            items.forEach((it: any) => pendingMap.set(it.id, it));
+            saveSetting('pending_inventory_movements', Array.from(pendingMap.values()));
 
-            const syncMetadata = getSetting('syncMetadata') || {};
-            syncMetadata['inventory_ledger'] = {
-                version: Date.now(),
-                lastUpdated: new Date().toISOString(),
-                itemCount: (getCollection('inventory_ledger')).length
-            };
-            saveSetting('syncMetadata', syncMetadata);
+            updateMetadata(collectionKey, getCurrentVersion(collectionKey));
         })();
 
         res.json({ success: true, processedIds, addedCount, totalCount: (getCollection('inventory_ledger')).length });

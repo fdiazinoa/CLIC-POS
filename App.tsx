@@ -39,6 +39,7 @@ import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 import { db } from './utils/db'; // Import Local DB
 import { dbAdapter } from './services/db'; // Import Adapter for Healthcheck
 import { syncManager } from './services/sync/SyncManager';
+import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
 import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
 import { calculateZReportStats } from './utils/analytics';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
@@ -81,7 +82,6 @@ import InventoryTracking from './components/InventoryTracking';
 import KitchenDisplay from './components/kds/KitchenDisplay';
 
 
-import { networkSyncService } from './services/sync/NetworkSyncService';
 import { seriesSyncService } from './services/sync/SeriesSyncService';
 import { permissionService } from './services/sync/PermissionService';
 import { terminalRouter } from './services/routing/TerminalRouter';
@@ -319,7 +319,6 @@ const AppContent: React.FC = () => {
             }
 
             await syncManager.initialize(finalConfig, pairedTerminal.id);
-            networkSyncService.setTerminalId(pairedTerminal.id);
 
             if (pairedTerminal.config.isPrimaryNode === false) {
               syncManager.startAutoSync(30000);
@@ -353,6 +352,7 @@ const AppContent: React.FC = () => {
                     await db.saveDocument('transactions', t);
                   });
                 }
+                await apiSyncAdapter.ackPendingTransactions(txns.map(t => t.id));
                 const updatedTransactions = await db.get('transactions') as Transaction[];
                 setTransactions(updatedTransactions);
               });
@@ -366,6 +366,7 @@ const AppContent: React.FC = () => {
                   affectedProducts.add(move.productId);
                   affectedWarehouses.add(move.warehouseId);
                 }
+                await apiSyncAdapter.ackPendingInventoryMovements(movements.map(m => m.id));
                 for (const productId of affectedProducts) {
                   for (const warehouseId of affectedWarehouses) {
                     await db.recalculateProductStock(productId, warehouseId);
@@ -376,7 +377,7 @@ const AppContent: React.FC = () => {
               });
             }
 
-            networkSyncService.init();
+            // NOTE: NetworkSyncService deprecated. SyncManager/ApiSyncAdapter handles sync now.
             backgroundSyncManager.initialize().catch(console.error);
 
             // RECOVERY: Check for lost Z-Reports (due to schema issues)
@@ -1575,7 +1576,7 @@ const AppContent: React.FC = () => {
                   await db.recordInventoryMovement(whId, adj.productId, type, 'AUDITORIA', adj.quantity, undefined, terminalId);
                 }
               }
-              networkSyncService.sync();
+              backgroundSyncManager.triggerSync();
               const freshData = await db.init();
               setProducts(freshData.products);
 
@@ -1588,7 +1589,7 @@ const AppContent: React.FC = () => {
               const freshStocks = await db.get('productStocks') as ProductStock[] || [];
               setProductStocks(freshStocks);
 
-              networkSyncService.sync();
+              // backgroundSyncManager.triggerSync already called above
             }}
             onAddSupplier={async (s) => {
               setSuppliers(prev => [...prev, s]);

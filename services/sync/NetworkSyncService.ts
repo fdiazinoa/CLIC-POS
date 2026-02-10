@@ -1,6 +1,8 @@
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 
+const ENABLE_NETWORK_SYNC = import.meta.env?.VITE_ENABLE_NETWORK_SYNC === 'true';
+
 const getApiUrl = () => {
     const masterIp = localStorage.getItem('pos_master_ip');
     if (masterIp) {
@@ -44,6 +46,11 @@ class NetworkSyncService {
     }
 
     public init() {
+        if (!ENABLE_NETWORK_SYNC) {
+            console.warn('🛑 NetworkSyncService disabled (set VITE_ENABLE_NETWORK_SYNC=true to enable).');
+            return;
+        }
+
         if (dbAdapter.adapterType === 'network') {
             console.log("🛑 NetworkSyncService disabled: Application is running in full Network Mode (No local DB).");
             return;
@@ -125,6 +132,7 @@ class NetworkSyncService {
     }
 
     public setTerminalId(id: string) {
+        if (!ENABLE_NETWORK_SYNC) return;
         if (this.terminalId !== id) {
             console.log(`🆔 NetworkSyncService: Terminal ID updated to ${id}`);
             this.terminalId = id;
@@ -163,6 +171,7 @@ class NetworkSyncService {
     }
 
     public async sync() {
+        if (!ENABLE_NETWORK_SYNC) return;
         if (dbAdapter.adapterType === 'network') return;
         if (this.isSyncing || !navigator.onLine) return;
 

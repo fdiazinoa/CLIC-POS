@@ -21,6 +21,17 @@ CREATE TABLE IF NOT EXISTS connected_terminals (
     status TEXT
 );
 
+-- Sync Change Log (Versioned Delta)
+CREATE TABLE IF NOT EXISTS sync_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection TEXT NOT NULL,
+    itemId TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    op TEXT NOT NULL, -- 'UPSERT' | 'DELETE' | 'FULL_REPLACE'
+    payload TEXT, -- JSON snapshot (optional for DELETE)
+    createdAt TEXT NOT NULL
+);
+
 -- 3. Core Entities
 CREATE TABLE IF NOT EXISTS roles (
     id TEXT PRIMARY KEY,
@@ -351,4 +362,4 @@ CREATE INDEX IF NOT EXISTS idx_z_reports_terminal ON z_reports(terminalId);
 CREATE INDEX IF NOT EXISTS idx_cash_movements_zreport ON cash_movements(zReportId);
 CREATE INDEX IF NOT EXISTS idx_currency_audit_currency ON currency_audit_logs(currencyCode);
 CREATE INDEX IF NOT EXISTS idx_currency_audit_date ON currency_audit_logs(changedAt);
-
+CREATE INDEX IF NOT EXISTS idx_sync_changes_collection_version ON sync_changes(collection, version);
