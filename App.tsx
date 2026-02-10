@@ -1804,9 +1804,31 @@ const AppContent: React.FC = () => {
             warehouseId={viewData?.warehouseId}
             warehouseName={viewData?.warehouseName}
             onSave={(counts) => {
-              console.log('Inventory counts saved:', counts);
-              alert(`Conteo guardado: ${counts.length} productos`);
-              handleViewChange('INVENTORY_HOME');
+              const now = new Date().toISOString();
+              const sessionId = `COUNT-${Date.now()}`;
+              const session = {
+                id: sessionId,
+                warehouseId: viewData?.warehouseId || '',
+                warehouseName: viewData?.warehouseName,
+                createdAt: now,
+                createdBy: currentUser?.id,
+                createdByName: currentUser?.name,
+                items: counts.map((c: any) => ({
+                  productId: c.productId,
+                  productName: c.productName,
+                  category: (products.find(p => p.id === c.productId)?.category) || undefined,
+                  systemQty: c.expectedQty,
+                  countedQty: c.countedQty,
+                  difference: c.difference
+                }))
+              };
+              db.saveDocument('inventoryCounts' as any, session).then(() => {
+                alert(`Conteo guardado: ${counts.length} productos`);
+                handleViewChange('INVENTORY_HOME');
+              }).catch((err) => {
+                console.error('Error saving inventory count session:', err);
+                alert('Error guardando el conteo.');
+              });
             }}
             onCancel={() => handleViewChange('INVENTORY_HOME')}
           />

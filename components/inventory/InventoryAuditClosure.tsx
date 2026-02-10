@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ClipboardList, Database, FileText, Lock } from 'lucide-react';
-import { BusinessConfig, InventoryAuditLog, InventorySnapshot, InventorySnapshotItem, Product, RoleDefinition, User, Warehouse } from '../../types';
+import { BusinessConfig, InventoryAuditLog, InventoryCountSession, InventorySnapshot, InventorySnapshotItem, Product, RoleDefinition, User, Warehouse } from '../../types';
 import { db } from '../../utils/db';
 
 interface InventoryAuditClosureProps {
@@ -35,9 +35,16 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>(warehouses[0]?.id || '');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [auditFilter, setAuditFilter] = useState<AuditFilter>('ALL');
-  const [auditCounts, setAuditCounts] = useState<Record<string, string>>({});
   const [auditLogs, setAuditLogs] = useState<InventoryAuditLog[]>([]);
   const [snapshots, setSnapshots] = useState<InventorySnapshot[]>([]);
+  const [inventoryCounts, setInventoryCounts] = useState<InventoryCountSession[]>([]);
+  const [selectedCountId, setSelectedCountId] = useState<string | null>(null);
+  const [dateFrom, setDateFrom] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().slice(0, 10);
+  });
+  const [dateTo, setDateTo] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [isApplying, setIsApplying] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [reopenReason, setReopenReason] = useState('');
@@ -57,8 +64,10 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
     const load = async () => {
       const storedLogs = await db.get('inventoryAuditLogs') as InventoryAuditLog[] || [];
       const storedSnapshots = await db.get('inventorySnapshots') as InventorySnapshot[] || [];
+      const storedCounts = await db.get('inventoryCounts') as InventoryCountSession[] || [];
       setAuditLogs(storedLogs);
       setSnapshots(storedSnapshots);
+      setInventoryCounts(storedCounts);
     };
     load();
   }, []);
@@ -91,85 +100,83 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
     loadCosts();
   }, [products, selectedWarehouseId]);
 
-  const filteredProducts = useMemo(() => {
-    return products.filter(p => {
-      if (selectedCategory !== 'ALL' && p.category !== selectedCategory) return false;
-      if (!selectedWarehouseId) return false;
-      if (p.activeInWarehouses && !p.activeInWarehouses.includes(selectedWarehouseId)) return false;
-      return true;
-    });
-  }, [products, selectedCategory, selectedWarehouseId]);
+  const filteredCounts = useMemo(() => {
+    if (!selectedWarehouseId) return [];
+    const from = new Date(`${dateFrom}T00:00:00`);
+    const to = new Date(`${dateTo}T23:59:59`);
+    return inventoryCounts.filter(c => {
+      if (c.warehouseId !== selectedWarehouseId) return false;
+      const d = new Date(c.createdAt);
+      return d >= from && d <= to;
+    }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [inventoryCounts, selectedWarehouseId, dateFrom, dateTo]);
+
+  const selectedCount = useMemo(() => {
+    if (!selectedCountId) return null;
+    return inventoryCounts.find(c => c.id === selectedCountId) || null;
+  }, [inventoryCounts, selectedCountId]);
 
   const auditRows: AuditRow[] = useMemo(() => {
-    return filteredProducts.map(p => {
-      const systemQty = p.stockBalances?.[selectedWarehouseId] ?? p.stock ?? 0;
-      const raw = auditCounts[p.id];
-      const physicalQty = raw === undefined || raw === '' ? undefined : Number(raw);
-      const diffQty = physicalQty === undefined ? undefined : physicalQty - systemQty;
-      return {
-        productId: p.id,
-        productName: p.name,
-        category: p.category,
-        systemQty,
-        physicalQty,
-        diffQty
-      };
-    });
-  }, [filteredProducts, auditCounts, selectedWarehouseId]);
-
-  const latestAuditSessionId = useMemo(() => {
-    const forWarehouse = auditLogs.filter(l => l.warehouseId === selectedWarehouseId && l.action === 'COUNT');
-    if (forWarehouse.length === 0) return null;
-    const latest = [...forWarehouse].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
-    return latest.sessionId;
-  }, [auditLogs, selectedWarehouseId]);
-
-  const kpi = useMemo(() => {
-    const rows = auditRows;
-    const totalValue = rows.reduce((sum, r) => {
-      const cost = avgCostByProduct.get(r.productId) || 0;
-      return sum + (r.systemQty * cost);
-    }, 0);
-
-    const counted = rows.filter(r => r.physicalQty !== undefined);
-    const totalSystem = counted.reduce((sum, r) => sum + r.systemQty, 0);
-    const totalAbsDiff = counted.reduce((sum, r) => sum + Math.abs(r.diffQty || 0), 0);
-    const eri = totalSystem > 0 ? Math.max(0, 1 - (totalAbsDiff / totalSystem)) * 100 : 0;
-
-    const sessionLogs = latestAuditSessionId
-      ? auditLogs.filter(l => l.sessionId === latestAuditSessionId && l.action === 'COUNT')
-      : [];
-
-    const shortage = sessionLogs.reduce((sum, l) => {
-      if ((l.diffQty || 0) < 0) return sum + Math.abs(l.diffQty || 0) * (avgCostByProduct.get(l.productId || '') || 0);
-      return sum;
-    }, 0);
-    const surplus = sessionLogs.reduce((sum, l) => {
-      if ((l.diffQty || 0) > 0) return sum + (l.diffQty || 0) * (avgCostByProduct.get(l.productId || '') || 0);
-      return sum;
-    }, 0);
-
-    const cutoff = new Date(Date.now() - LIMBO_DAYS * 24 * 60 * 60 * 1000);
-    const latestByProduct = new Map<string, string>();
-    auditLogs.filter(l => l.action === 'COUNT' && l.warehouseId === selectedWarehouseId).forEach(l => {
-      if (!l.productId) return;
-      const prev = latestByProduct.get(l.productId);
-      if (!prev || new Date(l.createdAt) > new Date(prev)) latestByProduct.set(l.productId, l.createdAt);
-    });
-    const limbo = filteredProducts.filter(p => {
-      const last = latestByProduct.get(p.id);
-      if (!last) return true;
-      return new Date(last) < cutoff;
-    }).length;
-
-    return { totalValue, eri, shortage, surplus, limbo };
-  }, [auditRows, avgCostByProduct, auditLogs, latestAuditSessionId, filteredProducts, selectedWarehouseId]);
+    if (!selectedCount) return [];
+    return selectedCount.items
+      .filter(i => selectedCategory === 'ALL' || i.category === selectedCategory)
+      .map(i => ({
+        productId: i.productId,
+        productName: i.productName,
+        category: i.category,
+        systemQty: i.systemQty,
+        physicalQty: i.countedQty,
+        diffQty: i.difference
+      }));
+  }, [selectedCount, selectedCategory]);
 
   const filteredAuditRows = useMemo(() => {
     if (auditFilter === 'ALL') return auditRows;
     if (auditFilter === 'UNCNT') return auditRows.filter(r => r.physicalQty === undefined);
     return auditRows.filter(r => r.physicalQty !== undefined && (r.diffQty || 0) !== 0);
   }, [auditRows, auditFilter]);
+
+  const kpi = useMemo(() => {
+    const rows = auditRows;
+    if (rows.length === 0) {
+      return { totalValue: 0, eri: 0, shortage: 0, surplus: 0, limbo: 0 };
+    }
+
+    const totalValue = rows.reduce((sum, r) => {
+      const cost = avgCostByProduct.get(r.productId) || 0;
+      return sum + (r.systemQty * cost);
+    }, 0);
+
+    const totalSystem = rows.reduce((sum, r) => sum + r.systemQty, 0);
+    const totalAbsDiff = rows.reduce((sum, r) => sum + Math.abs(r.diffQty || 0), 0);
+    const eri = totalSystem > 0 ? Math.max(0, 1 - (totalAbsDiff / totalSystem)) * 100 : 0;
+
+    const shortage = rows.reduce((sum, r) => {
+      if ((r.diffQty || 0) < 0) return sum + Math.abs(r.diffQty || 0) * (avgCostByProduct.get(r.productId) || 0);
+      return sum;
+    }, 0);
+    const surplus = rows.reduce((sum, r) => {
+      if ((r.diffQty || 0) > 0) return sum + (r.diffQty || 0) * (avgCostByProduct.get(r.productId) || 0);
+      return sum;
+    }, 0);
+
+    const cutoff = new Date(Date.now() - LIMBO_DAYS * 24 * 60 * 60 * 1000);
+    const latestByProduct = new Map<string, string>();
+    filteredCounts.forEach(c => {
+      c.items.forEach(i => {
+        const prev = latestByProduct.get(i.productId);
+        if (!prev || new Date(c.createdAt) > new Date(prev)) latestByProduct.set(i.productId, c.createdAt);
+      });
+    });
+    const limbo = products.filter(p => {
+      if (!selectedWarehouseId) return false;
+      const last = latestByProduct.get(p.id);
+      if (!last) return true;
+      return new Date(last) < cutoff;
+    }).length;
+
+    return { totalValue, eri, shortage, surplus, limbo };
+  }, [auditRows, avgCostByProduct, filteredCounts, products, selectedWarehouseId]);
 
   const lastClosed = useMemo(() => {
     const closed = snapshots.filter(s => s.status === 'CLOSED');
@@ -178,12 +185,12 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
   }, [snapshots]);
 
   const handleApplyAudit = async () => {
-    if (!selectedWarehouseId) return;
+    if (!selectedWarehouseId || !selectedCount) return;
     setIsApplying(true);
     setStatusMessage(null);
 
     try {
-      const sessionId = `AUD-${Date.now()}`;
+      const sessionId = `AUD-${selectedCount.id}`;
       const now = new Date().toISOString();
       const logs: InventoryAuditLog[] = [];
 
@@ -200,7 +207,7 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
           systemQty: row.systemQty,
           countedQty: row.physicalQty,
           diffQty: diff,
-          action: 'COUNT',
+          action: 'APPLY',
           createdAt: now,
           createdBy: currentUser?.id,
           createdByName: currentUser?.name
@@ -225,7 +232,6 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
       await db.save('inventoryAuditLogs' as any, [...storedLogs, ...logs]);
       setAuditLogs(prev => [...prev, ...logs]);
 
-      setAuditCounts({});
       setStatusMessage('Ajustes aplicados y kardex actualizado.');
     } catch (error: any) {
       setStatusMessage(error.message || 'Error aplicando auditoría.');
@@ -370,6 +376,24 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
           </select>
         </div>
         <div className="flex-1">
+          <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Desde</label>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none"
+          />
+        </div>
+        <div className="flex-1">
+          <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Hasta</label>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none"
+          />
+        </div>
+        <div className="flex-1">
           <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Categoría</label>
           <select
             value={selectedCategory}
@@ -383,128 +407,170 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-          <div className="flex items-center gap-3 text-gray-500">
-            <Database size={18} />
-            <span className="text-xs font-bold uppercase">Valor Total Inventario</span>
+      {!selectedCount && (
+        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+          <div className="flex items-center gap-3 mb-4">
+            <ClipboardList size={18} className="text-gray-500" />
+            <h3 className="text-lg font-black text-gray-900">Inventarios Físicos (Rango)</h3>
           </div>
-          <div className="text-2xl font-black text-gray-900 mt-2">${kpi.totalValue.toFixed(2)}</div>
-        </div>
-        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-          <div className="flex items-center gap-3 text-gray-500">
-            <CheckCircle2 size={18} />
-            <span className="text-xs font-bold uppercase">ERI (Exactitud)</span>
-          </div>
-          <div className="text-2xl font-black text-emerald-600 mt-2">{kpi.eri.toFixed(2)}%</div>
-        </div>
-        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-          <div className="flex items-center gap-3 text-gray-500">
-            <AlertTriangle size={18} />
-            <span className="text-xs font-bold uppercase">Discrepancia Monetaria</span>
-          </div>
-          <div className="mt-2 text-sm font-bold">
-            <span className="text-red-600">- ${kpi.shortage.toFixed(2)}</span>
-            <span className="text-gray-300 mx-2">|</span>
-            <span className="text-blue-600">+ ${kpi.surplus.toFixed(2)}</span>
-          </div>
-        </div>
-        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-          <div className="flex items-center gap-3 text-gray-500">
-            <ClipboardList size={18} />
-            <span className="text-xs font-bold uppercase">Artículos en Limbo</span>
-          </div>
-          <div className="text-2xl font-black text-gray-900 mt-2">{kpi.limbo}</div>
-        </div>
-      </div>
-
-      {statusMessage && (
-        <div className="bg-amber-50 border border-amber-200 text-amber-700 text-sm font-bold rounded-xl p-3">
-          {statusMessage}
+          {filteredCounts.length === 0 ? (
+            <div className="text-sm text-gray-400">No hay inventarios físicos en este rango.</div>
+          ) : (
+            <div className="space-y-3">
+              {filteredCounts.map(c => {
+                const diffCount = c.items.filter(i => i.difference !== 0).length;
+                return (
+                  <div key={c.id} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 p-4 bg-gray-50 rounded-xl border border-gray-200">
+                    <div>
+                      <p className="text-sm font-bold text-gray-800">{new Date(c.createdAt).toLocaleString()}</p>
+                      <p className="text-xs text-gray-400">{c.items.length} items · {diffCount} con diferencias</p>
+                    </div>
+                    <button
+                      onClick={() => setSelectedCountId(c.id)}
+                      className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs"
+                    >
+                      Auditar
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
-      <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-          <div>
-            <h3 className="text-lg font-black text-gray-900">Auditoría de Inventario</h3>
-            <p className="text-xs text-gray-400 font-bold uppercase">Conteos físicos y ajustes automáticos</p>
-          </div>
-          <div className="flex items-center gap-2">
+      {selectedCount && (
+        <>
+          <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-xs text-gray-400 uppercase font-bold">Inventario seleccionado</p>
+              <p className="text-sm font-bold text-gray-800">{new Date(selectedCount.createdAt).toLocaleString()}</p>
+            </div>
             <button
-              onClick={() => setAuditFilter('ALL')}
-              className={`px-3 py-2 text-xs font-bold rounded-xl border ${auditFilter === 'ALL' ? 'bg-gray-900 text-white border-gray-900' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
+              onClick={() => setSelectedCountId(null)}
+              className="px-4 py-2 bg-gray-100 text-gray-600 rounded-xl font-bold"
             >
-              Todos
-            </button>
-            <button
-              onClick={() => setAuditFilter('DIFF')}
-              className={`px-3 py-2 text-xs font-bold rounded-xl border ${auditFilter === 'DIFF' ? 'bg-amber-500 text-white border-amber-500' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
-            >
-              Solo con diferencias
-            </button>
-            <button
-              onClick={() => setAuditFilter('UNCNT')}
-              className={`px-3 py-2 text-xs font-bold rounded-xl border ${auditFilter === 'UNCNT' ? 'bg-blue-500 text-white border-blue-500' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
-            >
-              No contados
+              Volver a lista
             </button>
           </div>
-        </div>
 
-        <div className="overflow-auto max-h-[480px]">
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-white">
-              <tr className="text-left text-xs text-gray-400 uppercase">
-                <th className="py-2">Artículo</th>
-                <th className="py-2 text-right">Stock Sistema</th>
-                <th className="py-2 text-right">Stock Físico</th>
-                <th className="py-2 text-right">Diferencia</th>
-                <th className="py-2 text-center">Estado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredAuditRows.map(row => {
-                const status = row.physicalQty === undefined
-                  ? 'NO CONTADO'
-                  : (row.diffQty || 0) === 0 ? 'OK' : 'AJUSTE';
-                return (
-                  <tr key={row.productId} className="border-b border-gray-100">
-                    <td className="py-2 font-bold text-gray-800">{row.productName}</td>
-                    <td className="py-2 text-right font-mono text-gray-600">{row.systemQty}</td>
-                    <td className="py-2 text-right">
-                      <input
-                        type="number"
-                        value={auditCounts[row.productId] ?? ''}
-                        onChange={(e) => setAuditCounts(prev => ({ ...prev, [row.productId]: e.target.value }))}
-                        className="w-28 p-2 bg-gray-50 border border-gray-200 rounded-xl text-right font-bold"
-                      />
-                    </td>
-                    <td className={`py-2 text-right font-bold ${row.diffQty === undefined ? 'text-gray-300' : (row.diffQty || 0) < 0 ? 'text-red-600' : 'text-blue-600'}`}>
-                      {row.diffQty === undefined ? '--' : row.diffQty}
-                    </td>
-                    <td className="py-2 text-center">
-                      <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${status === 'OK' ? 'bg-emerald-100 text-emerald-700' : status === 'AJUSTE' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'}`}>
-                        {status}
-                      </span>
-                    </td>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+              <div className="flex items-center gap-3 text-gray-500">
+                <Database size={18} />
+                <span className="text-xs font-bold uppercase">Valor Total Inventario</span>
+              </div>
+              <div className="text-2xl font-black text-gray-900 mt-2">${kpi.totalValue.toFixed(2)}</div>
+            </div>
+            <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+              <div className="flex items-center gap-3 text-gray-500">
+                <CheckCircle2 size={18} />
+                <span className="text-xs font-bold uppercase">ERI (Exactitud)</span>
+              </div>
+              <div className="text-2xl font-black text-emerald-600 mt-2">{kpi.eri.toFixed(2)}%</div>
+            </div>
+            <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+              <div className="flex items-center gap-3 text-gray-500">
+                <AlertTriangle size={18} />
+                <span className="text-xs font-bold uppercase">Discrepancia Monetaria</span>
+              </div>
+              <div className="mt-2 text-sm font-bold">
+                <span className="text-red-600">- ${kpi.shortage.toFixed(2)}</span>
+                <span className="text-gray-300 mx-2">|</span>
+                <span className="text-blue-600">+ ${kpi.surplus.toFixed(2)}</span>
+              </div>
+            </div>
+            <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+              <div className="flex items-center gap-3 text-gray-500">
+                <ClipboardList size={18} />
+                <span className="text-xs font-bold uppercase">Artículos en Limbo</span>
+              </div>
+              <div className="text-2xl font-black text-gray-900 mt-2">{kpi.limbo}</div>
+            </div>
+          </div>
+
+          {statusMessage && (
+            <div className="bg-amber-50 border border-amber-200 text-amber-700 text-sm font-bold rounded-xl p-3">
+              {statusMessage}
+            </div>
+          )}
+
+          <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-lg font-black text-gray-900">Auditoría de Inventario</h3>
+                <p className="text-xs text-gray-400 font-bold uppercase">Conteo físico vs snapshot del momento</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setAuditFilter('ALL')}
+                  className={`px-3 py-2 text-xs font-bold rounded-xl border ${auditFilter === 'ALL' ? 'bg-gray-900 text-white border-gray-900' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
+                >
+                  Todos
+                </button>
+                <button
+                  onClick={() => setAuditFilter('DIFF')}
+                  className={`px-3 py-2 text-xs font-bold rounded-xl border ${auditFilter === 'DIFF' ? 'bg-amber-500 text-white border-amber-500' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
+                >
+                  Solo con diferencias
+                </button>
+                <button
+                  onClick={() => setAuditFilter('UNCNT')}
+                  className={`px-3 py-2 text-xs font-bold rounded-xl border ${auditFilter === 'UNCNT' ? 'bg-blue-500 text-white border-blue-500' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
+                >
+                  No contados
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-auto max-h-[480px]">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-white">
+                  <tr className="text-left text-xs text-gray-400 uppercase">
+                    <th className="py-2">Artículo</th>
+                    <th className="py-2 text-right">Stock Sistema</th>
+                    <th className="py-2 text-right">Stock Físico</th>
+                    <th className="py-2 text-right">Diferencia</th>
+                    <th className="py-2 text-center">Estado</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody>
+                  {filteredAuditRows.map(row => {
+                    const status = row.physicalQty === undefined
+                      ? 'NO CONTADO'
+                      : (row.diffQty || 0) === 0 ? 'OK' : 'AJUSTE';
+                    return (
+                      <tr key={row.productId} className="border-b border-gray-100">
+                        <td className="py-2 font-bold text-gray-800">{row.productName}</td>
+                        <td className="py-2 text-right font-mono text-gray-600">{row.systemQty}</td>
+                        <td className="py-2 text-right font-mono text-gray-800">{row.physicalQty ?? '--'}</td>
+                        <td className={`py-2 text-right font-bold ${row.diffQty === undefined ? 'text-gray-300' : (row.diffQty || 0) < 0 ? 'text-red-600' : 'text-blue-600'}`}>
+                          {row.diffQty === undefined ? '--' : row.diffQty}
+                        </td>
+                        <td className="py-2 text-center">
+                          <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${status === 'OK' ? 'bg-emerald-100 text-emerald-700' : status === 'AJUSTE' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'}`}>
+                            {status}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
 
-        <div className="flex justify-end mt-4">
-          <button
-            onClick={handleApplyAudit}
-            disabled={isApplying || !selectedWarehouseId}
-            className="px-5 py-3 bg-emerald-600 text-white rounded-xl font-bold shadow-sm hover:bg-emerald-700 disabled:opacity-50"
-          >
-            {isApplying ? 'Aplicando...' : 'Aplicar Ajustes de Auditoría'}
-          </button>
-        </div>
-      </div>
+            <div className="flex justify-end mt-4">
+              <button
+                onClick={handleApplyAudit}
+                disabled={isApplying || !selectedWarehouseId}
+                className="px-5 py-3 bg-emerald-600 text-white rounded-xl font-bold shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {isApplying ? 'Aplicando...' : 'Aplicar Ajustes de Auditoría'}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
         <div className="flex items-center justify-between gap-4">

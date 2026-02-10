@@ -109,6 +109,7 @@ const SEED_DATA = {
   inventoryTracking: [] as InventoryTracking[],
   inventorySnapshots: [] as any[],
   inventoryAuditLogs: [] as any[],
+  inventoryCounts: [] as any[],
   rooms: [] as any[],
   tables: [] as any[]
 };

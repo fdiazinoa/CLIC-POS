@@ -113,6 +113,25 @@ export interface LocalFiscalBuffer {
 // --- KARDEX TYPES ---
 export type LedgerConcept = 'COMPRA' | 'VENTA' | 'AJUSTE_ENTRADA' | 'AJUSTE_SALIDA' | 'TRASPASO_ENTRADA' | 'TRASPASO_SALIDA' | 'INICIAL' | 'DEVOLUCION';
 
+export interface InventoryCountItem {
+  productId: string;
+  productName: string;
+  category?: string;
+  systemQty: number;
+  countedQty: number;
+  difference: number;
+}
+
+export interface InventoryCountSession {
+  id: string;
+  warehouseId: string;
+  warehouseName?: string;
+  createdAt: string;
+  createdBy?: string;
+  createdByName?: string;
+  items: InventoryCountItem[];
+}
+
 export interface InventorySnapshotItem {
   productId: string;
   productName: string;
