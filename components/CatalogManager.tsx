@@ -403,8 +403,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          }
 
          // Reload from DB to get the correct stock values after movement recording (which updates products again)
-         const freshData = await db.init();
-         onUpdateProducts(freshData.products || products);
+         const freshProducts = await db.get('products') as Product[];
+         onUpdateProducts(freshProducts || products);
       } else {
          // New product with initial stock
          for (const [whId, qty] of Object.entries(savedProduct.stockBalances || {})) {
@@ -422,8 +422,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          }
 
          // For new products, reload to get accurate stock after movement recording
-         const freshData = await db.init();
-         onUpdateProducts(freshData.products || products);
+         const freshProducts = await db.get('products') as Product[];
+         onUpdateProducts(freshProducts || products);
       }
       setEditingProduct(null);
 

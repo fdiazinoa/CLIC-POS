@@ -22,27 +22,27 @@ const PriceCheckerLayout: React.FC<PriceCheckerLayoutProps> = ({
     onEscapeHatch
 }) => {
     const [pressTimer, setPressTimer] = useState<number | null>(null);
+    const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
-    // Force fullscreen
+    // Monitor fullscreen state
     useEffect(() => {
-        const enterFullscreen = async () => {
-            try {
-                if (document.documentElement.requestFullscreen) {
-                    await document.documentElement.requestFullscreen();
-                }
-            } catch (err) {
-                console.warn('⚠️ Could not enter fullscreen:', err);
-            }
+        const handleFullscreenChange = () => {
+            setIsFullscreen(!!document.fullscreenElement);
         };
 
-        enterFullscreen();
-
-        return () => {
-            if (document.fullscreenElement) {
-                document.exitFullscreen().catch(() => { });
-            }
-        };
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
     }, []);
+
+    const enterFullscreen = async () => {
+        try {
+            if (document.documentElement.requestFullscreen) {
+                await document.documentElement.requestFullscreen();
+            }
+        } catch (err) {
+            console.warn('⚠️ Could not enter fullscreen:', err);
+        }
+    };
 
     // Escape hatch
     const handleLogoPress = () => {
@@ -58,6 +58,30 @@ const PriceCheckerLayout: React.FC<PriceCheckerLayoutProps> = ({
             setPressTimer(null);
         }
     };
+
+    if (!isFullscreen) {
+        return (
+            <div
+                onClick={enterFullscreen}
+                style={{
+                    width: '100vw',
+                    height: '100vh',
+                    backgroundColor: '#000',
+                    color: '#fff',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    zIndex: 99999
+                }}
+            >
+                <div style={{ fontSize: '64px', marginBottom: '20px' }}>👆</div>
+                <div style={{ fontSize: '32px', fontWeight: 'bold' }}>Toca para Iniciar</div>
+                <div style={{ fontSize: '18px', marginTop: '10px', opacity: 0.7 }}>Modo Pantalla Completa Requerido</div>
+            </div>
+        );
+    }
 
     return (
         <div

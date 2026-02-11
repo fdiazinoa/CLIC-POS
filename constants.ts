@@ -1,5 +1,5 @@
 
-import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff, TaxDefinition } from './types';
+import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff, TaxDefinition, DeviceRole, AuthLevel } from './types';
 
 export const DEFAULT_DOCUMENT_SERIES: DocumentSeries[] = [
   { id: 'TICKET', documentType: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar para todas las ventas.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
@@ -103,6 +103,19 @@ export const DEFAULT_TERMINAL_CONFIG = {
   hardware: {
     cashDrawerTrigger: 'PRINTER' as const,
     printerAssignments: {},
+    customerDisplay: {
+      isEnabled: true,
+      welcomeMessage: '¡Bienvenidos a CLIC POS!',
+      showItemImages: true,
+      showQrPayment: true,
+      layout: 'SPLIT' as const,
+      connectionType: 'VIRTUAL' as const,
+      ads: [
+        { id: 'ad1', url: 'https://images.unsplash.com/photo-1550989460-0adf9ea622e2?q=80&w=800&auto=format&fit=crop', active: true },
+        { id: 'ad2', url: 'https://images.unsplash.com/photo-1571781926291-2805903e13d4?q=80&w=800&auto=format&fit=crop', active: true },
+        { id: 'ad3', url: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=800&auto=format&fit=crop', active: true }
+      ]
+    },
     scales: []
   },
   operational: {
@@ -122,6 +135,19 @@ export const DEFAULT_TERMINAL_CONFIG = {
   },
   catalog: {
     allowedCategories: []
+  },
+  deviceRole: {
+    role: DeviceRole.STANDARD_POS,
+    authLevel: AuthLevel.USER_REQUIRED,
+    allowedModules: ['SALES', 'CUSTOMERS', 'INVENTORY', 'REPORTS'],
+    uiSettings: {
+      fullscreenForced: false,
+      escapeHatch: {
+        enabled: true,
+        gesture: 'logo-press-5s',
+        requirePin: true
+      }
+    }
   }
 };
 

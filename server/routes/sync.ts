@@ -1,5 +1,7 @@
 import express from 'express';
 import { db, getCollection, getSetting, saveSetting } from '../db.js';
+import fs from 'fs';
+import path from 'path';
 
 const router = express.Router();
 
@@ -276,11 +278,11 @@ router.get('/delta/:collection', async (req, res) => {
         const deltaItems = rows.map(r => {
             if (r.op === 'DELETE') {
                 let payload: any = {};
-                try { payload = r.payload ? JSON.parse(r.payload) : {}; } catch {}
+                try { payload = r.payload ? JSON.parse(r.payload) : {}; } catch { }
                 return { id: r.itemId, deletedAt: payload.deletedAt || new Date().toISOString(), _op: 'DELETE' };
             }
             let payload: any = {};
-            try { payload = r.payload ? JSON.parse(r.payload) : {}; } catch {}
+            try { payload = r.payload ? JSON.parse(r.payload) : {}; } catch { }
             return { ...payload, _op: r.op || 'UPSERT' };
         });
 
@@ -329,8 +331,13 @@ router.post('/collections/:collection/push', async (req, res) => {
                 const columns = db.prepare(`PRAGMA table_info(${resolvedCollection})`).all() as any[];
                 const hasDataColumn = columns.some(c => c.name === 'data');
 
-                if (pushMode === 'FULL_REPLACE') {
-                    // Full replace (force push)
+                // FORCE UPSERT for products to avoid FK violations from DELETE
+                if (collection === 'products' && pushMode === 'FULL_REPLACE') {
+                    console.warn('[Sync] Forcing UPSERT mode for products to preserve Foreign Keys');
+                }
+
+                if (pushMode === 'FULL_REPLACE' && collection !== 'products') {
+                    // Full replace (force push) - Only for non-critical collections
                     db.prepare(`DELETE FROM ${resolvedCollection}`).run();
 
                     if (hasDataColumn) {
@@ -339,7 +346,8 @@ router.post('/collections/:collection/push', async (req, res) => {
                     } else {
                         const colNames = columns.map(c => c.name);
                         const placeholders = colNames.map(() => '?').join(',');
-                        const stmt = db.prepare(`INSERT OR REPLACE INTO ${resolvedCollection} (${colNames.join(',')}) VALUES (${placeholders})`);
+                        const updateSet = colNames.map(c => `${c}=excluded.${c}`).join(',');
+                        const stmt = db.prepare(`INSERT INTO ${resolvedCollection} (${colNames.join(',')}) VALUES (${placeholders}) ON CONFLICT(id) DO UPDATE SET ${updateSet}`);
                         const fieldsToStringify = jsonFields[collection] || [];
 
                         for (const item of items) {
@@ -368,11 +376,12 @@ router.post('/collections/:collection/push', async (req, res) => {
                     let fieldsToStringify: string[] = [];
 
                     if (hasDataColumn) {
-                        dataStmt = db.prepare(`INSERT OR REPLACE INTO ${resolvedCollection} (id, data) VALUES (?, ?)`);
+                        dataStmt = db.prepare(`INSERT INTO ${resolvedCollection} (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`);
                     } else {
                         colNames = columns.map(c => c.name);
                         const placeholders = colNames.map(() => '?').join(',');
-                        structuredStmt = db.prepare(`INSERT OR REPLACE INTO ${resolvedCollection} (${colNames.join(',')}) VALUES (${placeholders})`);
+                        const updateSet = colNames.map(c => `${c}=excluded.${c}`).join(',');
+                        structuredStmt = db.prepare(`INSERT INTO ${resolvedCollection} (${colNames.join(',')}) VALUES (${placeholders}) ON CONFLICT(id) DO UPDATE SET ${updateSet}`);
                         fieldsToStringify = jsonFields[collection] || [];
                     }
 
@@ -452,6 +461,16 @@ router.post('/collections/:collection/push', async (req, res) => {
         console.error(`❌ Error pushing to ${collection}:`, error);
         console.error(`❌ Error stack:`, error.stack);
         console.error(`❌ Sample item causing error:`, items && items[0]);
+
+        // Emergency log to file for debugging
+        try {
+            const logPath = path.join(process.cwd(), 'server_error.log');
+            const logEntry = `\n[${new Date().toISOString()}] Error pushing to ${collection}:\n${error.message}\n${error.stack}\nSample Item: ${JSON.stringify(items && items[0])}\n`;
+            fs.appendFileSync(logPath, logEntry);
+        } catch (e) {
+            console.error('Failed to write to error log', e);
+        }
+
         res.status(500).json({ success: false, message: error.message, details: error.stack });
     }
 });

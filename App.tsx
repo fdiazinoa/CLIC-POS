@@ -191,11 +191,45 @@ const AppContent: React.FC = () => {
     setCurrentView(view);
   };
 
+  // --- EMERGENCY RESCUE MECHANISM ---
+  useEffect(() => {
+    const handleEmergencyReset = async (e: KeyboardEvent) => {
+      // Shortcut: Ctrl + Shift + Alt + U (Unbind)
+      if (e.ctrlKey && e.shiftKey && e.altKey && e.code === 'KeyU') {
+        if (confirm('🚨 EMERGENCY RESET: This will unbind this terminal and clear local database config. Continue?')) {
+          try {
+            console.warn("🧺 EMERGENCY UNBIND TRIGGERED");
+            localStorage.removeItem('pos_device_id');
+            localStorage.removeItem('pos_master_ip');
+            localStorage.removeItem('CLIC_POS_MASTER_URL');
+            localStorage.removeItem('pos_sync_status');
+
+            // Wipe Local DB Config to avoid stale Slave/Master role mismatch
+            await db.deleteDocument('config', 'config' as any);
+
+            alert("Terminal Desvinculada. La aplicación se reiniciará.");
+            window.location.reload();
+          } catch (err) {
+            console.error("Failed to perform emergency reset:", err);
+            alert("Error doing reset. Please clear browser cache manually.");
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleEmergencyReset);
+    return () => window.removeEventListener('keydown', handleEmergencyReset);
+  }, []);
+
   // --- INITIAL DATA LOAD ---
   useEffect(() => {
     const loadData = async () => {
+      console.log('🚀 loadData started');
       try {
+        console.log('⏳ Calling db.init()...');
         const data = await db.init();
+        console.log('✅ db.init() returned:', data ? Object.keys(data) : 'null');
+
         let currentConfig = data.config;
         const masterIp = localStorage.getItem('pos_master_ip');
 
@@ -384,13 +418,22 @@ const AppContent: React.FC = () => {
             // This will reconstruct them from transaction history
             await ZReportRecoveryService.recoverOrphanedReports();
 
+            console.log('🎉 Setting isDataLoaded = true');
+            setIsDataLoaded(true);
+          } else {
+            console.warn('⚠️ No paired terminal found. Waiting for pairing...');
+            // Still load to allow access to pairing screen
             setIsDataLoaded(true);
           }
+        } else {
+          // First run or no data
+          console.log('INFO: No data found, setting isDataLoaded = true for setup');
+          setIsDataLoaded(true);
         }
       } catch (error: any) {
         console.error('CRITICAL: Failed to load initial data:', error);
         setInitialConnError(error.message || 'Error inicializando base de datos local');
-        // Do NOT set isDataLoaded(true) here to prevent POSInterface from rendering and crashing
+        // We now handle the error display in the loading screen, so we can keep isDataLoaded = false
       }
     };
     loadData();
@@ -1927,6 +1970,21 @@ const AppContent: React.FC = () => {
   };
 
   if (!isDataLoaded) {
+    if (initialConnError) {
+      return (
+        <div className="h-screen w-screen flex flex-col items-center justify-center bg-red-50 text-red-900 p-8">
+          <div className="text-6xl mb-4">⚠️</div>
+          <h1 className="text-2xl font-bold mb-2">Error de Inicialización</h1>
+          <p className="text-lg bg-white p-4 rounded shadow border border-red-200">{initialConnError}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-6 px-6 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+          >
+            Reintentar
+          </button>
+        </div>
+      );
+    }
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-slate-50 text-slate-900">
         <div className="flex flex-col items-center gap-4">

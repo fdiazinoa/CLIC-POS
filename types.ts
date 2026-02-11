@@ -410,6 +410,7 @@ export interface TerminalConfig {
 }
 
 export interface WalletConfig {
+
   apple: {
     teamId: string;
     passTypeIdentifier: string;

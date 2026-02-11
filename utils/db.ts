@@ -14,6 +14,7 @@ import { dbAdapter } from '../services/db';
 import { permissionService } from '../services/sync/PermissionService';
 
 const DB_KEY = 'clic_pos_db_v1';
+let initPromise: Promise<any> | null = null;
 
 // --- SEED DATA ---
 const DEFAULT_WAREHOUSES: Warehouse[] = [
@@ -116,62 +117,115 @@ const SEED_DATA = {
 
 export const db = {
   init: async (terminalId?: string) => {
-    await dbAdapter.connect();
+    if (initPromise) {
+      console.log('♻️ Reusing existing DB Init');
+      return initPromise;
+    }
 
-    // Check if seeded
-    const existingConfig = await dbAdapter.getCollection('config');
-    const isSlave = permissionService.isSlaveTerminal();
+    const _initRunner = async () => {
+      console.log('🏁 _initRunner started');
+      try {
+        console.log('🔌 Connecting to DB Adapter...');
+        await dbAdapter.connect();
+        console.log('✅ DB Adapter connected');
 
-    // Migration Logic: Ensure all collections exist even if config exists
-    // SKIP SEEDING ON SLAVES: Slaves must wait for Master snapshot
-    if (!isSlave) {
-      for (const [key, value] of Object.entries(SEED_DATA)) {
-        try {
-          const existingCollection = await dbAdapter.getCollection(key);
+        // Check if seeded
+        console.log('🔍 Checking config collection...');
+        const existingConfig = await dbAdapter.getCollection('config');
+        console.log('✅ Config check complete, exists:', !!existingConfig);
+        const isSlave = permissionService.isSlaveTerminal();
+        console.log('🤖 isSlave:', isSlave);
 
-          // If collection is missing or empty (and it's not the config itself which we checked), seed it
-          if (!existingCollection || (Array.isArray(existingCollection) && existingCollection.length === 0 && key !== 'config')) {
-            console.log(`🌱 Seeding missing collection: ${key}`);
-            if (key === 'config') {
-              if (!existingConfig || Object.keys(existingConfig).length === 0) {
-                await dbAdapter.saveCollection(key, value as any);
-              }
-            } else {
-              await dbAdapter.saveCollection(key, value as any[]);
+        // Migration Logic: Ensure all collections exist even if config exists
+        // SKIP SEEDING ON SLAVES: Slaves must wait for Master snapshot
+        if (!isSlave) {
+          // --- CONFIG PATCHING (Always run if config exists) ---
+          if (existingConfig && (Array.isArray(existingConfig) ? existingConfig.length > 0 : Object.keys(existingConfig).length > 0)) {
+            const currentConfig = (Array.isArray(existingConfig) ? existingConfig[0] : existingConfig) as any as BusinessConfig;
+            let wasPatched = false;
+            const seedConfig = SEED_DATA.config;
+
+            if (currentConfig.terminals) {
+              currentConfig.terminals.forEach(t => {
+                // Patch 0: Special fix for t1 role (Price Checker -> STANDARD_POS)
+                if (t.id === 't1' && (t.config.deviceRole?.role !== 'STANDARD_POS')) {
+                  console.warn('🩹 Patching terminal t1: Force role to STANDARD_POS');
+                  const seedVal = seedConfig.terminals.find(st => st.id === 't1');
+                  if (seedVal?.config.deviceRole) {
+                    t.config.deviceRole = JSON.parse(JSON.stringify(seedVal.config.deviceRole));
+                    wasPatched = true;
+                  }
+                }
+
+                // Patch 1: Missing Customer Display
+                if (!t.config.hardware.customerDisplay) {
+                  const seedVal = seedConfig.terminals.find(st => st.id === t.id) || seedConfig.terminals[0];
+                  if (seedVal?.config.hardware.customerDisplay) {
+                    t.config.hardware.customerDisplay = JSON.parse(JSON.stringify(seedVal.config.hardware.customerDisplay));
+                    wasPatched = true;
+                  }
+                }
+              });
+            }
+
+            if (wasPatched) {
+              console.log('🩹 Config patched with new defaults');
+              await dbAdapter.saveCollection('config', currentConfig as any);
             }
           }
-        } catch (error) {
-          console.warn(`⚠️ Failed to seed collection ${key}:`, error);
-          // Continue to next collection
+
+          // --- SEEDING MISSING COLLECTIONS ---
+          for (const [key, value] of Object.entries(SEED_DATA)) {
+            try {
+              const existingCollection = await dbAdapter.getCollection(key);
+
+              // If collection is missing or empty (except config which we already handled), seed it
+              if (!existingCollection || (Array.isArray(existingCollection) && existingCollection.length === 0 && key !== 'config')) {
+                console.log(`🌱 Seeding missing collection: ${key}`);
+                await dbAdapter.saveCollection(key, value as any);
+              }
+            } catch (error) {
+              console.warn(`⚠️ Failed to seed collection ${key}:`, error);
+            }
+          }
+        } else {
+          console.log('ℹ️ Slave terminal detected: Skipping auto-seeding. Waiting for Master sync.');
         }
+
+        if (!existingConfig || Object.keys(existingConfig).length === 0) {
+          return isSlave ? {} : SEED_DATA;
+        }
+
+        // Load all data to return consistent structure (Legacy support)
+        // Use Promise.allSettled to ensure one failure doesn't break everything
+        console.log('📦 Loading all collections...');
+        const keys = Object.keys(SEED_DATA);
+        const results = await Promise.allSettled(keys.map(key =>
+          dbAdapter.getCollection(key, (terminalId && key === 'rooms') ? { terminal_id: terminalId } : undefined)
+        ));
+        console.log('✅ All collections loaded (settled)');
+
+        const data: any = {};
+        results.forEach((result, index) => {
+          const key = keys[index];
+          if (result.status === 'fulfilled') {
+            data[key] = result.value;
+          } else {
+            console.error(`❌ Failed to load ${key}:`, result.reason);
+            data[key] = []; // Fallback to empty array
+          }
+        });
+
+        console.log('📤 _initRunner returning data');
+        return data;
+      } catch (e) {
+        initPromise = null;
+        throw e;
       }
-    } else {
-      console.log('ℹ️ Slave terminal detected: Skipping auto-seeding. Waiting for Master sync.');
-    }
+    };
 
-    if (!existingConfig || Object.keys(existingConfig).length === 0) {
-      return isSlave ? {} : SEED_DATA;
-    }
-
-    // Load all data to return consistent structure (Legacy support)
-    // Use Promise.allSettled to ensure one failure doesn't break everything
-    const keys = Object.keys(SEED_DATA);
-    const results = await Promise.allSettled(keys.map(key =>
-      dbAdapter.getCollection(key, (terminalId && key === 'rooms') ? { terminal_id: terminalId } : undefined)
-    ));
-
-    const data: any = {};
-    results.forEach((result, index) => {
-      const key = keys[index];
-      if (result.status === 'fulfilled') {
-        data[key] = result.value;
-      } else {
-        console.error(`❌ Failed to load ${key}:`, result.reason);
-        data[key] = []; // Fallback to empty array
-      }
-    });
-
-    return data;
+    initPromise = _initRunner();
+    return initPromise;
   },
 
   reset: async () => {

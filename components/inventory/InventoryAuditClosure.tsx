@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ClipboardList, Database, FileText, Lock } from 'lucide-react';
-import { BusinessConfig, InventoryAuditLog, InventoryCountSession, InventorySnapshot, InventorySnapshotItem, Product, RoleDefinition, User, Warehouse } from '../../types';
+import { BusinessConfig, InventoryAuditLog, InventorySnapshot, InventorySnapshotItem, Product, RoleDefinition, User, Warehouse } from '../../types';
 import { db } from '../../utils/db';
 
 interface InventoryAuditClosureProps {
@@ -35,16 +35,9 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>(warehouses[0]?.id || '');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [auditFilter, setAuditFilter] = useState<AuditFilter>('ALL');
+  const [auditCounts, setAuditCounts] = useState<Record<string, string>>({});
   const [auditLogs, setAuditLogs] = useState<InventoryAuditLog[]>([]);
   const [snapshots, setSnapshots] = useState<InventorySnapshot[]>([]);
-  const [inventoryCounts, setInventoryCounts] = useState<InventoryCountSession[]>([]);
-  const [selectedCountId, setSelectedCountId] = useState<string | null>(null);
-  const [dateFrom, setDateFrom] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 30);
-    return d.toISOString().slice(0, 10);
-  });
-  const [dateTo, setDateTo] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [isApplying, setIsApplying] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [reopenReason, setReopenReason] = useState('');
@@ -64,10 +57,8 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
     const load = async () => {
       const storedLogs = await db.get('inventoryAuditLogs') as InventoryAuditLog[] || [];
       const storedSnapshots = await db.get('inventorySnapshots') as InventorySnapshot[] || [];
-      const storedCounts = await db.get('inventoryCounts') as InventoryCountSession[] || [];
       setAuditLogs(storedLogs);
       setSnapshots(storedSnapshots);
-      setInventoryCounts(storedCounts);
     };
     load();
   }, []);
@@ -100,83 +91,85 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
     loadCosts();
   }, [products, selectedWarehouseId]);
 
-  const filteredCounts = useMemo(() => {
-    if (!selectedWarehouseId) return [];
-    const from = new Date(`${dateFrom}T00:00:00`);
-    const to = new Date(`${dateTo}T23:59:59`);
-    return inventoryCounts.filter(c => {
-      if (c.warehouseId !== selectedWarehouseId) return false;
-      const d = new Date(c.createdAt);
-      return d >= from && d <= to;
-    }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [inventoryCounts, selectedWarehouseId, dateFrom, dateTo]);
-
-  const selectedCount = useMemo(() => {
-    if (!selectedCountId) return null;
-    return inventoryCounts.find(c => c.id === selectedCountId) || null;
-  }, [inventoryCounts, selectedCountId]);
+  const filteredProducts = useMemo(() => {
+    return products.filter(p => {
+      if (selectedCategory !== 'ALL' && p.category !== selectedCategory) return false;
+      if (!selectedWarehouseId) return false;
+      if (p.activeInWarehouses && !p.activeInWarehouses.includes(selectedWarehouseId)) return false;
+      return true;
+    });
+  }, [products, selectedCategory, selectedWarehouseId]);
 
   const auditRows: AuditRow[] = useMemo(() => {
-    if (!selectedCount) return [];
-    return selectedCount.items
-      .filter(i => selectedCategory === 'ALL' || i.category === selectedCategory)
-      .map(i => ({
-        productId: i.productId,
-        productName: i.productName,
-        category: i.category,
-        systemQty: i.systemQty,
-        physicalQty: i.countedQty,
-        diffQty: i.difference
-      }));
-  }, [selectedCount, selectedCategory]);
+    return filteredProducts.map(p => {
+      const systemQty = p.stockBalances?.[selectedWarehouseId] ?? p.stock ?? 0;
+      const raw = auditCounts[p.id];
+      const physicalQty = raw === undefined || raw === '' ? undefined : Number(raw);
+      const diffQty = physicalQty === undefined ? undefined : physicalQty - systemQty;
+      return {
+        productId: p.id,
+        productName: p.name,
+        category: p.category,
+        systemQty,
+        physicalQty,
+        diffQty
+      };
+    });
+  }, [filteredProducts, auditCounts, selectedWarehouseId]);
 
-  const filteredAuditRows = useMemo(() => {
-    if (auditFilter === 'ALL') return auditRows;
-    if (auditFilter === 'UNCNT') return auditRows.filter(r => r.physicalQty === undefined);
-    return auditRows.filter(r => r.physicalQty !== undefined && (r.diffQty || 0) !== 0);
-  }, [auditRows, auditFilter]);
+  const latestAuditSessionId = useMemo(() => {
+    const forWarehouse = auditLogs.filter(l => l.warehouseId === selectedWarehouseId && l.action === 'COUNT');
+    if (forWarehouse.length === 0) return null;
+    const latest = [...forWarehouse].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    return latest.sessionId;
+  }, [auditLogs, selectedWarehouseId]);
 
   const kpi = useMemo(() => {
     const rows = auditRows;
-    if (rows.length === 0) {
-      return { totalValue: 0, eri: 0, shortage: 0, surplus: 0, limbo: 0 };
-    }
-
     const totalValue = rows.reduce((sum, r) => {
       const cost = avgCostByProduct.get(r.productId) || 0;
       return sum + (r.systemQty * cost);
     }, 0);
 
-    const totalSystem = rows.reduce((sum, r) => sum + r.systemQty, 0);
-    const totalAbsDiff = rows.reduce((sum, r) => sum + Math.abs(r.diffQty || 0), 0);
+    const counted = rows.filter(r => r.physicalQty !== undefined);
+    const totalSystem = counted.reduce((sum, r) => sum + r.systemQty, 0);
+    const totalAbsDiff = counted.reduce((sum, r) => sum + Math.abs(r.diffQty || 0), 0);
     const eri = totalSystem > 0 ? Math.max(0, 1 - (totalAbsDiff / totalSystem)) * 100 : 0;
 
-    const shortage = rows.reduce((sum, r) => {
-      if ((r.diffQty || 0) < 0) return sum + Math.abs(r.diffQty || 0) * (avgCostByProduct.get(r.productId) || 0);
+    const sessionLogs = latestAuditSessionId
+      ? auditLogs.filter(l => l.sessionId === latestAuditSessionId && l.action === 'COUNT')
+      : [];
+
+    const shortage = sessionLogs.reduce((sum, l) => {
+      if ((l.diffQty || 0) < 0) return sum + Math.abs(l.diffQty || 0) * (avgCostByProduct.get(l.productId || '') || 0);
       return sum;
     }, 0);
-    const surplus = rows.reduce((sum, r) => {
-      if ((r.diffQty || 0) > 0) return sum + (r.diffQty || 0) * (avgCostByProduct.get(r.productId) || 0);
+    const surplus = sessionLogs.reduce((sum, l) => {
+      if ((l.diffQty || 0) > 0) return sum + (l.diffQty || 0) * (avgCostByProduct.get(l.productId || '') || 0);
       return sum;
     }, 0);
 
     const cutoff = new Date(Date.now() - LIMBO_DAYS * 24 * 60 * 60 * 1000);
     const latestByProduct = new Map<string, string>();
-    filteredCounts.forEach(c => {
-      c.items.forEach(i => {
-        const prev = latestByProduct.get(i.productId);
-        if (!prev || new Date(c.createdAt) > new Date(prev)) latestByProduct.set(i.productId, c.createdAt);
-      });
+    auditLogs.filter(l => l.action === 'COUNT' && l.warehouseId === selectedWarehouseId).forEach(l => {
+      if (!l.productId) return;
+      const prev = latestByProduct.get(l.productId);
+      if (!prev || new Date(l.createdAt) > new Date(prev)) latestByProduct.set(l.productId, l.createdAt);
     });
-    const limbo = products.filter(p => {
-      if (!selectedWarehouseId) return false;
+    const limbo = filteredProducts.filter(p => {
       const last = latestByProduct.get(p.id);
       if (!last) return true;
       return new Date(last) < cutoff;
     }).length;
 
     return { totalValue, eri, shortage, surplus, limbo };
-  }, [auditRows, avgCostByProduct, filteredCounts, products, selectedWarehouseId]);
+  }, [auditRows, avgCostByProduct, auditLogs, latestAuditSessionId, filteredProducts, selectedWarehouseId]);
+
+  const filteredAuditRows = useMemo(() => {
+    if (auditFilter === 'ALL') return auditRows;
+    if (auditFilter === 'UNCNT') return auditRows.filter(r => r.physicalQty === undefined);
+    return auditRows.filter(r => r.physicalQty !== undefined && (r.diffQty || 0) !== 0);
+  }, [auditRows, auditFilter]);
 
   const lastClosed = useMemo(() => {
     const closed = snapshots.filter(s => s.status === 'CLOSED');
@@ -185,12 +178,12 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
   }, [snapshots]);
 
   const handleApplyAudit = async () => {
-    if (!selectedWarehouseId || !selectedCount) return;
+    if (!selectedWarehouseId) return;
     setIsApplying(true);
     setStatusMessage(null);
 
     try {
-      const sessionId = `AUD-${selectedCount.id}`;
+      const sessionId = `AUD-${Date.now()}`;
       const now = new Date().toISOString();
       const logs: InventoryAuditLog[] = [];
 
@@ -207,7 +200,7 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
           systemQty: row.systemQty,
           countedQty: row.physicalQty,
           diffQty: diff,
-          action: 'APPLY',
+          action: 'COUNT',
           createdAt: now,
           createdBy: currentUser?.id,
           createdByName: currentUser?.name
@@ -232,6 +225,7 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
       await db.save('inventoryAuditLogs' as any, [...storedLogs, ...logs]);
       setAuditLogs(prev => [...prev, ...logs]);
 
+      setAuditCounts({});
       setStatusMessage('Ajustes aplicados y kardex actualizado.');
     } catch (error: any) {
       setStatusMessage(error.message || 'Error aplicando auditoría.');
@@ -346,6 +340,7 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
     setStatusMessage('Periodo reabierto. Se permite registrar movimientos.');
   };
 
+
   const exportSnapshot = (snapshot: InventorySnapshot) => {
     const headers = ['productId', 'productName', 'category', 'warehouseId', 'qty', 'avgCost', 'value'];
     const rows = snapshot.items.map(i => [i.productId, i.productName, i.category || '', i.warehouseId, i.qty, i.avgCost, i.value]);
@@ -360,304 +355,249 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
   };
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col md:flex-row gap-4 items-center">
-        <div className="flex-1">
-          <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Almacén</label>
-          <select
-            value={selectedWarehouseId}
-            onChange={(e) => setSelectedWarehouseId(e.target.value)}
-            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none"
-          >
-            <option value="">-- Seleccionar --</option>
-            {warehouses.map(w => (
-              <option key={w.id} value={w.id}>{w.name}</option>
-            ))}
-          </select>
+    <div className="flex flex-col h-[calc(100vh-100px)] gap-4 pb-4">
+      {/* 1. Header & Controls - Fixed Height */}
+      <div className="flex-none flex flex-col gap-4">
+        {/* Selectors */}
+        <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col md:flex-row gap-4 items-center">
+          <div className="flex-1 w-full">
+            <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Almacén</label>
+            <select
+              value={selectedWarehouseId}
+              onChange={(e) => setSelectedWarehouseId(e.target.value)}
+              className="w-full p-2 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none text-sm"
+            >
+              <option value="">-- Seleccionar --</option>
+              {warehouses.map(w => (
+                <option key={w.id} value={w.id}>{w.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex-1 w-full">
+            <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Categoría</label>
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="w-full p-2 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none text-sm"
+            >
+              <option value="ALL">Todas</option>
+              {Array.from(new Set(products.map(p => p.category).filter(Boolean)))
+                .map(cat => <option key={cat} value={cat as string}>{cat}</option>)}
+            </select>
+          </div>
         </div>
-        <div className="flex-1">
-          <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Desde</label>
-          <input
-            type="date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none"
-          />
-        </div>
-        <div className="flex-1">
-          <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Hasta</label>
-          <input
-            type="date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none"
-          />
-        </div>
-        <div className="flex-1">
-          <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Categoría</label>
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none"
-          >
-            <option value="ALL">Todas</option>
-            {Array.from(new Set(products.map(p => p.category).filter(Boolean)))
-              .map(cat => <option key={cat} value={cat as string}>{cat}</option>)}
-          </select>
+
+        {/* KPIs */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+            <div className="flex items-center gap-2 text-gray-500 mb-1">
+              <Database size={14} />
+              <span className="text-[10px] font-bold uppercase truncate">Valor Total</span>
+            </div>
+            <div className="text-lg font-black text-gray-900">${kpi.totalValue.toFixed(2)}</div>
+          </div>
+          <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+            <div className="flex items-center gap-2 text-gray-500 mb-1">
+              <CheckCircle2 size={14} />
+              <span className="text-[10px] font-bold uppercase truncate">ERI (Exactitud)</span>
+            </div>
+            <div className="text-lg font-black text-emerald-600">{kpi.eri.toFixed(2)}%</div>
+          </div>
+          <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+            <div className="flex items-center gap-2 text-gray-500 mb-1">
+              <AlertTriangle size={14} />
+              <span className="text-[10px] font-bold uppercase truncate">Discrepancia</span>
+            </div>
+            <div className="text-sm font-bold truncate">
+              <span className="text-red-600">-${kpi.shortage.toFixed(2)}</span>
+              <span className="text-gray-300 mx-1">|</span>
+              <span className="text-blue-600">+${kpi.surplus.toFixed(2)}</span>
+            </div>
+          </div>
+          <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+            <div className="flex items-center gap-2 text-gray-500 mb-1">
+              <ClipboardList size={14} />
+              <span className="text-[10px] font-bold uppercase truncate">En Limbo</span>
+            </div>
+            <div className="text-lg font-black text-gray-900">{kpi.limbo}</div>
+          </div>
         </div>
       </div>
 
-      {!selectedCount && (
-        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
-          <div className="flex items-center gap-3 mb-4">
-            <ClipboardList size={18} className="text-gray-500" />
-            <h3 className="text-lg font-black text-gray-900">Inventarios Físicos (Rango)</h3>
-          </div>
-          {filteredCounts.length === 0 ? (
-            <div className="text-sm text-gray-400">No hay inventarios físicos en este rango.</div>
-          ) : (
-            <div className="space-y-3">
-              {filteredCounts.map(c => {
-                const diffCount = c.items.filter(i => i.difference !== 0).length;
-                return (
-                  <div key={c.id} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 p-4 bg-gray-50 rounded-xl border border-gray-200">
-                    <div>
-                      <p className="text-sm font-bold text-gray-800">{new Date(c.createdAt).toLocaleString()}</p>
-                      <p className="text-xs text-gray-400">{c.items.length} items · {diffCount} con diferencias</p>
-                    </div>
-                    <button
-                      onClick={() => setSelectedCountId(c.id)}
-                      className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs"
-                    >
-                      Auditar
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+      {statusMessage && (
+        <div className="flex-none bg-amber-50 border border-amber-200 text-amber-700 text-xs font-bold rounded-xl p-2 text-center animate-in fade-in slide-in-from-top-2">
+          {statusMessage}
         </div>
       )}
 
-      {selectedCount && (
-        <>
-          <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-xs text-gray-400 uppercase font-bold">Inventario seleccionado</p>
-              <p className="text-sm font-bold text-gray-800">{new Date(selectedCount.createdAt).toLocaleString()}</p>
-            </div>
+      {/* 2. Audit Table Area - Flex Grow & Scrollable */}
+      <div className="flex-1 min-h-0 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col overflow-hidden">
+        {/* Table Header Controls */}
+        <div className="flex-none p-4 bg-white border-b border-gray-100 flex items-center justify-between gap-2">
+          <div>
+            <h3 className="text-base font-black text-gray-900 flex items-center gap-2">
+              <ClipboardList className="text-indigo-600" size={18} />
+              Auditoría
+            </h3>
+            <p className="text-[10px] text-gray-400 font-bold uppercase hidden sm:block">Conteos físicos</p>
+          </div>
+          <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-xl border border-gray-100">
             <button
-              onClick={() => setSelectedCountId(null)}
-              className="px-4 py-2 bg-gray-100 text-gray-600 rounded-xl font-bold"
+              onClick={() => setAuditFilter('ALL')}
+              className={`px-3 py-1.5 text-[10px] font-bold rounded-lg transition-colors ${auditFilter === 'ALL' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
             >
-              Volver a lista
+              Todos
+            </button>
+            <button
+              onClick={() => setAuditFilter('DIFF')}
+              className={`px-3 py-1.5 text-[10px] font-bold rounded-lg transition-colors ${auditFilter === 'DIFF' ? 'bg-amber-100 text-amber-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+            >
+              Diferencias
+            </button>
+            <button
+              onClick={() => setAuditFilter('UNCNT')}
+              className={`px-3 py-1.5 text-[10px] font-bold rounded-lg transition-colors ${auditFilter === 'UNCNT' ? 'bg-blue-100 text-blue-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+            >
+              Faltantes
             </button>
           </div>
+        </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-              <div className="flex items-center gap-3 text-gray-500">
-                <Database size={18} />
-                <span className="text-xs font-bold uppercase">Valor Total Inventario</span>
-              </div>
-              <div className="text-2xl font-black text-gray-900 mt-2">${kpi.totalValue.toFixed(2)}</div>
-            </div>
-            <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-              <div className="flex items-center gap-3 text-gray-500">
-                <CheckCircle2 size={18} />
-                <span className="text-xs font-bold uppercase">ERI (Exactitud)</span>
-              </div>
-              <div className="text-2xl font-black text-emerald-600 mt-2">{kpi.eri.toFixed(2)}%</div>
-            </div>
-            <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-              <div className="flex items-center gap-3 text-gray-500">
-                <AlertTriangle size={18} />
-                <span className="text-xs font-bold uppercase">Discrepancia Monetaria</span>
-              </div>
-              <div className="mt-2 text-sm font-bold">
-                <span className="text-red-600">- ${kpi.shortage.toFixed(2)}</span>
-                <span className="text-gray-300 mx-2">|</span>
-                <span className="text-blue-600">+ ${kpi.surplus.toFixed(2)}</span>
-              </div>
-            </div>
-            <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-              <div className="flex items-center gap-3 text-gray-500">
-                <ClipboardList size={18} />
-                <span className="text-xs font-bold uppercase">Artículos en Limbo</span>
-              </div>
-              <div className="text-2xl font-black text-gray-900 mt-2">{kpi.limbo}</div>
-            </div>
-          </div>
-
-          {statusMessage && (
-            <div className="bg-amber-50 border border-amber-200 text-amber-700 text-sm font-bold rounded-xl p-3">
-              {statusMessage}
-            </div>
-          )}
-
-          <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-              <div>
-                <h3 className="text-lg font-black text-gray-900">Auditoría de Inventario</h3>
-                <p className="text-xs text-gray-400 font-bold uppercase">Conteo físico vs snapshot del momento</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setAuditFilter('ALL')}
-                  className={`px-3 py-2 text-xs font-bold rounded-xl border ${auditFilter === 'ALL' ? 'bg-gray-900 text-white border-gray-900' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
-                >
-                  Todos
-                </button>
-                <button
-                  onClick={() => setAuditFilter('DIFF')}
-                  className={`px-3 py-2 text-xs font-bold rounded-xl border ${auditFilter === 'DIFF' ? 'bg-amber-500 text-white border-amber-500' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
-                >
-                  Solo con diferencias
-                </button>
-                <button
-                  onClick={() => setAuditFilter('UNCNT')}
-                  className={`px-3 py-2 text-xs font-bold rounded-xl border ${auditFilter === 'UNCNT' ? 'bg-blue-500 text-white border-blue-500' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
-                >
-                  No contados
-                </button>
-              </div>
-            </div>
-
-            <div className="overflow-auto max-h-[480px]">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-white">
-                  <tr className="text-left text-xs text-gray-400 uppercase">
-                    <th className="py-2">Artículo</th>
-                    <th className="py-2 text-right">Stock Sistema</th>
-                    <th className="py-2 text-right">Stock Físico</th>
-                    <th className="py-2 text-right">Diferencia</th>
-                    <th className="py-2 text-center">Estado</th>
+        {/* Scrollable Table Container */}
+        <div className="flex-1 overflow-auto bg-gray-50/30">
+          <table className="w-full text-sm border-collapse">
+            <thead className="sticky top-0 bg-white shadow-sm z-10">
+              <tr className="text-left text-[10px] text-gray-400 uppercase font-bold tracking-wider">
+                <th className="py-3 px-4 bg-gray-50/50">Artículo</th>
+                <th className="py-3 px-2 text-right bg-gray-50/50 w-24">Sistema</th>
+                <th className="py-3 px-2 text-right bg-gray-50/50 w-32">Físico</th>
+                <th className="py-3 px-2 text-right bg-gray-50/50 w-24">Dif</th>
+                <th className="py-3 px-4 text-center bg-gray-50/50 w-24">Estado</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 bg-white">
+              {filteredAuditRows.map(row => {
+                const status = row.physicalQty === undefined
+                  ? 'PENDIENTE'
+                  : (row.diffQty || 0) === 0 ? 'OK' : 'AJUSTE';
+                return (
+                  <tr key={row.productId} className="hover:bg-gray-50 transition-colors group">
+                    <td className="py-3 px-4">
+                      <div className="font-bold text-gray-800 text-xs sm:text-sm">{row.productName}</div>
+                      <div className="text-[10px] text-gray-400">{row.category || 'Sin Categoría'}</div>
+                    </td>
+                    <td className="py-3 px-2 text-right font-mono text-gray-600 text-xs">{row.systemQty}</td>
+                    <td className="py-3 px-2 text-right">
+                      <input
+                        type="number"
+                        value={auditCounts[row.productId] ?? ''}
+                        onChange={(e) => setAuditCounts(prev => ({ ...prev, [row.productId]: e.target.value }))}
+                        className="w-full p-1.5 bg-gray-50 border border-gray-200 rounded-lg text-right font-bold text-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+                        placeholder="-"
+                      />
+                    </td>
+                    <td className={`py-3 px-2 text-right font-bold text-xs ${row.diffQty === undefined ? 'text-gray-300' : (row.diffQty || 0) < 0 ? 'text-red-600' : (row.diffQty || 0) > 0 ? 'text-blue-600' : 'text-emerald-600'}`}>
+                      {row.diffQty === undefined ? '--' : row.diffQty > 0 ? `+${row.diffQty}` : row.diffQty}
+                    </td>
+                    <td className="py-3 px-4 text-center">
+                      <span className={`inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${status === 'OK' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : status === 'AJUSTE' ? 'bg-amber-50 text-amber-700 border-amber-100' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                        {status === 'OK' && <CheckCircle2 size={10} className="mr-1" />}
+                        {status === 'AJUSTE' && <AlertTriangle size={10} className="mr-1" />}
+                        {status}
+                      </span>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {filteredAuditRows.map(row => {
-                    const status = row.physicalQty === undefined
-                      ? 'NO CONTADO'
-                      : (row.diffQty || 0) === 0 ? 'OK' : 'AJUSTE';
-                    return (
-                      <tr key={row.productId} className="border-b border-gray-100">
-                        <td className="py-2 font-bold text-gray-800">{row.productName}</td>
-                        <td className="py-2 text-right font-mono text-gray-600">{row.systemQty}</td>
-                        <td className="py-2 text-right font-mono text-gray-800">{row.physicalQty ?? '--'}</td>
-                        <td className={`py-2 text-right font-bold ${row.diffQty === undefined ? 'text-gray-300' : (row.diffQty || 0) < 0 ? 'text-red-600' : 'text-blue-600'}`}>
-                          {row.diffQty === undefined ? '--' : row.diffQty}
-                        </td>
-                        <td className="py-2 text-center">
-                          <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${status === 'OK' ? 'bg-emerald-100 text-emerald-700' : status === 'AJUSTE' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'}`}>
-                            {status}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                );
+              })}
+              {filteredAuditRows.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="py-12 text-center text-gray-400 text-sm">
+                    No hay artículos para mostrar con los filtros actuales.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
 
-            <div className="flex justify-end mt-4">
-              <button
-                onClick={handleApplyAudit}
-                disabled={isApplying || !selectedWarehouseId}
-                className="px-5 py-3 bg-emerald-600 text-white rounded-xl font-bold shadow-sm hover:bg-emerald-700 disabled:opacity-50"
-              >
-                {isApplying ? 'Aplicando...' : 'Aplicar Ajustes de Auditoría'}
-              </button>
-            </div>
-          </div>
-        </>
-      )}
+        {/* Table Footer Actions */}
+        <div className="flex-none p-3 border-t border-gray-100 bg-gray-50/50 flex justify-end">
+          <button
+            onClick={handleApplyAudit}
+            disabled={isApplying || !selectedWarehouseId}
+            className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs shadow-sm shadow-emerald-200 hover:bg-emerald-700 disabled:opacity-50 disabled:shadow-none transition-all active:scale-95 flex items-center gap-2"
+          >
+            {isApplying ? (
+              <>Applying...</>
+            ) : (
+              <>
+                <CheckCircle2 size={14} /> Aplicar Ajustes
+              </>
+            )}
+          </button>
+        </div>
+      </div>
 
-      <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h3 className="text-lg font-black text-gray-900">Cierre de Inventario</h3>
-            <p className="text-xs text-gray-400 font-bold uppercase">Snapshot contable y bloqueo de movimientos</p>
+      {/* 3. Bottom Actions Panel - Fixed Height */}
+      <div className="flex-none grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Close Inventory Card */}
+        <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className={`p-2 rounded-xl ${lastClosed?.status === 'CLOSED' ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-400'}`}>
+              <Lock size={20} />
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-gray-900">Cierre de Periodo</h3>
+              {lastClosed ? (
+                <p className="text-[10px] text-gray-500 font-bold">
+                  Último: {new Date(lastClosed.closedAt).toLocaleDateString()}
+                </p>
+              ) : (
+                <p className="text-[10px] text-gray-400">Sin cierres previos</p>
+              )}
+            </div>
           </div>
           <button
             onClick={handleCloseInventory}
             disabled={!selectedWarehouseId || isClosing}
-            className="px-5 py-3 bg-gray-900 text-white rounded-xl font-bold shadow-sm hover:bg-black disabled:opacity-50 flex items-center gap-2"
+            className="px-4 py-2 bg-gray-900 text-white rounded-xl font-bold text-xs shadow-lg shadow-gray-200 hover:bg-black disabled:opacity-50 transition-all flex items-center gap-2"
           >
-            <Lock size={16} /> {isClosing ? 'Cerrando...' : 'Ejecutar Cierre'}
+            {isClosing ? '...' : 'Ejecutar Cierre'}
           </button>
         </div>
 
-        {lastClosed && (
-          <div className="mt-4 p-4 bg-gray-50 rounded-xl border border-gray-200">
-            <p className="text-xs font-bold text-gray-500 uppercase">Último Cierre</p>
-            <p className="text-sm font-bold text-gray-800">{lastClosed.label} — {new Date(lastClosed.closedAt).toLocaleString()}</p>
-            <p className="text-xs text-gray-400">Bloqueo activo hasta esa fecha</p>
-          </div>
-        )}
-
-        {isAdmin && lastClosed && lastClosed.status === 'CLOSED' && (
-          <div className="mt-4">
-            {!showReopen ? (
-              <button
-                onClick={() => setShowReopen(true)}
-                className="px-4 py-2 bg-amber-500 text-white rounded-xl font-bold shadow-sm hover:bg-amber-600"
-              >
-                Reabrir Periodo
-              </button>
+        {/* Historical Reports Card / Reopen */}
+        <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col justify-center">
+          {isAdmin && lastClosed && lastClosed.status === 'CLOSED' ? (
+            !showReopen ? (
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-gray-500 uppercase">Administración</span>
+                <button
+                  onClick={() => setShowReopen(true)}
+                  className="px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-100 rounded-lg font-bold text-[10px] hover:bg-amber-100 transition-colors"
+                >
+                  Reabrir Periodo
+                </button>
+              </div>
             ) : (
-              <div className="flex flex-col md:flex-row gap-3">
+              <div className="flex items-center gap-2">
                 <input
                   value={reopenReason}
                   onChange={(e) => setReopenReason(e.target.value)}
-                  placeholder="Motivo de reapertura"
-                  className="flex-1 p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold"
+                  placeholder="Motivo..."
+                  className="flex-1 p-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs"
+                  autoFocus
                 />
-                <button
-                  onClick={handleReopen}
-                  className="px-4 py-2 bg-red-600 text-white rounded-xl font-bold shadow-sm hover:bg-red-700"
-                >
-                  Confirmar Reapertura
-                </button>
-                <button
-                  onClick={() => { setShowReopen(false); setReopenReason(''); }}
-                  className="px-4 py-2 bg-gray-100 text-gray-600 rounded-xl font-bold"
-                >
-                  Cancelar
-                </button>
+                <button onClick={handleReopen} className="p-1.5 bg-red-600 text-white rounded-lg"><CheckCircle2 size={14} /></button>
+                <button onClick={() => setShowReopen(false)} className="p-1.5 bg-gray-200 text-gray-600 rounded-lg"><AlertTriangle size={14} /></button>
               </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
-        <div className="flex items-center gap-3 mb-4">
-          <FileText size={18} className="text-gray-500" />
-          <h3 className="text-lg font-black text-gray-900">Reportes Históricos</h3>
-        </div>
-
-        <div className="space-y-3">
-          {snapshots.length === 0 && (
-            <div className="text-sm text-gray-400">No hay cierres registrados.</div>
+            )
+          ) : (
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-gray-400 uppercase">Historial</span>
+              <span className="text-xs font-bold text-gray-800">{snapshots.length} Cierres</span>
+            </div>
           )}
-          {snapshots
-            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-            .map(s => (
-              <div key={s.id} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 p-4 bg-gray-50 rounded-xl border border-gray-200">
-                <div>
-                  <p className="text-sm font-bold text-gray-800">{s.label}</p>
-                  <p className="text-xs text-gray-400">{new Date(s.closedAt).toLocaleString()} — ${s.totalValue.toFixed(2)}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => exportSnapshot(s)}
-                    className="px-3 py-2 bg-blue-600 text-white rounded-xl font-bold text-xs"
-                  >
-                    Exportar CSV
-                  </button>
-                </div>
-              </div>
-            ))}
         </div>
       </div>
     </div>
