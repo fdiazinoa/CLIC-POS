@@ -903,15 +903,25 @@ const AppContent: React.FC = () => {
     console.log(`🔒 Shift Segregation: Found ${terminalTransactions.length} txns and ${terminalCashMovements.length} cash movements for ${terminalId}`);
 
     // 3. Totals and Stats (Prioritize Dashboard-confirmed values)
-    const totalsByMethod = reportData?.totalsByMethod || terminalTransactions.flatMap(t => t?.payments || []).reduce((acc: Record<string, number>, p) => {
+    const totalsByMethod = terminalTransactions.flatMap(t => t?.payments || []).reduce((acc: Record<string, number>, p) => {
       if (p && p.method) {
         acc[p.method] = (acc[p.method] || 0) + p.amount;
       }
       return acc;
     }, {});
 
-    const stats = reportData?.stats || calculateZReportStats(terminalTransactions);
-    const transactionCount = reportData?.transactionCount ?? terminalTransactions.length;
+    const totalSales = terminalTransactions.reduce((acc, t) => acc + t.total, 0);
+
+    const cashSalesNet = terminalTransactions.reduce((acc, t) => {
+      const cashPay = (t.payments || []).find(p => p.method === 'CASH');
+      if (!cashPay) return acc;
+      const otherPayments = (t.payments || []).filter(p => p.method !== 'CASH').reduce((sum, p) => sum + p.amount, 0);
+      const cashNeeded = Math.max(0, t.total - otherPayments);
+      return acc + cashNeeded;
+    }, 0);
+
+    const stats = calculateZReportStats(terminalTransactions);
+    const transactionCount = terminalTransactions.length;
 
     // 4. Create and Save Z-Report
     const existingReports = await db.get('zReports') as ZReport[];
@@ -928,12 +938,13 @@ const AppContent: React.FC = () => {
       closedByUserName: currentUser?.name || 'System',
       baseCurrency: config.currencySymbol,
       totalsByMethod,
-      cashExpected: reportData?.expectedCashByCurrency || {},
+      totalSales, // Explicitly use the transaction total sum
+      cashSales: cashSalesNet, // Use the net cash sales
+      cashIn: terminalCashMovements.filter(m => m.type === 'IN').reduce((acc, m) => acc + m.amount, 0),
+      cashOut: terminalCashMovements.filter(m => m.type === 'OUT').reduce((acc, m) => acc + m.amount, 0),
+      cashExpected: reportData?.expectedCashByCurrency || {}, // Keep this for multi-currency compatibility if needed
       cashCounted: reportData?.cashCountedByCurrency || {},
       cashDiscrepancy: reportData?.cashDiscrepancyByCurrency || {},
-      cashSales: reportData?.cashSalesTotal || 0,
-      cashIn: reportData?.cashIn || 0,
-      cashOut: reportData?.cashOut || 0,
       transactionCount,
       notes,
       stats,

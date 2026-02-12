@@ -121,19 +121,32 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
 
    // --- CALCS FOR X-REPORT ---
    // Robustly filter out any closed transactions (Double-check)
-   const openTransactions = transactions.filter(t => !t.zReportId);
-   const payments = openTransactions.flatMap(t => t.payments);
-   const totalsByMethod = payments.reduce((acc: Record<string, number>, p) => {
-      acc[p.method] = (acc[p.method] || 0) + p.amount;
+   const openTransactions = transactions.filter(t => !t.zReportId && t.status !== 'REFUNDED');
+
+   // Calculate totals By Method, but CAP at transaction total to avoid including "change" as sales
+   const totalsByMethod = openTransactions.reduce((acc: Record<string, number>, t) => {
+      t.payments.forEach(p => {
+         acc[p.method] = (acc[p.method] || 0) + p.amount;
+      });
       return acc;
    }, {} as Record<string, number>);
 
-   const cashSalesTotal = totalsByMethod['CASH'] || 0;
+   const totalSales = openTransactions.reduce((acc, t) => acc + t.total, 0);
+
+   // Cash in drawer remains based on actual cash collected (tendered) minus change
+   // expectedCashInDrawer = CashSales (net) + CashIn - CashOut
+   const cashSalesNet = openTransactions.reduce((acc, t) => {
+      const cashPay = (t.payments || []).find(p => p.method === 'CASH');
+      if (!cashPay) return acc;
+      const otherPayments = (t.payments || []).filter(p => p.method !== 'CASH').reduce((sum, p) => sum + p.amount, 0);
+      const cashNeeded = Math.max(0, t.total - otherPayments);
+      return acc + cashNeeded;
+   }, 0);
+
    const cashIn = cashMovements.filter(m => m.type === 'IN').reduce((acc, m) => acc + m.amount, 0);
    const cashOut = cashMovements.filter(m => m.type === 'OUT').reduce((acc, m) => acc + m.amount, 0);
 
-   const expectedCashInDrawer = cashSalesTotal + cashIn - cashOut;
-   const totalSales = (Object.values(totalsByMethod) as number[]).reduce((acc: number, val: number) => acc + val, 0);
+   const expectedCashInDrawer = cashSalesNet + cashIn - cashOut;
 
    return (
       <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden">
@@ -259,7 +272,7 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
                         <p className="text-xs font-bold text-gray-500 uppercase">Desglose por Método</p>
                         <div className="flex justify-between items-center text-sm border-b border-white/10 pb-2">
                            <span className="flex items-center gap-2 text-gray-300"><Banknote size={14} /> Efectivo</span>
-                           <span className="font-bold">{config.currencySymbol}{cashSalesTotal.toFixed(2)}</span>
+                           <span className="font-bold">{config.currencySymbol}{cashSalesNet.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center text-sm border-b border-white/10 pb-2">
                            <span className="flex items-center gap-2 text-gray-300"><CreditCard size={14} /> Tarjetas</span>

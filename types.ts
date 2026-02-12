@@ -1505,6 +1505,7 @@ export interface ZReport {
   // Financials
   baseCurrency: string;
   totalsByMethod: Record<string, number>; // CASH, CARD, etc.
+  totalSales: number;
 
   // Cash Details (Multi-currency)
   cashExpected: Record<string, number>;

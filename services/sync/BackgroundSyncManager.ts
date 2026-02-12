@@ -219,7 +219,7 @@ class BackgroundSyncManager {
                 const toPruneIds: string[] = [];
 
                 data.forEach(item => {
-                    const itemDate = new Date(item.createdAt || item.timestamp || item.date || 0);
+                    const itemDate = new Date(item.createdAt || item.timestamp || item.date || item.closedAt || item.openedAt || 0);
                     const isOld = itemDate < cutoff;
                     const isSynced = item.syncStatus === 'COMPLETED';
 

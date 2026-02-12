@@ -794,10 +794,12 @@ router.post('/z-reports', async (req, res) => {
         db.transaction(() => {
             const stmt = db.prepare(`INSERT OR IGNORE INTO z_reports (id, openedAt, closedAt, terminalId, userId, userName, openingBalance, closingBalance, totalSales, totalTaxes, totalDiscounts, totalCash, totalCard, totalTransfer, totalOther, status, syncStatus, syncError, sequenceNumber, totalsByMethod, cashExpected, cashCounted, cashDiscrepancy, stats, transactionCount, notes, baseCurrency, cashSales, cashIn, cashOut) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
             for (const report of items) {
-                // Determine total sales from totalsByMethod if possible
-                const totalSales = typeof report.totalsByMethod === 'object' ?
-                    Object.values(report.totalsByMethod).reduce((sum: any, val: any) => sum + (val || 0), 0) :
-                    (report.totalSales || 0);
+                // Determine total sales: Prioritize report.totalSales (frontend-calculated sum of t.total)
+                // Fallback to totalsByMethod if totalSales is missing
+                const totalSales = (typeof report.totalSales === 'number') ? report.totalSales :
+                    (typeof report.totalsByMethod === 'object' ?
+                        Object.values(report.totalsByMethod).reduce((sum: any, val: any) => sum + (val || 0), 0) :
+                        (report.totalSales || 0));
 
                 const result = stmt.run(
                     report.id, report.openedAt, report.closedAt, report.terminalId, report.userId, report.userName,
@@ -913,7 +915,7 @@ router.post('/reset/:terminalId', async (req, res) => {
     try {
         const isFullReset = terminalId === 'ALL';
         db.transaction(() => {
-            const tables = ['transactions', 'inventory_ledger', 'z_reports', 'cash_movements', 'receptions'];
+            const tables = ['transactions', 'inventory_ledger', 'cash_movements', 'receptions'];
             for (const table of tables) {
                 try {
                     if (isFullReset) {
