@@ -1525,4 +1525,5 @@ export interface ZReport {
   stats?: ZReportStats;
   syncStatus?: SyncStatus;
   syncError?: string;
+  carryOverAmount?: number; // Amount left in drawer for next shift
 }

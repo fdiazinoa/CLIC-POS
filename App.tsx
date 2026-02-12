@@ -886,7 +886,7 @@ const AppContent: React.FC = () => {
     }
   };
 
-  const handleZReport = async (cashCounted: number, notes: string, reportData?: any) => {
+  const handleZReport = async (cashCounted: number, notes: string, reportData?: any, carryOverAmount?: number) => {
     // 1. Robust Terminal ID Discovery
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     const terminalId = currentTerminal?.id || 'T1';
@@ -948,7 +948,8 @@ const AppContent: React.FC = () => {
       transactionCount,
       notes,
       stats,
-      syncStatus: 'PENDING' as const
+      syncStatus: 'PENDING' as const,
+      carryOverAmount: carryOverAmount || 0 // Store historical record of amount left
     };
 
     console.log("💾 Saving Z-Report:", newZReport);
@@ -970,6 +971,26 @@ const AppContent: React.FC = () => {
     // 7. Update states by removing ONLY what was closed
     const remainingTransactions = transactions.filter(t => !closedTxnIds.has(t.id));
     const remainingCashMovements = cashMovements.filter(m => !closedMoveIds.has(m.id));
+
+    // --- CARRY OVER HANDLING ---
+    // Create the initial fund movement for the NEXT session
+    if (carryOverAmount && carryOverAmount > 0) {
+      console.log(`🔄 Carry Over: Creating initial fund movement of ${carryOverAmount}`);
+      const carryOverMove: CashMovement = {
+        id: `CM-${Date.now()}-CARRY`,
+        type: 'IN',
+        amount: carryOverAmount,
+        reason: 'Fondo Inicial (Automático - Dejar Fondo)',
+        timestamp: new Date().toISOString(),
+        userId: currentUser?.id || 'sys',
+        userName: currentUser?.name || 'System',
+        terminalId: terminalId,
+        syncStatus: 'PENDING' as const
+      };
+
+      await db.saveDocument('cashMovements', carryOverMove);
+      remainingCashMovements.push(carryOverMove);
+    }
 
     setTransactions(remainingTransactions);
     setCashMovements(remainingCashMovements);
