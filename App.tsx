@@ -1849,13 +1849,28 @@ const AppContent: React.FC = () => {
             onSave={(counts) => {
               const now = new Date().toISOString();
               const sessionId = `COUNT-${Date.now()}`;
+              const warehouseId = viewData?.warehouseId || '';
+              const warehouseProducts = products.filter(p => {
+                if (!warehouseId) return true;
+                if (p.activeInWarehouses && !p.activeInWarehouses.includes(warehouseId)) return false;
+                return true;
+              });
               const session = {
                 id: sessionId,
-                warehouseId: viewData?.warehouseId || '',
+                warehouseId,
                 warehouseName: viewData?.warehouseName,
                 createdAt: now,
+                finalizedAt: now,
+                status: 'FINALIZED',
                 createdBy: currentUser?.id,
                 createdByName: currentUser?.name,
+                systemSnapshot: warehouseProducts.map(p => ({
+                  productId: p.id,
+                  productName: p.name,
+                  category: p.category,
+                  systemQty: warehouseId ? (p.stockBalances?.[warehouseId] ?? 0) : (p.stock ?? 0),
+                  avgCost: p.cost || 0
+                })),
                 items: counts.map((c: any) => ({
                   productId: c.productId,
                   productName: c.productName,

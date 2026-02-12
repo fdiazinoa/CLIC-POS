@@ -122,13 +122,24 @@ export interface InventoryCountItem {
   difference: number;
 }
 
+export interface InventoryCountSnapshotItem {
+  productId: string;
+  productName: string;
+  category?: string;
+  systemQty: number;
+  avgCost: number;
+}
+
 export interface InventoryCountSession {
   id: string;
   warehouseId: string;
   warehouseName?: string;
   createdAt: string;
+  finalizedAt?: string;
+  status?: 'OPEN' | 'FINALIZED';
   createdBy?: string;
   createdByName?: string;
+  systemSnapshot?: InventoryCountSnapshotItem[];
   items: InventoryCountItem[];
 }
 
@@ -149,6 +160,9 @@ export interface InventorySnapshot {
   categoryId?: string;
   createdAt: string;
   closedAt: string;
+  cutoffDate?: string;
+  lockDate?: string;
+  immutable?: boolean;
   status: 'CLOSED' | 'REOPENED';
   createdBy?: string;
   createdByName?: string;
@@ -622,6 +636,14 @@ export interface BusinessConfig {
   inventoryScope?: {
     defaultSalesWarehouseId: string;
     visibleWarehouseIds: string[];
+  };
+  operational?: {
+    vertical_negocio: VerticalType;
+    usa_mesas: boolean;
+    pantalla_inicio: 'VENTA_DIRECTA' | 'MAPA_MESAS';
+    bloqueo_meseros: boolean;
+    pedir_comensales: boolean;
+    usa_modulos_cocina: boolean;
   };
 }
 

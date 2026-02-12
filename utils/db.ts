@@ -15,6 +15,46 @@ import { permissionService } from '../services/sync/PermissionService';
 
 const DB_KEY = 'clic_pos_db_v1';
 let initPromise: Promise<any> | null = null;
+const INVENTORY_CLOSE_LOCK_MESSAGE = 'Acción denegada: El inventario a esta fecha ya ha sido cerrado y auditado.';
+
+const getSnapshotLockDate = (snapshot: any): number => {
+  const lockRef = snapshot?.lockDate || snapshot?.cutoffDate || snapshot?.closedAt || snapshot?.createdAt;
+  return new Date(lockRef).getTime();
+};
+
+const assertInventoryMovementUnlocked = async (
+  warehouseId: string,
+  effectiveDate?: string
+): Promise<void> => {
+  const snapshots = await dbAdapter.getCollection<any>('inventorySnapshots') || [];
+  const closedSnapshots = snapshots
+    .filter((s: any) => s.status === 'CLOSED' && s.warehouseId === warehouseId)
+    .sort((a: any, b: any) => getSnapshotLockDate(b) - getSnapshotLockDate(a));
+
+  const activeLock = closedSnapshots[0];
+  if (!activeLock) return;
+
+  const lockDate = getSnapshotLockDate(activeLock);
+  if (!Number.isFinite(lockDate)) return;
+
+  const movementDate = effectiveDate ? new Date(effectiveDate).getTime() : Date.now();
+  if (!Number.isFinite(movementDate)) {
+    throw new Error('Fecha de movimiento inválida.');
+  }
+
+  if (movementDate <= lockDate) {
+    throw new Error(INVENTORY_CLOSE_LOCK_MESSAGE);
+  }
+};
+
+const toValidMovementIso = (effectiveDate?: string): string => {
+  if (!effectiveDate) return new Date().toISOString();
+  const parsed = new Date(effectiveDate);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error('Fecha de movimiento inválida.');
+  }
+  return parsed.toISOString();
+};
 
 // --- SEED DATA ---
 const DEFAULT_WAREHOUSES: Warehouse[] = [
@@ -555,18 +595,12 @@ export const db = {
     variantId?: string,
     variantName?: string,
     trackingId?: string,
-    trackingCode?: string
+    trackingCode?: string,
+    effectiveDate?: string
   ): Promise<InventoryLedgerEntry | undefined> => {
-    const snapshots = await dbAdapter.getCollection<any>('inventorySnapshots') || [];
-    const closedSnapshots = snapshots.filter((s: any) => s.status === 'CLOSED');
-    const lastClosed = closedSnapshots.sort((a: any, b: any) => new Date(b.closedAt || b.createdAt).getTime() - new Date(a.closedAt || a.createdAt).getTime())[0];
-    if (lastClosed) {
-      const closeDate = new Date(lastClosed.closedAt || lastClosed.createdAt).getTime();
-      const movementDate = new Date().getTime();
-      if (movementDate <= closeDate) {
-        throw new Error(`Error: Periodo Cerrado. No se permiten movimientos antes del ${new Date(closeDate).toLocaleString()} por auditoría contable.`);
-      }
-    }
+    await assertInventoryMovementUnlocked(warehouseId, effectiveDate);
+
+    const movementTimestamp = toValidMovementIso(effectiveDate);
 
     // 1. Create Ledger Entry (Temporary balance, will be recalculated)
     const qtyIn = qty > 0 ? qty : 0;
@@ -578,7 +612,7 @@ export const db = {
       warehouseId: warehouseId,
       concept: concept,
       documentRef: documentRef,
-      createdAt: new Date().toISOString(),
+      createdAt: movementTimestamp,
       qtyIn: qtyIn,
       qtyOut: qtyOut,
       unitCost: movementCost || 0,
@@ -618,22 +652,15 @@ export const db = {
     variantId?: string,
     variantName?: string,
     trackingId?: string,
-    trackingCode?: string
+    trackingCode?: string,
+    effectiveDate?: string
   }[]): Promise<InventoryLedgerEntry[]> => {
-    const snapshots = await dbAdapter.getCollection<any>('inventorySnapshots') || [];
-    const closedSnapshots = snapshots.filter((s: any) => s.status === 'CLOSED');
-    const lastClosed = closedSnapshots.sort((a: any, b: any) => new Date(b.closedAt || b.createdAt).getTime() - new Date(a.closedAt || a.createdAt).getTime())[0];
-    if (lastClosed) {
-      const closeDate = new Date(lastClosed.closedAt || lastClosed.createdAt).getTime();
-      const movementDate = new Date().getTime();
-      if (movementDate <= closeDate) {
-        throw new Error(`Error: Periodo Cerrado. No se permiten movimientos antes del ${new Date(closeDate).toLocaleString()} por auditoría contable.`);
-      }
-    }
-
     const newEntries: InventoryLedgerEntry[] = [];
 
     for (const move of movements) {
+      await assertInventoryMovementUnlocked(move.warehouseId, move.effectiveDate);
+
+      const movementTimestamp = toValidMovementIso(move.effectiveDate);
       const qtyIn = move.qty > 0 ? move.qty : 0;
       const qtyOut = move.qty < 0 ? Math.abs(move.qty) : 0;
 
@@ -643,7 +670,7 @@ export const db = {
         warehouseId: move.warehouseId,
         concept: move.concept,
         documentRef: move.documentRef,
-        createdAt: new Date().toISOString(),
+        createdAt: movementTimestamp,
         qtyIn: qtyIn,
         qtyOut: qtyOut,
         unitCost: move.movementCost || 0,

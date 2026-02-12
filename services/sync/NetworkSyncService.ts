@@ -1,7 +1,7 @@
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 
-const ENABLE_NETWORK_SYNC = import.meta.env?.VITE_ENABLE_NETWORK_SYNC === 'true';
+const ENABLE_NETWORK_SYNC = (import.meta as any).env?.VITE_ENABLE_NETWORK_SYNC === 'true';
 
 const getApiUrl = () => {
     const masterIp = localStorage.getItem('pos_master_ip');
