@@ -975,7 +975,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          } else {
             // Standard single transaction logic
             const taxAmount = cartTax;
-            const netAmount = grossLineTotal - discountAmount - (isTaxIncluded ? 0 : taxAmount);
+            const netAmount = isTaxIncluded
+               ? (grossLineTotal - discountAmount - taxAmount)
+               : (grossLineTotal - discountAmount);
 
             const txn = await transactionService.createTransaction({
                documentType: hasReturns ? 'REFUND' : 'TICKET',
@@ -1374,7 +1376,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                   <div className="hidden lg:block leading-tight">
                      <p className="text-sm font-black text-gray-800 truncate max-w-[120px]">{currentUser.name}</p>
-                     <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">Cajero</p>
+                     <div className="flex items-center gap-2">
+                        <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">Cajero</p>
+                        <span className="text-gray-300">•</span>
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">T-{terminalId}</p>
+                     </div>
                   </div>
                </div>
 
@@ -1396,15 +1402,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
                <div className="flex-1 flex items-center gap-4">
-                  {/* TERMINAL ID BADGE (DEBUG/INFO) */}
-                  <div className="hidden xl:flex flex-col leading-none border-r border-gray-100 pr-4 mr-2">
-                     <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Terminal</span>
-                     <span className={`text-xs font-bold ${terminalId === 'T1' && config.terminals?.length > 1 ? 'text-red-500 animate-pulse' : 'text-gray-700'}`}>
-                        {terminalId}
-                     </span>
-                  </div>
 
-                  <div className="relative flex-1 group">
+                  <div className="relative flex-1 group min-w-[300px]">
                      <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
                      <input
                         ref={searchInputRef}
@@ -1428,35 +1427,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </button>
                   </div>
 
-                  {/* RETURN MODE TOGGLE */}
-                  <button
-                     onClick={() => {
-                        if (!isReturnMode) {
-                           // ENTERING REFUND MODE - CHECK PERMISSIONS
-                           // Check if user has permission in their profile or role
-                           const hasPermission = (currentUser as any).permissions?.includes('CAN_REFUND') ||
-                              ['ADMIN', 'MANAGER'].includes(currentUser.role);
-
-                           if (!hasPermission) {
-                              setShowSupervisorAuth(true);
-                              return;
-                           }
-                        }
-                        // Turn off authorization if leaving refund mode
-                        if (isReturnMode) {
-                           setRefundAuthorizedBy(null);
-                        }
-                        // Toggle mode if authorized
-                        setIsReturnMode(!isReturnMode);
-                     }}
-                     className={`flex items-center gap-3 px-5 py-3 rounded-2xl border-2 transition-all ${isReturnMode ? 'border-red-500 bg-red-50' : 'bg-gray-100 border-transparent hover:bg-gray-200'}`}
-                  >
-                     <ArrowRightLeft size={18} className={isReturnMode ? 'text-red-600' : 'text-gray-400'} />
-                     <div className="text-left hidden sm:block">
-                        <p className={`text-[9px] font-black uppercase tracking-widest leading-none mb-1 ${isReturnMode ? 'text-red-400' : 'text-gray-400'}`}>Modo Operación</p>
-                        <p className={`text-xs font-bold leading-none ${isReturnMode ? 'text-red-900' : 'text-gray-600'}`}>{isReturnMode ? 'DEVOLUCIÓN' : 'VENTA'}</p>
-                     </div>
-                  </button>
 
                   <SupervisorAuthModal
                      isOpen={showSupervisorAuth}
@@ -2110,6 +2080,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  <button onClick={() => onOpenInventoryTracking()} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all">
                                     <Package size={16} />
                                     <span className="text-[9px] font-black uppercase mt-1">Rastreo</span>
+                                 </button>
+                                 <button
+                                    onClick={() => {
+                                       if (!isReturnMode) {
+                                          const hasPermission = (currentUser as any).permissions?.includes('CAN_REFUND') ||
+                                             ['ADMIN', 'MANAGER'].includes(currentUser.role);
+                                          if (!hasPermission) {
+                                             setShowSupervisorAuth(true);
+                                             return;
+                                          }
+                                       }
+                                       if (isReturnMode) setRefundAuthorizedBy(null);
+                                       setIsReturnMode(!isReturnMode);
+                                    }}
+                                    className={`flex flex-col items-center justify-center py-2 rounded-xl border-2 transition-all ${isReturnMode ? 'border-red-500 bg-red-50 text-red-600' : 'bg-white border-gray-100 text-gray-400 hover:border-red-100 hover:text-red-500'}`}
+                                 >
+                                    <ArrowRightLeft size={16} />
+                                    <span className="text-[9px] font-black uppercase mt-1">{isReturnMode ? 'VENTA' : 'DEVOL.'}</span>
                                  </button>
                                  {activeTerminalConfig?.operational?.usa_mesas && (
                                     <button onClick={handleBackToMap} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-teal-50 border-teal-100 text-teal-600 hover:bg-teal-100 hover:border-teal-200 transition-all">

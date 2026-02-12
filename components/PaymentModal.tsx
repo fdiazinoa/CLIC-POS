@@ -137,9 +137,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                customerName: completedTransaction?.customerSnapshot?.name || completedTransaction?.customerName,
                companyInfo: config?.companyInfo,
                currencySymbol: currencySymbol,
-               subtotal: (completedTransaction?.netAmount || 0) + (completedTransaction?.taxAmount || 0), // Approx if not stored directly
+               subtotal: (completedTransaction?.netAmount || 0) + (completedTransaction?.discountAmount || 0),
                tax: completedTransaction?.taxAmount,
-               discount: completedTransaction?.discountAmount
+               discount: completedTransaction?.discountAmount,
+               totalSavings: (completedTransaction?.items || []).reduce((sum, item) =>
+                  sum + ((item.originalPrice || item.price) - item.price) * item.quantity, 0) + (completedTransaction?.discountAmount || 0),
+               showSavings: config?.receiptConfig?.showSavings || false
             })
          });
 

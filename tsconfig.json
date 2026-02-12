@@ -26,5 +26,15 @@
     "esModuleInterop": true,
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "debug_schema.ts",
+    "debug_schema.js"
+  ]
 }

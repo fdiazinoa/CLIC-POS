@@ -33,9 +33,14 @@ const SupplierSelector: React.FC<SupplierSelectorProps> = ({
             try {
                 const response = await fetch(`/api/suppliers?q=${searchTerm}`);
                 const data = await response.json();
-                setSuppliers(data);
+                if (Array.isArray(data)) {
+                    setSuppliers(data);
+                } else {
+                    setSuppliers([]);
+                }
             } catch (error) {
                 console.error('Error fetching suppliers:', error);
+                setSuppliers([]);
             } finally {
                 setIsLoading(false);
             }

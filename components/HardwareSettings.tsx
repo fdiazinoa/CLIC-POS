@@ -79,6 +79,19 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       currentTerminalConfig?.config?.hardware?.customerDisplay || DEFAULT_DISPLAY_CONFIG
    );
    const [previewMode, setPreviewMode] = useState<'IDLE' | 'CHECKOUT'>('CHECKOUT');
+   const [currentPreviewAdIndex, setCurrentPreviewAdIndex] = useState(0);
+
+   // Auto-rotate preview ads in IDLE mode
+   useEffect(() => {
+      if (previewMode === 'IDLE' && displayConfig.ads && displayConfig.ads.length > 1) {
+         const interval = setInterval(() => {
+            setCurrentPreviewAdIndex(prev => (prev + 1) % displayConfig.ads.length);
+         }, 3000); // Faster rotation for preview (3s)
+         return () => clearInterval(interval);
+      } else {
+         setCurrentPreviewAdIndex(0);
+      }
+   }, [previewMode, displayConfig.ads?.length]);
 
    // -- Scale Label State --
    const [scaleLabelConfig, setScaleLabelConfig] = useState<ScaleLabelConfig>(globalConfig.scaleLabelConfig || {
@@ -223,6 +236,15 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       } else if (url) {
          alert("Por favor introduce una URL válida");
       }
+   };
+
+   const toggleAdActive = (adId: string) => {
+      setDisplayConfig(prev => ({
+         ...prev,
+         ads: (prev.ads || []).map(ad =>
+            ad.id === adId ? { ...ad, active: !ad.active } : ad
+         )
+      }));
    };
 
    const removeAd = (adId: string) => {
@@ -371,14 +393,27 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                      {(displayConfig.ads || []).map(ad => (
                         <div key={ad.id} className="relative group rounded-2xl overflow-hidden aspect-video border border-gray-200 bg-gray-100">
                            <img src={ad.url} className="w-full h-full object-cover" alt="Ad" />
-                           <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                           <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
+                              <button
+                                 onClick={() => toggleAdActive(ad.id)}
+                                 className={`p-2.5 rounded-xl text-white transition-all shadow-lg ${ad.active ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 hover:bg-gray-700'}`}
+                                 title={ad.active ? 'Desactivar' : 'Activar'}
+                              >
+                                 <Monitor size={18} />
+                              </button>
                               <button
                                  onClick={() => removeAd(ad.id)}
-                                 className="p-2.5 bg-red-600 rounded-xl text-white hover:scale-110 transition-transform shadow-lg"
+                                 className="p-2.5 bg-red-600 rounded-xl text-white hover:bg-red-700 transition-all shadow-lg"
+                                 title="Eliminar"
                               >
                                  <Trash2 size={18} />
                               </button>
                            </div>
+                           {!ad.active && (
+                              <div className="absolute top-2 right-2 bg-red-500 text-white text-[8px] font-black px-2 py-1 rounded-full uppercase tracking-tighter shadow-sm">
+                                 Inactivo
+                              </div>
+                           )}
                         </div>
                      ))}
                      {(displayConfig.ads || []).length === 0 && (
@@ -402,8 +437,8 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                      {previewMode === 'IDLE' ? (
                         <div className="flex-1 flex flex-col">
                            <div className="flex-1 relative overflow-hidden">
-                              {displayConfig.ads?.[0] ? (
-                                 <img src={displayConfig.ads[0].url} className="w-full h-full object-cover opacity-90 animate-pulse" alt="Ad" />
+                              {displayConfig.ads?.[currentPreviewAdIndex] ? (
+                                 <img src={displayConfig.ads[currentPreviewAdIndex].url} className="w-full h-full object-cover opacity-90 transition-all duration-500" alt="Ad" />
                               ) : (
                                  <div className="w-full h-full bg-slate-100 flex items-center justify-center"><ImageIcon size={48} className="text-slate-200" /></div>
                               )}

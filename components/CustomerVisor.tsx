@@ -38,7 +38,7 @@ const CustomerVisor: React.FC = () => {
         } else {
             setCurrentAdIndex(0); // Reset to 0 if only one or no ads
         }
-    }, [state?.ads]);
+    }, [state?.ads?.length]); // Only restart if the number of ads changes
 
     if (!state) {
         return (
@@ -56,9 +56,9 @@ const CustomerVisor: React.FC = () => {
         <div className="h-screen w-screen flex flex-row bg-white overflow-hidden font-sans">
             {/* LEFT PANEL: Ads & Welcome */}
             <div className="flex-1 bg-slate-100 flex flex-col relative">
-                <div className="flex-1 flex items-center justify-center p-8">
+                <div className="flex-1 flex items-center justify-center p-4">
                     {ads && ads.length > 0 ? (
-                        <div className="w-full h-full relative rounded-2xl overflow-hidden shadow-2xl bg-black">
+                        <div className="w-full h-full max-h-[85vh] relative rounded-2xl overflow-hidden shadow-2xl bg-black">
                             <img
                                 src={ads[currentAdIndex].url}
                                 alt="Publicidad"

@@ -641,9 +641,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                   <div className="w-1.5 h-1.5 rounded-full bg-gray-300"></div>
                                   <div className="flex flex-col">
                                     <span className="font-bold text-gray-700 text-xs">
-                                      {child.variantName || 'Variante Genérica'}
+                                      {child.trackingCode ? (
+                                        <span className="flex items-center gap-1.5">
+                                          <span className="text-[9px] bg-indigo-50 text-indigo-600 px-1 py-0.5 rounded font-black uppercase tracking-tighter">Serie</span>
+                                          {child.trackingCode}
+                                        </span>
+                                      ) : (child.variantName || 'Principal')}
                                     </span>
-                                    {child.variantId && (
+                                    {(child.variantId && !child.trackingCode) && (
                                       <span className="text-[9px] text-gray-400 font-mono scale-90 origin-left">
                                         ID: {child.variantId}
                                       </span>

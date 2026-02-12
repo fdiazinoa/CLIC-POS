@@ -13,8 +13,8 @@ router.get('/', (req, res) => {
     if (q) {
         const query = (q as string).toLowerCase();
         suppliers = suppliers.filter((s: Supplier) =>
-            s.name.toLowerCase().includes(query) ||
-            s.taxId.toLowerCase().includes(query)
+            (s.name || '').toLowerCase().includes(query) ||
+            (s.taxId || '').toLowerCase().includes(query)
         );
     }
 

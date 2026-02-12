@@ -86,6 +86,13 @@ export const getCollection = (name: string): any[] => {
                     }
                 });
 
+                // Flatten 'data' if it exists
+                if (hasDataColumn && newRow.data && typeof newRow.data === 'object') {
+                    const data = newRow.data;
+                    delete newRow.data;
+                    return { ...newRow, ...data };
+                }
+
                 // Convert Booleans
                 const fieldsToConvert = booleanFields[name] || [];
                 fieldsToConvert.forEach(field => {

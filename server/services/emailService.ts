@@ -223,7 +223,8 @@ export class EmailService {
         const {
             items, total, paymentMethod, companyInfo, transactionId,
             ncf, date, cashierName, tax, subtotal, discount,
-            currencySymbol = '$', logoUrl = 'https://clicpos.com/logo.png'
+            currencySymbol = '$', logoUrl = 'https://clicpos.com/logo.png',
+            totalSavings = 0, showSavings = false
         } = receiptData;
 
         // 1. Read Template
@@ -236,8 +237,12 @@ export class EmailService {
                 ? `<div style="font-size: 12px; color: #64748B; font-style: italic; margin-top: 2px;">&bull; ${item.options.join(' &bull; ')}</div>`
                 : '';
 
-            const discountInfo = item.discount > 0
-                ? `<div style="font-size: 12px; color: #10B981; font-weight: 600; margin-top: 2px;">(Ahorro: ${currencySymbol}${item.discount.toFixed(2)})</div>`
+            const itemSavings = (item.originalPrice && item.originalPrice > item.price)
+                ? (item.originalPrice - item.price) * item.quantity
+                : (item.discount || 0);
+
+            const discountInfo = itemSavings > 0
+                ? `<div style="font-size: 12px; color: #10B981; font-weight: 600; margin-top: 2px;">(Ahorro: ${currencySymbol}${itemSavings.toFixed(2)})</div>`
                 : '';
 
             const sellerInfo = receiptData.config?.showSeller && item.sellerName
@@ -303,6 +308,26 @@ export class EmailService {
             `);
         } else {
             html = html.replace(/{{globalDiscountRow}}/g, '');
+        }
+
+        // --- Savings Section ---
+        if (showSavings && totalSavings > 0) {
+            html = html.replace(/{{savingsSection}}/g, `
+                <tr>
+                    <td colspan="2" align="center" style="padding: 30px 40px;">
+                        <div style="border: 2px dashed #3B82F6; border-radius: 12px; padding: 20px; background-color: #EFF6FF;">
+                            <div style="font-size: 14px; font-weight: 800; color: #3B82F6; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">
+                                ¡USTED HA AHORRADO!
+                            </div>
+                            <div style="font-size: 28px; font-weight: 900; color: #1E293B;">
+                                ${currencySymbol}${totalSavings.toFixed(2)}
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+            `);
+        } else {
+            html = html.replace(/{{savingsSection}}/g, '');
         }
 
         // 5. Send Email
