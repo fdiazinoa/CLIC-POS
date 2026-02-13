@@ -80,7 +80,6 @@ import InventoryHome from './components/inventory/InventoryHome';
 import InventoryCount from './components/inventory/InventoryCount';
 import InventoryTracking from './components/InventoryTracking';
 import KitchenDisplay from './components/kds/KitchenDisplay';
-import InventoryAuditClosure from './components/inventory/InventoryAuditClosure';
 
 
 import { seriesSyncService } from './services/sync/SeriesSyncService';
@@ -192,45 +191,11 @@ const AppContent: React.FC = () => {
     setCurrentView(view);
   };
 
-  // --- EMERGENCY RESCUE MECHANISM ---
-  useEffect(() => {
-    const handleEmergencyReset = async (e: KeyboardEvent) => {
-      // Shortcut: Ctrl + Shift + Alt + U (Unbind)
-      if (e.ctrlKey && e.shiftKey && e.altKey && e.code === 'KeyU') {
-        if (confirm('🚨 EMERGENCY RESET: This will unbind this terminal and clear local database config. Continue?')) {
-          try {
-            console.warn("🧺 EMERGENCY UNBIND TRIGGERED");
-            localStorage.removeItem('pos_device_id');
-            localStorage.removeItem('pos_master_ip');
-            localStorage.removeItem('CLIC_POS_MASTER_URL');
-            localStorage.removeItem('pos_sync_status');
-
-            // Wipe Local DB Config to avoid stale Slave/Master role mismatch
-            await db.deleteDocument('config', 'config' as any);
-
-            alert("Terminal Desvinculada. La aplicación se reiniciará.");
-            window.location.reload();
-          } catch (err) {
-            console.error("Failed to perform emergency reset:", err);
-            alert("Error doing reset. Please clear browser cache manually.");
-          }
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleEmergencyReset);
-    return () => window.removeEventListener('keydown', handleEmergencyReset);
-  }, []);
-
   // --- INITIAL DATA LOAD ---
   useEffect(() => {
     const loadData = async () => {
-      console.log('🚀 loadData started');
       try {
-        console.log('⏳ Calling db.init()...');
         const data = await db.init();
-        console.log('✅ db.init() returned:', data ? Object.keys(data) : 'null');
-
         let currentConfig = data.config;
         const masterIp = localStorage.getItem('pos_master_ip');
 
@@ -419,22 +384,13 @@ const AppContent: React.FC = () => {
             // This will reconstruct them from transaction history
             await ZReportRecoveryService.recoverOrphanedReports();
 
-            console.log('🎉 Setting isDataLoaded = true');
-            setIsDataLoaded(true);
-          } else {
-            console.warn('⚠️ No paired terminal found. Waiting for pairing...');
-            // Still load to allow access to pairing screen
             setIsDataLoaded(true);
           }
-        } else {
-          // First run or no data
-          console.log('INFO: No data found, setting isDataLoaded = true for setup');
-          setIsDataLoaded(true);
         }
       } catch (error: any) {
         console.error('CRITICAL: Failed to load initial data:', error);
         setInitialConnError(error.message || 'Error inicializando base de datos local');
-        // We now handle the error display in the loading screen, so we can keep isDataLoaded = false
+        // Do NOT set isDataLoaded(true) here to prevent POSInterface from rendering and crashing
       }
     };
     loadData();
@@ -1186,7 +1142,6 @@ const AppContent: React.FC = () => {
             onOpenHistory={() => setCurrentView('HISTORY')}
             onOpenFinance={() => handleViewChange('FINANCE')}
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
-            onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
             onOpenTableMap={() => handleViewChange('TABLE_MAP')}
             onTransactionComplete={handleTransactionComplete}
             activeTable={activeTable}
@@ -1227,22 +1182,6 @@ const AppContent: React.FC = () => {
             onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
             onUpdateProducts={async (p) => { setProducts(p); /* db.save('products', p) removed for efficiency */ syncManager.broadcastChange('products', null, 'UPDATE').catch(console.error); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
-            onAdjustStock={async (adjustments) => {
-              const pairedTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
-              const terminalId = pairedTerminal?.id || 'LOCAL';
-              const whId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
-              for (const adj of adjustments) {
-                if (adj.quantity !== 0) {
-                  const type = adj.quantity > 0 ? 'AJUSTE_ENTRADA' : 'AJUSTE_SALIDA';
-                  await db.recordInventoryMovement(whId, adj.productId, type, 'AUDITORIA', adj.quantity, undefined, terminalId);
-                }
-              }
-              backgroundSyncManager.triggerSync();
-              const freshData = await db.init();
-              setProducts(freshData.products);
-              const freshStocks = await db.get('productStocks') as ProductStock[] || [];
-              setProductStocks(freshStocks);
-            }}
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
@@ -1287,22 +1226,6 @@ const AppContent: React.FC = () => {
             onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
             onUpdateProducts={async (p) => { setProducts(p); await db.save('products', p); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
-            onAdjustStock={async (adjustments) => {
-              const pairedTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
-              const terminalId = pairedTerminal?.id || 'LOCAL';
-              const whId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
-              for (const adj of adjustments) {
-                if (adj.quantity !== 0) {
-                  const type = adj.quantity > 0 ? 'AJUSTE_ENTRADA' : 'AJUSTE_SALIDA';
-                  await db.recordInventoryMovement(whId, adj.productId, type, 'AUDITORIA', adj.quantity, undefined, terminalId);
-                }
-              }
-              backgroundSyncManager.triggerSync();
-              const freshData = await db.init();
-              setProducts(freshData.products);
-              const freshStocks = await db.get('productStocks') as ProductStock[] || [];
-              setProductStocks(freshStocks);
-            }}
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
@@ -1787,32 +1710,6 @@ const AppContent: React.FC = () => {
           />
         );
 
-      case 'INVENTORY_AUDIT':
-        return (
-          <div className="bg-gray-100 h-screen flex flex-col overflow-hidden">
-            <div className="bg-white shadow-sm border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-10 shrink-0">
-              <button
-                onClick={() => setCurrentView('INVENTORY_HOME')}
-                className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-gray-200"
-              >
-                ← Volver
-              </button>
-              <h1 className="text-base font-black text-gray-800">Auditoría de Inventarios</h1>
-              <div className="w-20"></div>
-            </div>
-            <div className="flex-1 overflow-hidden p-4">
-              <InventoryAuditClosure
-                warehouses={warehouses}
-                products={products}
-                config={config}
-                currentUser={currentUser}
-                roles={roles}
-                terminalId={getCurrentTerminal()?.id}
-              />
-            </div>
-          </div>
-        );
-
       case 'KIOSK_PAYMENT':
         return (
           <KioskPayment
@@ -1907,48 +1804,9 @@ const AppContent: React.FC = () => {
             warehouseId={viewData?.warehouseId}
             warehouseName={viewData?.warehouseName}
             onSave={(counts) => {
-              const now = new Date().toISOString();
-              const sessionId = `COUNT-${Date.now()}`;
-              const warehouseId = viewData?.warehouseId || '';
-              const warehouseProducts = products.filter(p => {
-                if (!warehouseId) return true;
-                if (p.activeInWarehouses && !p.activeInWarehouses.includes(warehouseId)) return false;
-                return true;
-              });
-              const session = {
-                id: sessionId,
-                warehouseId,
-                warehouseName: viewData?.warehouseName,
-                createdAt: now,
-                finalizedAt: now,
-                status: 'FINALIZED',
-                createdBy: currentUser?.id,
-                createdByName: currentUser?.name,
-                systemSnapshot: warehouseProducts.map(p => ({
-                  productId: p.id,
-                  productName: p.name,
-                  category: p.category,
-                  systemQty: warehouseId ? (p.stockBalances?.[warehouseId] ?? 0) : (p.stock ?? 0),
-                  avgCost: p.cost || 0
-                })),
-                items: counts.map((c: any) => ({
-                  productId: c.productId,
-                  productName: c.productName,
-                  category: (products.find(p => p.id === c.productId)?.category) || undefined,
-                  systemQty: c.expectedQty,
-                  countedQty: c.countedQty,
-                  difference: c.difference
-                })),
-                updatedAt: now,
-                syncStatus: 'PENDING'
-              };
-              db.saveDocument('inventoryCounts' as any, session).then(() => {
-                alert(`Conteo guardado: ${counts.length} productos`);
-                handleViewChange('INVENTORY_HOME');
-              }).catch((err) => {
-                console.error('Error saving inventory count session:', err);
-                alert('Error guardando el conteo.');
-              });
+              console.log('Inventory counts saved:', counts);
+              alert(`Conteo guardado: ${counts.length} productos`);
+              handleViewChange('INVENTORY_HOME');
             }}
             onCancel={() => handleViewChange('INVENTORY_HOME')}
           />
@@ -2047,21 +1905,6 @@ const AppContent: React.FC = () => {
   };
 
   if (!isDataLoaded) {
-    if (initialConnError) {
-      return (
-        <div className="h-screen w-screen flex flex-col items-center justify-center bg-red-50 text-red-900 p-8">
-          <div className="text-6xl mb-4">⚠️</div>
-          <h1 className="text-2xl font-bold mb-2">Error de Inicialización</h1>
-          <p className="text-lg bg-white p-4 rounded shadow border border-red-200">{initialConnError}</p>
-          <button
-            onClick={() => window.location.reload()}
-            className="mt-6 px-6 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
-          >
-            Reintentar
-          </button>
-        </div>
-      );
-    }
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-slate-50 text-slate-900">
         <div className="flex flex-col items-center gap-4">

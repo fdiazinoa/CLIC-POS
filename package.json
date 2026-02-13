@@ -13,6 +13,7 @@
     "db:seed": "node server/seed.js",
     "db:reset": "node server/seed.js && echo 'Base de datos reiniciada correctamente.'",
     "start:dev": "concurrently \"npm run server\" \"npm run dev\" \"npm run kds\"",
+    "start:mobile": "USE_HTTPS=true npm run start:dev",
     "start": "npm run start:dev"
   },
   "dependencies": {

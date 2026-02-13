@@ -322,6 +322,8 @@ router.post('/collections/:collection/push', async (req, res) => {
             users: []
         };
 
+
+
         db.transaction(() => {
             const resolvedCollection = resolveCollectionName(collection);
             const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(resolvedCollection);
@@ -1040,6 +1042,8 @@ router.post('/inventory/movements', async (req, res) => {
                     addedCount++;
                     const version = bumpVersion(collectionKey);
                     insertChangeStmt.run(collectionKey, move.id, version, 'UPSERT', JSON.stringify(move), now);
+
+                    // 1. Update product_stocks table (Detailed Stock)
                     db.prepare(`
                         INSERT INTO product_stocks (id, productId, warehouseId, quantity, updatedAt)
                         VALUES (?, ?, ?, ?, ?)
@@ -1055,6 +1059,36 @@ router.post('/inventory/movements', async (req, res) => {
                         (move.qtyIn || 0) - (move.qtyOut || 0),
                         new Date().toISOString()
                     );
+
+                    // 2. Update products table (Catalog View)
+                    // We need to update both the scalar 'stock' (total) and the 'stockBalances' JSON
+                    const productState = db.prepare("SELECT stock, stockBalances FROM products WHERE id = ?").get(move.productId) as any;
+
+                    if (productState) {
+                        const currentBalances = productState.stockBalances ? JSON.parse(productState.stockBalances) : {};
+                        const movementQty = (move.qtyIn || 0) - (move.qtyOut || 0);
+
+                        // Update specific warehouse balance
+                        currentBalances[move.warehouseId] = (currentBalances[move.warehouseId] || 0) + movementQty;
+
+                        // Calculate new total stock
+                        const newTotalStock = (productState.stock || 0) + movementQty;
+
+                        db.prepare(`
+                            UPDATE products 
+                            SET stock = ?, 
+                                stockBalances = ?, 
+                                updatedAt = ? 
+                            WHERE id = ?
+                        `).run(
+                            newTotalStock,
+                            JSON.stringify(currentBalances),
+                            new Date().toISOString(),
+                            move.productId
+                        );
+                    }
+
+
                 }
                 processedIds.push(move.id);
             }

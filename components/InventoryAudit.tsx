@@ -10,7 +10,7 @@ interface InventoryAuditProps {
   products: Product[];
   mode: 'ADDITIVE' | 'ABSOLUTE';
   onClose: () => void;
-  onCommit: (adjustments: { productId: string; newStock: number }[]) => void;
+  onCommit: (adjustments: { productId: string; newStock: number }[]) => void | Promise<void>;
 }
 
 interface AuditItem {
@@ -26,6 +26,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, mode, onClose
   const [searchQuery, setSearchQuery] = useState('');
   const [isCameraActive, setIsCameraActive] = useState(true);
   const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Audio refs for feedback
   const successBeep = useRef<HTMLAudioElement | null>(null);
@@ -114,7 +115,7 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, mode, onClose
     }
   };
 
-  const handleFinalize = () => {
+  const handleFinalize = async () => {
     if (auditItems.length === 0) {
       onClose();
       return;
@@ -122,11 +123,17 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, mode, onClose
 
     const actionText = mode === 'ADDITIVE' ? 'AGREGAR al' : 'REEMPLAZAR el';
     if (confirm(`¿${actionText} stock de ${auditItems.length} productos? Esta acción actualizará el inventario.`)) {
-      const adjustments = auditItems.map(item => ({
-        productId: item.product.id,
-        newStock: item.countedStock
-      }));
-      onCommit(adjustments);
+      setIsSubmitting(true);
+      try {
+        const adjustments = auditItems.map(item => ({
+          productId: item.product.id,
+          newStock: item.countedStock
+        }));
+        await onCommit(adjustments);
+      } catch (error) {
+        console.error("Error committing audit:", error);
+        setIsSubmitting(false);
+      }
     }
   };
 
@@ -242,10 +249,13 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, mode, onClose
 
           <button
             onClick={handleFinalize}
-            className="px-6 py-3 bg-gray-900 text-white rounded-xl font-bold shadow-lg hover:bg-gray-800 hover:scale-[1.02] active:scale-95 transition-all flex items-center gap-2"
+            disabled={isSubmitting}
+            className="px-6 py-3 bg-gray-900 text-white rounded-xl font-bold shadow-lg hover:bg-gray-800 hover:scale-[1.02] active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Save size={20} />
-            <span className="hidden sm:inline">{mode === 'ADDITIVE' ? 'Agregar Stock' : 'Ajustar Stock'}</span>
+            {isSubmitting ? <RefreshCw size={20} className="animate-spin" /> : <Save size={20} />}
+            <span className="hidden sm:inline">
+              {isSubmitting ? 'Procesando...' : (mode === 'ADDITIVE' ? 'Agregar Stock' : 'Ajustar Stock')}
+            </span>
           </button>
         </div>
 

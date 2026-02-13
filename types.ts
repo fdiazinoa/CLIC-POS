@@ -1004,6 +1004,7 @@ export type ViewState =
   | 'TRACKING' // Added TRACKING view state
   | 'TABLE_MAP'
   | 'TABLE_DESIGNER'
+  | 'INVENTORY_AUDIT'
   | 'DEVICE_UNAUTHORIZED'
   // Kiosk / Self-Checkout views
   | 'KIOSK_WELCOME'

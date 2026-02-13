@@ -11,7 +11,7 @@ import { apiSyncAdapter, SyncMetadata } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
 import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig } from '../../types';
 
-export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'internalSequences' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices';
+export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices';
 
 interface SyncStatus {
     collection: string;
@@ -164,7 +164,7 @@ class SyncManager {
      * For API mode, we track versions locally
      */
     private async loadSyncVersions() {
-        const collections: SyncableCollection[] = ['products', 'customers', 'suppliers', 'internalSequences'];
+        const collections: SyncableCollection[] = ['products', 'customers', 'suppliers', 'users', 'roles', 'internalSequences'];
 
         for (const collection of collections) {
             // Load timestamp from localStorage
@@ -344,6 +344,8 @@ class SyncManager {
             'products',
             'customers',
             'suppliers',
+            'users',
+            'roles',
             'internalSequences',
             'productStocks',
             ...(isMaster ? ['inventoryLedger' as SyncableCollection] : []),
@@ -427,6 +429,8 @@ class SyncManager {
             'products',
             'customers',
             'suppliers',
+            'users',
+            'roles',
             'internalSequences',
             'transactions',
             'productStocks',
@@ -457,7 +461,7 @@ class SyncManager {
             throw new Error('Solo la terminal Master puede forzar la subida de datos.');
         }
 
-        const collections: SyncableCollection[] = ['products', 'customers', 'suppliers', 'internalSequences'];
+        const collections: SyncableCollection[] = ['products', 'customers', 'suppliers', 'users', 'roles', 'internalSequences'];
         console.log('🚀 Force pushing all collections...');
 
         for (const collection of collections) {
@@ -480,6 +484,8 @@ class SyncManager {
             { id: 'products', label: 'Catálogo de Productos' },
             { id: 'customers', label: 'Base de Clientes' },
             { id: 'suppliers', label: 'Proveedores' },
+            { id: 'users', label: 'Operadores de Sistema' },
+            { id: 'roles', label: 'Roles y Permisos' },
             { id: 'internalSequences', label: 'Secuencias de Documentos' },
         ];
 
@@ -560,7 +566,7 @@ class SyncManager {
      * Get sync status for all collections with detailed counts
      */
     async getSyncStatus(): Promise<(SyncStatus & { itemCount: number })[]> {
-        const collections: SyncableCollection[] = ['products', 'customers', 'suppliers', 'internalSequences'];
+        const collections: SyncableCollection[] = ['products', 'customers', 'suppliers', 'users', 'roles', 'internalSequences'];
         const statuses: (SyncStatus & { itemCount: number })[] = [];
 
         for (const collection of collections) {

@@ -357,8 +357,8 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-100px)] gap-4 pb-4">
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-col lg:flex-row gap-3 lg:items-center lg:justify-between">
+    <div className="flex flex-col h-full gap-4 pb-4 overflow-hidden">
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-col lg:flex-row gap-3 lg:items-center lg:justify-between shrink-0">
         <div className="flex items-center gap-2">
           <ClipboardList className="text-emerald-600" size={18} />
           <h2 className="text-base font-black text-gray-900">Auditoría de Inventarios (Histórico)</h2>
@@ -515,30 +515,28 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
                           <td className="py-3 px-2 text-right font-mono text-xs text-gray-700">
                             {row.physicalQty === undefined ? '--' : row.physicalQty}
                           </td>
-                          <td className={`py-3 px-2 text-right font-bold text-xs ${
-                            row.status === 'FALTANTE'
+                          <td className={`py-3 px-2 text-right font-bold text-xs ${row.status === 'FALTANTE'
                               ? 'text-red-700'
                               : row.status === 'SOBRANTE'
                                 ? 'text-blue-700'
                                 : row.status === 'SIN_CONTAR'
                                   ? 'text-gray-400'
                                   : 'text-emerald-700'
-                          }`}>
+                            }`}>
                             {row.diffQty === undefined ? '--' : row.diffQty > 0 ? `+${row.diffQty}` : row.diffQty}
                           </td>
                           <td className="py-3 px-2 text-right font-bold text-xs text-gray-700">
                             {row.diffQty === undefined || row.diffQty === 0 ? '--' : `$${row.discrepancyValue.toFixed(2)}`}
                           </td>
                           <td className="py-3 px-4 text-center">
-                            <span className={`inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${
-                              row.status === 'FALTANTE'
+                            <span className={`inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${row.status === 'FALTANTE'
                                 ? 'bg-red-100 text-red-700 border-red-200'
                                 : row.status === 'SOBRANTE'
                                   ? 'bg-blue-100 text-blue-700 border-blue-200'
                                   : row.status === 'SIN_CONTAR'
                                     ? 'bg-gray-100 text-gray-600 border-gray-200'
                                     : 'bg-emerald-100 text-emerald-700 border-emerald-200'
-                            }`}>
+                              }`}>
                               {row.status === 'SIN_CONTAR' ? 'SIN CONTAR' : row.status}
                             </span>
                           </td>

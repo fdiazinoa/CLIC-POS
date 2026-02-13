@@ -232,8 +232,12 @@ export const db = {
           console.log('ℹ️ Slave terminal detected: Skipping auto-seeding. Waiting for Master sync.');
         }
 
-        if (!existingConfig || Object.keys(existingConfig).length === 0) {
-          return isSlave ? {} : SEED_DATA;
+        // Determine if we should return seed data (only for masters that are truly empty)
+        const hasConfig = existingConfig && (Array.isArray(existingConfig) ? existingConfig.length > 0 : Object.keys(existingConfig).length > 0);
+
+        if (!hasConfig && !isSlave) {
+          console.log('🌱 No config found on Master: Returning SEED_DATA');
+          return SEED_DATA;
         }
 
         // Load all data to return consistent structure (Legacy support)

@@ -55,6 +55,14 @@ const InventoryHome: React.FC<InventoryHomeProps> = ({
             description: 'Probar conexión con Maestra',
             color: 'indigo',
             gradient: 'from-indigo-500 to-indigo-600'
+        },
+        {
+            id: 'INVENTORY_AUDIT',
+            icon: BarChart3,
+            label: 'Auditoría y Cierre',
+            description: 'Revisar sesiones y cerrar inventario',
+            color: 'rose',
+            gradient: 'from-rose-500 to-rose-600'
         }
     ];
 

@@ -80,7 +80,6 @@ import InventoryHome from './components/inventory/InventoryHome';
 import InventoryCount from './components/inventory/InventoryCount';
 import InventoryTracking from './components/InventoryTracking';
 import KitchenDisplay from './components/kds/KitchenDisplay';
-import InventoryAuditClosure from './components/inventory/InventoryAuditClosure';
 
 
 import { seriesSyncService } from './services/sync/SeriesSyncService';
@@ -1186,7 +1185,6 @@ const AppContent: React.FC = () => {
             onOpenHistory={() => setCurrentView('HISTORY')}
             onOpenFinance={() => handleViewChange('FINANCE')}
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
-            onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
             onOpenTableMap={() => handleViewChange('TABLE_MAP')}
             onTransactionComplete={handleTransactionComplete}
             activeTable={activeTable}
@@ -1227,22 +1225,6 @@ const AppContent: React.FC = () => {
             onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
             onUpdateProducts={async (p) => { setProducts(p); /* db.save('products', p) removed for efficiency */ syncManager.broadcastChange('products', null, 'UPDATE').catch(console.error); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
-            onAdjustStock={async (adjustments) => {
-              const pairedTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
-              const terminalId = pairedTerminal?.id || 'LOCAL';
-              const whId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
-              for (const adj of adjustments) {
-                if (adj.quantity !== 0) {
-                  const type = adj.quantity > 0 ? 'AJUSTE_ENTRADA' : 'AJUSTE_SALIDA';
-                  await db.recordInventoryMovement(whId, adj.productId, type, 'AUDITORIA', adj.quantity, undefined, terminalId);
-                }
-              }
-              backgroundSyncManager.triggerSync();
-              const freshData = await db.init();
-              setProducts(freshData.products);
-              const freshStocks = await db.get('productStocks') as ProductStock[] || [];
-              setProductStocks(freshStocks);
-            }}
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
@@ -1287,22 +1269,6 @@ const AppContent: React.FC = () => {
             onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
             onUpdateProducts={async (p) => { setProducts(p); await db.save('products', p); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
-            onAdjustStock={async (adjustments) => {
-              const pairedTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
-              const terminalId = pairedTerminal?.id || 'LOCAL';
-              const whId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
-              for (const adj of adjustments) {
-                if (adj.quantity !== 0) {
-                  const type = adj.quantity > 0 ? 'AJUSTE_ENTRADA' : 'AJUSTE_SALIDA';
-                  await db.recordInventoryMovement(whId, adj.productId, type, 'AUDITORIA', adj.quantity, undefined, terminalId);
-                }
-              }
-              backgroundSyncManager.triggerSync();
-              const freshData = await db.init();
-              setProducts(freshData.products);
-              const freshStocks = await db.get('productStocks') as ProductStock[] || [];
-              setProductStocks(freshStocks);
-            }}
             onOpenZReport={() => setCurrentView('Z_REPORT')}
             onOpenSupplyChain={() => setCurrentView('SUPPLY_CHAIN')}
             onOpenFranchise={() => setCurrentView('FRANCHISE_DASHBOARD')}
@@ -1787,32 +1753,6 @@ const AppContent: React.FC = () => {
           />
         );
 
-      case 'INVENTORY_AUDIT':
-        return (
-          <div className="bg-gray-100 h-screen flex flex-col overflow-hidden">
-            <div className="bg-white shadow-sm border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-10 shrink-0">
-              <button
-                onClick={() => setCurrentView('INVENTORY_HOME')}
-                className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-gray-200"
-              >
-                ← Volver
-              </button>
-              <h1 className="text-base font-black text-gray-800">Auditoría de Inventarios</h1>
-              <div className="w-20"></div>
-            </div>
-            <div className="flex-1 overflow-hidden p-4">
-              <InventoryAuditClosure
-                warehouses={warehouses}
-                products={products}
-                config={config}
-                currentUser={currentUser}
-                roles={roles}
-                terminalId={getCurrentTerminal()?.id}
-              />
-            </div>
-          </div>
-        );
-
       case 'KIOSK_PAYMENT':
         return (
           <KioskPayment
@@ -1909,28 +1849,13 @@ const AppContent: React.FC = () => {
             onSave={(counts) => {
               const now = new Date().toISOString();
               const sessionId = `COUNT-${Date.now()}`;
-              const warehouseId = viewData?.warehouseId || '';
-              const warehouseProducts = products.filter(p => {
-                if (!warehouseId) return true;
-                if (p.activeInWarehouses && !p.activeInWarehouses.includes(warehouseId)) return false;
-                return true;
-              });
               const session = {
                 id: sessionId,
-                warehouseId,
+                warehouseId: viewData?.warehouseId || '',
                 warehouseName: viewData?.warehouseName,
                 createdAt: now,
-                finalizedAt: now,
-                status: 'FINALIZED',
                 createdBy: currentUser?.id,
                 createdByName: currentUser?.name,
-                systemSnapshot: warehouseProducts.map(p => ({
-                  productId: p.id,
-                  productName: p.name,
-                  category: p.category,
-                  systemQty: warehouseId ? (p.stockBalances?.[warehouseId] ?? 0) : (p.stock ?? 0),
-                  avgCost: p.cost || 0
-                })),
                 items: counts.map((c: any) => ({
                   productId: c.productId,
                   productName: c.productName,
@@ -1938,9 +1863,7 @@ const AppContent: React.FC = () => {
                   systemQty: c.expectedQty,
                   countedQty: c.countedQty,
                   difference: c.difference
-                })),
-                updatedAt: now,
-                syncStatus: 'PENDING'
+                }))
               };
               db.saveDocument('inventoryCounts' as any, session).then(() => {
                 alert(`Conteo guardado: ${counts.length} productos`);

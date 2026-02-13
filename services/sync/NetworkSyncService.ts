@@ -208,11 +208,19 @@ class NetworkSyncService {
             await this.pullCollection('inventoryLedger'); // Sync Kardex
             await this.pullCollection('purchaseOrders');  // Sync Orders
             await this.pullCollection('transfers');       // Sync Stock Transfers
+            await this.pullCollection('transfers');       // Sync Stock Transfers
             await this.pullCollection('receptions');      // Sync Purchase Receptions
+            await this.pullCollection('inventoryCounts'); // Sync Audit Sessions
+            await this.pullCollection('inventorySnapshots');     // Sync Hard Locks
+            await this.pullCollection('inventoryAuditLogs');     // Sync Audit Logs
 
             // 4. Push Other Pending Collections
             await this.pushCollection('transfers');
+            await this.pushCollection('transfers');
             await this.pushCollection('receptions');
+            await this.pushCollection('inventoryCounts');
+            await this.pushCollection('inventorySnapshots');
+            await this.pushCollection('inventoryAuditLogs');
 
             this.updateStatus({
                 lastSync: new Date(),

@@ -15,7 +15,7 @@ interface LoginScreenProps {
 const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availableUsers, config }) => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
-  const [showUsersList, setShowUsersList] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
   const [biometricError, setBiometricError] = useState(false);
   const [biometricFailCount, setBiometricFailCount] = useState(0);
   const [isHardwareAvailable, setIsHardwareAvailable] = useState(false);
@@ -135,9 +135,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
     setTimeout(() => setBiometricError(false), 2000);
   };
 
-  const handleUserClick = (userPin: string) => {
-    setPin(userPin);
-    checkLogin(userPin);
+  const handleUserClick = (user: UserType) => {
+    setSelectedUser(user);
+    setPin('');
+    setError(false);
   };
 
   return (
@@ -154,44 +155,35 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
 
       <div className="max-w-md w-full bg-gray-800/80 backdrop-blur-md rounded-3xl border border-gray-700 shadow-2xl p-8 z-10 flex flex-col relative">
 
-        <div className="text-center mb-8">
-          <div className="bg-gray-700 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner">
-            <Lock className="text-blue-400" size={32} />
+        <div className="text-center mb-6">
+          <div className="bg-gray-700/50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3 shadow-inner">
+            <Lock className="text-blue-400" size={28} />
           </div>
-          <h1 className="text-2xl font-bold text-white mb-1">Acceso de Usuario</h1>
-          <p className="text-gray-400 text-sm mb-2">{subVertical}</p>
+          <h1 className="text-xl font-bold text-white mb-1">Acceso de Sistema</h1>
+          <p className="text-gray-400 text-xs mb-4">{subVertical}</p>
 
-          {/* Demo Users Hint */}
-          <button
-            onClick={() => setShowUsersList(!showUsersList)}
-            className="text-xs text-blue-400 font-bold hover:text-blue-300 flex items-center justify-center gap-1 mx-auto bg-gray-700/50 px-3 py-1 rounded-full transition-colors"
-          >
-            Ver Credenciales Demo <ChevronDown size={14} className={`transition-transform ${showUsersList ? 'rotate-180' : ''}`} />
-          </button>
-          {showUsersList && (
-            <div className="mt-4 bg-gray-700 rounded-xl p-3 animate-in slide-in-from-top-2 text-left space-y-2 border border-gray-600">
-              {availableUsers.map(u => (
-                <div
-                  key={u.id}
-                  onClick={() => handleUserClick(u.pin)}
-                  className="flex justify-between items-center p-2 hover:bg-gray-600 rounded-lg cursor-pointer transition-colors group"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-gray-500 flex items-center justify-center text-xs font-bold text-white">
-                      {u.name.charAt(0)}
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-white">{u.name}</p>
-                      <p className="text-[10px] text-gray-300">{u.role}</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-xs font-mono bg-black/30 px-2 py-1 rounded text-green-400 group-hover:bg-black/50">
-                      {u.pin}
-                    </span>
-                  </div>
+          {/* User Selection Grid */}
+          <div className="grid grid-cols-3 gap-3 mb-6">
+            {availableUsers.map(u => (
+              <button
+                key={u.id}
+                onClick={() => handleUserClick(u)}
+                className={`flex flex-col items-center p-3 rounded-2xl transition-all border-2 ${selectedUser?.id === u.id
+                  ? 'bg-blue-600/20 border-blue-500 scale-105'
+                  : 'bg-gray-700/30 border-transparent hover:bg-gray-700/50'
+                  }`}
+              >
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold mb-2 shadow-lg ${selectedUser?.id === u.id ? 'bg-blue-500 text-white' : 'bg-gray-600 text-gray-300'}`}>
+                  {u.photo ? <img src={u.photo} className="w-full h-full rounded-full object-cover" /> : u.name.charAt(0)}
                 </div>
-              ))}
+                <span className="text-[10px] font-bold text-gray-300 truncate w-full text-center">{u.name.split(' ')[0]}</span>
+              </button>
+            ))}
+          </div>
+
+          {selectedUser && (
+            <div className="animate-in fade-in slide-in-from-top-2">
+              <p className="text-blue-400 text-sm font-bold mb-4">Ingresa PIN para {selectedUser.name}</p>
             </div>
           )}
         </div>

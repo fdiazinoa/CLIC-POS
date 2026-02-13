@@ -52,6 +52,7 @@ interface SettingsProps {
   onUpdateRoles: (roles: RoleDefinition[]) => void;
   onUpdateProducts: (products: Product[]) => void;
   onUpdateWarehouses: (warehouses: Warehouse[]) => void;
+  onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
   onOpenZReport: () => void;
   onOpenSupplyChain: () => void;
   onOpenFranchise: () => void;
@@ -148,6 +149,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
             onUpdateProducts={props.onUpdateProducts}
             onUpdateTransfers={props.onUpdateTransfers || (() => { })}
             onUpdateSequences={props.onUpdateSequences || (() => { })}
+            onAdjustStock={props.onAdjustStock}
             onClose={() => setCurrentView('HOME')}
           />
         );

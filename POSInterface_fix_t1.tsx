@@ -10,8 +10,7 @@ import {
    ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle,
    MessageSquare, PlayCircle, Download, Lock, ArrowUpRight, Landmark,
    UserCheck, StickyNote, Inbox, Printer, QrCode, Box, Package,
-   Cloud, RefreshCw, CloudOff, Layout, ChefHat, Building2, ClipboardCheck
-
+   Cloud, RefreshCw, CloudOff, Layout, ChefHat
 
 } from 'lucide-react';
 import { Html5Qrcode } from "html5-qrcode";
@@ -76,7 +75,6 @@ interface POSInterfaceProps {
    onOpenHistory: () => void;
    onOpenFinance: () => void;
    onOpenInventoryTracking: (productId?: string) => void;
-   onOpenAudit?: () => void;
    onOpenTableMap?: () => void;
    onTransactionComplete: (txn: Transaction) => void;
    onAddCustomer: (customer: Customer) => void;
@@ -109,7 +107,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onOpenHistory,
    onOpenFinance,
    onOpenInventoryTracking,
-   onOpenAudit,
    onOpenTableMap,
    onTransactionComplete,
    onAddCustomer,
@@ -978,9 +975,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          } else {
             // Standard single transaction logic
             const taxAmount = cartTax;
-            const netAmount = isTaxIncluded
-               ? (grossLineTotal - discountAmount - taxAmount)
-               : (grossLineTotal - discountAmount);
+            const netAmount = grossLineTotal - discountAmount - (isTaxIncluded ? 0 : taxAmount);
 
             const txn = await transactionService.createTransaction({
                documentType: hasReturns ? 'REFUND' : 'TICKET',
@@ -1372,18 +1367,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          {/* LEFT AREA: PRODUCTS */}
          <div className={`flex-1 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
-            <header className="bg-white px-4 md:px-8 py-3 md:py-4 border-b border-gray-200 flex items-center gap-3 md:gap-6 shadow-sm z-10 shrink-0">
+            <header className="bg-white px-8 py-4 border-b border-gray-200 flex items-center gap-6 shadow-sm z-10 shrink-0">
                <div className="flex items-center gap-3 pr-4 border-r border-gray-100">
                   <div className="w-10 h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
                      {currentUser.photo ? <img src={currentUser.photo} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center bg-blue-50 text-blue-600 font-bold">{currentUser.name.charAt(0)}</div>}
                   </div>
                   <div className="hidden lg:block leading-tight">
                      <p className="text-sm font-black text-gray-800 truncate max-w-[120px]">{currentUser.name}</p>
-                     <div className="flex items-center gap-2">
-                        <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">Cajero</p>
-                        <span className="text-gray-300">•</span>
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">T-{terminalId}</p>
-                     </div>
+                     <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">Cajero</p>
                   </div>
                </div>
 
@@ -1396,40 +1387,76 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <Cloud size={18} className="text-emerald-500" />
                   )}
                   <div className="flex flex-col leading-none">
-                     <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest hidden md:block">Sincronización</span>
+                     <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Sincronización</span>
                      <span className={`text-[10px] font-bold ${syncState.pendingCount > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                        {syncState.isSyncing ? '...' : syncState.pendingCount > 0 ? `${syncState.pendingCount}` : 'OK'}
+                        {syncState.isSyncing ? 'Subiendo...' : syncState.pendingCount > 0 ? `${syncState.pendingCount} pendientes` : 'Al día'}
                      </span>
                   </div>
                </div>
 
 
-               <div className="flex-1 flex items-center gap-2 md:gap-4">
+               <div className="flex-1 flex items-center gap-4">
+                  {/* TERMINAL ID BADGE (DEBUG/INFO) */}
+                  <div className="hidden xl:flex flex-col leading-none border-r border-gray-100 pr-4 mr-2">
+                     <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Terminal</span>
+                     <span className={`text-xs font-bold ${terminalId === 'T1' && config.terminals?.length > 1 ? 'text-red-500 animate-pulse' : 'text-gray-700'}`}>
+                        {terminalId}
+                     </span>
+                  </div>
 
-                  <div className="relative flex-1 group min-w-[150px] md:min-w-[300px]">
-                     <Search className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                  <div className="relative flex-1 group">
+                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
                      <input
                         ref={searchInputRef}
                         type="text"
-                        placeholder="Buscar..."
+                        placeholder="Buscar producto..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         onKeyDown={handleSearchKeyDown}
-                        className="w-full pl-10 md:pl-12 pr-10 md:pr-4 py-2.5 md:py-3 bg-gray-100 rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
+                        className="w-full pl-12 pr-12 md:pr-4 py-3 bg-gray-100 rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
                      />
-                     <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
+                     <button onClick={() => setIsScannerOpen(true)} className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
                   </div>
                   <div className="relative shrink-0">
-                     <button onClick={() => setShowTariffSelector(!showTariffSelector)} className={`flex items-center gap-2 md:gap-3 px-3 md:px-5 py-2.5 md:py-3 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-gray-100 border-transparent'}`}>
+                     <button onClick={() => setShowTariffSelector(!showTariffSelector)} className={`flex items-center gap-3 px-5 py-3 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-gray-100 border-transparent'}`}>
                         <Tag size={18} className="text-purple-600" />
                         <div className="text-left hidden sm:block">
                            <p className="text-[9px] font-black text-purple-400 uppercase tracking-widest leading-none mb-1">Tarifa Activa</p>
                            <p className="text-xs font-bold text-purple-900 leading-none truncate max-w-[120px]">{activeTariff?.name || 'General'}</p>
                         </div>
-                        <ChevronDown size={14} className={`text-purple-400 transition-transform ${showTariffSelector ? 'rotate-180' : ''}`} />
+                        <ChevronDown size={16} className={`text-purple-400 ${showTariffSelector ? 'rotate-180' : ''}`} />
                      </button>
                   </div>
 
+                  {/* RETURN MODE TOGGLE */}
+                  <button
+                     onClick={() => {
+                        if (!isReturnMode) {
+                           // ENTERING REFUND MODE - CHECK PERMISSIONS
+                           // Check if user has permission in their profile or role
+                           const hasPermission = (currentUser as any).permissions?.includes('CAN_REFUND') ||
+                              ['ADMIN', 'MANAGER'].includes(currentUser.role);
+
+                           if (!hasPermission) {
+                              setShowSupervisorAuth(true);
+                              return;
+                           }
+                        }
+                        // Turn off authorization if leaving refund mode
+                        if (isReturnMode) {
+                           setRefundAuthorizedBy(null);
+                        }
+                        // Toggle mode if authorized
+                        setIsReturnMode(!isReturnMode);
+                     }}
+                     className={`flex items-center gap-3 px-5 py-3 rounded-2xl border-2 transition-all ${isReturnMode ? 'border-red-500 bg-red-50' : 'bg-gray-100 border-transparent hover:bg-gray-200'}`}
+                  >
+                     <ArrowRightLeft size={18} className={isReturnMode ? 'text-red-600' : 'text-gray-400'} />
+                     <div className="text-left hidden sm:block">
+                        <p className={`text-[9px] font-black uppercase tracking-widest leading-none mb-1 ${isReturnMode ? 'text-red-400' : 'text-gray-400'}`}>Modo Operación</p>
+                        <p className={`text-xs font-bold leading-none ${isReturnMode ? 'text-red-900' : 'text-gray-600'}`}>{isReturnMode ? 'DEVOLUCIÓN' : 'VENTA'}</p>
+                     </div>
+                  </button>
 
                   <SupervisorAuthModal
                      isOpen={showSupervisorAuth}
@@ -1955,16 +1982,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <span className="text-[9px] font-black uppercase mt-1">Rastreo</span>
                            </button>
 
-                           <button onClick={() => onOpenSettings('WAREHOUSES')} title="Gestión de Almacenes" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-amber-50 border-amber-200 text-amber-600 hover:bg-amber-100 transition-all min-w-[60px]">
-                              <Building2 size={18} />
-                              <span className="text-[9px] font-black uppercase mt-1">Almacén</span>
-                           </button>
-
-                           <button onClick={() => onOpenAudit?.()} title="Auditoría de Inventario" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 transition-all min-w-[60px]">
-                              <ClipboardCheck size={18} />
-                              <span className="text-[9px] font-black uppercase mt-1">Audit</span>
-                           </button>
-
                            {activeTerminalConfig?.operational?.usa_mesas && (
                               <button
                                  onClick={(config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL') ? handleSendAndExit : () => onOpenTableMap?.()}
@@ -2093,24 +2110,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  <button onClick={() => onOpenInventoryTracking()} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all">
                                     <Package size={16} />
                                     <span className="text-[9px] font-black uppercase mt-1">Rastreo</span>
-                                 </button>
-                                 <button
-                                    onClick={() => {
-                                       if (!isReturnMode) {
-                                          const hasPermission = (currentUser as any).permissions?.includes('CAN_REFUND') ||
-                                             ['ADMIN', 'MANAGER'].includes(currentUser.role);
-                                          if (!hasPermission) {
-                                             setShowSupervisorAuth(true);
-                                             return;
-                                          }
-                                       }
-                                       if (isReturnMode) setRefundAuthorizedBy(null);
-                                       setIsReturnMode(!isReturnMode);
-                                    }}
-                                    className={`flex flex-col items-center justify-center py-2 rounded-xl border-2 transition-all ${isReturnMode ? 'border-red-500 bg-red-50 text-red-600' : 'bg-white border-gray-100 text-gray-400 hover:border-red-100 hover:text-red-500'}`}
-                                 >
-                                    <ArrowRightLeft size={16} />
-                                    <span className="text-[9px] font-black uppercase mt-1">{isReturnMode ? 'VENTA' : 'DEVOL.'}</span>
                                  </button>
                                  {activeTerminalConfig?.operational?.usa_mesas && (
                                     <button onClick={handleBackToMap} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-teal-50 border-teal-100 text-teal-600 hover:bg-teal-100 hover:border-teal-200 transition-all">

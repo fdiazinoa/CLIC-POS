@@ -25,17 +25,21 @@ interface WarehouseManagerProps {
    onUpdateProducts: (products: Product[]) => void;
    onUpdateTransfers: (transfers: StockTransfer[]) => void;
    onUpdateSequences: (sequences: any[]) => void;
+   onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
    onClose: () => void;
    terminalId?: string;
 }
 
-type Tab = 'LOCATIONS' | 'TRANSFERS' | 'HISTORY' | 'OPTIMIZER' | 'FORECASTING' | 'AUDIT_CLOSURE';
+type Tab = 'LOCATIONS' | 'TRANSFERS' | 'HISTORY' | 'OPTIMIZER' | 'FORECASTING' | 'INVENTORY' | 'AUDIT_CLOSURE';
 type HistoryFilter = 'ALL' | 'IN_TRANSIT' | 'COMPLETED';
 
 import InventoryOptimizer from './InventoryOptimizer';
 import SmartReplenishment from './SmartReplenishment';
 import { Supplier, PurchaseOrder } from '../types';
+import InventoryAudit from './InventoryAudit';
 import InventoryAuditClosure from './inventory/InventoryAuditClosure';
+import ErrorBoundary from './ErrorBoundary';
+import { ScanBarcode } from 'lucide-react';
 
 const WarehouseManager: React.FC<WarehouseManagerProps> = ({
    warehouses,
@@ -50,6 +54,7 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
    onUpdateProducts,
    onUpdateTransfers,
    onUpdateSequences,
+   onAdjustStock,
    onClose,
    terminalId,
    currentUser,
@@ -83,6 +88,149 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
 
    const [breakdownData, setBreakdownData] = useState<{ product: Product, warehouseId: string } | null>(null);
    const [activeTracking, setActiveTracking] = useState<any[]>([]);
+
+   // Inventory State
+   const [isAuditMode, setIsAuditMode] = useState(false);
+   const [productSearch, setProductSearch] = useState('');
+   const [selectedCategory, setSelectedCategory] = useState<string>('Todas');
+
+   const categories = useMemo(() => {
+      const cats = new Set(products.map(p => p.category).filter(Boolean));
+      return ['Todas', ...Array.from(cats)].sort();
+   }, [products]);
+
+   const filteredProductsList = useMemo(() => {
+      return products.filter(p => {
+         const matchesSearch = (p.name || '').toLowerCase().includes(productSearch.toLowerCase()) ||
+            (p.barcode || '').includes(productSearch);
+         const matchesCategory = selectedCategory === 'Todas' || p.category === selectedCategory;
+         return matchesSearch && matchesCategory;
+      });
+   }, [products, productSearch, selectedCategory]);
+
+   const handleAuditCommit = async (adjustments: { productId: string; newStock: number }[]) => {
+      const now = new Date().toISOString();
+      const sessionItems = adjustments.map(adj => {
+         const product = products.find(p => p.id === adj.productId);
+         return {
+            productId: adj.productId,
+            productName: product?.name || 'Unknown',
+            systemQty: product?.stock || 0,
+            countedQty: adj.newStock,
+            difference: adj.newStock - (product?.stock || 0)
+         };
+      });
+
+      const session = {
+         id: `SESSION-${Date.now()}`,
+         warehouseId: config.inventoryScope?.defaultSalesWarehouseId || 'wh_central',
+         warehouseName: 'Principal',
+         createdAt: now,
+         finalizedAt: now,
+         status: 'FINALIZED' as const,
+         createdBy: currentUser?.id || 'POS-MASTER',
+         createdByName: currentUser?.name || 'Terminal Maestra',
+         items: sessionItems,
+         syncStatus: 'PENDING' as const,
+         updatedAt: now
+      };
+
+      // Save to inventoryCounts so it appears in Audit history
+      await db.saveDocument('inventoryCounts' as any, session);
+
+      // Map adjustments for onAdjustStock
+      const normalizedAdjustments = adjustments.map(adj => {
+         const current = products.find(p => p.id === adj.productId)?.stock || 0;
+         return {
+            productId: adj.productId,
+            quantity: adj.newStock - current
+         };
+      });
+
+      onAdjustStock(normalizedAdjustments);
+      setIsAuditMode(false);
+      alert("Inventario actualizado y sesión de auditoría registrada.");
+   };
+
+   const renderInventoryList = () => (
+      <div className="animate-in fade-in slide-in-from-right-4 pb-20 flex flex-col h-full">
+         <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold text-gray-800">Inventario Actual</h2>
+            <button
+               onClick={() => setIsAuditMode(true)}
+               className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-500 transition-all flex items-center gap-2"
+            >
+               <ScanBarcode size={20} />
+               Hacer Auditoría (Ajuste Manual)
+            </button>
+         </div>
+
+         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex-1 flex flex-col">
+            <div className="p-4 border-b border-gray-100 bg-gray-50/50">
+               <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+                  <input
+                     type="text"
+                     placeholder="Filtrar por nombre o código..."
+                     value={productSearch}
+                     onChange={(e) => setProductSearch(e.target.value)}
+                     className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20"
+                  />
+               </div>
+
+               <div className="flex gap-2 p-3 overflow-x-auto no-scrollbar border-t border-gray-100">
+                  {categories.map(cat => (
+                     <button
+                        key={cat}
+                        onClick={() => setSelectedCategory(cat)}
+                        className={`px-3 py-1 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${selectedCategory === cat
+                           ? 'bg-blue-600 text-white shadow-sm'
+                           : 'bg-white text-gray-500 border border-gray-100 h-8 flex items-center'
+                           }`}
+                     >
+                        {cat}
+                     </button>
+                  ))}
+               </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+               <table className="w-full text-left text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
+                     <tr>
+                        <th className="p-4 font-bold text-gray-500">Producto</th>
+                        <th className="p-4 font-bold text-gray-500">Categoría</th>
+                        <th className="p-4 font-bold text-gray-500 text-center">Stock</th>
+                        <th className="p-4 font-bold text-gray-500 text-right">Valor Total</th>
+                     </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                     {filteredProductsList.map((p, idx) => (
+                        <tr key={p.id || `inv-${idx}`} className="hover:bg-gray-50">
+                           <td className="p-4">
+                              <div className="font-bold text-gray-800">{p.name}</div>
+                              <div className="text-xs text-gray-400 font-mono">{p.barcode || 'N/A'}</div>
+                           </td>
+                           <td className="p-4 text-gray-600">
+                              <span className="px-2 py-1 bg-gray-100 rounded-lg text-xs font-bold">{p.category}</span>
+                           </td>
+                           <td className="p-4 text-center">
+                              <span className={`font-bold ${(p.stock || 0) <= (p.minStock || 0) ? 'text-red-600 bg-red-50 px-2 py-1 rounded' : 'text-gray-800'
+                                 }`}>
+                                 {p.stock}
+                              </span>
+                           </td>
+                           <td className="p-4 text-right font-mono text-gray-600">
+                              {config.currencySymbol}{((p.stock || 0) * (p.cost || 0)).toFixed(2)}
+                           </td>
+                        </tr>
+                     ))}
+                  </tbody>
+               </table>
+            </div>
+         </div>
+      </div>
+   );
 
    // --- WAREHOUSE CRUD ---
 
@@ -665,6 +813,12 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                   <ShoppingBag size={18} /> Reabastecimiento
                </button>
                <button
+                  onClick={() => setActiveTab('INVENTORY')}
+                  className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'INVENTORY' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+               >
+                  <Package size={18} /> Inventario
+               </button>
+               <button
                   onClick={() => setActiveTab('AUDIT_CLOSURE')}
                   className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'AUDIT_CLOSURE' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
@@ -673,6 +827,9 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
             </div>
 
             <div className="flex-1 overflow-hidden p-8">
+
+               {/* --- INVENTORY LIST TAB --- */}
+               {activeTab === 'INVENTORY' && renderInventoryList()}
 
                {/* --- LOCATIONS TAB --- */}
                {activeTab === 'LOCATIONS' && (
@@ -1435,6 +1592,12 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                   </div>
                </div>
             )}
+
+         {isAuditMode && (
+            <ErrorBoundary componentName="InventoryAudit">
+               <InventoryAudit products={products} mode="ABSOLUTE" onClose={() => setIsAuditMode(false)} onCommit={handleAuditCommit} />
+            </ErrorBoundary>
+         )}
       </>
    );
 };

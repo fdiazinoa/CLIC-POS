@@ -37,7 +37,7 @@ interface SupplyChainManagerProps {
    onDeleteReception: (id: string) => Promise<void>;
 }
 
-type Tab = 'ALERTS' | 'CREATE' | 'RECEIVE' | 'INVENTORY' | 'SUPPLIERS';
+type Tab = 'ALERTS' | 'CREATE' | 'RECEIVE' | 'SUPPLIERS';
 type AuditMode = 'ADDITIVE' | 'ABSOLUTE';
 
 const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
@@ -321,23 +321,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
       }
    };
 
-   const handleAuditCommit = (adjustments: { productId: string; newStock: number }[]) => {
-      const fakeItems: PurchaseOrderItem[] = adjustments.map(adj => {
-         const current = (safeProducts || []).find(p => p.id === adj.productId)?.stock || 0;
-         const diff = adj.newStock - current;
-         return {
-            productId: adj.productId,
-            productName: 'Audit Adjustment',
-            quantityOrdered: 0,
-            quantityReceived: diff,
-            cost: 0
-         };
-      });
 
-      onReceiveStock(fakeItems);
-      setIsAuditMode(false);
-      alert("Inventario actualizado correctamente.");
-   };
 
    // --- TOUCH FRIENDLY COMPONENTS ---
 
@@ -411,86 +395,8 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
       </div>
    );
 
-   const renderInventoryList = () => (
-      <div className="animate-in fade-in slide-in-from-right-4 pb-20 flex flex-col h-full">
-         <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-bold text-gray-800">Inventario Actual</h2>
-            <button
-               onClick={() => setIsAuditMode(true)}
-               className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-500 transition-all flex items-center gap-2"
-            >
-               <ScanBarcode size={20} />
-               Hacer Auditoría (Stocktake)
-            </button>
-         </div>
 
-         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex-1 flex flex-col">
-            <div className="p-4 border-b border-gray-100 bg-gray-50/50">
-               <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-                  <input
-                     type="text"
-                     placeholder="Filtrar inventario..."
-                     value={productSearch}
-                     onChange={(e) => setProductSearch(e.target.value)}
-                     className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20"
-                  />
-               </div>
 
-               {/* Inventory Category chips */}
-               <div className="flex gap-2 p-3 overflow-x-auto no-scrollbar border-t border-gray-100">
-                  {categories.map(cat => (
-                     <button
-                        key={cat}
-                        onClick={() => setSelectedCategory(cat)}
-                        className={`px-3 py-1 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${selectedCategory === cat
-                           ? 'bg-blue-600 text-white shadow-sm'
-                           : 'bg-white text-gray-500 border border-gray-100 h-8 flex items-center'
-                           }`}
-                     >
-                        {cat}
-                     </button>
-                  ))}
-               </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto">
-               <table className="w-full text-left text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
-                     <tr>
-                        <th className="p-4 font-bold text-gray-500">Producto</th>
-                        <th className="p-4 font-bold text-gray-500">Categoría</th>
-                        <th className="p-4 font-bold text-gray-500 text-center">Stock</th>
-                        <th className="p-4 font-bold text-gray-500 text-right">Valor Total</th>
-                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                     {(filteredProducts || []).map((p, idx) => (
-                        <tr key={p.id || `inv-${idx}`} className="hover:bg-gray-50">
-                           <td className="p-4">
-                              <div className="font-bold text-gray-800">{p.name}</div>
-                              <div className="text-xs text-gray-400 font-mono">{p.barcode || 'N/A'}</div>
-                           </td>
-                           <td className="p-4 text-gray-600">
-                              <span className="px-2 py-1 bg-gray-100 rounded-lg text-xs font-bold">{p.category}</span>
-                           </td>
-                           <td className="p-4 text-center">
-                              <span className={`font-bold ${(p.stock || 0) <= (p.minStock || 0) ? 'text-red-600 bg-red-50 px-2 py-1 rounded' : 'text-gray-800'
-                                 }`}>
-                                 {p.stock}
-                              </span>
-                           </td>
-                           <td className="p-4 text-right font-mono text-gray-600">
-                              {config.currencySymbol}{((p.stock || 0) * (p.cost || 0)).toFixed(2)}
-                           </td>
-                        </tr>
-                     ))}
-                  </tbody>
-               </table>
-            </div>
-         </div>
-      </div>
-   );
 
    const renderCreateOrder = () => {
       if (!isCreatingOrder) {
@@ -1586,14 +1492,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
       </div>
    );
 
-   if (isAuditMode) {
-      return (
-         <ErrorBoundary componentName="InventoryAudit">
-            <InventoryAudit products={safeProducts} mode="ABSOLUTE" onClose={() => setIsAuditMode(false)} onCommit={handleAuditCommit} />
-         </ErrorBoundary>
-      );
-   }
-
    return (
       <ErrorBoundary componentName="SupplyChainManager">
          <div className="h-screen w-full bg-gray-50 flex flex-col overflow-hidden">
@@ -1625,12 +1523,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                      <Archive size={20} /> Recepción
                      {activeOrders.length > 0 && <span className="bg-green-500 text-white text-[10px] px-1.5 rounded-full">{activeOrders.length}</span>}
                   </button>
-                  <button
-                     onClick={() => setActiveTab('INVENTORY')}
-                     className={`px-6 py-3 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeTab === 'INVENTORY' ? 'bg-white text-blue-600 shadow-md' : 'text-gray-500'}`}
-                  >
-                     <LayoutList size={20} /> Inventario
-                  </button>
+
                   <button
                      onClick={() => setActiveTab('ALERTS')}
                      className={`px-6 py-3 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeTab === 'ALERTS' ? 'bg-white text-red-600 shadow-md' : 'text-gray-500'}`}
@@ -1653,7 +1546,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   {activeTab === 'ALERTS' && renderAlerts()}
                   {activeTab === 'CREATE' && renderCreateOrder()}
                   {activeTab === 'RECEIVE' && renderReception()}
-                  {activeTab === 'INVENTORY' && renderInventoryList()}
+
                   {activeTab === 'SUPPLIERS' && renderSuppliers()}
                </ErrorBoundary>
             </div>
