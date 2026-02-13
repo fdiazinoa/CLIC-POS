@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Trash2, AlertTriangle, Calculator, Package, ChefHat, Search, Info } from 'lucide-react';
+import { Plus, Trash2, AlertTriangle, Calculator, Package, ChefHat, Search, Info, Wand2 } from 'lucide-react';
 import { Product, RecipeDetail, ProductType } from '../types';
+import { UNITS, calculateCost, UnitType } from '../utils/units';
+import { calculatePriceFromMargin } from '../utils/pricing';
 
 const formatCurrency = (amount: number, symbol: string = '$'): string => {
     return new Intl.NumberFormat('es-DO', {
@@ -21,9 +23,6 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
     const [searchTerm, setSearchTerm] = useState('');
     const [searchResults, setSearchResults] = useState<Product[]>([]);
 
-    // Local state for recursive cost preview, could be fetched from backend for deep trees
-    // asking backend to calc cost is better, but for UI responsiveness we do basic calc here
-
     const recipeType = product.type === 'KIT' ? 'KIT' : 'RECETA';
 
     useEffect(() => {
@@ -39,13 +38,17 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
     }, [searchTerm, allProducts, product.id]);
 
     const handleAddIngredient = (ingredient: Product) => {
+        // Try to infer purchasing unit from attributes or defaults
+        const purchaseUnit = ingredient.purchaseUnit || ingredient.attributes?.find(a => a.name === 'Unidad')?.options[0] || 'un';
+
         const newDetail: RecipeDetail = {
             id: crypto.randomUUID(), // Temp ID
             parentItemId: product.id,
             childItemId: ingredient.id,
             childItemName: ingredient.name,
             quantity: 1,
-            unit: ingredient.attributes?.find(a => a.name === 'Unidad')?.options[0] || 'un',
+            unit: purchaseUnit,
+            originalUnit: purchaseUnit,
             wasteFactor: 0,
             isOptional: false,
             cost: ingredient.cost || 0
@@ -75,12 +78,16 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
         return (product.recipeDetails || []).reduce((sum, detail) => {
             const ing = allProducts.find(p => p.id === detail.childItemId);
             const baseCost = ing?.cost || 0;
+            const purchaseUnit = detail.originalUnit || ing?.purchaseUnit || 'un';
+
+            // Calculate cost based on Unit Conversion
+            const convertedCost = calculateCost(detail.quantity, detail.unit, baseCost, purchaseUnit);
 
             let waste = parseFloat(detail.wasteFactor.toString());
             if (isNaN(waste) || waste >= 1) waste = 0;
 
-            const realCost = (baseCost * detail.quantity) / (1 - waste);
-            return sum + realCost;
+            const finalCost = convertedCost / (1 - waste);
+            return sum + finalCost;
         }, 0);
     }, [product.recipeDetails, allProducts]);
 
@@ -95,6 +102,23 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
             onUpdate({ theoreticalCost: unitCost });
         }
     }, [unitCost]);
+
+    // Helper to get compatible units for a selector
+    const getCompatibleUnits = (baseUnitCode: string) => {
+        const baseUnit = UNITS[baseUnitCode];
+        if (!baseUnit) return [UNITS['un']]; // Fallback
+        return Object.values(UNITS).filter(u => u.type === baseUnit.type);
+    };
+
+    // Smart Price Adjustment State
+    const [showPricePopover, setShowPricePopover] = useState(false);
+    const [targetMargin, setTargetMargin] = useState<string>('30'); // Default to 30%
+
+    const handleApplyMargin = (percentage: number) => {
+        const newPrice = calculatePriceFromMargin(unitCost, percentage);
+        onUpdate({ price: newPrice });
+        setShowPricePopover(false);
+    };
 
     return (
         <div className="space-y-6 animate-in fade-in">
@@ -150,6 +174,7 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
             <div className="flex flex-col lg:flex-row gap-8">
                 {/* Left: Ingredients List */}
                 <div className="flex-1 space-y-4">
+                    {/* ... (ingredients list content) */}
                     {/* Search */}
                     <div className="relative">
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
@@ -185,7 +210,7 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
                             <thead className="bg-slate-50 text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100">
                                 <tr>
                                     <th className="px-4 py-3">Ingrediente</th>
-                                    <th className="px-4 py-3 text-center">Cant.</th>
+                                    <th className="px-4 py-3 text-center">Cant. / Unidad</th>
                                     {recipeType === 'RECETA' && <th className="px-4 py-3 text-center">Merma %</th>}
                                     <th className="px-4 py-3 text-right">Costo Est.</th>
                                     <th className="px-4 py-3 w-10"></th>
@@ -195,25 +220,43 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
                                 {(product.recipeDetails || []).map((detail, idx) => {
                                     const ing = allProducts.find(p => p.id === detail.childItemId);
                                     const baseCost = ing?.cost || 0;
+                                    const purchaseUnit = detail.originalUnit || ing?.purchaseUnit || 'un';
+
+                                    // Calculate for display
+                                    const convertedCost = calculateCost(detail.quantity, detail.unit, baseCost, purchaseUnit);
                                     let waste = detail.wasteFactor || 0;
-                                    const realCost = (baseCost * detail.quantity) / (1 - waste);
+                                    const realCost = convertedCost / (1 - waste);
+
+                                    const compatibleUnits = getCompatibleUnits(purchaseUnit);
 
                                     return (
                                         <tr key={detail.id || idx} className="hover:bg-slate-50/50 transition-colors">
                                             <td className="px-4 py-3">
                                                 <div className="font-bold text-slate-700 text-sm">{detail.childItemName || ing?.name || '---'}</div>
-                                                <div className="text-[10px] text-slate-400">{formatCurrency(baseCost, currencySymbol)} / unidad</div>
+                                                <div className="text-[10px] text-slate-400">
+                                                    {formatCurrency(baseCost, currencySymbol)} / {UNITS[purchaseUnit]?.name || purchaseUnit}
+                                                </div>
                                             </td>
                                             <td className="px-4 py-3 text-center">
-                                                <input
-                                                    type="number"
-                                                    min="0"
-                                                    step="0.001"
-                                                    value={detail.quantity}
-                                                    onChange={(e) => handleUpdateDetail(detail.id, 'quantity', parseFloat(e.target.value))}
-                                                    className="w-20 text-center font-bold bg-slate-100 rounded-lg py-1 text-sm border-transparent focus:bg-white focus:border-blue-300 outline-none border transition-all"
-                                                />
-                                                <span className="text-xs text-slate-400 ml-1">{detail.unit}</span>
+                                                <div className="flex items-center justify-center gap-2">
+                                                    <input
+                                                        type="number"
+                                                        min="0"
+                                                        step="0.001"
+                                                        value={detail.quantity}
+                                                        onChange={(e) => handleUpdateDetail(detail.id, 'quantity', parseFloat(e.target.value))}
+                                                        className="w-16 text-center font-bold bg-slate-100 rounded-lg py-1 text-sm border-transparent focus:bg-white focus:border-blue-300 outline-none border transition-all"
+                                                    />
+                                                    <select
+                                                        value={detail.unit}
+                                                        onChange={(e) => handleUpdateDetail(detail.id, 'unit', e.target.value)}
+                                                        className="w-24 text-xs font-bold bg-slate-100 rounded-lg py-1 border-transparent focus:bg-white focus:border-blue-300 outline-none border transition-all"
+                                                    >
+                                                        {compatibleUnits.map(u => (
+                                                            <option key={u.code} value={u.code}>{u.name}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
                                             </td>
                                             {recipeType === 'RECETA' && (
                                                 <td className="px-4 py-3 text-center">
@@ -256,7 +299,7 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
 
                 {/* Right: Cost Summary */}
                 <div className="lg:w-80 shrink-0 space-y-6">
-                    <div className="bg-slate-900 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
+                    <div className="bg-slate-900 rounded-3xl p-6 text-white shadow-xl relative overflow-visible">
 
                         {/* Dynamic color warning bg */}
                         {foodCostPct > 35 && (
@@ -282,9 +325,61 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
                                 <span className="text-slate-100 text-sm font-bold">Costo Unitario</span>
                                 <span className="text-2xl font-black">{formatCurrency(unitCost, currencySymbol)}</span>
                             </div>
-                            <div className="flex justify-between items-end pb-2">
-                                <span className="text-slate-400 text-sm">Precio Venta</span>
+                            <div className="flex justify-between items-end pb-2 relative">
+                                <span className="text-slate-400 text-sm flex items-center gap-2">
+                                    Precio Venta
+                                    <button
+                                        onClick={() => setShowPricePopover(!showPricePopover)}
+                                        className="flex items-center gap-1.5 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30 rounded-lg px-2 py-1 transition-all group"
+                                        title="Ajuste Inteligente de Precio"
+                                    >
+                                        <Wand2 size={12} className="text-blue-300 group-hover:text-blue-200" />
+                                        <span className="text-[10px] font-bold text-blue-300 group-hover:text-blue-200 uppercase tracking-wide">Ajustar</span>
+                                    </button>
+                                </span>
                                 <span className="text-xl font-bold text-slate-300">{formatCurrency(product.price, currencySymbol)}</span>
+
+                                {/* Smart Price Adjustment Popover */}
+                                {showPricePopover && (
+                                    <div className="absolute right-0 top-full mt-2 bg-white rounded-xl shadow-2xl p-4 w-64 z-[100] border border-slate-200 animate-in fade-in zoom-in-95 origin-top-right text-slate-800">
+                                        <div className="flex justify-between items-center mb-3">
+                                            <h5 className="font-bold text-xs uppercase text-slate-500">Ajuste Inteligente</h5>
+                                            <button onClick={() => setShowPricePopover(false)} className="text-slate-400 hover:text-slate-600"><Plus size={16} className="rotate-45" /></button>
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            <button
+                                                onClick={() => handleApplyMargin(30)}
+                                                className="w-full py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg text-sm font-bold border border-emerald-100 transition-colors"
+                                            >
+                                                Aplicar Food Cost 30%
+                                            </button>
+
+                                            <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                                                <div className="relative flex-1">
+                                                    <input
+                                                        type="number"
+                                                        value={targetMargin}
+                                                        onChange={(e) => setTargetMargin(e.target.value)}
+                                                        className="w-full pl-2 pr-8 py-1.5 bg-slate-50 rounded-lg text-sm font-bold border border-slate-200 outline-none focus:border-blue-300"
+                                                        placeholder="40"
+                                                    />
+                                                    <span className="absolute right-2 top-1.5 text-xs text-slate-400 font-bold">%</span>
+                                                </div>
+                                                <button
+                                                    onClick={() => handleApplyMargin(parseFloat(targetMargin) || 30)}
+                                                    className="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-bold transition-colors"
+                                                >
+                                                    Ok
+                                                </button>
+                                            </div>
+
+                                            <div className="text-[10px] text-center text-slate-400 mt-1">
+                                                Sugerido: <span className="font-mono font-bold text-slate-600">{formatCurrency(calculatePriceFromMargin(unitCost, parseFloat(targetMargin) || 30), currencySymbol)}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
@@ -305,6 +400,7 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
                             </p>
                         )}
                     </div>
+    // ...
 
                     <div className="p-4 bg-blue-50 border border-blue-100 rounded-2xl">
                         <h5 className="font-bold text-blue-800 text-sm mb-2 flex items-center gap-2">
@@ -321,3 +417,4 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({ product, allProducts, onU
 };
 
 export default RecipeManager;
+

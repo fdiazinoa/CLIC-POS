@@ -107,6 +107,15 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, mode, onClose
     }));
   };
 
+  const handleQuantityUpdate = (productId: string, newValue: number) => {
+    setAuditItems(prev => prev.map(item => {
+      if (item.product.id === productId) {
+        return { ...item, countedStock: Math.max(0, newValue) };
+      }
+      return item;
+    }));
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       if (searchQuery.trim()) {
@@ -285,12 +294,33 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, mode, onClose
                   {/* Details */}
                   <div className="flex-1 min-w-0 text-center sm:text-left">
                     <h4 className="font-bold text-slate-800 text-lg leading-tight truncate">{item.product.name}</h4>
-                    <div className="flex items-center justify-center sm:justify-start gap-3 mt-1 text-sm">
-                      <span className="text-slate-500 font-mono bg-white/50 px-1.5 rounded">{item.product.barcode || 'NO-CODE'}</span>
-                      {mode === 'ABSOLUTE' && (
-                        <span className="text-slate-400 flex items-center gap-1">
-                          Teórico: <strong>{item.systemStock}</strong>
-                        </span>
+                    <div className="flex flex-col justify-center sm:justify-start mt-1 text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-500 font-mono bg-white/50 px-1.5 rounded">{item.product.barcode || 'NO-CODE'}</span>
+                        {mode === 'ABSOLUTE' && (
+                          <span className="text-slate-400 flex items-center gap-1">
+                            Teórico: <strong>{item.systemStock}</strong>
+                          </span>
+                        )}
+                      </div>
+
+                      {/* UNIT HINT */}
+                      {(item.product.measurementUnit || item.product.purchaseUnit) && (
+                        <div className="flex items-center gap-2 mt-1 text-xs">
+                          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">
+                            Base: <strong>{item.product.measurementUnit || 'un'}</strong>
+                          </span>
+
+                          {item.product.purchaseUnit && item.product.purchaseUnit !== item.product.measurementUnit && (
+                            <>
+                              <span className="text-slate-300">|</span>
+                              <span className="px-1.5 py-0.5 rounded bg-orange-50 text-orange-600 border border-orange-200 flex items-center gap-1">
+                                <AlertTriangle size={10} />
+                                Compra: <strong>{item.product.purchaseUnit}</strong>
+                              </span>
+                            </>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -303,8 +333,15 @@ const InventoryAudit: React.FC<InventoryAuditProps> = ({ products, mode, onClose
                     >
                       <Minus size={20} />
                     </button>
-                    <div className="w-16 text-center">
-                      <span className="block text-2xl font-black text-slate-800 leading-none">{item.countedStock}</span>
+                    <div className="w-20 text-center">
+                      <input
+                        type="number"
+                        min="0"
+                        value={item.countedStock}
+                        onChange={(e) => handleQuantityUpdate(item.product.id, parseFloat(e.target.value) || 0)}
+                        onFocus={(e) => e.target.select()}
+                        className="w-full text-center text-2xl font-black text-slate-800 bg-transparent outline-none border-b border-transparent focus:border-blue-500 transition-colors"
+                      />
                     </div>
                     <button
                       onClick={() => handleManualCountChange(item.product.id, 1)}

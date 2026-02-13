@@ -19,6 +19,7 @@ import WatchlistMonitor from './WatchlistMonitor';
 import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
+import ClassificationManager from './ClassificationManager';
 
 interface CatalogManagerProps {
    products: Product[];
@@ -39,7 +40,7 @@ interface CatalogManagerProps {
    suppliers?: Supplier[];
 }
 
-type ViewMode = 'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS' | 'GROUPS' | 'SEASONS' | 'BI_MONITOR';
+type CatalogViewMode = 'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS' | 'GROUPS' | 'SEASONS' | 'BI_MONITOR' | 'CLASSIFICATIONS';
 
 // --- SUB-COMPONENT: STOCK ROW ---
 const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks: ProductStock[] }> = ({ product, warehouseId, productStocks }) => {
@@ -203,7 +204,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    purchaseOrders = [],
    suppliers = []
 }) => {
-   const [viewMode, setViewMode] = useState<ViewMode>('PRODUCTS');
+   const [viewMode, setViewMode] = useState<CatalogViewMode>('PRODUCTS');
    const [searchTerm, setSearchTerm] = useState('');
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    const [editingProduct, setEditingProduct] = useState<Product | null | 'NEW'>(null);
@@ -361,6 +362,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={products} config={config} availableTariffs={tariffs} onSave={handleSaveTariff} onUpdateProducts={onUpdateProducts} onClose={() => setEditingTariff(null)} />;
    if (editingGroup) return <GroupForm initialData={editingGroup === 'NEW' ? null : editingGroup} products={products} onSave={handleSaveGroup} onClose={() => setEditingGroup(null)} />;
    if (editingSeason) return <SeasonForm initialData={editingSeason === 'NEW' ? null : editingSeason} products={products} onSave={handleSaveSeason} onClose={() => setEditingSeason(null)} />;
+   if (viewMode === 'CLASSIFICATIONS') return <ClassificationManager config={config} onUpdateConfig={onUpdateConfig} onClose={() => setViewMode('PRODUCTS')} />;
 
    async function handleSaveProduct(savedProduct: Product) {
       const oldProduct = products.find(p => p.id === savedProduct.id);
@@ -509,6 +511,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                   <button onClick={() => setViewMode('SEASONS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'SEASONS' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-gray-400'}`}><Sun size={18} /> Temporadas</button>
                   <button onClick={() => setViewMode('STOCKS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'STOCKS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-400'}`}><ClipboardList size={18} /> Stocks</button>
                   <button onClick={() => setViewMode('TARIFFS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'TARIFFS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400'}`}><Tag size={18} /> Tarifas</button>
+                  <button onClick={() => setViewMode('CLASSIFICATIONS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${(viewMode as string) === 'CLASSIFICATIONS' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400'}`}><Layers size={18} /> Clasificaciones</button>
                </div>
             </div>
          </div>

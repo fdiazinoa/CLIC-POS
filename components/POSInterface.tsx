@@ -1536,6 +1536,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  )}
                               </div>
                            )}
+
+                           {/* FALLBACK BADGES (NO IMAGE MODE) */}
+                           {!uxConfig.showProductImages && hasProductPromotion(product, config, activeTerminalId) && (
+                              <div
+                                 className="absolute top-0 right-0 cursor-pointer z-20"
+                                 onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedPromoProduct(product);
+                                    setShowPromoSheet(true);
+                                 }}
+                              >
+                                 <div className="bg-red-500 text-white text-[10px] font-black px-3 py-1.5 rounded-bl-2xl shadow-sm flex items-center gap-1 hover:bg-red-600 transition-colors">
+                                    <Tag size={12} className="fill-white" />
+                                    <span>OFERTA</span>
+                                 </div>
+                              </div>
+                           )}
                            <div className="flex flex-col flex-1">
                               <span className="text-[9px] font-bold text-purple-500 uppercase mb-1 opacity-60">{product.category}</span>
                               <h3 className="font-bold text-gray-800 dark:text-white text-sm leading-tight mb-2 line-clamp-2 flex-1">{product.name}</h3>

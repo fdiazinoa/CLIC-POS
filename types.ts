@@ -602,6 +602,13 @@ export interface UnitDefinition {
   type?: 'MASS' | 'VOLUME' | 'UNIT';
 }
 
+export interface ClassificationItem {
+  id: string;
+  name: string;
+  code?: string;
+  parentId?: string; // For hierarchy (e.g. Section -> Department)
+}
+
 export interface BusinessConfig {
   vertical: VerticalType;
   subVertical: SubVertical;
@@ -624,6 +631,15 @@ export interface BusinessConfig {
   receiptConfig?: ReceiptConfig;
   tipsConfig?: TipConfiguration;
   emailConfig?: EmailConfig;
+
+  // Classifications
+  departments?: ClassificationItem[];
+  sections?: ClassificationItem[];
+  families?: ClassificationItem[];
+  subfamilies?: ClassificationItem[];
+  brands?: ClassificationItem[];
+  posCategories?: ClassificationItem[]; // Standardized POS Categories
+
   availablePrinters?: PrinterDevice[];
   scales?: ScaleDevice[];
   scaleLabelConfig?: ScaleLabelConfig;
@@ -774,7 +790,9 @@ export interface RecipeDetail {
   childItemId: string;
   childItemName?: string; // For UI display
   quantity: number;
-  unit: string;
+  unit: string; // The unit used in the recipe (e.g., 'gr')
+  originalUnit?: string; // The purchasing unit of the ingredient (e.g., 'lb')
+  conversionFactor?: number; // Cost multiplier or conversion ratio
   wasteFactor: number; // 0.1 = 10%
   isOptional: boolean;
   cost?: number; // Calculated dynamic cost
@@ -980,6 +998,7 @@ export interface Transaction {
   syncStatus?: SyncStatus;
   syncError?: string;
   zReportId?: string; // ID of the Z-Report that closed this transaction
+  zReportSequence?: string; // Human readable sequence number of the Z-Report (e.g. "Z-000123")
 
   // Wallet Interaction
   walletDepositAmount?: number;     // Amount sent to customer wallet (advance/refund)

@@ -231,6 +231,10 @@ const AppContent: React.FC = () => {
         const data = await db.init();
         console.log('✅ db.init() returned:', data ? Object.keys(data) : 'null');
 
+        // RECOVERY: Check for orphaned transactions and rebuild Z-Reports if needed
+        // This fixes history visibility issues even if some reports were deleted or lost
+        await ZReportRecoveryService.recoverOrphanedReports();
+
         let currentConfig = data.config;
         const masterIp = localStorage.getItem('pos_master_ip');
 
@@ -778,8 +782,19 @@ const AppContent: React.FC = () => {
       );
 
       // 3. Save Entries
+      // 3. Save Entries
       for (const entry of ledgerEntries) {
         await db.saveDocument('inventoryLedger', entry);
+      }
+
+      // 4. Recalculate Stock for affected products immediately
+      // This ensures the product document Is updated before we refresh the UI
+      const affectedPairs = new Set<string>();
+      ledgerEntries.forEach(e => affectedPairs.add(`${e.productId}|${e.warehouseId}`));
+
+      for (const pair of affectedPairs) {
+        const [pId, wId] = pair.split('|');
+        await db.recalculateProductStock(pId, wId);
       }
     }
 
@@ -915,12 +930,74 @@ const AppContent: React.FC = () => {
     const transactionCount = reportData?.transactionCount ?? terminalTransactions.length;
 
     // 4. Create and Save Z-Report
-    const existingReports = await db.get('zReports') as ZReport[];
-    const nextSeqNum = (existingReports.length + 1).toString().padStart(6, '0');
-    const sequenceNumber = `Z-${nextSeqNum}`;
+    let sequenceNumber = '';
+    let zReportId = `ZR-${Date.now()}`;
+
+    // DOCUMENT SERIES LOGIC
+    // Attempt to find an assigned series for Z_REPORT
+    const zReportSeriesId = currentTerminal?.config?.documentAssignments?.['Z_REPORT'];
+    // Series are stored inside the terminal config
+    const terminalSeriesList = currentTerminal?.config?.documentSeries || [];
+    const zReportSeries = zReportSeriesId
+      ? terminalSeriesList.find(s => s.id === zReportSeriesId)
+      : undefined;
+
+    if (zReportSeries) {
+      // Use the Series
+      const prefix = zReportSeries.prefix || '';
+      const num = zReportSeries.nextNumber || 1;
+      const padding = zReportSeries.padding || 8;
+      sequenceNumber = `${prefix}${num.toString().padStart(padding, '0')}`;
+
+      console.log(`🎫 Generating Z-Report using Series ${zReportSeries.name}: ${sequenceNumber}`);
+
+      // Increment Series locally
+      const updatedSeries = {
+        ...zReportSeries,
+        nextNumber: num + 1
+      };
+
+      // Update the list of series for this terminal
+      const updatedTerminalSeries = terminalSeriesList.map(s => s.id === zReportSeries.id ? updatedSeries : s);
+
+      // We need to update the global config object to reflect this change inside the specific terminal
+      const updatedTerminals = (config.terminals || []).map(t => {
+        if (t.id === terminalId) {
+          return {
+            ...t,
+            config: {
+              ...t.config,
+              documentSeries: updatedTerminalSeries
+            }
+          };
+        }
+        return t;
+      });
+
+      const updatedConfig = { ...config, terminals: updatedTerminals };
+
+      // Update local state (optimistic)
+      setConfig(updatedConfig);
+
+      // Persist to DB
+      await db.save('config', updatedConfig);
+
+      // If Master, we should push this update to others?
+      // Series updates are critical.
+      if (permissionService.isMasterTerminal()) {
+        // TODO: Implement specific sync for series if needed, or rely on config sync.
+        // For now, simple persistence is key.
+      }
+
+    } else {
+      // Fallback to legacy Logic
+      const existingReports = await db.get('zReports') as ZReport[];
+      const nextSeqNum = (existingReports.length + 1).toString().padStart(6, '0');
+      sequenceNumber = `Z-${nextSeqNum}`;
+    }
 
     const newZReport: ZReport = {
-      id: `ZR-${Date.now()}`,
+      id: zReportId,
       terminalId,
       sequenceNumber,
       openedAt: terminalTransactions.length > 0 ? terminalTransactions[0].date : new Date().toISOString(),
@@ -952,7 +1029,12 @@ const AppContent: React.FC = () => {
     // 6. Archive locally
     console.log(`🗄️ Archiving ${terminalTransactions.length} transactions to history...`);
     for (const tx of terminalTransactions) {
-      await db.saveDocument('transactionHistory', { ...tx, zReportId: newZReport.id });
+      // NEW: Save sequence number for easy display
+      await db.saveDocument('transactionHistory', {
+        ...tx,
+        zReportId: newZReport.id,
+        zReportSequence: newZReport.sequenceNumber
+      });
       // NEW: Explicitly delete from active table to avoid orphans
       await db.deleteDocument('transactions', tx.id);
     }

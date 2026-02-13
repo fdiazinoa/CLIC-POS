@@ -782,26 +782,53 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
          };
 
          const updateSupplierPriceCatalog = async () => {
-            const rawUpdates = (order.items || []).filter(i => i.quantityReceived > 0).map(i => ({
-               id: `${order.supplierId}_${i.productId}`,
-               supplierId: order.supplierId,
-               productId: i.productId,
-               lastCost: i.cost || 0,
-               updatedAt: new Date().toISOString()
-            }));
+            // 1. Get raw updates from current reception
+            const receivedItems = (order.items || []).filter(i => i.quantityReceived > 0);
+            if (receivedItems.length === 0) return;
 
-            const updatesMap = new Map();
-            for (const u of rawUpdates) {
-               updatesMap.set(u.id, u);
+            // 2. Fetch existing records to preserve history
+            const updates = [];
+            for (const item of receivedItems) {
+               const recordId = `${order.supplierId}_${item.productId}`;
+               let existingRecord = await db.getDocument('supplierProductPrices', recordId) as any;
+
+               // Initialize if not exists
+               if (!existingRecord) {
+                  existingRecord = {
+                     id: recordId,
+                     supplierId: order.supplierId,
+                     productId: item.productId,
+                     history: []
+                  };
+               }
+
+               // 3. Update Record
+               const newCost = item.cost || 0;
+               const newHistoryEntry = {
+                  date: new Date().toISOString(),
+                  cost: newCost,
+                  orderId: order.id
+               };
+
+               const updatedRecord = {
+                  ...existingRecord,
+                  lastCost: newCost,
+                  currency: config.currencySymbol,
+                  updatedAt: new Date().toISOString(),
+                  history: [...(existingRecord.history || []), newHistoryEntry]
+               };
+
+               updates.push(updatedRecord);
             }
-            const updates = Array.from(updatesMap.values());
 
+            // 4. Save to DB
             for (const update of updates) {
                await db.saveDocument('supplierProductPrices', update);
             }
 
+            // 5. Broadcast (Optimistic)
             if (updates.length > 0) {
-               syncManager.broadcastChange('supplierProductPrices', updates, 'UPDATE');
+               syncManager.broadcastChange('supplierProductPrices', updates, 'UPDATE').catch(console.error);
             }
          };
 

@@ -176,6 +176,30 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                 </div>
             </div>
 
+            {/* Section: UX & Visual Experience */}
+            <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6 animate-in slide-in-from-bottom-8 duration-700">
+                <div className="flex items-center gap-3 mb-2">
+                    <div className="w-10 h-10 bg-purple-100 text-purple-600 rounded-2xl flex items-center justify-center">
+                        <Monitor size={20} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-black text-gray-800">Experiencia Visual</h3>
+                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest">Interfaz y Diseño</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <Toggle
+                        label="Modo Supermercado (Grid Expandido)"
+                        description="Oculta la barra de categorías y expande la cuadrícula de productos para maximizar el espacio de venta."
+                        checked={config.ux?.viewMode === 'RETAIL'}
+                        onChange={(v: boolean) => onUpdate('ux', 'viewMode', v ? 'RETAIL' : 'VISUAL')}
+                        icon={LayoutGrid}
+                        disabled={isReadOnly}
+                    />
+                </div>
+            </div>
+
             {/* Section: Operational Security */}
             <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6">
                 <div className="flex items-center gap-3 mb-2">

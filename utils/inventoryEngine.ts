@@ -1,6 +1,7 @@
 
 import { Product, Season, Supplier, InventoryLedgerEntry, Warehouse, StockTransfer, CartItem } from '../types';
 import { db } from './db';
+import { getConversionFactor } from './units';
 
 // ... existing code ...
 
@@ -28,14 +29,22 @@ export async function calculateInventoryDeductions(
 
     // 2. If it's a recipe/kit, recurse through ingredients
     const batchYield = item.batchYield || 1; // Default to 1 if not set
-    const productionBatches = quantitySold / batchYield; // How many "batches" we sold (e.g. 0.1 batches if sold 1 unit of a 10-unit yield)
+    const productionBatches = quantitySold / batchYield; // How many "batches" we sold
 
     for (const detail of item.recipeDetails) {
         const ingredient = allProducts.find(p => p.id === detail.childItemId);
         if (!ingredient) continue; // Skip if ingredient deleted
 
         // Calculate raw quantity needed for THIS level
-        const ingredientQtyPerBatch = detail.quantity;
+        let ingredientQtyPerBatch = detail.quantity;
+
+        // CRITICAL: Unit Conversion (Recipe Unit -> Ingredient Stock Unit)
+        // If the recipe calls for 'gr' but the ingredient is tracked in 'lb', convert it.
+        if (detail.unit && ingredient.measurementUnit && detail.unit !== ingredient.measurementUnit) {
+            const conversionFactor = getConversionFactor(detail.unit, ingredient.measurementUnit);
+            ingredientQtyPerBatch = detail.quantity * conversionFactor;
+        }
+
         const totalIngredientNeeded = ingredientQtyPerBatch * productionBatches;
 
         // Recurse (Deep Recipe Support)

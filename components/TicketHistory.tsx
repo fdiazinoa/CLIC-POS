@@ -58,13 +58,15 @@ const SalesSummaryBar: React.FC<{ kpis: any; config: BusinessConfig }> = ({ kpis
    </div>
 );
 
+
 const SalesHistoryTable: React.FC<{
    transactions: Transaction[];
    config: BusinessConfig;
    onRowClick: (id: string) => void;
    themeBg: string;
    themeText: string;
-}> = ({ transactions, config, onRowClick, themeBg, themeText }) => {
+   zReportMap?: Map<string, string>;
+}> = ({ transactions, config, onRowClick, themeBg, themeText, zReportMap }) => {
    const getStatusBadge = (tx: Transaction) => {
       if (tx.status === 'REFUNDED') return <span className="px-2 py-0.5 bg-red-100 text-red-600 rounded-full text-[10px] font-bold">ANULADO</span>;
       if (tx.status === 'PARTIAL_REFUND') return <span className="px-2 py-0.5 bg-orange-100 text-orange-600 rounded-full text-[10px] font-bold">PARTIAL</span>;
@@ -94,45 +96,58 @@ const SalesHistoryTable: React.FC<{
                      <th className="px-4 py-3 font-bold text-gray-400 uppercase text-[10px] tracking-widest">Fecha / Hora</th>
                      <th className="px-4 py-3 font-bold text-gray-400 uppercase text-[10px] tracking-widest">Cliente</th>
                      <th className="px-4 py-3 font-bold text-gray-400 uppercase text-[10px] tracking-widest text-center">Pago</th>
+                     <th className="px-4 py-3 font-bold text-gray-400 uppercase text-[10px] tracking-widest text-center">Cierre</th>
                      <th className="px-4 py-3 font-bold text-gray-400 uppercase text-[10px] tracking-widest text-right">Total</th>
                      <th className="px-4 py-3 font-bold text-gray-400 uppercase text-[10px] tracking-widest text-right"></th>
                   </tr>
                </thead>
                <tbody className="divide-y divide-gray-50">
-                  {transactions.map((tx) => (
-                     <tr
-                        key={tx.id}
-                        onClick={() => onRowClick(tx.id)}
-                        className="hover:bg-gray-50 transition-colors cursor-pointer group"
-                     >
-                        <td className="px-4 py-3">{getStatusBadge(tx)}</td>
-                        <td className="px-4 py-3 text-xs font-medium text-gray-500">{tx.displayId || tx.id.slice(-8).toUpperCase()}</td>
-                        <td className="px-4 py-3">
-                           <p className="font-bold text-gray-800">{new Date(tx.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-                           <p className="text-[10px] text-gray-400 font-medium">{new Date(tx.date).toLocaleDateString()}</p>
-                        </td>
-                        <td className="px-4 py-3">
-                           {tx.customerName && tx.customerName !== 'null' ? (
-                              <p className="font-bold text-gray-700">{tx.customerName}</p>
-                           ) : (
-                              <p className="text-gray-400 italic">Cliente General</p>
-                           )}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                           <div className="flex justify-center">
-                              {getPaymentIcon(tx.payments?.[0]?.method || 'CASH')}
-                           </div>
-                        </td>
-                        <td className="px-4 py-3 text-right font-mono font-bold text-gray-900">
-                           {config.currencySymbol}{tx.total.toFixed(2)}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                           <button className="p-1 hover:bg-gray-200 rounded-md transition-colors text-gray-400">
-                              <MoreVertical size={16} />
-                           </button>
-                        </td>
-                     </tr>
-                  ))}
+                  {transactions.map((tx) => {
+                     const zSeq = tx.zReportSequence || (tx.zReportId ? zReportMap?.get(tx.zReportId) : null);
+                     return (
+                        <tr
+                           key={tx.id}
+                           onClick={() => onRowClick(tx.id)}
+                           className="hover:bg-gray-50 transition-colors cursor-pointer group"
+                        >
+                           <td className="px-4 py-3">{getStatusBadge(tx)}</td>
+                           <td className="px-4 py-3 text-xs font-medium text-gray-500">{tx.displayId || tx.id.slice(-8).toUpperCase()}</td>
+                           <td className="px-4 py-3">
+                              <p className="font-bold text-gray-800">{new Date(tx.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                              <p className="text-[10px] text-gray-400 font-medium">{new Date(tx.date).toLocaleDateString()}</p>
+                           </td>
+                           <td className="px-4 py-3">
+                              {tx.customerName && tx.customerName !== 'null' ? (
+                                 <p className="font-bold text-gray-700">{tx.customerName}</p>
+                              ) : (
+                                 <p className="text-gray-400 italic">Cliente General</p>
+                              )}
+                           </td>
+                           <td className="px-4 py-3 text-center">
+                              <div className="flex justify-center">
+                                 {getPaymentIcon(tx.payments?.[0]?.method || 'CASH')}
+                              </div>
+                           </td>
+                           <td className="px-4 py-3 text-center">
+                              {zSeq ? (
+                                 <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-[10px] font-bold border border-purple-200">
+                                    {zSeq}
+                                 </span>
+                              ) : (
+                                 <span className="text-gray-300 text-[10px]">•</span>
+                              )}
+                           </td>
+                           <td className="px-4 py-3 text-right font-mono font-bold text-gray-900">
+                              {config.currencySymbol}{tx.total.toFixed(2)}
+                           </td>
+                           <td className="px-4 py-3 text-right">
+                              <button className="p-1 hover:bg-gray-200 rounded-md transition-colors text-gray-400">
+                                 <MoreVertical size={16} />
+                              </button>
+                           </td>
+                        </tr>
+                     );
+                  })}
                </tbody>
             </table>
          </div>
@@ -272,6 +287,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const [giftReceiptTx, setGiftReceiptTx] = useState<Transaction | null>(null);
 
    const [historyTransactions, setHistoryTransactions] = useState<Transaction[]>([]);
+   const [zReportMap, setZReportMap] = useState<Map<string, string>>(new Map()); // Map zReportId -> Sequence
    const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
 
    // Load History on Mount
@@ -288,6 +304,14 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                // Mark all loaded history as archived so they are highlighted even if missing zReportId
                const markedHistory = history.map(h => ({ ...h, _isArchived: true }));
                setHistoryTransactions(markedHistory);
+            }
+
+            // Load Z-Reports for lookup
+            const zReports = await db.get('zReports') as any[];
+            if (zReports) {
+               const map = new Map<string, string>();
+               zReports.forEach(r => map.set(r.id, r.sequenceNumber));
+               setZReportMap(map);
             }
          } catch (e) {
             console.error("Failed to load transaction history:", e);
@@ -579,6 +603,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                onRowClick={(id) => setSelectedTxId(id)}
                themeBg={themeBg}
                themeText={themeText}
+               zReportMap={zReportMap}
             />
 
             {filteredTransactions.length === 0 && (

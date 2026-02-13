@@ -7,6 +7,7 @@ import {
 import { ZReport, BusinessConfig } from '../types';
 import { db } from '../utils/db';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
+import { ZReportRecoveryService } from '../services/recovery/ZReportRecoveryService';
 
 interface ZReportHistoryProps {
     config: BusinessConfig;
@@ -25,7 +26,14 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
         const loadReports = async () => {
             setIsLoading(true);
             try {
-                const data = await db.get('zReports') as ZReport[];
+                let data = await db.get('zReports') as ZReport[];
+
+                // RECOVERY: If no reports found, try to recover from transaction history
+                if (!data || data.length === 0) {
+                    await ZReportRecoveryService.recoverOrphanedReports();
+                    data = await db.get('zReports') as ZReport[];
+                }
+
                 // Sort by closedAt descending (newest first)
                 const sorted = (data || []).sort((a, b) =>
                     new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime()

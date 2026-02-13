@@ -22,6 +22,7 @@ import { permissionService } from '../services/sync/PermissionService';
 import { inventorySyncService } from '../services/sync/InventorySyncService';
 import { UnitSelector } from './UnitSelector';
 import { ConversionHelper } from './ConversionHelper';
+import { calculateCost, UNITS } from '../utils/units';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -620,8 +621,21 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                           {canViewCost && (
                             <td className="p-4 text-right">
                               <div className="flex flex-col items-end">
-                                <span className="font-black text-gray-800">{config.currencySymbol}{((entry.dynamicBalance || 0) * (entry.balanceAvgCost || 0)).toFixed(2)}</span>
-                                <span className="text-[9px] text-gray-400 uppercase">CPP: {(entry.balanceAvgCost || 0).toFixed(2)}</span>
+                                <span className="font-black text-gray-800">
+                                  {config.currencySymbol}
+                                  {calculateCost(
+                                    entry.dynamicBalance || 0,
+                                    formData.measurementUnit || 'un',
+                                    entry.balanceAvgCost || 0,
+                                    formData.purchaseUnit || 'un'
+                                  ).toFixed(2)}
+                                </span>
+                                <span className="text-[9px] text-gray-400 uppercase">CPP: {(entry.balanceAvgCost || 0).toFixed(2)} / {UNITS[formData.purchaseUnit || 'un']?.name || formData.purchaseUnit}</span>
+                                {formData.measurementUnit !== formData.purchaseUnit && (
+                                  <span className="text-[9px] text-blue-400 italic">
+                                    (Conv. {formData.measurementUnit} → {formData.purchaseUnit})
+                                  </span>
+                                )}
                               </div>
                             </td>
                           )}
@@ -1271,57 +1285,74 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
               <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm space-y-8">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-4">
-                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Jerarquía de Almacén</label>
                     <div className="space-y-4">
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-2">Departamento</label>
-                        <select
-                          value={formData.departmentId || ''}
-                          onChange={(e) => setFormData({ ...formData, departmentId: e.target.value })}
-                          className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="">-- Sin Definir --</option>
-                          <option value="DEP_01">Alimentos</option>
-                          <option value="DEP_02">Hogar</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-2">Sección</label>
-                        <select
-                          value={formData.sectionId || ''}
-                          onChange={(e) => setFormData({ ...formData, sectionId: e.target.value })}
-                          className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="">-- Sin Definir --</option>
-                          <option value="SEC_01">Abarrotes</option>
-                          <option value="SEC_02">Frescos</option>
-                        </select>
+                      <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Jerarquía de Almacén</label>
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-xs font-bold text-gray-700 mb-2">Departamento</label>
+                          <select
+                            value={formData.departmentId || ''}
+                            onChange={(e) => setFormData({ ...formData, departmentId: e.target.value })}
+                            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="">-- Sin Definir --</option>
+                            {config.departments?.map(d => (
+                              <option key={d.id} value={d.id}>{d.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-gray-700 mb-2">Sección</label>
+                          <select
+                            value={formData.sectionId || ''}
+                            onChange={(e) => setFormData({ ...formData, sectionId: e.target.value })}
+                            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="">-- Sin Definir --</option>
+                            {config.sections?.map(s => (
+                              <option key={s.id} value={s.id}>{s.name}</option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="space-y-4">
-                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Clasificación Comercial</label>
                     <div className="space-y-4">
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-2">Categoría POS</label>
-                        <input
-                          type="text"
-                          value={formData.category}
-                          onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                          className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium"
-                          placeholder="Ej: Bebidas"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-2">Marca</label>
-                        <select
-                          value={formData.brandId || ''}
-                          onChange={(e) => setFormData({ ...formData, brandId: e.target.value })}
-                          className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="">-- Sin Marca --</option>
-                        </select>
+                      <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Clasificación Comercial</label>
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-xs font-bold text-gray-700 mb-2">Categoría POS</label>
+                          {/* We use a datalist to allow both standardized selection and free text if needed, or just strict Select */}
+                          <div className="relative">
+                            <input
+                              list="pos-categories-list"
+                              type="text"
+                              value={formData.category}
+                              onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                              className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium"
+                              placeholder="Ej: Bebidas"
+                            />
+                            <datalist id="pos-categories-list">
+                              {config.posCategories?.map(c => (
+                                <option key={c.id} value={c.name} />
+                              ))}
+                            </datalist>
+                          </div>
+                          <p className="text-[10px] text-gray-400 mt-1 pl-1">Seleccione de la lista o escriba una nueva.</p>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-gray-700 mb-2">Marca</label>
+                          <select
+                            value={formData.brandId || ''}
+                            onChange={(e) => setFormData({ ...formData, brandId: e.target.value })}
+                            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="">-- Sin Marca --</option>
+                            {config.brands?.map(b => (
+                              <option key={b.id} value={b.id}>{b.name}</option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1330,332 +1361,366 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             </div>
           )}
 
-          {activeTab === 'LOGISTICS' && (
-            <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
-              <div className="flex justify-between items-center px-2">
-                <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2"><Truck className="text-blue-500" /> Alcance y Límites de Stock</h3>
+          {
+            activeTab === 'LOGISTICS' && (
+              <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
+                <div className="flex justify-between items-center px-2">
+                  <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2"><Truck className="text-blue-500" /> Alcance y Límites de Stock</h3>
 
-                {/* SUGGESTION MODAL */}
-                {calcResult && (
-                  <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in">
-                    <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-sm p-8 animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-                      <div className="flex justify-between items-start mb-6">
-                        <div className="p-3 bg-blue-50 text-blue-600 rounded-2xl">
-                          <TrendingUp size={24} />
-                        </div>
-                        <button onClick={() => setCalcResult(null)} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors"><X size={20} /></button>
-                      </div>
-
-                      <div className="mb-6">
-                        <h4 className="text-xl font-black text-gray-800">Sugerencia Magic</h4>
-                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">
-                          Sede: {warehouses.find(w => w.id === calcResult.warehouseId)?.name}
-                        </p>
-                      </div>
-
-                      {calcResult.hasInsufficientData ? (
-                        <div className="bg-orange-50 p-6 rounded-2xl border border-orange-100 mb-6 text-orange-700 text-sm text-center italic">
-                          No hay datos suficientes de ventas o traspasos en los últimos 30 días para generar una sugerencia confiable para este almacén.
-                        </div>
-                      ) : (
-                        <>
-                          <div className="grid grid-cols-2 gap-4 mb-6">
-                            <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100">
-                              <p className="text-[10px] font-black text-blue-400 uppercase mb-1">Stock Mínimo</p>
-                              <p className="text-3xl font-black text-blue-700">{calcResult.suggestedMin}</p>
-                            </div>
-                            <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
-                              <p className="text-[10px] font-black text-indigo-400 uppercase mb-1">Stock Máximo</p>
-                              <p className="text-3xl font-black text-indigo-700">{calcResult.suggestedMax}</p>
-                            </div>
+                  {/* SUGGESTION MODAL */}
+                  {calcResult && (
+                    <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in">
+                      <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-sm p-8 animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                        <div className="flex justify-between items-start mb-6">
+                          <div className="p-3 bg-blue-50 text-blue-600 rounded-2xl">
+                            <TrendingUp size={24} />
                           </div>
+                          <button onClick={() => setCalcResult(null)} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors"><X size={20} /></button>
+                        </div>
 
-                          <div className="space-y-3 mb-8 text-xs border-t border-gray-100 pt-6">
-                            <div className="flex justify-between items-center whitespace-nowrap">
-                              <span className="text-gray-500">Venta Media (VMD)</span>
-                              <span className="font-bold text-gray-800">{calcResult.breakdown.baseVmd} u/día</span>
-                            </div>
-                            {calcResult.breakdown.transferDemandVmd !== undefined && calcResult.breakdown.transferDemandVmd > 0 && (
-                              <div className="flex justify-between items-center whitespace-nowrap">
-                                <span className="text-gray-500">Demanda Traspasos (CD)</span>
-                                <span className="font-bold text-indigo-600">+{calcResult.breakdown.transferDemandVmd} u/día</span>
+                        <div className="mb-6">
+                          <h4 className="text-xl font-black text-gray-800">Sugerencia Magic</h4>
+                          <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">
+                            Sede: {warehouses.find(w => w.id === calcResult.warehouseId)?.name}
+                          </p>
+                        </div>
+
+                        {calcResult.hasInsufficientData ? (
+                          <div className="bg-orange-50 p-6 rounded-2xl border border-orange-100 mb-6 text-orange-700 text-sm text-center italic">
+                            No hay datos suficientes de ventas o traspasos en los últimos 30 días para generar una sugerencia confiable para este almacén.
+                          </div>
+                        ) : (
+                          <>
+                            <div className="grid grid-cols-2 gap-4 mb-6">
+                              <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100">
+                                <p className="text-[10px] font-black text-blue-400 uppercase mb-1">Stock Mínimo</p>
+                                <p className="text-3xl font-black text-blue-700">{calcResult.suggestedMin}</p>
                               </div>
-                            )}
-                            <div className="flex justify-between items-center whitespace-nowrap">
-                              <span className="text-gray-500">Factor Temporada</span>
-                              <span className="font-bold text-yellow-600">x{calcResult.breakdown.seasonMultiplier}</span>
+                              <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
+                                <p className="text-[10px] font-black text-indigo-400 uppercase mb-1">Stock Máximo</p>
+                                <p className="text-3xl font-black text-indigo-700">{calcResult.suggestedMax}</p>
+                              </div>
                             </div>
-                            <div className="flex justify-between items-center whitespace-nowrap">
-                              <span className="text-gray-500 font-medium">Lead Time Proveedor</span>
-                              <span className="font-bold text-gray-800">{calcResult.breakdown.leadTimeDays} días</span>
-                            </div>
-                          </div>
 
-                          <button
-                            onClick={applyCalculation}
-                            type="button"
-                            className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-2xl font-black shadow-xl shadow-blue-200 hover:shadow-blue-400 transition-all active:scale-95 flex items-center justify-center gap-2"
-                          >
-                            <Check size={20} strokeWidth={3} /> Aplicar a este Almacén
-                          </button>
-                        </>
-                      )}
+                            <div className="space-y-3 mb-8 text-xs border-t border-gray-100 pt-6">
+                              <div className="flex justify-between items-center whitespace-nowrap">
+                                <span className="text-gray-500">Venta Media (VMD)</span>
+                                <span className="font-bold text-gray-800">{calcResult.breakdown.baseVmd} u/día</span>
+                              </div>
+                              {calcResult.breakdown.transferDemandVmd !== undefined && calcResult.breakdown.transferDemandVmd > 0 && (
+                                <div className="flex justify-between items-center whitespace-nowrap">
+                                  <span className="text-gray-500">Demanda Traspasos (CD)</span>
+                                  <span className="font-bold text-indigo-600">+{calcResult.breakdown.transferDemandVmd} u/día</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between items-center whitespace-nowrap">
+                                <span className="text-gray-500">Factor Temporada</span>
+                                <span className="font-bold text-yellow-600">x{calcResult.breakdown.seasonMultiplier}</span>
+                              </div>
+                              <div className="flex justify-between items-center whitespace-nowrap">
+                                <span className="text-gray-500 font-medium">Lead Time Proveedor</span>
+                                <span className="font-bold text-gray-800">{calcResult.breakdown.leadTimeDays} días</span>
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={applyCalculation}
+                              type="button"
+                              className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-2xl font-black shadow-xl shadow-blue-200 hover:shadow-blue-400 transition-all active:scale-95 flex items-center justify-center gap-2"
+                            >
+                              <Check size={20} strokeWidth={3} /> Aplicar a este Almacén
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
-              <div className="bg-white rounded-3xl border border-gray-100 overflow-hidden shadow-sm">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-gray-50 text-gray-400 font-bold uppercase text-[10px] tracking-widest">
-                    <tr>
-                      <th className="p-4">Almacén / Ubicación</th>
-                      <th className="p-4 text-center">Estado</th>
-                      <th className="p-4 text-center">En Tránsito</th>
-                      <th className="p-4 text-center">Por Recibir</th>
-                      <th className="p-4 text-center">Mínimo</th>
-                      <th className="p-4 text-center">Máximo</th>
-                      <th className="p-4 text-center w-10">Magic</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {warehouses.map(wh => {
-                      const isActive = formData.activeInWarehouses?.includes(wh.id);
-                      const settings = warehouseSettings[wh.id] || { min: 0, max: 0 };
+                  )}
+                </div>
+                <div className="bg-white rounded-3xl border border-gray-100 overflow-hidden shadow-sm">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-gray-50 text-gray-400 font-bold uppercase text-[10px] tracking-widest">
+                      <tr>
+                        <th className="p-4">Almacén / Ubicación</th>
+                        <th className="p-4 text-center">Estado</th>
+                        <th className="p-4 text-center">En Tránsito</th>
+                        <th className="p-4 text-center">Por Recibir</th>
+                        <th className="p-4 text-center">Mínimo</th>
+                        <th className="p-4 text-center">Máximo</th>
+                        <th className="p-4 text-center w-10">Magic</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {warehouses.map(wh => {
+                        const isActive = formData.activeInWarehouses?.includes(wh.id);
+                        const settings = warehouseSettings[wh.id] || { min: 0, max: 0 };
 
-                      // Calculate In Transit quantity for this warehouse
-                      const inTransitQty = transfers
-                        .filter(t =>
+                        // Calculate In Transit quantity for this warehouse
+                        const inTransitQty = transfers
+                          .filter(t =>
+                            t.status === 'IN_TRANSIT' &&
+                            t.destinationWarehouseId === wh.id &&
+                            t.items.some(item => item.productId === formData.id)
+                          )
+                          .reduce((sum, transfer) => {
+                            const item = transfer.items.find(i => i.productId === formData.id);
+                            return sum + (item?.quantity || 0);
+                          }, 0);
+
+                        // Calculate On Order quantity for this warehouse  
+                        const onOrderQty = purchaseOrders
+                          .filter(po =>
+                            po.status === 'APPROVED' &&
+                            po.destinationWarehouseId === wh.id &&
+                            po.items.some(item => item.productId === formData.id)
+                          )
+                          .reduce((sum, order) => {
+                            const item = order.items.find(i => i.productId === formData.id);
+                            return sum + (item?.quantityOrdered || 0) - (item?.quantityReceived || 0);
+                          }, 0);
+
+                        // Get transfers for this warehouse (for popover)
+                        const warehouseTransfers = transfers.filter(t =>
                           t.status === 'IN_TRANSIT' &&
                           t.destinationWarehouseId === wh.id &&
                           t.items.some(item => item.productId === formData.id)
-                        )
-                        .reduce((sum, transfer) => {
-                          const item = transfer.items.find(i => i.productId === formData.id);
-                          return sum + (item?.quantity || 0);
-                        }, 0);
+                        );
 
-                      // Calculate On Order quantity for this warehouse  
-                      const onOrderQty = purchaseOrders
-                        .filter(po =>
-                          po.status === 'APPROVED' &&
-                          po.destinationWarehouseId === wh.id &&
-                          po.items.some(item => item.productId === formData.id)
-                        )
-                        .reduce((sum, order) => {
-                          const item = order.items.find(i => i.productId === formData.id);
-                          return sum + (item?.quantityOrdered || 0) - (item?.quantityReceived || 0);
-                        }, 0);
+                        const showPopover = openTransitPopover === wh.id;
 
-                      // Get transfers for this warehouse (for popover)
-                      const warehouseTransfers = transfers.filter(t =>
-                        t.status === 'IN_TRANSIT' &&
-                        t.destinationWarehouseId === wh.id &&
-                        t.items.some(item => item.productId === formData.id)
-                      );
-
-                      const showPopover = openTransitPopover === wh.id;
-
-                      return (
-                        <tr key={wh.id} className={isActive ? 'bg-white' : 'bg-gray-50/50 opacity-60'}>
-                          <td className="p-4">
-                            <p className="font-bold text-gray-800 flex items-center gap-2">
-                              {wh.name}
-                              {wh.isMain && <span className="text-[8px] bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full font-black uppercase tracking-tight">CD</span>}
-                            </p>
-                            <p className="text-[10px] text-gray-400">{wh.type}</p>
-                          </td>
-                          <td className="p-4 text-center">
-                            <button onClick={() => {
-                              const current = formData.activeInWarehouses || [];
-                              const isAct = current.includes(wh.id);
-                              setFormData({ ...formData, activeInWarehouses: isAct ? current.filter(id => id !== wh.id) : [...current, wh.id] });
-                            }} className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${isActive ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-500'}`}>
-                              {isActive ? 'Activo' : 'Inactivo'}
-                            </button>
-                          </td>
-
-                          {/* IN TRANSIT COLUMN */}
-                          <td className="p-4 text-center relative">
-                            {inTransitQty > 0 ? (
-                              <div className="relative inline-block">
-                                <button
-                                  onClick={() => setOpenTransitPopover(showPopover ? null : wh.id)}
-                                  className="font-bold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer transition-colors"
-                                >
-                                  {inTransitQty} u.
-                                </button>
-
-                                {/* POPOVER */}
-                                {showPopover && (
-                                  <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 z-50 w-72 bg-white rounded-xl border border-gray-200 shadow-2xl animate-in zoom-in-95 duration-100">
-                                    <div className="p-4 border-b bg-gray-50 rounded-t-xl">
-                                      <p className="text-xs font-black text-gray-700 uppercase tracking-wide flex items-center gap-2">
-                                        <Truck size={14} className="text-blue-600" />
-                                        Traspasos en Tránsito
-                                      </p>
-                                    </div>
-                                    <div className="p-3 max-h-64 overflow-y-auto">
-                                      {warehouseTransfers.map(transfer => {
-                                        const item = transfer.items.find(i => i.productId === formData.id);
-                                        const sourceWarehouse = warehouses.find(w => w.id === transfer.sourceWarehouseId);
-                                        return (
-                                          <div key={transfer.id} className="p-3 bg-gray-50 rounded-lg mb-2 last:mb-0">
-                                            <div className="flex justify-between items-start mb-1">
-                                              <p className="text-xs font-bold text-gray-800">#{transfer.displayId || transfer.id}</p>
-                                              <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{item?.quantity} u.</span>
-                                            </div>
-                                            <p className="text-[10px] text-gray-500">
-                                              <span className="font-medium">Desde:</span> {sourceWarehouse?.name || 'Desconocido'}
-                                            </p>
-                                            <p className="text-[10px] text-gray-400 mt-1">
-                                              {new Date(transfer.createdAt).toLocaleDateString()}
-                                            </p>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                    <div className="p-2 border-t bg-gray-50 rounded-b-xl">
-                                      <button
-                                        onClick={() => setOpenTransitPopover(null)}
-                                        className="w-full text-center text-[10px] font-bold text-gray-500 hover:text-gray-700"
-                                      >
-                                        Cerrar
-                                      </button>
-                                    </div>
-                                  </div>
-                                )}
-
-                                {/* Backdrop to close popover */}
-                                {showPopover && (
-                                  <div
-                                    className="fixed inset-0 z-40"
-                                    onClick={() => setOpenTransitPopover(null)}
-                                  />
-                                )}
-                              </div>
-                            ) : (
-                              <span className="text-gray-300">-</span>
-                            )}
-                          </td>
-
-                          {/* ON ORDER COLUMN */}
-                          <td className="p-4 text-center">
-                            {onOrderQty > 0 ? (
-                              <span className="font-bold text-gray-700">{onOrderQty} u.</span>
-                            ) : (
-                              <span className="text-gray-300">-</span>
-                            )}
-                          </td>
-
-                          <td className="p-4">
-                            <input type="number" disabled={!isActive} value={settings.min} onChange={e => setWarehouseSettings({ ...warehouseSettings, [wh.id]: { ...(warehouseSettings[wh.id] || { min: 0, max: 0 }), min: parseInt(e.target.value) || 0 } })} className="w-16 mx-auto block p-2 bg-gray-50 border border-gray-200 rounded-lg text-center font-bold text-blue-600 disabled:opacity-30" />
-                          </td>
-                          <td className="p-4">
-                            <input type="number" disabled={!isActive} value={settings.max} onChange={e => setWarehouseSettings({ ...warehouseSettings, [wh.id]: { ...(warehouseSettings[wh.id] || { min: 0, max: 0 }), max: parseInt(e.target.value) || 0 } })} className="w-16 mx-auto block p-2 bg-gray-50 border border-gray-200 rounded-lg text-center font-bold text-gray-700 disabled:opacity-30" />
-                          </td>
-                          <td className="p-4 text-center">
-                            {isActive && (
-                              <button
-                                type="button"
-                                onClick={(e) => { e.preventDefault(); handleCalculateInventory(wh.id); }}
-                                disabled={isCalculating === wh.id}
-                                className="p-2 hover:bg-blue-50 text-blue-600 rounded-xl transition-all active:scale-95 disabled:opacity-30"
-                                title="Calcular Magic Min/Max para este almacén"
-                              >
-                                {isCalculating === wh.id ? <RefreshCw size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                        return (
+                          <tr key={wh.id} className={isActive ? 'bg-white' : 'bg-gray-50/50 opacity-60'}>
+                            <td className="p-4">
+                              <p className="font-bold text-gray-800 flex items-center gap-2">
+                                {wh.name}
+                                {wh.isMain && <span className="text-[8px] bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full font-black uppercase tracking-tight">CD</span>}
+                              </p>
+                              <p className="text-[10px] text-gray-400">{wh.type}</p>
+                            </td>
+                            <td className="p-4 text-center">
+                              <button onClick={() => {
+                                const current = formData.activeInWarehouses || [];
+                                const isAct = current.includes(wh.id);
+                                setFormData({ ...formData, activeInWarehouses: isAct ? current.filter(id => id !== wh.id) : [...current, wh.id] });
+                              }} className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${isActive ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                                {isActive ? 'Activo' : 'Inactivo'}
                               </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+                            </td>
 
-          {activeTab === 'RECIPE' && (
-            <RecipeManager
-              product={formData}
-              allProducts={allProducts}
-              onUpdate={(updates) => setFormData(prev => ({ ...prev, ...updates }))}
-              currencySymbol={config.currencySymbol}
-            />
-          )}
+                            {/* IN TRANSIT COLUMN */}
+                            <td className="p-4 text-center relative">
+                              {inTransitQty > 0 ? (
+                                <div className="relative inline-block">
+                                  <button
+                                    onClick={() => setOpenTransitPopover(showPopover ? null : wh.id)}
+                                    className="font-bold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer transition-colors"
+                                  >
+                                    {inTransitQty} u.
+                                  </button>
 
-          {activeTab === 'TAXES' && (
-            <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
-              <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
-                <h3 className="text-xl font-bold text-gray-800 mb-6">Impuestos Aplicables</h3>
-                <div className="space-y-3">
-                  {config.taxes.map(tax => {
-                    const isSelected = formData.appliedTaxIds?.includes(tax.id);
-                    return (
-                      <div
-                        key={tax.id}
-                        onClick={() => {
-                          const current = formData.appliedTaxIds || [];
-                          setFormData({ ...formData, appliedTaxIds: isSelected ? current.filter(id => id !== tax.id) : [...current, tax.id] });
-                        }}
-                        className={`flex items-center justify-between p-4 rounded-xl border-2 cursor-pointer transition-all ${isSelected ? 'bg-blue-50 border-blue-500' : 'bg-gray-50 border-gray-100'}`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className={`w-6 h-6 rounded border-2 flex items-center justify-center ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-300'}`}>
-                            {isSelected && <Check size={14} className="text-white" />}
-                          </div>
-                          <div><p className="font-bold text-gray-800">{tax.name}</p></div>
-                        </div>
-                        <span className="font-black text-lg text-gray-700">{((tax.rate || 0) * 100).toFixed(2)}%</span>
-                      </div>
-                    );
-                  })}
+                                  {/* POPOVER */}
+                                  {showPopover && (
+                                    <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 z-50 w-72 bg-white rounded-xl border border-gray-200 shadow-2xl animate-in zoom-in-95 duration-100">
+                                      <div className="p-4 border-b bg-gray-50 rounded-t-xl">
+                                        <p className="text-xs font-black text-gray-700 uppercase tracking-wide flex items-center gap-2">
+                                          <Truck size={14} className="text-blue-600" />
+                                          Traspasos en Tránsito
+                                        </p>
+                                      </div>
+                                      <div className="p-3 max-h-64 overflow-y-auto">
+                                        {warehouseTransfers.map(transfer => {
+                                          const item = transfer.items.find(i => i.productId === formData.id);
+                                          const sourceWarehouse = warehouses.find(w => w.id === transfer.sourceWarehouseId);
+                                          return (
+                                            <div key={transfer.id} className="p-3 bg-gray-50 rounded-lg mb-2 last:mb-0">
+                                              <div className="flex justify-between items-start mb-1">
+                                                <p className="text-xs font-bold text-gray-800">#{transfer.displayId || transfer.id}</p>
+                                                <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{item?.quantity} u.</span>
+                                              </div>
+                                              <p className="text-[10px] text-gray-500">
+                                                <span className="font-medium">Desde:</span> {sourceWarehouse?.name || 'Desconocido'}
+                                              </p>
+                                              <p className="text-[10px] text-gray-400 mt-1">
+                                                {new Date(transfer.createdAt).toLocaleDateString()}
+                                              </p>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                      <div className="p-2 border-t bg-gray-50 rounded-b-xl">
+                                        <button
+                                          onClick={() => setOpenTransitPopover(null)}
+                                          className="w-full text-center text-[10px] font-bold text-gray-500 hover:text-gray-700"
+                                        >
+                                          Cerrar
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Backdrop to close popover */}
+                                  {showPopover && (
+                                    <div
+                                      className="fixed inset-0 z-40"
+                                      onClick={() => setOpenTransitPopover(null)}
+                                    />
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-gray-300">-</span>
+                              )}
+                            </td>
+
+                            {/* ON ORDER COLUMN */}
+                            <td className="p-4 text-center">
+                              {onOrderQty > 0 ? (
+                                <span className="font-bold text-gray-700">{onOrderQty} u.</span>
+                              ) : (
+                                <span className="text-gray-300">-</span>
+                              )}
+                            </td>
+
+                            <td className="p-4">
+                              <input type="number" disabled={!isActive} value={settings.min} onChange={e => setWarehouseSettings({ ...warehouseSettings, [wh.id]: { ...(warehouseSettings[wh.id] || { min: 0, max: 0 }), min: parseInt(e.target.value) || 0 } })} className="w-16 mx-auto block p-2 bg-gray-50 border border-gray-200 rounded-lg text-center font-bold text-blue-600 disabled:opacity-30" />
+                            </td>
+                            <td className="p-4">
+                              <input type="number" disabled={!isActive} value={settings.max} onChange={e => setWarehouseSettings({ ...warehouseSettings, [wh.id]: { ...(warehouseSettings[wh.id] || { min: 0, max: 0 }), max: parseInt(e.target.value) || 0 } })} className="w-16 mx-auto block p-2 bg-gray-50 border border-gray-200 rounded-lg text-center font-bold text-gray-700 disabled:opacity-30" />
+                            </td>
+                            <td className="p-4 text-center">
+                              {isActive && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.preventDefault(); handleCalculateInventory(wh.id); }}
+                                  disabled={isCalculating === wh.id}
+                                  className="p-2 hover:bg-blue-50 text-blue-600 rounded-xl transition-all active:scale-95 disabled:opacity-30"
+                                  title="Calcular Magic Min/Max para este almacén"
+                                >
+                                  {isCalculating === wh.id ? <RefreshCw size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               </div>
-            </div>
-          )}
+            )
+          }
 
-        </div>
+          {
+            activeTab === 'RECIPE' && (
+              <RecipeManager
+                product={formData}
+                allProducts={allProducts}
+                onUpdate={(updates) => {
+                  setFormData(prev => {
+                    const newData = { ...prev, ...updates };
+
+                    // SYNC LOGIC: If price changed, update 'General' tariff (id: '1')
+                    if (updates.price !== undefined) {
+                      const generalTariffId = '1';
+                      const tariffIndex = newData.tariffs?.findIndex(t => t.tariffId === generalTariffId);
+
+                      if (tariffIndex !== undefined && tariffIndex >= 0 && newData.tariffs) {
+                        const updatedTariffs = [...newData.tariffs];
+                        updatedTariffs[tariffIndex] = {
+                          ...updatedTariffs[tariffIndex],
+                          price: updates.price,
+                          // Recalculate margin for the tariff if cost exists
+                          margin: newData.cost > 0
+                            ? ((updates.price / (1 + (config.taxRate || 0.18))) - newData.cost) / newData.cost * 100
+                            : 0
+                        };
+                        newData.tariffs = updatedTariffs;
+                      }
+                    }
+                    return newData;
+                  });
+                }}
+                currencySymbol={config.currencySymbol}
+              />
+            )
+          }
+
+          {
+            activeTab === 'TAXES' && (
+              <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
+                <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
+                  <h3 className="text-xl font-bold text-gray-800 mb-6">Impuestos Aplicables</h3>
+                  <div className="space-y-3">
+                    {config.taxes.map(tax => {
+                      const isSelected = formData.appliedTaxIds?.includes(tax.id);
+                      return (
+                        <div
+                          key={tax.id}
+                          onClick={() => {
+                            const current = formData.appliedTaxIds || [];
+                            setFormData({ ...formData, appliedTaxIds: isSelected ? current.filter(id => id !== tax.id) : [...current, tax.id] });
+                          }}
+                          className={`flex items-center justify-between p-4 rounded-xl border-2 cursor-pointer transition-all ${isSelected ? 'bg-blue-50 border-blue-500' : 'bg-gray-50 border-gray-100'}`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className={`w-6 h-6 rounded border-2 flex items-center justify-center ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-300'}`}>
+                              {isSelected && <Check size={14} className="text-white" />}
+                            </div>
+                            <div><p className="font-bold text-gray-800">{tax.name}</p></div>
+                          </div>
+                          <span className="font-black text-lg text-gray-700">{((tax.rate || 0) * 100).toFixed(2)}%</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )
+          }
+
+        </div >
 
         {/* Footer Actions */}
-        <div className="p-6 border-t bg-white flex justify-between items-center shrink-0">
+        < div className="p-6 border-t bg-white flex justify-between items-center shrink-0" >
           <div>{hasHistory && <span className="flex items-center gap-2 text-xs text-orange-600 bg-orange-50 px-3 py-2 rounded-xl font-bold"><ShieldAlert size={16} /> Producto con historial</span>}</div>
           <div className="flex gap-3">
             <button onClick={onClose} className="px-6 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors">Cancelar</button>
             <button onClick={handleFinalSave} className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 active:scale-95 flex items-center gap-2"><Save size={20} /> Guardar Producto</button>
           </div>
-        </div>
+        </div >
 
         {/* PROFIT CALCULATOR MODAL */}
-        {showProfitCalc && (
-          <ProfitCalculator
-            initialCost={formData.tariffs.find(t => t.tariffId === showProfitCalc)?.costBase || formData.cost || 0}
-            initialPrice={formData.tariffs.find(t => t.tariffId === showProfitCalc)?.price || formData.price}
-            initialMargin={formData.tariffs.find(t => t.tariffId === showProfitCalc)?.margin || 30}
-            taxRate={config.taxRate}
-            currencySymbol={config.currencySymbol}
-            onClose={() => setShowProfitCalc(null)}
-            onApply={(values) => {
-              setFormData(prev => ({
-                ...prev,
-                tariffs: prev.tariffs.map(t => t.tariffId === showProfitCalc ? { ...t, price: values.price, margin: values.margin, costBase: values.cost } : t)
-              }));
-              setShowProfitCalc(null);
-            }}
-          />
-        )}
+        {
+          showProfitCalc && (
+            <ProfitCalculator
+              initialCost={formData.tariffs.find(t => t.tariffId === showProfitCalc)?.costBase || formData.cost || 0}
+              initialPrice={formData.tariffs.find(t => t.tariffId === showProfitCalc)?.price || formData.price}
+              initialMargin={formData.tariffs.find(t => t.tariffId === showProfitCalc)?.margin || 30}
+              taxRate={config.taxRate}
+              currencySymbol={config.currencySymbol}
+              onClose={() => setShowProfitCalc(null)}
+              onApply={(values) => {
+                setFormData(prev => ({
+                  ...prev,
+                  tariffs: prev.tariffs.map(t => t.tariffId === showProfitCalc ? { ...t, price: values.price, margin: values.margin, costBase: values.cost } : t)
+                }));
+                setShowProfitCalc(null);
+              }}
+            />
+          )
+        }
 
         {/* CONVERSION HELPER MODAL */}
-        {showConversionHelper && (
-          <ConversionHelper
-            fromUnit={formData.purchaseUnit || ''}
-            toUnit={formData.measurementUnit || ''}
-            currentFactor={formData.conversionFactor || 0}
-            onApply={factor => setFormData({ ...formData, conversionFactor: factor })}
-            onClose={() => setShowConversionHelper(false)}
-          />
-        )}
-      </div>
+        {
+          showConversionHelper && (
+            <ConversionHelper
+              fromUnit={formData.purchaseUnit || ''}
+              toUnit={formData.measurementUnit || ''}
+              currentFactor={formData.conversionFactor || 0}
+              onApply={factor => setFormData({ ...formData, conversionFactor: factor })}
+              onClose={() => setShowConversionHelper(false)}
+            />
+          )
+        }
+      </div >
     </div >
   );
 };
