@@ -3,8 +3,8 @@ import {
   Printer, Type, ScanBarcode, QrCode,
   Settings, Save, X, ZoomIn, ZoomOut, Copy, Trash2, Plus, RotateCcw
 } from 'lucide-react';
-import { BusinessConfig, LabelElement, LabelElementType, LabelTemplate, LabelDataSource } from '../types';
-import { DEFAULT_LABEL_TEMPLATES } from '../constants';
+import { BusinessConfig, LabelElement, LabelElementType, LabelTemplate, LabelDataSource, LabelTemplateCategory } from '../types';
+import { DEFAULT_LABEL_TEMPLATES, DEFAULT_LABEL_TEMPLATE_IDS } from '../constants';
 
 interface LabelDesignerProps {
   config: BusinessConfig;
@@ -13,6 +13,9 @@ interface LabelDesignerProps {
 }
 
 const MM_TO_PX = 3.78;
+const CATEGORY_ORDER: Record<LabelTemplateCategory, number> = { ARTICLE: 0, GONDOLA: 1 };
+const DEFAULT_TEMPLATE_IDS = new Set(DEFAULT_LABEL_TEMPLATE_IDS);
+const PRINTABLE_SOURCES: LabelDataSource[] = ['PRODUCT_NAME', 'PRODUCT_PRICE', 'PRODUCT_SKU'];
 
 const cloneTemplates = (templates: LabelTemplate[]): LabelTemplate[] => (
   templates.map(template => ({
@@ -21,18 +24,53 @@ const cloneTemplates = (templates: LabelTemplate[]): LabelTemplate[] => (
   }))
 );
 
-const getTemplatesFromConfig = (config: BusinessConfig): LabelTemplate[] => {
-  if (Array.isArray(config.labelTemplates) && config.labelTemplates.length > 0) {
-    return cloneTemplates(config.labelTemplates);
+const inferCategory = (template: Partial<LabelTemplate>): LabelTemplateCategory => {
+  if (template.category === 'ARTICLE' || template.category === 'GONDOLA') {
+    return template.category;
   }
-  return cloneTemplates(DEFAULT_LABEL_TEMPLATES);
+
+  const name = `${template.id || ''} ${template.name || ''}`.toLowerCase();
+  return name.includes('gondola') ? 'GONDOLA' : 'ARTICLE';
 };
 
-const createCustomTemplate = (): LabelTemplate => ({
+const normalizeTemplate = (template: LabelTemplate): LabelTemplate => ({
+  ...template,
+  category: inferCategory(template),
+  elements: template.elements.map(element => ({ ...element }))
+});
+
+const sortTemplates = (templates: LabelTemplate[]): LabelTemplate[] => (
+  [...templates].sort((a, b) => {
+    const byCategory = CATEGORY_ORDER[a.category] - CATEGORY_ORDER[b.category];
+    if (byCategory !== 0) return byCategory;
+    return a.name.localeCompare(b.name);
+  })
+);
+
+const mergeWithMissingDefaults = (templates: LabelTemplate[]): LabelTemplate[] => {
+  const normalized = templates.map(normalizeTemplate);
+  const currentIds = new Set(normalized.map(template => template.id));
+
+  const missingDefaults = DEFAULT_LABEL_TEMPLATES
+    .filter(template => !currentIds.has(template.id))
+    .map(template => normalizeTemplate(template));
+
+  return sortTemplates([...normalized, ...missingDefaults]);
+};
+
+const getTemplatesFromConfig = (config: BusinessConfig): LabelTemplate[] => {
+  if (Array.isArray(config.labelTemplates) && config.labelTemplates.length > 0) {
+    return mergeWithMissingDefaults(cloneTemplates(config.labelTemplates));
+  }
+  return sortTemplates(cloneTemplates(DEFAULT_LABEL_TEMPLATES));
+};
+
+const createCustomTemplate = (category: LabelTemplateCategory): LabelTemplate => ({
   id: `lbl-custom-${Date.now()}`,
-  name: 'Etiqueta Personalizada',
-  widthMm: 50,
-  heightMm: 25,
+  name: category === 'ARTICLE' ? 'Articulo Personalizado' : 'Gondola Personalizada',
+  category,
+  widthMm: category === 'ARTICLE' ? 50 : 100,
+  heightMm: category === 'ARTICLE' ? 25 : 35,
   elements: [
     {
       id: `el-name-${Date.now()}`,
@@ -72,12 +110,17 @@ const createCustomTemplate = (): LabelTemplate => ({
 });
 
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(value, max));
+const hasPrintableData = (template: LabelTemplate): boolean => (
+  template.elements.some(element => PRINTABLE_SOURCES.includes(element.dataSource))
+);
 
 const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, onClose }) => {
   const [templates, setTemplates] = useState<LabelTemplate[]>(() => getTemplatesFromConfig(config));
   const [activeTemplateId, setActiveTemplateId] = useState<string>(() => getTemplatesFromConfig(config)[0]?.id || '');
+  const [templateTypeFilter, setTemplateTypeFilter] = useState<LabelTemplateCategory>('ARTICLE');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(2);
+  const [printCopies, setPrintCopies] = useState(1);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
 
@@ -91,9 +134,18 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
     const incomingTemplates = getTemplatesFromConfig(config);
     setTemplates(incomingTemplates);
     setActiveTemplateId((prev) => incomingTemplates.some(t => t.id === prev) ? prev : (incomingTemplates[0]?.id || ''));
+    setTemplateTypeFilter((prev) => {
+      if (incomingTemplates.some(template => template.category === prev)) return prev;
+      return incomingTemplates[0]?.category || 'ARTICLE';
+    });
     setSelectedId(null);
     setIsDirty(false);
   }, [config.labelTemplates]);
+
+  const visibleTemplates = useMemo(
+    () => sortTemplates(templates).filter(template => template.category === templateTypeFilter),
+    [templates, templateTypeFilter]
+  );
 
   const activeTemplate = useMemo(
     () => templates.find(template => template.id === activeTemplateId) || null,
@@ -105,9 +157,18 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
     [activeTemplate, selectedId]
   );
 
+  useEffect(() => {
+    if (!visibleTemplates.length) return;
+    const activeVisible = visibleTemplates.some(template => template.id === activeTemplateId);
+    if (!activeVisible) {
+      setActiveTemplateId(visibleTemplates[0].id);
+      setSelectedId(null);
+    }
+  }, [visibleTemplates, activeTemplateId]);
+
   const updateTemplates = (updater: (current: LabelTemplate[]) => LabelTemplate[]) => {
     setTemplates((current) => {
-      const updated = updater(current);
+      const updated = mergeWithMissingDefaults(updater(current));
       return updated;
     });
     setIsDirty(true);
@@ -121,7 +182,7 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
   };
 
   const addTemplate = () => {
-    const newTemplate = createCustomTemplate();
+    const newTemplate = createCustomTemplate(templateTypeFilter);
     updateTemplates(current => [...current, newTemplate]);
     setActiveTemplateId(newTemplate.id);
     setSelectedId(null);
@@ -148,26 +209,47 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
 
   const deleteTemplate = () => {
     if (!activeTemplate) return;
+    if (DEFAULT_TEMPLATE_IDS.has(activeTemplate.id)) {
+      setStatusMessage('Las plantillas por defecto no se pueden eliminar.');
+      return;
+    }
     if (templates.length <= 1) {
       setStatusMessage('Debe existir al menos una plantilla.');
       return;
     }
 
     const remaining = templates.filter(template => template.id !== activeTemplate.id);
-    setTemplates(remaining);
-    setActiveTemplateId(remaining[0].id);
+    const nextVisible = sortTemplates(remaining).filter(template => template.category === templateTypeFilter);
+    updateTemplates(() => remaining);
+    setActiveTemplateId(nextVisible[0]?.id || sortTemplates(remaining)[0]?.id || '');
     setSelectedId(null);
-    setIsDirty(true);
     setStatusMessage('Plantilla eliminada.');
   };
 
-  const restoreDefaults = () => {
-    const defaults = cloneTemplates(DEFAULT_LABEL_TEMPLATES);
+  const restoreAllDefaults = () => {
+    const defaults = sortTemplates(cloneTemplates(DEFAULT_LABEL_TEMPLATES));
     setTemplates(defaults);
-    setActiveTemplateId(defaults[0]?.id || '');
+    setActiveTemplateId(defaults.find(template => template.category === templateTypeFilter)?.id || defaults[0]?.id || '');
     setSelectedId(null);
     setIsDirty(true);
     setStatusMessage('Plantillas por defecto restauradas.');
+  };
+
+  const restoreActiveDefault = () => {
+    if (!activeTemplate) return;
+    if (!DEFAULT_TEMPLATE_IDS.has(activeTemplate.id)) {
+      setStatusMessage('Solo las plantillas por defecto se pueden restaurar por plantilla.');
+      return;
+    }
+
+    const defaultTemplate = DEFAULT_LABEL_TEMPLATES.find(template => template.id === activeTemplate.id);
+    if (!defaultTemplate) return;
+
+    updateTemplates(current => current.map(template => (
+      template.id === activeTemplate.id ? normalizeTemplate(defaultTemplate) : template
+    )));
+    setSelectedId(null);
+    setStatusMessage(`Plantilla restaurada: ${defaultTemplate.name}`);
   };
 
   const addElement = (type: LabelElementType) => {
@@ -254,9 +336,16 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
     setStatusMessage('Plantillas guardadas en Ajustes.');
   };
 
-  const handlePrint = () => {
+  const handlePrintTest = () => {
     if (!activeTemplate) return;
-    setStatusMessage(`Plantilla lista para imprimir: ${activeTemplate.name}`);
+    if (!hasPrintableData(activeTemplate)) {
+      setStatusMessage('Impresion bloqueada: agrega al menos un dato (nombre, precio o SKU/codigo).');
+      return;
+    }
+
+    const copies = Math.max(1, Math.floor(printCopies) || 1);
+    setPrintCopies(copies);
+    setStatusMessage(`Impresion de prueba enviada: ${activeTemplate.name} (${copies} copia${copies > 1 ? 's' : ''}).`);
   };
 
   return (
@@ -380,7 +469,15 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
             <Settings size={18} /> Diseno de Etiquetas
           </h3>
           <div className="flex items-center gap-2">
-            <button onClick={handlePrint} className="bg-slate-100 hover:bg-slate-200 text-slate-700 p-2 rounded-lg transition-colors" title="Vista de impresion">
+            <input
+              type="number"
+              min={1}
+              value={printCopies}
+              onChange={(e) => setPrintCopies(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              className="w-16 p-2 bg-white border border-gray-300 rounded-lg text-sm font-mono text-center"
+              title="Copias"
+            />
+            <button onClick={handlePrintTest} className="bg-slate-100 hover:bg-slate-200 text-slate-700 p-2 rounded-lg transition-colors" title="Imprimir prueba">
               <Printer size={18} />
             </button>
             <button
@@ -402,6 +499,19 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
           )}
 
           <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-3">
+            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tipo de Etiqueta</label>
+            <select
+              value={templateTypeFilter}
+              onChange={(e) => {
+                setTemplateTypeFilter(e.target.value as LabelTemplateCategory);
+                setSelectedId(null);
+              }}
+              className="w-full p-2 bg-white border border-gray-300 rounded-lg text-sm font-bold"
+            >
+              <option value="ARTICLE">Articulo</option>
+              <option value="GONDOLA">Gondola</option>
+            </select>
+
             <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Plantilla Activa</label>
             <select
               value={activeTemplateId}
@@ -411,7 +521,7 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
               }}
               className="w-full p-2 bg-white border border-gray-300 rounded-lg text-sm font-bold"
             >
-              {templates.map(template => (
+              {visibleTemplates.map(template => (
                 <option key={template.id} value={template.id}>{template.name}</option>
               ))}
             </select>
@@ -423,21 +533,53 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
               <button onClick={duplicateTemplate} disabled={!activeTemplate} className="px-2 py-2 text-xs font-bold rounded-lg bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50 flex items-center justify-center gap-1">
                 <Copy size={14} /> Duplicar
               </button>
-              <button onClick={deleteTemplate} disabled={!activeTemplate} className="px-2 py-2 text-xs font-bold rounded-lg bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50 flex items-center justify-center gap-1">
+              <button
+                onClick={deleteTemplate}
+                disabled={!activeTemplate || (activeTemplate ? DEFAULT_TEMPLATE_IDS.has(activeTemplate.id) : false)}
+                className="px-2 py-2 text-xs font-bold rounded-lg bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50 flex items-center justify-center gap-1"
+                title={activeTemplate && DEFAULT_TEMPLATE_IDS.has(activeTemplate.id) ? 'Plantilla por defecto protegida' : 'Eliminar plantilla'}
+              >
                 <Trash2 size={14} /> Eliminar
               </button>
-              <button onClick={restoreDefaults} className="px-2 py-2 text-xs font-bold rounded-lg bg-white border border-gray-300 hover:bg-gray-100 flex items-center justify-center gap-1">
-                <RotateCcw size={14} /> Defaults
+              <button
+                onClick={restoreActiveDefault}
+                disabled={!activeTemplate || (activeTemplate ? !DEFAULT_TEMPLATE_IDS.has(activeTemplate.id) : true)}
+                className="px-2 py-2 text-xs font-bold rounded-lg bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50 flex items-center justify-center gap-1"
+              >
+                <RotateCcw size={14} /> Restaurar
+              </button>
+              <button onClick={restoreAllDefaults} className="col-span-2 px-2 py-2 text-xs font-bold rounded-lg bg-white border border-gray-300 hover:bg-gray-100 flex items-center justify-center gap-1">
+                <RotateCcw size={14} /> Restaurar Todos los Defaults
               </button>
             </div>
 
             <p className="text-[10px] text-gray-500">
-              Incluye por defecto: Articulo (XS, S, M, L, XL) y Gondola.
+              Defaults protegidos: Articulo (XS, S, M, L, XL) y Gondola.
             </p>
           </div>
 
           {!selectedElement && activeTemplate && (
             <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-gray-500 uppercase">Categoria</label>
+                {DEFAULT_TEMPLATE_IDS.has(activeTemplate.id) && (
+                  <span className="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded bg-slate-100 text-slate-700">
+                    Default
+                  </span>
+                )}
+              </div>
+              <select
+                value={activeTemplate.category}
+                onChange={(e) => {
+                  const nextCategory = e.target.value as LabelTemplateCategory;
+                  updateActiveTemplate(template => ({ ...template, category: nextCategory }));
+                  setTemplateTypeFilter(nextCategory);
+                }}
+                className="w-full p-2 bg-gray-50 border rounded-lg text-sm"
+              >
+                <option value="ARTICLE">Articulo</option>
+                <option value="GONDOLA">Gondola</option>
+              </select>
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre Plantilla</label>
                 <input

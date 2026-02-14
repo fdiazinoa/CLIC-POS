@@ -1293,6 +1293,7 @@ export interface TimeRecord {
 
 export type LabelElementType = 'TEXT' | 'BARCODE' | 'QR';
 export type LabelDataSource = 'CUSTOM_TEXT' | 'PRODUCT_NAME' | 'PRODUCT_PRICE' | 'PRODUCT_SKU';
+export type LabelTemplateCategory = 'ARTICLE' | 'GONDOLA';
 
 export interface LabelElement {
   id: string;
@@ -1310,6 +1311,7 @@ export interface LabelElement {
 export interface LabelTemplate {
   id: string;
   name: string;
+  category: LabelTemplateCategory;
   widthMm: number;
   heightMm: number;
   elements: LabelElement[];

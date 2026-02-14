@@ -10,6 +10,7 @@ type RecoveryOptions = {
 export class ZReportRecoveryService {
     private static recoveryPromise: Promise<number> | null = null;
     private static alreadyRanInSession = false;
+    private static notifiedInSession = false;
 
     static async recoverOrphanedReports(options: RecoveryOptions = {}): Promise<number> {
         const { notifyUser = false, runOncePerSession = true } = options;
@@ -126,8 +127,9 @@ export class ZReportRecoveryService {
                 }
             }
 
-            if (notifyUser && recoveredReports.length > 0) {
+            if (notifyUser && recoveredReports.length > 0 && !this.notifiedInSession) {
                 alert(`SISTEMA: Se han recuperado ${recoveredReports.length} Cierres Z perdidos.`);
+                this.notifiedInSession = true;
             }
 
             return recoveredReports.length;

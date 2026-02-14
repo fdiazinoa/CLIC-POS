@@ -418,6 +418,7 @@ export const AVAILABLE_PERMISSIONS = [
 const createArticleTemplate = (id: string, name: string, widthMm: number, heightMm: number): LabelTemplate => ({
   id,
   name,
+  category: 'ARTICLE',
   widthMm,
   heightMm,
   elements: [
@@ -467,6 +468,7 @@ export const DEFAULT_LABEL_TEMPLATES: LabelTemplate[] = [
   {
     id: 'lbl-gondola',
     name: 'Gondola (100x35 mm)',
+    category: 'GONDOLA',
     widthMm: 100,
     heightMm: 35,
     elements: [
@@ -519,6 +521,8 @@ export const DEFAULT_LABEL_TEMPLATES: LabelTemplate[] = [
     ]
   }
 ];
+
+export const DEFAULT_LABEL_TEMPLATE_IDS = DEFAULT_LABEL_TEMPLATES.map(template => template.id);
 
 export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
   const isFood = ([SubVertical.RESTAURANT, SubVertical.FAST_FOOD, SubVertical.BAR] as string[]).includes(subVertical);
