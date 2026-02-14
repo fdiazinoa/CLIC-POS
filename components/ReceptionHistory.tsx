@@ -1,21 +1,23 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Package, Calendar, User, ArrowRight, Clock, X, Hash, Box, Trash2 } from 'lucide-react';
-import { Reception, BusinessConfig, Supplier, PurchaseOrder } from '../types';
+import { Search, Package, Calendar, User, ArrowRight, Clock, X, Hash, Box, Trash2, Landmark, CreditCard, Printer } from 'lucide-react';
+import { Reception, BusinessConfig, Supplier, PurchaseOrder, Product } from '../types';
 import { formatSafeDate, formatSafeTime } from '../utils/dateUtils';
-import { Landmark, CreditCard, Receipt } from 'lucide-react';
+import LabelPrintModal from './LabelPrintModal';
 
 interface ReceptionHistoryProps {
     receptions: Reception[];
     config: BusinessConfig;
     suppliers: Supplier[];
     purchaseOrders: PurchaseOrder[];
+    products?: Product[];
     onDeleteReception: (id: string) => void;
     onDeleteOrder?: (id: string) => void;
 }
 
-const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config, suppliers, purchaseOrders, onDeleteReception, onDeleteOrder }) => {
+const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config, suppliers, purchaseOrders, products = [], onDeleteReception, onDeleteOrder }) => {
     const [search, setSearch] = useState('');
     const [selectedReception, setSelectedReception] = useState<Reception | null>(null);
+    const [isLabelModalOpen, setIsLabelModalOpen] = useState(false);
 
     const filteredReceptions = useMemo(() => {
         return receptions
@@ -31,6 +33,20 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config,
                 return dateB - dateA;
             });
     }, [receptions, search]);
+
+    const receptionLabelItems = useMemo(() => {
+        if (!selectedReception) return [];
+        return (selectedReception.items || []).map(item => {
+            const catalogProduct = products.find(product => product.id === item.productId);
+            return {
+                productId: item.productId,
+                productName: item.productName,
+                sku: item.variantSku || catalogProduct?.barcode || item.productId,
+                price: catalogProduct?.price ?? item.cost,
+                quantityReceived: item.quantityReceived
+            };
+        });
+    }, [selectedReception, products]);
 
     return (
         <div className="flex flex-col h-full animate-in fade-in duration-300">
@@ -139,7 +155,10 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config,
                                 <p className="text-green-100 text-sm opacity-80">#{selectedReception.id} • PO: {selectedReception.purchaseOrderId}</p>
                             </div>
                             <button
-                                onClick={() => setSelectedReception(null)}
+                                onClick={() => {
+                                    setSelectedReception(null);
+                                    setIsLabelModalOpen(false);
+                                }}
                                 className="p-2 hover:bg-white/20 rounded-full transition-colors"
                             >
                                 <X size={24} />
@@ -219,9 +238,19 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config,
                             </table>
                         </div>
 
-                        <div className="p-6 bg-gray-50 border-t border-gray-100 flex justify-end">
+                        <div className="p-6 bg-gray-50 border-t border-gray-100 flex justify-between items-center">
                             <button
-                                onClick={() => setSelectedReception(null)}
+                                onClick={() => setIsLabelModalOpen(true)}
+                                disabled={(selectedReception.items || []).length === 0}
+                                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                            >
+                                <Printer size={16} /> Imprimir Etiquetas
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setSelectedReception(null);
+                                    setIsLabelModalOpen(false);
+                                }}
                                 className="px-6 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-xl font-bold transition-colors"
                             >
                                 Cerrar
@@ -229,6 +258,19 @@ const ReceptionHistory: React.FC<ReceptionHistoryProps> = ({ receptions, config,
                         </div>
                     </div>
                 </div>
+            )}
+
+            {selectedReception && (
+                <LabelPrintModal
+                    isOpen={isLabelModalOpen}
+                    onClose={() => setIsLabelModalOpen(false)}
+                    config={config}
+                    items={receptionLabelItems}
+                    sourceTitle={`Recepcion #${selectedReception.id}`}
+                    terminalId={selectedReception.terminalId}
+                    defaultTemplateCategory="ARTICLE"
+                    defaultQuantityMode="RECEIVED"
+                />
             )}
         </div>
     );

@@ -1110,6 +1110,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                config={config}
                suppliers={safeSuppliers}
                purchaseOrders={safeOrders}
+               products={safeProducts}
                onDeleteReception={onDeleteReception}
                onDeleteOrder={onDeleteOrder}
             />

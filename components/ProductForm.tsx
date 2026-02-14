@@ -8,7 +8,7 @@ import {
   ShieldAlert, AlertCircle, Check, LayoutTemplate, ClipboardList, ListTree,
   Truck, ArrowDownToLine, Building2, Search, Filter, AlertTriangle,
   Scale, Ban, ShieldCheck, Zap, History, MapPin, ChevronRight, ChevronDown, Settings,
-  Keyboard, BookOpen, ArrowUpRight, ArrowDownLeft, Calendar, Award, Sparkles, TrendingUp, ScanBarcode
+  Keyboard, BookOpen, ArrowUpRight, ArrowDownLeft, Calendar, Award, Sparkles, TrendingUp, ScanBarcode, Printer
 } from 'lucide-react';
 import { calculateOptimalInventoryLevels, InventoryCalculation } from '../utils/inventoryEngine';
 import {
@@ -23,6 +23,7 @@ import { inventorySyncService } from '../services/sync/InventorySyncService';
 import { UnitSelector } from './UnitSelector';
 import { ConversionHelper } from './ConversionHelper';
 import { calculateCost, UNITS } from '../utils/units';
+import LabelPrintModal from './LabelPrintModal';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -42,7 +43,7 @@ interface ProductFormProps {
   allProducts?: Product[]; // For recipe search
 }
 
-type ProductTab = 'GENERAL' | 'CLASSIFICATION' | 'OPERATIVE' | 'TAXES' | 'PRICING' | 'VARIANTS' | 'LOGISTICS' | 'STOCKS' | 'KARDEX' | 'RECIPE';
+type ProductTab = 'GENERAL' | 'CLASSIFICATION' | 'LABELS' | 'OPERATIVE' | 'TAXES' | 'PRICING' | 'VARIANTS' | 'LOGISTICS' | 'STOCKS' | 'KARDEX' | 'RECIPE';
 
 const DEFAULT_OPERATIONAL_FLAGS: ProductOperationalFlags = {
   isWeighted: false,
@@ -76,6 +77,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   // --- STATE ---
   const [showProfitCalc, setShowProfitCalc] = useState<string | null>(null);
   const [showTemplateMenu, setShowTemplateMenu] = useState(false);
+  const [isLabelModalOpen, setIsLabelModalOpen] = useState(false);
   const [pendingOption, setPendingOption] = useState<Record<string, string>>({});
 
   // Kardex Filter State
@@ -480,6 +482,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
           {[
             { id: 'GENERAL', label: 'General', icon: Info },
             { id: 'CLASSIFICATION', label: 'Clasificación', icon: ListTree },
+            { id: 'LABELS', label: 'Etiquetas', icon: Printer },
             { id: 'OPERATIVE', label: 'Operativa', icon: Settings2 },
             { id: 'PRICING', label: 'Tarifas', icon: Tag },
             { id: 'VARIANTS', label: 'Variantes', icon: Layers },
@@ -1361,6 +1364,49 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             </div>
           )}
 
+          {activeTab === 'LABELS' && (
+            <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
+              <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm space-y-6">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                  <div>
+                    <h3 className="text-xl font-bold text-gray-800">Etiquetas del Articulo</h3>
+                    <p className="text-sm text-gray-500">
+                      Imprime etiquetas desde el modulo de articulos usando las plantillas guardadas.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsLabelModalOpen(true)}
+                    className="px-5 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-md hover:bg-blue-700 transition-colors flex items-center gap-2 w-fit"
+                  >
+                    <Printer size={18} /> Imprimir Etiquetas
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="p-4 rounded-2xl bg-gray-50 border border-gray-100">
+                    <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Articulo</p>
+                    <p className="font-bold text-gray-800 break-words">{formData.name || 'Sin nombre'}</p>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-gray-50 border border-gray-100">
+                    <p className="text-[10px] font-black text-gray-400 uppercase mb-1">SKU / Codigo</p>
+                    <p className="font-mono text-sm text-gray-700 break-words">{formData.barcode || formData.id}</p>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-gray-50 border border-gray-100">
+                    <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Precio Actual</p>
+                    <p className="font-black text-blue-700">{config.currencySymbol}{(formData.price || 0).toFixed(2)}</p>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl border border-blue-100 bg-blue-50">
+                  <p className="text-xs text-blue-700 font-semibold">
+                    Consejo: puedes seleccionar plantilla, copias y filtros avanzados dentro del modal de impresion.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {
             activeTab === 'LOGISTICS' && (
               <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in">
@@ -1707,6 +1753,27 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             />
           )
         }
+
+        {isLabelModalOpen && (
+          <LabelPrintModal
+            isOpen={isLabelModalOpen}
+            onClose={() => setIsLabelModalOpen(false)}
+            config={config}
+            items={[
+              {
+                productId: formData.id,
+                productName: formData.name || formData.id,
+                sku: formData.barcode || formData.id,
+                price: formData.price || 0,
+                quantityReceived: 1
+              }
+            ]}
+            sourceTitle={`Articulo ${formData.id}`}
+            defaultProductId={formData.id}
+            defaultTemplateCategory="ARTICLE"
+            defaultQuantityMode="FIXED"
+          />
+        )}
 
         {/* CONVERSION HELPER MODAL */}
         {
