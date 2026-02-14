@@ -53,6 +53,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
   const [activeAddProductId, setActiveAddProductId] = useState<string | null>(null);
   const [cartPulse, setCartPulse] = useState(false);
   const [language, setLanguage] = useState<'ES' | 'EN'>('ES');
+  const [logoLoadError, setLogoLoadError] = useState(false);
 
   const [showPromoSheet, setShowPromoSheet] = useState(false);
   const [selectedPromoProduct, setSelectedPromoProduct] = useState<Product | null>(null);
@@ -206,6 +207,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
 
   const moneySymbol = config.currencySymbol || '$';
   const formatMoney = (amount: number) => `${moneySymbol}${amount.toFixed(2)}`;
+  const kioskLogoSrc = !logoLoadError ? '/favicon.png' : '';
 
   const handleDecrease = (item: CartItem) => {
     if (item.quantity <= 1) {
@@ -248,7 +250,18 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
       <section className="flex-[7] min-w-0 h-full flex flex-col overflow-hidden">
         <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-blue-600 text-white font-black flex items-center justify-center">C</div>
+            <div className="w-11 h-11 rounded-xl bg-blue-600 text-white font-black flex items-center justify-center overflow-hidden shadow-sm">
+              {kioskLogoSrc ? (
+                <img
+                  src={kioskLogoSrc}
+                  alt="Logo CLIC POS"
+                  className="w-full h-full object-contain"
+                  onError={() => setLogoLoadError(true)}
+                />
+              ) : (
+                <span>C</span>
+              )}
+            </div>
             <div>
               <p className="text-xs uppercase tracking-widest text-slate-400 font-bold">Self Checkout</p>
               <p className="text-xl font-black text-slate-800">{config.companyInfo?.name || 'CLIC POS'}</p>

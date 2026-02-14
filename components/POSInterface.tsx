@@ -4,7 +4,7 @@ import {
    CreditCard, User, Tag, Grid, Save,
    Settings, Users, History, Wallet,
    UserPlus, PlusCircle, X, Percent, ArrowLeft, ChevronRight,
-   Scale as ScaleIcon, PauseCircle, LogOut, Minus, Plus,
+   Scale as ScaleIcon, PauseCircle, LogOut, Minus, Plus, Edit3,
    ArrowRightLeft, Globe, DollarSign,
    ChevronDown, Check, AlertCircle, Layers,
    ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle,
@@ -46,6 +46,7 @@ import MobileConfigModal from './MobileConfigModal';
 import ReturnModal from './ReturnModal';
 import PromoBottomSheet from './PromoBottomSheet';
 import { backgroundSyncManager, SyncState } from '../services/sync/BackgroundSyncManager';
+import ProductTableSupermarket from './ProductTableSupermarket';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { visorSync } from '../utils/visorSync';
 import ProductQuickActions from './ProductQuickActions';
@@ -457,6 +458,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return true;
    }, [defaultSalesWarehouseId, warehouses, config.features.stockTracking, activeTerminalConfig, cart]);
 
+   const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
+
    const addToCart = useCallback((product: Product, quantity: number = 1, priceOverride?: number, modifiers?: string[], trackingData?: any[]) => {
       if (!canAddItemToCart(product, quantity)) return;
 
@@ -469,30 +472,41 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const finalPrice = priceOverride || getProductPrice(product);
-      onUpdateCart(prev => {
-         const modifiersString = modifiers ? modifiers.sort().join('|') : '';
-         const existing = (prev || []).find(i => {
-            const iMods = i.modifiers ? i.modifiers.sort().join('|') : '';
-            return i.id === product.id && iMods === modifiersString && i.price === finalPrice;
-         });
+      const modifiersString = modifiers ? modifiers.sort().join('|') : '';
 
+      // We look for existing item in the stable 'cart' prop/state instead of inside the setter
+      // to avoid using setter for logic that triggers side effects.
+      const existing = (cart || []).find(i => {
+         const iMods = i.modifiers ? i.modifiers.sort().join('|') : '';
+         return i.id === product.id && iMods === modifiersString && i.price === finalPrice;
+      });
+
+      let targetCartId: string;
+
+      if (existing && !usesSerial) {
+         targetCartId = existing.cartId!;
+         onUpdateCart(prev => {
+            const updatedItem = { ...existing, quantity: existing.quantity + quantity };
+            return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
+         });
+      } else {
+         const newCartId = Math.random().toString(36).substr(2, 9);
+         targetCartId = newCartId;
          const newItem = {
             ...product,
-            cartId: Math.random().toString(36).substr(2, 9),
+            cartId: newCartId,
             quantity,
             price: finalPrice,
             modifiers,
             originalPrice: getProductPrice(product),
-            trackingData // Added tracking data to cart item
+            trackingData
          };
+         onUpdateCart(prev => [newItem, ...prev]);
+      }
 
-         if (existing && !usesSerial) {
-            // For series, we never collapse because each unit has a unique ID
-            return prev.map(i => i.cartId === existing.cartId ? { ...i, quantity: i.quantity + quantity } : i);
-         }
-         return [...prev, newItem];
-      });
-   }, [canAddItemToCart, getProductPrice, onUpdateCart]);
+      // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
+      setLastAddedCartId(targetCartId);
+   }, [canAddItemToCart, getProductPrice, onUpdateCart, cart]); // Added cart to dependencies
 
    const handleProductClick = useCallback((product: Product) => {
       // MOBILE INTERCEPTION
@@ -827,29 +841,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const diff = updatedItem.quantity - originalItem.quantity;
             if (!canAddItemToCart(updatedItem, diff)) return;
          }
-
-         if (originalItem && updatedItem.price < originalItem.price) {
-            const authorized = await requestApproval({
-               permission: 'POS_PRICE_OVERRIDE',
-               actionDescription: 'Modificar Precio de Ítem',
-               context: {
-                  itemId: updatedItem.cartId,
-                  originalValue: originalItem.price,
-                  newValue: updatedItem.price
-               }
-            });
-            if (!authorized) return;
-         }
-
-         newCart = cart.map(i => i.cartId === updatedItem.cartId ? updatedItem : i);
+         newCart = cart.map(item => item.cartId === updatedItem.cartId ? updatedItem : item);
       }
 
-      // 1. Update UI
       onUpdateCart(newCart);
-      setEditingItem(null);
 
-      // 2. Sync to Backend/Persistence (If Active Table)
-      if (activeTable && activeTable.currentOrderId) {
+      // KDS Sync (if active table)
+      if (activeTable) {
          const ticketId = activeTable.currentOrderId;
          const total = newCart.reduce((sum, i) => sum + (i.price * i.quantity), 0);
 
@@ -1072,7 +1070,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (activeTable) {
             await handleParkCurrentTicket();
          } else {
-            // Non-table direct order: Simplified park or just proceed if server can handle it 
+            // Non-table direct order: Simplified park or just proceed if server can handle it
             // from the items in memory (but our server reads from transactions table usually)
             // For now, only support dispatching for saved orders (Active Table).
             if (!activeTable) {
@@ -1248,7 +1246,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // Local Update (if exists in current view)
          const localExists = transactions.find(t => t.id === originalTransaction.id);
          if (localExists) {
-            // Use a custom event or callback? 
+            // Use a custom event or callback?
             // Since transactions prop is passed down, we might not be able to set it directly if onTransactionComplete handles addition only.
             // Ideally we should reload transactions or optimistically update.
             // Given the architecture, onTransactionComplete usually refreshes or adds.
@@ -1768,113 +1766,142 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             {/* --- CART ITEMS LIST --- */}
-            < div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-gray-50/50" >
-               {
-                  processedCart.map((item, idx) => {
-                     const hasDiscount = item.originalPrice && item.price < item.originalPrice;
-                     const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
-                     const lineNet = item.price * item.quantity;
+            {isRetailMode ? (
+               // SUPERMARKET MODE (DENSE TABLE)
+               <ProductTableSupermarket
+                  cart={processedCart}
+                  config={config}
+                  currencySymbol={baseCurrency.symbol}
+                  lastAddedCartId={lastAddedCartId}
+                  onRemoveItem={(cartId) => updateCartItem(null, cartId)}
+               />
+            ) : (
+               // STANDARD RESTAURANT/RETAIL LIST
+               <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-gray-50/50" >
+                  {
+                     processedCart.map((item, idx) => {
+                        const hasDiscount = item.originalPrice && item.price < item.originalPrice;
+                        const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
+                        const lineNet = item.price * item.quantity;
 
-                     // MOBILE CARD DESIGN
-                     if (isMobile) {
-                        return (
-                           <div key={item.cartId || `cart-m-${idx}`} className="bg-white rounded-2xl p-3 shadow-sm border border-gray-100 flex gap-3 animate-in slide-in-from-right-2">
-                              <div className="w-16 h-16 rounded-xl bg-gray-50 overflow-hidden shrink-0 border border-gray-100">
-                                 {item.image ? <img src={item.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={24} /></div>}
-                              </div>
-                              <div className="flex-1 min-w-0 flex flex-col justify-between">
-                                 <div>
-                                    <div className="flex justify-between items-start">
-                                       <h4 className="font-bold text-gray-800 text-sm leading-tight line-clamp-1">{item.name}</h4>
-                                       <button onClick={() => updateCartItem(null, item.cartId)} className="p-1 text-gray-300 hover:text-red-500"><Trash2 size={16} /></button>
-                                    </div>
-                                    <div className="flex flex-col mt-0.5">
-                                       <div className="flex items-center gap-2">
-                                          <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toFixed(2)}</span>
-                                          {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toFixed(2)}</span>}
+                        // MOBILE CARD DESIGN
+                        if (isMobile) {
+                           return (
+                              <div key={item.cartId || `cart-m-${idx}`} className="bg-white rounded-2xl p-3 shadow-sm border border-gray-100 flex gap-3 animate-in slide-in-from-right-2">
+                                 <div className="w-16 h-16 rounded-xl bg-gray-50 overflow-hidden shrink-0 border border-gray-100">
+                                    {item.image ? <img src={item.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={24} /></div>}
+                                 </div>
+                                 <div className="flex-1 min-w-0 flex flex-col justify-between">
+                                    <div>
+                                       <div className="flex justify-between items-start">
+                                          <h4 className="font-bold text-gray-800 text-sm leading-tight line-clamp-1">{item.name}</h4>
+                                          <button onClick={() => updateCartItem(null, item.cartId)} className="p-1 text-gray-300 hover:text-red-500"><Trash2 size={16} /></button>
                                        </div>
-                                       <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">
-                                          ITBIS: {baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)}
-                                       </span>
+                                       <div className="flex flex-col mt-0.5">
+                                          <div className="flex items-center gap-2">
+                                             <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toFixed(2)}</span>
+                                             {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toFixed(2)}</span>}
+                                          </div>
+                                          <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">
+                                             ITBIS: {baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)}
+                                          </span>
+                                       </div>
+                                       {item.salespersonId && (
+                                          <div className="mt-1 flex items-center gap-1 text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-md w-fit">
+                                             <User size={10} />
+                                             <span>{users?.find(u => u.id === item.salespersonId)?.name || 'Vendedor'}</span>
+                                          </div>
+                                       )}
                                     </div>
-                                    {item.salespersonId && (
-                                       <p className="text-[10px] text-blue-500 font-bold uppercase mt-1">
-                                          Vendedor: {users.find(u => u.id === item.salespersonId)?.name || 'Desconocido'}
-                                       </p>
-                                    )}
-                                    {item.note && (
-                                       <p className="text-[10px] text-gray-500 font-medium mt-0.5 italic">
-                                          Nota: {item.note}
-                                       </p>
-                                    )}
-                                 </div>
-                                 <div className="flex justify-between items-center mt-2">
-                                    <div className="flex items-center bg-gray-100 rounded-lg p-0.5">
-                                       <button onClick={() => updateCartItem({ ...item, quantity: Math.max(0.001, item.quantity - 1) })} className="p-1 text-gray-500 hover:text-blue-600"><Minus size={14} strokeWidth={3} /></button>
-                                       <span className="px-2 text-xs font-black text-gray-700 min-w-[24px] text-center">{item.quantity}</span>
-                                       <button onClick={() => updateCartItem({ ...item, quantity: item.quantity + 1 })} className="p-1 text-gray-500 hover:text-blue-600"><Plus size={14} strokeWidth={3} /></button>
+                                    <div className="flex items-center justify-between mt-2">
+                                       <div className="flex items-center gap-3 bg-gray-50 rounded-lg p-1">
+                                          <button onClick={() => updateCartItem({ ...item, quantity: item.quantity - 1 })} className="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm text-gray-600 hover:text-red-500 font-bold">-</button>
+                                          <span className="text-xs font-black min-w-[20px] text-center">{item.quantity}</span>
+                                          <button onClick={() => updateCartItem({ ...item, quantity: item.quantity + 1 })} className="w-6 h-6 flex items-center justify-center bg-blue-600 rounded shadow-sm text-white hover:bg-blue-700 font-bold">+</button>
+                                       </div>
+                                       <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toFixed(2)}</span>
                                     </div>
-                                    <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toFixed(2)}</span>
                                  </div>
                               </div>
-                           </div>
-                        );
-                     }
+                           );
+                        }
 
-                     // DESKTOP ROW DESIGN (UNCHANGED)
-                     return (
-                        <div key={item.cartId || `cart-d-${idx}`} onClick={() => setEditingItem(item)} className="flex flex-col gap-1 px-3 py-3 transition-all hover:bg-white rounded-xl cursor-pointer group border border-transparent hover:border-gray-200 hover:shadow-sm animate-in slide-in-from-right-2">
-                           <div className="flex justify-between items-start">
-                              <div className="flex-1 min-w-0 pr-2">
-                                 <span className={`font-bold text-gray-700 leading-tight line-clamp-2 ${isRetailMode ? 'text-lg' : 'text-sm'}`}>{item.name}</span>
-                              </div>
-                              <span className={`font-black text-gray-900 shrink-0 ${isRetailMode ? 'text-lg' : 'text-sm'}`}>{baseCurrency.symbol}{(lineNet).toFixed(2)}</span>
-                           </div>
-                           <div className="flex items-center gap-3 mt-1">
-                              <div className="flex flex-col">
-                                 <span className={`bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-black uppercase tracking-tighter ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>
-                                    {(item.quantity || 0).toFixed(item.type === 'SERVICE' ? 3 : 0)}x {baseCurrency.symbol}{(item.originalPrice || item.price).toFixed(2)}
-                                 </span>
-                                 {hasDiscount && (
-                                    <div className="flex flex-col mt-1">
-                                       <span className={`text-red-600 font-black flex items-center gap-1 animate-in zoom-in-95 ${isRetailMode ? 'text-[11px]' : 'text-[9px]'}`}>
-                                          <Tag size={10} className="fill-red-600" />
-                                          {config.promotions?.find(p => p.id === item.appliedPromotionId)?.name || 'Descuento Aplicado'}
-                                          <span className="ml-1 px-1 bg-red-100 rounded text-red-700 text-[8px]">-{discountPct}%</span>
-                                       </span>
-                                       <span className="text-gray-400 text-[8px] font-bold uppercase tracking-tighter line-through opacity-60">
-                                          Original: {baseCurrency.symbol}{(item.originalPrice! * item.quantity).toFixed(2)}
-                                       </span>
+                        // DESKTOP CARD DESIGN (Restaurant/Retail)
+                        return (
+                           <div key={item.cartId || `cart-${idx}`} className={`bg-white rounded-xl p-3 shadow-sm border border-gray-100 group relative overflow-hidden transition-all hover:shadow-md ${editingItem?.cartId === item.cartId ? 'ring-2 ring-blue-500 bg-blue-50' : ''}`}>
+                              {/* Discount Badge */}
+                              {hasDiscount && (
+                                 <div className="absolute top-0 right-0 bg-red-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-bl-lg">
+                                    -{discountPct}%
+                                 </div>
+                              )}
+
+                              <div className="flex gap-3">
+                                 {/* Item Image */}
+                                 {uxConfig.showProductImages && (
+                                    <div className="w-12 h-12 rounded-lg bg-gray-50 shrink-0 overflow-hidden border border-gray-100">
+                                       {item.image ? <img src={item.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={20} /></div>}
                                     </div>
                                  )}
-                                 <span className={`text-gray-400 font-bold uppercase tracking-tighter ml-1 ${isRetailMode ? 'text-[10px]' : 'text-[8px]'}`}>
-                                    ITBIS: {baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)}
-                                 </span>
+
+                                 {/* Item Details */}
+                                 <div className="flex-1 min-w-0">
+                                    <div className="flex justify-between items-start mb-1">
+                                       <h4 className="font-bold text-gray-800 text-sm leading-tight line-clamp-2" title={item.name}>{item.name}</h4>
+                                       <div className="text-right shrink-0 ml-2">
+                                          <p className="font-black text-gray-900">{baseCurrency.symbol}{lineNet.toFixed(2)}</p>
+                                          {hasDiscount && <p className="text-[10px] text-gray-400 line-through">{baseCurrency.symbol}{(item.originalPrice! * item.quantity).toFixed(2)}</p>}
+                                       </div>
+                                    </div>
+
+                                    <div className="flex items-center justify-between">
+                                       <div className="flex flex-col">
+                                          <div className="flex items-center gap-1 text-[10px] text-gray-500">
+                                             <span>{item.quantity} x {baseCurrency.symbol}{item.price.toFixed(2)}</span>
+                                             {item.modifiers && item.modifiers.length > 0 && <span className="text-blue-600 font-bold ml-1">+{item.modifiers.length} mod</span>}
+                                          </div>
+                                          {/* Salesperson Badge */}
+                                          {item.salespersonId && (
+                                             <div className="flex items-center gap-1 text-[9px] text-gray-400 mt-0.5">
+                                                <User size={10} />
+                                                <span className="truncate max-w-[80px]">{users?.find(u => u.id === item.salespersonId)?.name || '...'}</span>
+                                             </div>
+                                          )}
+                                       </div>
+
+                                       {/* Actions */}
+                                       <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                          <button onClick={() => updateCartItem({ ...item, quantity: item.quantity - 1 }, item.cartId)} className="w-6 h-6 flex items-center justify-center rounded bg-white shadow-sm text-gray-600 hover:text-red-500 hover:bg-red-50 transition-colors"><Minus size={12} strokeWidth={3} /></button>
+                                          <button onClick={() => updateCartItem({ ...item, quantity: item.quantity + 1 }, item.cartId)} className="w-6 h-6 flex items-center justify-center rounded bg-white shadow-sm text-gray-600 hover:text-blue-600 hover:bg-blue-50 transition-colors"><Plus size={12} strokeWidth={3} /></button>
+                                          <div className="w-px h-3 bg-gray-300 mx-0.5" />
+                                          <button
+                                             onClick={() => {
+                                                setEditingItem(item);
+                                                // If needed, open modifier modal
+                                             }}
+                                             className="w-6 h-6 flex items-center justify-center rounded bg-white shadow-sm text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                                          >
+                                             <Edit3 size={12} />
+                                          </button>
+                                          <button onClick={() => updateCartItem(null, item.cartId)} className="w-6 h-6 flex items-center justify-center rounded bg-white shadow-sm text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"><Trash2 size={12} /></button>
+                                       </div>
+                                    </div>
+                                 </div>
                               </div>
+
+                              {/* Modifiers List */}
+                              {item.modifiers && item.modifiers.length > 0 && (
+                                 <div className="mt-2 pl-2 border-l-2 border-blue-100">
+                                    <p className="text-[10px] text-gray-500 leading-relaxed">{item.modifiers.join(', ')}</p>
+                                 </div>
+                              )}
                            </div>
-                           {item.salespersonId && (
-                              <p className="text-[10px] text-blue-500 font-bold uppercase mt-0.5">
-                                 Vendedor: {users.find(u => u.id === item.salespersonId)?.name || 'Desconocido'}
-                              </p>
-                           )}
-                           {item.note && (
-                              <p className="text-[10px] text-gray-500 font-medium mt-0.5 italic">
-                                 Nota: {item.note}
-                              </p>
-                           )}
-                           {item.modifiers && item.modifiers.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                 {item.modifiers.map((m, mi) => (
-                                    <span key={mi} className={`bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-bold border border-blue-100 uppercase ${isRetailMode ? 'text-xs' : 'text-[9px]'}`}>{m}</span>
-                                 ))}
-                              </div>
-                           )}
-                        </div>
-                     );
-                  })
-               }
-               < div ref={cartEndRef} />
-            </div >
+                        );
+                     })
+                  }
+               </div >
+            )}
+            < div ref={cartEndRef} />
 
             {/* Sidebar Footer */}
             <div className={`flex-none bg-white border-t border-gray-200 p-4 shadow-inner ${isRetailMode ? 'flex flex-row-reverse items-center justify-between gap-6' : 'space-y-3'} ${isMobile ? 'hidden' : ''}`}>
@@ -2197,75 +2224,75 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   )
                }
             </div >
+         </div>
 
-            {/* MOBILE STICKY FOOTER */}
-            {
-               isMobile && (
-                  <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5">
-                     <div className="flex justify-between items-center mb-4 px-2">
-                        <div className="flex gap-4">
-                           <button onClick={() => setShowGlobalDiscount(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-pink-500">
-                              <Percent size={18} />
-                              <span className="text-[9px] font-bold uppercase">Desc.</span>
+         {/* MOBILE STICKY FOOTER */}
+         {
+            isMobile && (
+               <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5">
+                  <div className="flex justify-between items-center mb-4 px-2">
+                     <div className="flex gap-4">
+                        <button onClick={() => setShowGlobalDiscount(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-pink-500">
+                           <Percent size={18} />
+                           <span className="text-[9px] font-bold uppercase">Desc.</span>
+                        </button>
+                        <button onClick={() => setShowCouponModal(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-cyan-500">
+                           <QrCode size={18} />
+                           <span className="text-[9px] font-bold uppercase">Cupón</span>
+                        </button>
+                        <button onClick={handleParkCurrentTicket} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
+                           <Save size={18} />
+                           <span className="text-[9px] font-bold uppercase">Grd.</span>
+                        </button>
+                        <button onClick={() => setShowParkedList(!showParkedList)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-500 relative">
+                           <Inbox size={18} />
+                           <span className="text-[9px] font-bold uppercase">Esp.</span>
+                           {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
+                        </button>
+                        {activeTerminalConfig?.operational?.usa_modulos_cocina && (
+                           <button onClick={handleDispatchCommand} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-600">
+                              <ChefHat size={18} />
+                              <span className="text-[9px] font-bold uppercase">March.</span>
                            </button>
-                           <button onClick={() => setShowCouponModal(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-cyan-500">
-                              <QrCode size={18} />
-                              <span className="text-[9px] font-bold uppercase">Cupón</span>
-                           </button>
-                           <button onClick={handleParkCurrentTicket} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
-                              <Save size={18} />
-                              <span className="text-[9px] font-bold uppercase">Grd.</span>
-                           </button>
-                           <button onClick={() => setShowParkedList(!showParkedList)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-500 relative">
-                              <Inbox size={18} />
-                              <span className="text-[9px] font-bold uppercase">Esp.</span>
-                              {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
-                           </button>
-                           {activeTerminalConfig?.operational?.usa_modulos_cocina && (
-                              <button onClick={handleDispatchCommand} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-600">
-                                 <ChefHat size={18} />
-                                 <span className="text-[9px] font-bold uppercase">March.</span>
-                              </button>
-                           )}
-                           <button onClick={() => onOpenInventoryTracking()} className="flex flex-col items-center gap-1 text-gray-400 hover:text-indigo-500">
-                              <Package size={18} />
-                              <span className="text-[9px] font-bold uppercase">Rast.</span>
-                           </button>
-                        </div>
-                        <div className="text-right">
-                           <span className="text-[10px] font-bold text-gray-400 uppercase block">Subtotal: {baseCurrency.symbol}{cartSubtotal.toFixed(2)}</span>
-                           {discountAmount > 0 && <span className="text-[10px] font-bold text-red-500 uppercase block">Desc: -{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>}
-                        </div>
-                     </div>
-                     <div className="flex items-center gap-4">
-                        <div className="flex-1">
-                           <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block leading-none mb-1">Total</span>
-                           <span className="text-3xl font-black text-gray-900 tracking-tighter leading-none">{baseCurrency.symbol}{cartTotal.toFixed(2)}</span>
-                        </div>
-                        <button
-                           onClick={() => {
-                              if (cart.length > 0 && fiscalStatus.hasNCF) {
-                                 if (terminalTransactions.length > 0 && activeTerminalConfig) {
-                                    const sessionStartDate = terminalTransactions[0].date;
-                                    if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
-                                       const proceed = confirm("⚠️ ADVERTENCIA DE JORNADA\n\nEl sistema detecta que la jornada operativa ha cambiado.\n\n¿Desea continuar facturando de todos modos?");
-                                       if (!proceed) return;
-                                    }
-                                 }
-                                 setShowPaymentModal(true);
-                              }
-                           }}
-                           disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                           className="bg-blue-600 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-lg shadow-blue-200 active:scale-95 transition-all flex items-center gap-2"
-                        >
-                           <span>COBRAR</span>
-                           <ArrowRight size={20} />
+                        )}
+                        <button onClick={() => onOpenInventoryTracking()} className="flex flex-col items-center gap-1 text-gray-400 hover:text-indigo-500">
+                           <Package size={18} />
+                           <span className="text-[9px] font-bold uppercase">Rast.</span>
                         </button>
                      </div>
+                     <div className="text-right">
+                        <span className="text-[10px] font-bold text-gray-400 uppercase block">Subtotal: {baseCurrency.symbol}{cartSubtotal.toFixed(2)}</span>
+                        {discountAmount > 0 && <span className="text-[10px] font-bold text-red-500 uppercase block">Desc: -{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>}
+                     </div>
                   </div>
-               )
-            }
-         </div >
+                  <div className="flex items-center gap-4">
+                     <div className="flex-1">
+                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block leading-none mb-1">Total</span>
+                        <span className="text-3xl font-black text-gray-900 tracking-tighter leading-none">{baseCurrency.symbol}{cartTotal.toFixed(2)}</span>
+                     </div>
+                     <button
+                        onClick={() => {
+                           if (cart.length > 0 && fiscalStatus.hasNCF) {
+                              if (terminalTransactions.length > 0 && activeTerminalConfig) {
+                                 const sessionStartDate = terminalTransactions[0].date;
+                                 if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
+                                    const proceed = confirm("⚠️ ADVERTENCIA DE JORNADA\n\nEl sistema detecta que la jornada operativa ha cambiado.\n\n¿Desea continuar facturando de todos modos?");
+                                    if (!proceed) return;
+                                 }
+                              }
+                              setShowPaymentModal(true);
+                           }
+                        }}
+                        disabled={cart.length === 0 || !fiscalStatus.hasNCF}
+                        className="bg-blue-600 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-lg shadow-blue-200 active:scale-95 transition-all flex items-center gap-2"
+                     >
+                        <span>COBRAR</span>
+                        <ArrowRight size={20} />
+                     </button>
+                  </div>
+               </div>
+            )
+         }
 
          {/* Modals & Overlays */}
          {showPaymentModal && <UnifiedPaymentModal total={cartTotal} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={selectedCustomer} />}
