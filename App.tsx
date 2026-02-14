@@ -233,7 +233,7 @@ const AppContent: React.FC = () => {
 
         // RECOVERY: Check for orphaned transactions and rebuild Z-Reports if needed
         // This fixes history visibility issues even if some reports were deleted or lost
-        await ZReportRecoveryService.recoverOrphanedReports();
+        await ZReportRecoveryService.recoverOrphanedReports({ notifyUser: false });
 
         let currentConfig = data.config;
         const masterIp = localStorage.getItem('pos_master_ip');
@@ -418,10 +418,6 @@ const AppContent: React.FC = () => {
 
             // NOTE: NetworkSyncService deprecated. SyncManager/ApiSyncAdapter handles sync now.
             backgroundSyncManager.initialize().catch(console.error);
-
-            // RECOVERY: Check for lost Z-Reports (due to schema issues)
-            // This will reconstruct them from transaction history
-            await ZReportRecoveryService.recoverOrphanedReports();
 
             console.log('🎉 Setting isDataLoaded = true');
             setIsDataLoaded(true);

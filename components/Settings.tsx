@@ -29,6 +29,7 @@ import LoyaltySettings from './LoyaltySettings';
 import WalletIntegrations from './WalletIntegrations';
 import SyncSettings from './SyncSettings';
 import ProductionAreaManager from './ProductionAreaManager';
+import LabelDesigner from './LabelDesigner';
 
 interface SettingsProps {
   config: BusinessConfig;
@@ -65,7 +66,7 @@ interface SettingsProps {
   initialData?: any;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS';
 
 const Settings: React.FC<SettingsProps> = (props) => {
   const [currentView, setCurrentView] = useState<SettingsView>(props.initialView || 'HOME');
@@ -293,6 +294,15 @@ const Settings: React.FC<SettingsProps> = (props) => {
           </div>
         );
 
+      case 'LABELS':
+        return (
+          <LabelDesigner
+            config={props.config}
+            onUpdateConfig={(newConfig) => props.onUpdateConfig(newConfig)}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
       case 'SYNC':
         return (
           <SyncSettings
@@ -404,6 +414,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={Monitor} label="Terminales POS" description="Perfiles de Caja, Inventario" color="bg-blue-500" onClick={() => setCurrentView('TERMINALS')} locked={!hasPermission('SETTINGS_HARDWARE')} />
                   <SettingsCard icon={Grid} label="Diseñador de Mesas" description="Plano, Salas y Distribución" color="bg-slate-700" onClick={props.onOpenTableDesigner} locked={!hasPermission('CATALOG_MANAGE')} />
                   <SettingsCard icon={Printer} label="Hardware" description="Impresoras, Balanzas, VFD" color="bg-gray-700" onClick={() => setCurrentView('HARDWARE')} locked={!hasPermission('SETTINGS_HARDWARE')} />
+                  <SettingsCard icon={Tag} label="Diseño de Etiquetas" description="Plantillas Artículo y Góndola" color="bg-emerald-600" onClick={() => setCurrentView('LABELS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Coins} label="Propinas" description="Cargos por Servicio y Tips" color="bg-yellow-500" onClick={() => setCurrentView('TIPS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                 </div>
               </section>

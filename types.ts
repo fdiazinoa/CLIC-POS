@@ -629,6 +629,7 @@ export interface BusinessConfig {
   productGroups?: ProductGroup[];
   seasons?: Season[];
   receiptConfig?: ReceiptConfig;
+  labelTemplates?: LabelTemplate[];
   tipsConfig?: TipConfiguration;
   emailConfig?: EmailConfig;
 

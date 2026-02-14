@@ -1,5 +1,5 @@
 
-import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff, TaxDefinition, DeviceRole, AuthLevel } from './types';
+import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff, TaxDefinition, DeviceRole, AuthLevel, LabelTemplate } from './types';
 
 export const DEFAULT_DOCUMENT_SERIES: DocumentSeries[] = [
   { id: 'TICKET', documentType: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar para todas las ventas.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
@@ -415,6 +415,111 @@ export const AVAILABLE_PERMISSIONS = [
   { key: 'AUDIT_LOG_VIEW', label: 'Ver Auditoría', description: 'Registro de actividades', category: 'ADMIN' }
 ];
 
+const createArticleTemplate = (id: string, name: string, widthMm: number, heightMm: number): LabelTemplate => ({
+  id,
+  name,
+  widthMm,
+  heightMm,
+  elements: [
+    {
+      id: `${id}-name`,
+      type: 'TEXT',
+      x: 2,
+      y: 1,
+      width: Math.max(8, widthMm - 4),
+      height: Math.max(4, Math.round(heightMm * 0.28)),
+      content: 'Nombre Producto',
+      dataSource: 'PRODUCT_NAME',
+      fontSize: Math.max(6, Math.round(heightMm * 0.22)),
+      isBold: true
+    },
+    {
+      id: `${id}-barcode`,
+      type: 'BARCODE',
+      x: 2,
+      y: Math.max(4, Math.round(heightMm * 0.42)),
+      width: Math.max(10, widthMm - 12),
+      height: Math.max(4, Math.round(heightMm * 0.35)),
+      content: '123456',
+      dataSource: 'PRODUCT_SKU'
+    },
+    {
+      id: `${id}-price`,
+      type: 'TEXT',
+      x: Math.max(2, widthMm - 18),
+      y: Math.max(1, heightMm - 6),
+      width: Math.min(16, widthMm - 4),
+      height: 5,
+      content: '$99.00',
+      dataSource: 'PRODUCT_PRICE',
+      fontSize: Math.max(8, Math.round(heightMm * 0.24)),
+      isBold: true
+    }
+  ]
+});
+
+export const DEFAULT_LABEL_TEMPLATES: LabelTemplate[] = [
+  createArticleTemplate('lbl-article-xs', 'Articulo XS (30x15 mm)', 30, 15),
+  createArticleTemplate('lbl-article-s', 'Articulo S (40x20 mm)', 40, 20),
+  createArticleTemplate('lbl-article-m', 'Articulo M (50x25 mm)', 50, 25),
+  createArticleTemplate('lbl-article-l', 'Articulo L (60x30 mm)', 60, 30),
+  createArticleTemplate('lbl-article-xl', 'Articulo XL (80x40 mm)', 80, 40),
+  {
+    id: 'lbl-gondola',
+    name: 'Gondola (100x35 mm)',
+    widthMm: 100,
+    heightMm: 35,
+    elements: [
+      {
+        id: 'lbl-gondola-name',
+        type: 'TEXT',
+        x: 3,
+        y: 2,
+        width: 70,
+        height: 8,
+        content: 'Nombre Producto',
+        dataSource: 'PRODUCT_NAME',
+        fontSize: 12,
+        isBold: true
+      },
+      {
+        id: 'lbl-gondola-price',
+        type: 'TEXT',
+        x: 74,
+        y: 3,
+        width: 23,
+        height: 9,
+        content: '$99.00',
+        dataSource: 'PRODUCT_PRICE',
+        fontSize: 16,
+        isBold: true
+      },
+      {
+        id: 'lbl-gondola-barcode',
+        type: 'BARCODE',
+        x: 3,
+        y: 15,
+        width: 62,
+        height: 14,
+        content: '123456',
+        dataSource: 'PRODUCT_SKU'
+      },
+      {
+        id: 'lbl-gondola-sku',
+        type: 'TEXT',
+        x: 68,
+        y: 19,
+        width: 29,
+        height: 6,
+        content: 'SKU',
+        dataSource: 'PRODUCT_SKU',
+        fontSize: 10,
+        isBold: false
+      }
+    ]
+  }
+];
+
 export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
   const isFood = ([SubVertical.RESTAURANT, SubVertical.FAST_FOOD, SubVertical.BAR] as string[]).includes(subVertical);
 
@@ -433,6 +538,10 @@ export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
       { id: 'card', name: 'Tarjeta', type: 'CARD', isEnabled: true, icon: 'CreditCard', color: 'bg-blue-500', opensDrawer: false, requiresSignature: false, integration: 'NONE' }
     ],
     tariffs: INITIAL_TARIFFS,
+    labelTemplates: DEFAULT_LABEL_TEMPLATES.map(template => ({
+      ...template,
+      elements: template.elements.map(element => ({ ...element }))
+    })),
     terminals: [
       { id: 't1', config: { ...DEFAULT_TERMINAL_CONFIG, isPrimaryNode: true } },
       { id: 't2', config: { ...DEFAULT_TERMINAL_CONFIG, isPrimaryNode: false, currentDeviceId: undefined } },

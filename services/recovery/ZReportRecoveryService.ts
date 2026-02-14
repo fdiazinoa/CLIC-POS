@@ -2,15 +2,46 @@
 import { db } from '../../utils/db';
 import { ZReport, Transaction } from '../../types';
 
+type RecoveryOptions = {
+    notifyUser?: boolean;
+    runOncePerSession?: boolean;
+};
+
 export class ZReportRecoveryService {
-    static async recoverOrphanedReports() {
+    private static recoveryPromise: Promise<number> | null = null;
+    private static alreadyRanInSession = false;
+
+    static async recoverOrphanedReports(options: RecoveryOptions = {}): Promise<number> {
+        const { notifyUser = false, runOncePerSession = true } = options;
+
+        if (runOncePerSession && this.alreadyRanInSession) {
+            return 0;
+        }
+
+        // Prevent duplicate/concurrent recoveries (e.g. React StrictMode double effects)
+        if (this.recoveryPromise) {
+            return this.recoveryPromise;
+        }
+
+        this.recoveryPromise = this.runRecovery(notifyUser);
+
+        try {
+            const recoveredCount = await this.recoveryPromise;
+            this.alreadyRanInSession = true;
+            return recoveredCount;
+        } finally {
+            this.recoveryPromise = null;
+        }
+    }
+
+    private static async runRecovery(notifyUser: boolean): Promise<number> {
         console.log("🔍 ZReportRecovery: Checking for orphaned transactions...");
 
         try {
             const reports = await db.get('zReports') as ZReport[];
             const history = await db.get('transactionHistory') as (Transaction & { zReportId?: string })[];
 
-            if (!history || history.length === 0) return;
+            if (!history || history.length === 0) return 0;
 
             const existingReportIds = new Set(reports?.map(r => r.id) || []);
             const transactionsByReportId = new Map<string, Transaction[]>();
@@ -26,7 +57,7 @@ export class ZReportRecoveryService {
 
             if (transactionsByReportId.size === 0) {
                 console.log("✅ ZReportRecovery: No orphaned transactions found.");
-                return;
+                return 0;
             }
 
             console.warn(`⚠️ ZReportRecovery: Found ${transactionsByReportId.size} missing Z-Reports! Recovering...`);
@@ -84,12 +115,26 @@ export class ZReportRecoveryService {
                 console.log(`♻️ Recovered Z-Report ${reportId}:`, recoveredReport);
 
                 await db.saveDocument('zReports', recoveredReport);
+
+                // Enrich historical transactions to avoid UI fallbacks to raw ID
+                for (const tx of txs) {
+                    if ((tx as any).zReportSequence === recoveredReport.sequenceNumber) continue;
+                    await db.saveDocument('transactionHistory', {
+                        ...tx,
+                        zReportSequence: recoveredReport.sequenceNumber
+                    } as any);
+                }
             }
 
-            alert(`SISTEMA: Se han recuperado ${recoveredReports.length} Cierres Z perdidos.`);
+            if (notifyUser && recoveredReports.length > 0) {
+                alert(`SISTEMA: Se han recuperado ${recoveredReports.length} Cierres Z perdidos.`);
+            }
+
+            return recoveredReports.length;
 
         } catch (error) {
             console.error("❌ ZReportRecovery Failed:", error);
+            return 0;
         }
     }
 }

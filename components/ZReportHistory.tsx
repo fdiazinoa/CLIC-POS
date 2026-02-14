@@ -30,7 +30,7 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
 
                 // RECOVERY: If no reports found, try to recover from transaction history
                 if (!data || data.length === 0) {
-                    await ZReportRecoveryService.recoverOrphanedReports();
+                    await ZReportRecoveryService.recoverOrphanedReports({ notifyUser: false, runOncePerSession: false });
                     data = await db.get('zReports') as ZReport[];
                 }
 
