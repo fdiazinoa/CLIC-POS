@@ -281,7 +281,7 @@ const generateProducts = () => {
       variants: [],
       tariffs: [{ tariffId: 'trf-gen', price: item.p }],
       appliedTaxIds: isWeighable ? ['tax-exempt'] : ['tax-18'],
-      image: `https://source.unsplash.com/200x200/?${encodeURIComponent(item.c === 'Cuidado Personal' ? 'soap' : item.c === 'Alacena' ? 'pantry' : item.n)}`
+      image: `https://placehold.co/200x200/e2e8f0/1e293b?text=${encodeURIComponent(item.n)}`
     } as Product;
   });
 };

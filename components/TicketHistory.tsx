@@ -133,6 +133,13 @@ const SalesHistoryTable: React.FC<{
                                  <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-[10px] font-bold border border-purple-200">
                                     {zSeq}
                                  </span>
+                              ) : tx.zReportId ? (
+                                 <span
+                                    title={`ID: ${tx.zReportId}`}
+                                    className="px-2 py-1 bg-gray-100 text-gray-500 rounded-lg text-[10px] font-bold border border-gray-200 cursor-help"
+                                 >
+                                    {tx.zReportId.slice(0, 8)}...
+                                 </span>
                               ) : (
                                  <span className="text-gray-300 text-[10px]">•</span>
                               )}
@@ -312,6 +319,14 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                const map = new Map<string, string>();
                zReports.forEach(r => map.set(r.id, r.sequenceNumber));
                setZReportMap(map);
+               console.log(`🔍 [TicketHistory] Loaded ${zReports.length} Z-Reports. Sample Map:`, Array.from(map.entries()).slice(0, 3));
+            }
+
+            if (history && history.length > 0) {
+               console.log(`🔍 [TicketHistory] Inspecting first 3 history items for Z-Report linkage:`);
+               history.slice(0, 3).forEach(h => {
+                  console.log(`   - Tx ${h.id.slice(-8)}: zReportId=${h.zReportId}, zReportSequence=${h.zReportSequence}`);
+               });
             }
          } catch (e) {
             console.error("Failed to load transaction history:", e);

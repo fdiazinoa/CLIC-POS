@@ -39,9 +39,21 @@ const InventoryOptimizer: React.FC<InventoryOptimizerProps> = ({
     const [includeNoMovement, setIncludeNoMovement] = useState(true);
 
     // Filter Options (Extracted from data)
-    const departments = useMemo(() => Array.from(new Set(products.map(p => p.category))).filter(Boolean).sort(), [products]);
-    const brands = useMemo(() => Array.from(new Set(products.map(p => p.brandId))).filter(Boolean).sort(), [products]);
-    const families = useMemo(() => Array.from(new Set(products.map(p => p.familyId))).filter(Boolean).sort(), [products]);
+    // Filter Options (Source: Config)
+    const departments = useMemo(() => {
+        if (config.departments?.length) return config.departments.map(d => d.name).sort();
+        return Array.from(new Set(products.map(p => p.category))).filter(Boolean).sort();
+    }, [products, config.departments]);
+
+    const brands = useMemo(() => {
+        if (config.brands?.length) return config.brands.map(b => ({ id: b.id, name: b.name })).sort((a, b) => a.name.localeCompare(b.name));
+        return Array.from(new Set(products.map(p => p.brandId))).filter(Boolean).map(id => ({ id, name: id }));
+    }, [products, config.brands]);
+
+    const families = useMemo(() => {
+        if (config.families?.length) return config.families.map(f => ({ id: f.id, name: f.name })).sort((a, b) => a.name.localeCompare(b.name));
+        return Array.from(new Set(products.map(p => p.familyId))).filter(Boolean).map(id => ({ id, name: id }));
+    }, [products, config.families]);
     const supplierList = useMemo(() => suppliers.map(s => ({ id: s.id, name: s.name })), [suppliers]);
 
     // Selection State
@@ -226,12 +238,12 @@ const InventoryOptimizer: React.FC<InventoryOptimizerProps> = ({
                                         onChange={(e) => setSelectedBrands(prev => prev.includes(e.target.value) ? prev : [...prev, e.target.value])}
                                     >
                                         <option value="">+ Marca</option>
-                                        {brands.map(b => <option key={b} value={b}>{b}</option>)}
+                                        {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                                     </select>
                                     <div className="flex flex-wrap gap-1 mt-2">
-                                        {selectedBrands.map(b => (
-                                            <span key={b} onClick={() => setSelectedBrands(prev => prev.filter(x => x !== b))} className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer hover:bg-red-50 hover:text-red-600 transition-colors">
-                                                {b}
+                                        {selectedBrands.map(id => (
+                                            <span key={id} onClick={() => setSelectedBrands(prev => prev.filter(x => x !== id))} className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer hover:bg-red-50 hover:text-red-600 transition-colors">
+                                                {brands.find(b => b.id === id)?.name || id}
                                             </span>
                                         ))}
                                     </div>
@@ -243,12 +255,12 @@ const InventoryOptimizer: React.FC<InventoryOptimizerProps> = ({
                                         onChange={(e) => setSelectedFamilies(prev => prev.includes(e.target.value) ? prev : [...prev, e.target.value])}
                                     >
                                         <option value="">+ Familia</option>
-                                        {families.map(f => <option key={f} value={f}>{f}</option>)}
+                                        {families.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                                     </select>
                                     <div className="flex flex-wrap gap-1 mt-2">
-                                        {selectedFamilies.map(f => (
-                                            <span key={f} onClick={() => setSelectedFamilies(prev => prev.filter(x => x !== f))} className="bg-green-50 text-green-600 px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer hover:bg-red-50 hover:text-red-600 transition-colors">
-                                                {f}
+                                        {selectedFamilies.map(id => (
+                                            <span key={id} onClick={() => setSelectedFamilies(prev => prev.filter(x => x !== id))} className="bg-green-50 text-green-600 px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer hover:bg-red-50 hover:text-red-600 transition-colors">
+                                                {families.find(f => f.id === id)?.name || id}
                                             </span>
                                         ))}
                                     </div>

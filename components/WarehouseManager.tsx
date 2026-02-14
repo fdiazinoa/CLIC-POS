@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
    Building2, Plus, ArrowRightLeft, MapPin,
    Check, X, Search, Package, AlertTriangle,
@@ -61,6 +61,31 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
    roles
 }) => {
    const [activeTab, setActiveTab] = useState<Tab>('LOCATIONS');
+
+   // Fallback Data Loading
+   useEffect(() => {
+      const loadTransfers = async () => {
+         if (!transfers || transfers.length === 0) {
+            console.log('🔄 [WarehouseManager] Transfers prop is empty. Attempting backup fetch from DB...');
+            try {
+               const dbTransfers = await db.get('transfers') as StockTransfer[];
+               if (dbTransfers && dbTransfers.length > 0) {
+                  console.log(`✅ [WarehouseManager] Found ${dbTransfers.length} transfers in DB. Syncing up...`);
+                  onUpdateTransfers(dbTransfers);
+               } else {
+                  console.log('⚠️ [WarehouseManager] No transfers found in DB either.');
+               }
+            } catch (e) {
+               console.error('❌ [WarehouseManager] Error fetching transfers from DB:', e);
+            }
+         } else {
+            console.log(`ℹ️ [WarehouseManager] Loaded with ${transfers.length} transfers from props.`);
+         }
+      };
+
+      // Delay slightly to allow main thread to settle
+      setTimeout(loadTransfers, 500);
+   }, []); // Run once on mount
 
    // Warehouse Editing
    const [editingWarehouse, setEditingWarehouse] = useState<Warehouse | null>(null);
@@ -1145,6 +1170,18 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                            <div className="text-center py-20 text-gray-400">
                               <Truck size={48} className="mx-auto mb-2 opacity-50" />
                               <p>No hay traspasos registrados con este filtro.</p>
+                              {/* DEBUG SECTION */}
+                              <div className="mt-8 p-4 bg-gray-100 rounded text-xs text-left font-mono">
+                                 <p className="font-bold text-red-500">DEBUG INFO:</p>
+                                 <p>Transfers in Prop: {transfers?.length || 0}</p>
+                                 <p>Filter Mode: {historyFilter}</p>
+                                 <p>Statuses in Prop:</p>
+                                 <ul className="list-disc pl-4">
+                                    {Array.from(new Set(transfers?.map(t => t.status) || [])).map(s => (
+                                       <li key={s}>{s}</li>
+                                    ))}
+                                 </ul>
+                              </div>
                            </div>
                         )}
                         {filteredTransfers.map(t => {
