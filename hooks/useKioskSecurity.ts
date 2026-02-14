@@ -303,3 +303,11 @@ export const useKioskSecurity = (options: UseKioskSecurityOptions = {}) => {
     clearSecurityState
   };
 };
+
+// Avoid React Fast Refresh hook-order mismatches when this security hook evolves.
+const hot = (import.meta as any).hot;
+if (hot) {
+  hot.accept(() => {
+    window.location.reload();
+  });
+}
