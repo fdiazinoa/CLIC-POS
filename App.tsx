@@ -75,6 +75,7 @@ import TableLayoutDesigner from './components/TableLayoutDesigner';
 import KioskWelcome from './components/kiosk/KioskWelcome';
 import KioskProductBrowser from './components/kiosk/KioskProductBrowser';
 import KioskPayment from './components/kiosk/KioskPayment';
+import { KioskSecurityProvider, useKioskSecurityContext } from './components/kiosk/KioskContext';
 import PriceCheckerDisplay from './components/price-checker/PriceCheckerDisplay';
 import InventoryHome from './components/inventory/InventoryHome';
 import InventoryCount from './components/inventory/InventoryCount';
@@ -97,12 +98,15 @@ import { processInventoryDeduction } from './utils/inventoryEngine';
 const App: React.FC = () => {
   return (
     <ThemeProvider>
-      <AppContent />
+      <KioskSecurityProvider>
+        <AppContent />
+      </KioskSecurityProvider>
     </ThemeProvider>
   );
 };
 
 const AppContent: React.FC = () => {
+  const { clearSecurityState, setSupervisorPinValidator } = useKioskSecurityContext();
   // --- GLOBAL STATE ---
   const [activeTable, setActiveTable] = useState<Table | null>(null); // New state for selected table context
   const [currentView, setCurrentView] = useState<ViewState>(() => {
@@ -191,6 +195,32 @@ const AppContent: React.FC = () => {
     setViewData(data);
     setCurrentView(view);
   };
+
+  const validateSupervisorPin = React.useCallback((pin: string): boolean => {
+    const cleanedPin = pin.trim();
+    if (!cleanedPin) return false;
+
+    const supervisorCandidate = users.find(user => user.pin === cleanedPin);
+    if (!supervisorCandidate) return false;
+
+    const roleId = supervisorCandidate.roleId || supervisorCandidate.role;
+    const role = roles.find(r => r.id === roleId);
+    if (!role) return false;
+
+    const roleName = role.name.toLowerCase();
+    const hasSupervisorPrivileges =
+      role.permissions.includes('ALL') ||
+      role.permissions.includes('SETTINGS_ACCESS') ||
+      roleName.includes('super') ||
+      roleName.includes('admin') ||
+      roleName.includes('gerente');
+
+    return hasSupervisorPrivileges;
+  }, [users, roles]);
+
+  useEffect(() => {
+    setSupervisorPinValidator(validateSupervisorPin);
+  }, [setSupervisorPinValidator, validateSupervisorPin]);
 
   // --- EMERGENCY RESCUE MECHANISM ---
   useEffect(() => {
@@ -1825,7 +1855,10 @@ const AppContent: React.FC = () => {
       case 'KIOSK_WELCOME':
         return (
           <KioskWelcome
-            onStartShopping={() => handleViewChange('KIOSK_BROWSER')}
+            onStartShopping={() => {
+              clearSecurityState();
+              handleViewChange('KIOSK_BROWSER');
+            }}
             storeName={config.companyInfo?.name}
           />
         );
@@ -1857,11 +1890,13 @@ const AppContent: React.FC = () => {
             }}
             onCheckout={() => handleViewChange('KIOSK_PAYMENT')}
             onCancel={() => {
+              clearSecurityState();
               setCart([]);
               handleViewChange('KIOSK_WELCOME');
             }}
             config={config}
             terminalId={getCurrentTerminal()?.id || 'T1'}
+            customerConfidenceIndex={selectedCustomer ? 1 : 0.75}
           />
         );
 
@@ -1950,6 +1985,7 @@ const AppContent: React.FC = () => {
                 await handleTransactionComplete(txn);
 
                 // Clear cart and return
+                clearSecurityState();
                 setCart([]);
                 handleViewChange('KIOSK_WELCOME');
               } catch (error) {
@@ -1958,6 +1994,7 @@ const AppContent: React.FC = () => {
               }
             }}
             onCancel={() => {
+              clearSecurityState();
               setCart([]);
               handleViewChange('KIOSK_WELCOME');
             }}
@@ -2080,6 +2117,7 @@ const AppContent: React.FC = () => {
             onEscapeHatch={handleEscapeHatch}
             onTimeout={() => {
               if (currentView !== 'KIOSK_WELCOME') {
+                clearSecurityState();
                 setCart([]);
                 setCurrentView('KIOSK_WELCOME');
               }

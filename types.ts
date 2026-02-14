@@ -830,6 +830,7 @@ export interface Product {
   subfamilyId?: string;
   brandId?: string;
   operationalFlags?: ProductOperationalFlags;
+  requires_verification?: boolean;
   updatedAt?: string;
   hasActivePromotion?: boolean; // UI Flag for badges
   returnReason?: string; // For items with qty < 0
