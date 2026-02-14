@@ -22,30 +22,69 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
 
+    const sortReportsByDate = (data: ZReport[]) =>
+        [...(data || [])].sort((a, b) =>
+            new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime()
+        );
+
+    const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
+        let timeoutHandle: number | undefined;
+        try {
+            return await Promise.race([
+                promise,
+                new Promise<T>((_, reject) => {
+                    timeoutHandle = window.setTimeout(() => {
+                        reject(new Error(`${label}_TIMEOUT`));
+                    }, timeoutMs);
+                })
+            ]);
+        } finally {
+            if (timeoutHandle) window.clearTimeout(timeoutHandle);
+        }
+    };
+
     useEffect(() => {
+        let cancelled = false;
+
         const loadReports = async () => {
             setIsLoading(true);
             try {
-                let data = await db.get('zReports') as ZReport[];
-
-                // RECOVERY: If no reports found, try to recover from transaction history
-                if (!data || data.length === 0) {
-                    await ZReportRecoveryService.recoverOrphanedReports({ notifyUser: false, runOncePerSession: false });
-                    data = await db.get('zReports') as ZReport[];
+                const data = await withTimeout(db.get('zReports') as Promise<ZReport[]>, 4000, 'LOAD_Z_REPORTS');
+                if (!cancelled) {
+                    setReports(sortReportsByDate(data || []));
                 }
 
-                // Sort by closedAt descending (newest first)
-                const sorted = (data || []).sort((a, b) =>
-                    new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime()
-                );
-                setReports(sorted);
+                // Recovery runs in background so UI never stays blocked in spinner.
+                // It also restores missing single reports (not only empty-history scenarios).
+                void (async () => {
+                    try {
+                        const recoveredCount = await ZReportRecoveryService.recoverOrphanedReports({
+                            notifyUser: false,
+                            runOncePerSession: true,
+                            enrichHistory: false
+                        });
+                        if (recoveredCount > 0) {
+                            const recovered = await withTimeout(db.get('zReports') as Promise<ZReport[]>, 4000, 'RELOAD_Z_REPORTS');
+                            if (!cancelled) {
+                                setReports(sortReportsByDate(recovered || []));
+                            }
+                        }
+                    } catch (recoveryError) {
+                        console.warn('⚠️ ZReportHistory: recovery failed', recoveryError);
+                    }
+                })();
             } catch (error) {
                 console.error("Error loading Z-Reports:", error);
             } finally {
-                setIsLoading(false);
+                if (!cancelled) setIsLoading(false);
             }
         };
+
         loadReports();
+
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     // Helper to get local date string YYYY-MM-DD

@@ -18,7 +18,7 @@ import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType,
-   PaymentEntry, Table
+   PaymentEntry, Table, Reservation
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import UnifiedPaymentModal from './PaymentModal';
@@ -39,6 +39,7 @@ import { validateTerminalSeries } from '../utils/seriesValidation';
 import { applyPromotions } from '../utils/promotionEngine';
 import { calculatePointsEarned, getPrimaryLoyaltyCard } from '../utils/loyaltyEngine';
 import { couponService } from '../utils/couponService';
+import { transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -139,6 +140,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const uxConfig = activeTerminalConfig?.ux || { showProductImages: true, gridDensity: 'COMFORTABLE', theme: 'LIGHT', quickKeysLayout: 'A' };
 
    const isRetailMode = activeTerminalConfig?.ux?.viewMode === 'RETAIL';
+   const reservationPolicy = activeTerminalConfig?.operational?.reservationPolicy || {
+      validityDays: 7,
+      requireAdvance: false,
+      minimumAdvancePercent: 20
+   };
 
    // --- UX EFFECTS ---
    useEffect(() => {
@@ -164,6 +170,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          try {
             if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
                const data = JSON.parse(trimmed);
+               if (data.type === 'RESERVATION_NOTE' && (data.id || data.code)) {
+                  const found = (reservations || []).find(r => r.id === data.id || r.code === data.code);
+                  if (found) {
+                     handleRecoverReservation(found);
+                     setSuccessToast('Reserva Recuperada');
+                     return;
+                  }
+               }
                if (data.type === 'INVOICE_RETURN' && data.id) {
                   setReturnInvoiceId(data.id);
                   setShowReturnModal(true);
@@ -364,6 +378,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showPromoSheet, setShowPromoSheet] = useState(false);
    const [selectedPromoProduct, setSelectedPromoProduct] = useState<Product | null>(null);
 
+   // --- RESERVAS / PRE-FACTURACION ---
+   const [reservations, setReservations] = useState<Reservation[]>([]);
+   const [showReservationModal, setShowReservationModal] = useState(false);
+   const [showReservationReceipt, setShowReservationReceipt] = useState<Reservation | null>(null);
+   const [showRecoverReservationModal, setShowRecoverReservationModal] = useState(false);
+   const [reservationCustomerId, setReservationCustomerId] = useState<string>('');
+   const [reservationAdvanceInput, setReservationAdvanceInput] = useState<string>('0');
+   const [reservationDeliveryDate, setReservationDeliveryDate] = useState<string>('');
+   const [reservationSearchTerm, setReservationSearchTerm] = useState<string>('');
+   const [activeRecoveredReservation, setActiveRecoveredReservation] = useState<Reservation | null>(null);
+   const [committedByProduct, setCommittedByProduct] = useState<Record<string, number>>({});
+
    // --- SUPERVISOR AUTH ---
    const { requestApproval, supervisorModalProps } = useSupervisorAuth({
       config,
@@ -371,6 +397,90 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       roles,
       onUpdateConfig
    });
+
+   const reloadCommitments = useCallback(async () => {
+      const commitments = await db.get('inventoryCommitments') as any[] || [];
+      const map: Record<string, number> = {};
+      (commitments || []).forEach(row => {
+         if (defaultSalesWarehouseId && row.warehouseId && row.warehouseId !== defaultSalesWarehouseId) return;
+         map[row.productId] = (map[row.productId] || 0) + Math.max(0, Number(row.qtyCommitted || 0));
+      });
+      setCommittedByProduct(map);
+   }, [defaultSalesWarehouseId]);
+
+   const reloadReservations = useCallback(async () => {
+      const loaded = await db.get('reservations') as Reservation[] || [];
+      setReservations((loaded || []).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+      await reloadCommitments();
+   }, [reloadCommitments]);
+
+   const expireReservationsIfNeeded = useCallback(async () => {
+      const loaded = await db.get('reservations') as Reservation[] || [];
+      const now = Date.now();
+      const expired = (loaded || []).filter(r => r.status === 'ACTIVE' && new Date(r.expiryDate).getTime() < now);
+      if (expired.length === 0) {
+         setReservations((loaded || []).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+         await reloadCommitments();
+         return;
+      }
+
+      for (const reservation of expired) {
+         const warehouseId = reservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
+         await transferStockToCommitted(reservation.items || [], warehouseId, products, 'RELEASE');
+         await db.saveDocument('reservations', {
+            ...reservation,
+            status: 'EXPIRED',
+            expiredAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+         });
+      }
+
+      const refreshed = await db.get('reservations') as Reservation[] || [];
+      setReservations((refreshed || []).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+      await reloadCommitments();
+      setErrorToast(`${expired.length} reserva(s) vencida(s). Stock comprometido liberado.`);
+      setTimeout(() => setErrorToast(null), 4000);
+   }, [defaultSalesWarehouseId, products, reloadCommitments]);
+
+   useEffect(() => {
+      reloadReservations().catch(console.error);
+      expireReservationsIfNeeded().catch(console.error);
+
+      const timer = window.setInterval(() => {
+         expireReservationsIfNeeded().catch(console.error);
+      }, 60000);
+
+      return () => window.clearInterval(timer);
+   }, [reloadReservations, expireReservationsIfNeeded]);
+
+   const handleRecoverReservation = useCallback((reservation: Reservation) => {
+      const hydratedItems = (reservation.items || []).map((item, idx) => ({
+         ...item,
+         cartId: `RSV-${reservation.id}-${idx}-${Date.now()}`
+      }));
+
+      onUpdateCart(hydratedItems);
+      const customer = customers.find(c => c.id === reservation.customerId) || null;
+      onSelectCustomer(customer);
+      setActiveRecoveredReservation(reservation);
+      setShowRecoverReservationModal(false);
+      setReservationSearchTerm('');
+      setSuccessToast(`Reserva ${reservation.code} cargada`);
+   }, [customers, onSelectCustomer, onUpdateCart]);
+
+   const activeReservations = useMemo(() => {
+      return (reservations || []).filter(r => r.status === 'ACTIVE');
+   }, [reservations]);
+
+   const filteredActiveReservations = useMemo(() => {
+      const term = reservationSearchTerm.trim().toLowerCase();
+      if (!term) return activeReservations;
+      return activeReservations.filter(r =>
+         r.customerName.toLowerCase().includes(term) ||
+         r.code.toLowerCase().includes(term) ||
+         r.id.toLowerCase().includes(term)
+      );
+   }, [activeReservations, reservationSearchTerm]);
 
    const handleRedeemCoupon = () => {
       if (!couponCode) return;
@@ -444,11 +554,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // If negative stock is NOT allowed (at either level), check availability
          if (!productAllowsNegative || !terminalAllowsNegative) {
             const currentStock = product.stockBalances?.[defaultSalesWarehouseId] ?? product.stock ?? 0;
+            const committedQty = committedByProduct[product.id] || 0;
+            const availableStock = Math.max(0, currentStock - committedQty);
             const inCartQty = cart.filter(item => item.id === product.id).reduce((sum, item) => sum + item.quantity, 0);
             const totalRequested = inCartQty + quantityToAdd;
 
-            if (totalRequested > currentStock) {
-               setErrorToast(`Stock insuficiente. Disponible: ${currentStock}. En carrito: ${inCartQty}`);
+            if (totalRequested > availableStock) {
+               setErrorToast(`Stock insuficiente. Disponible: ${availableStock}. En carrito: ${inCartQty}`);
                setTimeout(() => setErrorToast(null), 3500);
                return false;
             }
@@ -456,7 +568,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return true;
-   }, [defaultSalesWarehouseId, warehouses, config.features.stockTracking, activeTerminalConfig, cart]);
+   }, [defaultSalesWarehouseId, warehouses, config.features.stockTracking, activeTerminalConfig, cart, committedByProduct]);
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 
@@ -585,6 +697,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       try {
          if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
             const data = JSON.parse(trimmed);
+            if (data.type === 'RESERVATION_NOTE' && (data.id || data.code)) {
+               const found = (reservations || []).find(r => r.id === data.id || r.code === data.code);
+               if (found) {
+                  handleRecoverReservation(found);
+                  return;
+               }
+            }
             if (data.type === 'INVOICE_RETURN' && data.id) {
                setReturnInvoiceId(data.id);
                setShowReturnModal(true);
@@ -640,7 +759,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          setErrorToast(`Producto agregado: ${product.name}`);
          setTimeout(() => setErrorToast(null), 1500);
       }
-   }, [config, products, handleProductClick, getProductPrice, canAddItemToCart, transactions]);
+   }, [config, products, handleProductClick, getProductPrice, canAddItemToCart, transactions, reservations, handleRecoverReservation]);
 
    const isAnyModalOpen = !!(
       showPaymentModal ||
@@ -656,6 +775,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       showReturnModal ||
       showPromoSheet ||
       showMobileConfigModal ||
+      showReservationModal ||
+      !!showReservationReceipt ||
+      showRecoverReservationModal ||
       supervisorModalProps.isOpen
    );
 
@@ -790,6 +912,91 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // Alias for compatibility if needed, though netSubtotal is what we usually display as "Subtotal"
    const cartSubtotal = grossLineTotal; // This represents the sum of list prices
    const baseCurrency = (config.currencies || []).find(c => c.isBase) || (config.currencies || [])[0];
+   const reservationAdvanceApplied = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
+   const reservationBalanceDue = Math.max(0, cartTotal - reservationAdvanceApplied);
+   const amountDueNow = activeRecoveredReservation ? reservationBalanceDue : cartTotal;
+
+   const handleCreateReservation = async () => {
+      if (cart.length === 0) {
+         alert('No hay artículos en el ticket para reservar.');
+         return;
+      }
+
+      const customer = customers.find(c => c.id === reservationCustomerId) || selectedCustomer;
+      if (!customer) {
+         alert('Debe seleccionar un cliente para crear la reserva.');
+         return;
+      }
+
+      if (!reservationDeliveryDate) {
+         alert('Debe indicar la fecha de entrega de la reserva.');
+         return;
+      }
+
+      const advance = Math.max(0, parseFloat(reservationAdvanceInput || '0') || 0);
+      const minAdvance = reservationPolicy.requireAdvance
+         ? (cartTotal * (Math.max(0, reservationPolicy.minimumAdvancePercent || 0) / 100))
+         : 0;
+
+      if (reservationPolicy.requireAdvance && advance < minAdvance) {
+         alert(`Anticipo insuficiente. Mínimo requerido: ${baseCurrency.symbol}${minAdvance.toFixed(2)} (${reservationPolicy.minimumAdvancePercent}%).`);
+         return;
+      }
+
+      if (advance > cartTotal) {
+         alert('El abono no puede exceder el total de la reserva.');
+         return;
+      }
+
+      const now = new Date();
+      const expiryDate = new Date(now);
+      expiryDate.setDate(expiryDate.getDate() + Math.max(1, reservationPolicy.validityDays || 7));
+
+      const reservationId = `RSV-${Date.now()}`;
+      const reservationCode = `RSV-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      const qrPayload = JSON.stringify({ type: 'RESERVATION_NOTE', id: reservationId, code: reservationCode });
+      const warehouseId = defaultSalesWarehouseId || 'wh_central';
+      const reservationItems = processedCart.filter(i => (i.quantity || 0) > 0).map(item => ({ ...item }));
+
+      if (reservationItems.length === 0) {
+         alert('La reserva requiere al menos una línea de venta positiva.');
+         return;
+      }
+
+      const reservation: Reservation = {
+         id: reservationId,
+         code: reservationCode,
+         qrPayload,
+         customerId: customer.id,
+         customerName: customer.name,
+         total: cartTotal,
+         balancePaid: advance,
+         expiryDate: expiryDate.toISOString(),
+         status: 'ACTIVE',
+         items: reservationItems,
+         warehouseId,
+         deliveryDate: reservationDeliveryDate ? new Date(`${reservationDeliveryDate}T00:00:00`).toISOString() : undefined,
+         terminalId,
+         createdById: currentUser.id,
+         createdByName: currentUser.name,
+         createdAt: now.toISOString(),
+         updatedAt: now.toISOString()
+      };
+
+      await db.saveDocument('reservations', reservation);
+      await transferStockToCommitted(reservation.items, warehouseId, products, 'COMMIT');
+      await reloadReservations();
+
+      setShowReservationModal(false);
+      setShowReservationReceipt(reservation);
+      setReservationAdvanceInput('0');
+      setReservationDeliveryDate('');
+      setReservationCustomerId('');
+      onUpdateCart([]);
+      onSelectCustomer(null);
+      setActiveRecoveredReservation(null);
+      setSuccessToast(`Reserva ${reservation.code} creada`);
+   };
 
    const pointsEarned = useMemo(() => calculatePointsEarned(processedCart, config), [processedCart, config]);
    const primaryLoyaltyCard = selectedCustomer ? getPrimaryLoyaltyCard(selectedCustomer) : undefined;
@@ -816,6 +1023,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          cartEndRef.current?.scrollIntoView({ behavior: 'smooth' });
       }
    }, [cart.length]);
+
+   useEffect(() => {
+      if (cart.length === 0 && activeRecoveredReservation) {
+         setActiveRecoveredReservation(null);
+      }
+   }, [cart.length, activeRecoveredReservation]);
 
 
 
@@ -902,6 +1115,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
       const hasReturns = processedCart.some(i => i.quantity < 0);
       const hasSales = processedCart.some(i => i.quantity > 0);
+      const reservationAdvance = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
+      const paymentsForTransaction = reservationAdvance > 0
+         ? [...payments, { id: `ADV-${Date.now()}`, method: 'ADVANCE', amount: reservationAdvance, timestamp: new Date() }]
+         : payments;
+
+      if (activeRecoveredReservation && hasReturns) {
+         alert('La recuperación de reserva no admite líneas de devolución. Finalice la reserva y procese devoluciones por separado.');
+         return null;
+      }
 
       try {
          // If it's a mixed transaction, use the split endpoint
@@ -988,7 +1210,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                date: new Date().toISOString(),
                items: processedCart,
                total: cartTotal,
-               payments: payments,
+               payments: paymentsForTransaction,
                userId: currentUser.id,
                userName: currentUser.name,
                terminalId: terminalId,
@@ -1009,7 +1231,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                } : undefined,
                isTaxIncluded: isTaxIncluded,
                authorizedById: hasReturns ? refundAuthorizedBy?.id : undefined,
-               authorizedByName: hasReturns ? refundAuthorizedBy?.name : undefined
+               authorizedByName: hasReturns ? refundAuthorizedBy?.name : undefined,
+               reservationId: activeRecoveredReservation?.id,
+               reservationCode: activeRecoveredReservation?.code,
+               priorAdvancePaid: reservationAdvance > 0 ? reservationAdvance : undefined,
+               balanceDueAtSale: activeRecoveredReservation ? reservationBalanceDue : undefined
             });
 
             // Ensure seriesId is preserved (Backend might not return it in the root object)
@@ -1019,6 +1245,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             };
 
             onTransactionComplete(finalTxn);
+
+            if (activeRecoveredReservation) {
+               const warehouseId = activeRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
+               await transferStockToCommitted(activeRecoveredReservation.items || [], warehouseId, products, 'RELEASE');
+               await db.saveDocument('reservations', {
+                  ...activeRecoveredReservation,
+                  status: 'INVOICED',
+                  invoicedAt: new Date().toISOString(),
+                  invoicedTransactionId: txn.id,
+                  updatedAt: new Date().toISOString()
+               });
+               await reloadReservations();
+            }
 
             // --- CRITICAL: Ticket Closing Logic ---
             if (activeTable) {
@@ -1050,6 +1289,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             onSelectCustomer(null);
             setIsReturnMode(false);
             setRefundAuthorizedBy(null);
+            setActiveRecoveredReservation(null);
             return txn;
          }
       } catch (error: any) {
@@ -1057,6 +1297,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          alert(`Error de red: ${error.message}`);
          return null;
       }
+   };
+
+   const proceedToCheckout = () => {
+      if (activeRecoveredReservation && amountDueNow <= 0.0001) {
+         handlePaymentConfirm([]).catch(console.error);
+         return;
+      }
+      setShowPaymentModal(true);
    };
 
    const handleDispatchCommand = async () => {
@@ -1093,6 +1341,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          console.error("Dispatch error:", e);
          alert("Error de comunicación con el servicio de cocina");
       }
+   };
+
+   const openReservationModal = () => {
+      const today = new Date().toISOString().slice(0, 10);
+      setReservationCustomerId(selectedCustomer?.id || '');
+      setReservationAdvanceInput('0');
+      setReservationDeliveryDate(today);
+      setShowReservationModal(true);
    };
 
    const handleParkCurrentTicket = async () => {
@@ -1139,6 +1395,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       onUpdateCart([]); onSelectCustomer(null);
+      setActiveRecoveredReservation(null);
       setErrorToast(activeTable ? "Mesa Guardada" : "Ticket Guardado");
       setTimeout(() => setErrorToast(null), 2000);
    };
@@ -1176,6 +1433,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (found) onSelectCustomer(found);
       }
       onUpdateParkedTickets(parkedTickets.filter(p => p.id !== parked.id));
+      setActiveRecoveredReservation(null);
       setShowParkedList(false);
       setMobileView('TICKET');
    };
@@ -1903,6 +2161,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             )}
             < div ref={cartEndRef} />
 
+            {activeRecoveredReservation && (
+               <div className="mx-4 mb-3 p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-800">
+                  <p className="text-[10px] font-black uppercase tracking-widest">Reserva Recuperada</p>
+                  <p className="text-xs font-bold mt-1">{activeRecoveredReservation.code} • {activeRecoveredReservation.customerName}</p>
+                  <p className="text-[11px] mt-1">
+                     Total: {baseCurrency.symbol}{cartTotal.toFixed(2)} | Anticipo: {baseCurrency.symbol}{reservationAdvanceApplied.toFixed(2)} | Saldo: {baseCurrency.symbol}{reservationBalanceDue.toFixed(2)}
+                  </p>
+               </div>
+            )}
+
             {/* Sidebar Footer */}
             <div className={`flex-none bg-white border-t border-gray-200 p-4 shadow-inner ${isRetailMode ? 'flex flex-row-reverse items-center justify-between gap-6' : 'space-y-3'} ${isMobile ? 'hidden' : ''}`}>
                {/* DESKTOP FOOTER CONTENT (UNCHANGED) */}
@@ -1957,7 +2225,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           if (!proceed) return;
                                        }
                                     }
-                                    setShowPaymentModal(true);
+                                    proceedToCheckout();
                                  } else if (!fiscalStatus.hasNCF) {
                                     alert("No hay secuencias fiscales disponibles.");
                                  }
@@ -1965,7 +2233,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               disabled={cart.length === 0 || !fiscalStatus.hasNCF}
                               className={`h-16 px-8 rounded-2xl font-black text-xl shadow-xl hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-3 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
                            >
-                              <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : 'COBRAR'}</span>
+                              <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
                               <ArrowRight size={24} />
                            </button>
                         </div>
@@ -1984,6 +2252,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <Inbox size={18} />
                               <span className="text-[9px] font-black uppercase mt-1">Espera</span>
                               {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white"></span>}
+                           </button>
+                           <button onClick={openReservationModal} title="Reserva / Hold" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-amber-50 border-amber-100 text-amber-700 hover:bg-amber-100 transition-all min-w-[60px]">
+                              <StickyNote size={18} />
+                              <span className="text-[9px] font-black uppercase mt-1">Reserva</span>
+                           </button>
+                           <button onClick={() => setShowRecoverReservationModal(true)} title="Recuperar Reserva" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-teal-50 border-teal-100 text-teal-700 hover:bg-teal-100 transition-all min-w-[60px]">
+                              <QrCode size={18} />
+                              <span className="text-[9px] font-black uppercase mt-1">Rec. Res.</span>
                            </button>
                            <button onClick={onOpenHistory} title="Historial" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-purple-50 border-purple-100 text-purple-600 hover:bg-purple-100 transition-all min-w-[60px]">
                               <History size={18} />
@@ -2134,6 +2410,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     <span className="text-[9px] font-black uppercase mt-1">Espera</span>
                                     {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-1 right-2 w-2 h-2 bg-orange-500 rounded-full border border-white"></span>}
                                  </button>
+                                 <button onClick={openReservationModal} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-amber-50 border-amber-100 text-amber-700 hover:bg-amber-100 hover:border-amber-200 transition-all">
+                                    <StickyNote size={16} />
+                                    <span className="text-[9px] font-black uppercase mt-1">Reserva</span>
+                                 </button>
+                                 <button onClick={() => setShowRecoverReservationModal(true)} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-teal-50 border-teal-100 text-teal-700 hover:bg-teal-100 hover:border-teal-200 transition-all">
+                                    <QrCode size={16} />
+                                    <span className="text-[9px] font-black uppercase mt-1">Rec. Res.</span>
+                                 </button>
                                  <button onClick={() => onOpenInventoryTracking()} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all">
                                     <Package size={16} />
                                     <span className="text-[9px] font-black uppercase mt-1">Rastreo</span>
@@ -2207,7 +2491,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              return;
                                           }
                                        }
-                                       setShowPaymentModal(true);
+                                       proceedToCheckout();
                                     } else if (!fiscalStatus.hasNCF) {
                                        alert("No hay secuencias fiscales disponibles.");
                                     }
@@ -2215,7 +2499,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  disabled={cart.length === 0 || !fiscalStatus.hasNCF}
                                  className={`w-full py-4 rounded-2xl font-black text-xl shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
                               >
-                                 <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : 'COBRAR'}</span>
+                                 <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
                                  <ArrowRight size={24} />
                               </button>
                            </>
@@ -2249,6 +2533,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <span className="text-[9px] font-bold uppercase">Esp.</span>
                            {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
                         </button>
+                        <button onClick={openReservationModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-amber-600">
+                           <StickyNote size={18} />
+                           <span className="text-[9px] font-bold uppercase">Res.</span>
+                        </button>
+                        <button onClick={() => setShowRecoverReservationModal(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-teal-600">
+                           <QrCode size={18} />
+                           <span className="text-[9px] font-bold uppercase">Rec.</span>
+                        </button>
                         {activeTerminalConfig?.operational?.usa_modulos_cocina && (
                            <button onClick={handleDispatchCommand} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-600">
                               <ChefHat size={18} />
@@ -2280,13 +2572,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     if (!proceed) return;
                                  }
                               }
-                              setShowPaymentModal(true);
+                              proceedToCheckout();
                            }
                         }}
                         disabled={cart.length === 0 || !fiscalStatus.hasNCF}
                         className="bg-blue-600 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-lg shadow-blue-200 active:scale-95 transition-all flex items-center gap-2"
                      >
-                        <span>COBRAR</span>
+                        <span>{activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR'}</span>
                         <ArrowRight size={20} />
                      </button>
                   </div>
@@ -2295,7 +2587,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          {/* Modals & Overlays */}
-         {showPaymentModal && <UnifiedPaymentModal total={cartTotal} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={selectedCustomer} />}
+         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={selectedCustomer} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr) => { addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
@@ -2360,6 +2652,186 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             )
          }
 
+         {showReservationModal && (
+            <div className="fixed inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+               <div className="bg-white rounded-[2rem] w-full max-w-lg shadow-2xl overflow-hidden">
+                  <div className="p-6 border-b bg-amber-50 flex justify-between items-center">
+                     <h3 className="font-black text-xl text-amber-900 flex items-center gap-2">
+                        <StickyNote size={20} />
+                        Reserva / Hold
+                     </h3>
+                     <button onClick={() => setShowReservationModal(false)} className="p-2 hover:bg-amber-100 rounded-full text-amber-700">
+                        <X size={18} />
+                     </button>
+                  </div>
+                  <div className="p-6 space-y-4">
+                     <div>
+                        <label className="block text-[11px] font-black text-gray-500 uppercase tracking-widest mb-2">Cliente (Obligatorio)</label>
+                        <select
+                           value={reservationCustomerId}
+                           onChange={(e) => setReservationCustomerId(e.target.value)}
+                           className="w-full p-3 rounded-xl border border-gray-200 font-bold text-sm outline-none focus:ring-2 focus:ring-amber-100"
+                        >
+                           <option value="">Seleccionar Cliente</option>
+                           {(customers || []).map(c => (
+                              <option key={c.id} value={c.id}>{c.name}</option>
+                           ))}
+                        </select>
+                     </div>
+
+                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                           <label className="block text-[11px] font-black text-gray-500 uppercase tracking-widest mb-2">Monto de Abono</label>
+                           <input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={reservationAdvanceInput}
+                              onChange={(e) => setReservationAdvanceInput(e.target.value)}
+                              className="w-full p-3 rounded-xl border border-gray-200 font-bold text-sm outline-none focus:ring-2 focus:ring-amber-100"
+                           />
+                        </div>
+                        <div>
+                           <label className="block text-[11px] font-black text-gray-500 uppercase tracking-widest mb-2">Fecha de Entrega</label>
+                           <input
+                              type="date"
+                              value={reservationDeliveryDate}
+                              onChange={(e) => setReservationDeliveryDate(e.target.value)}
+                              className="w-full p-3 rounded-xl border border-gray-200 font-bold text-sm outline-none focus:ring-2 focus:ring-amber-100"
+                           />
+                        </div>
+                     </div>
+
+                     <div className="p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-xs">
+                        Vigencia: {reservationPolicy.validityDays} día(s)
+                        {reservationPolicy.requireAdvance && (
+                           <span> • Anticipo mínimo: {reservationPolicy.minimumAdvancePercent}%</span>
+                        )}
+                     </div>
+
+                     <div className="p-4 rounded-xl border border-gray-100 bg-gray-50 text-sm">
+                        <div className="flex justify-between font-bold text-gray-600">
+                           <span>Total Reserva</span>
+                           <span>{baseCurrency.symbol}{cartTotal.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-gray-500 mt-1">
+                           <span>Saldo estimado</span>
+                           <span>{baseCurrency.symbol}{Math.max(0, cartTotal - (parseFloat(reservationAdvanceInput || '0') || 0)).toFixed(2)}</span>
+                        </div>
+                     </div>
+                  </div>
+                  <div className="px-6 pb-6 flex justify-end gap-3">
+                     <button onClick={() => setShowReservationModal(false)} className="px-4 py-2 rounded-xl border border-gray-200 text-gray-600 font-bold hover:bg-gray-50">
+                        Cancelar
+                     </button>
+                     <button onClick={handleCreateReservation} className="px-5 py-2.5 rounded-xl bg-amber-600 text-white font-black hover:bg-amber-700 transition-all">
+                        Guardar Reserva
+                     </button>
+                  </div>
+               </div>
+            </div>
+         )}
+
+         {showRecoverReservationModal && (
+            <div className="fixed inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+               <div className="bg-white rounded-[2rem] w-full max-w-2xl shadow-2xl overflow-hidden">
+                  <div className="p-6 border-b bg-teal-50 flex justify-between items-center">
+                     <h3 className="font-black text-xl text-teal-900 flex items-center gap-2">
+                        <QrCode size={20} />
+                        Recuperar Reserva
+                     </h3>
+                     <button onClick={() => setShowRecoverReservationModal(false)} className="p-2 hover:bg-teal-100 rounded-full text-teal-700">
+                        <X size={18} />
+                     </button>
+                  </div>
+                  <div className="p-6 space-y-4">
+                     <div className="flex gap-2">
+                        <div className="flex-1 relative">
+                           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                           <input
+                              type="text"
+                              value={reservationSearchTerm}
+                              onChange={(e) => setReservationSearchTerm(e.target.value)}
+                              placeholder="Buscar por cliente, código o ID..."
+                              className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-gray-200 font-bold text-sm outline-none focus:ring-2 focus:ring-teal-100"
+                           />
+                        </div>
+                        <button
+                           onClick={() => {
+                              setShowRecoverReservationModal(false);
+                              setIsScannerOpen(true);
+                           }}
+                           className="px-4 py-2.5 rounded-xl border border-teal-200 bg-teal-50 text-teal-700 font-bold hover:bg-teal-100"
+                        >
+                           Escanear QR
+                        </button>
+                     </div>
+
+                     <div className="max-h-[45vh] overflow-y-auto space-y-2">
+                        {filteredActiveReservations.map(reservation => (
+                           <button
+                              key={reservation.id}
+                              onClick={() => handleRecoverReservation(reservation)}
+                              className="w-full text-left p-4 rounded-xl border border-gray-100 hover:border-teal-300 hover:bg-teal-50 transition-all"
+                           >
+                              <div className="flex justify-between items-start gap-2">
+                                 <div>
+                                    <p className="font-black text-gray-800">{reservation.customerName}</p>
+                                    <p className="text-[11px] font-bold text-gray-500 mt-0.5">{reservation.code}</p>
+                                 </div>
+                                 <div className="text-right">
+                                    <p className="text-xs font-black text-gray-800">{baseCurrency.symbol}{reservation.total.toFixed(2)}</p>
+                                    <p className="text-[11px] text-gray-500">Abono: {baseCurrency.symbol}{(reservation.balancePaid || 0).toFixed(2)}</p>
+                                 </div>
+                              </div>
+                              <p className="text-[11px] text-gray-500 mt-2">
+                                 Vence: {new Date(reservation.expiryDate).toLocaleDateString()} {reservation.deliveryDate ? `• Entrega: ${new Date(reservation.deliveryDate).toLocaleDateString()}` : ''}
+                              </p>
+                           </button>
+                        ))}
+                        {filteredActiveReservations.length === 0 && (
+                           <div className="p-8 rounded-xl border border-dashed border-gray-200 text-center text-sm text-gray-400">
+                              No hay reservas activas para mostrar.
+                           </div>
+                        )}
+                     </div>
+                  </div>
+               </div>
+            </div>
+         )}
+
+         {showReservationReceipt && (
+            <div className="fixed inset-0 z-[130] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+               <div className="bg-white rounded-[2rem] w-full max-w-md shadow-2xl overflow-hidden">
+                  <div className="p-6 border-b bg-slate-50">
+                     <h3 className="font-black text-xl text-slate-800">Nota de Reserva</h3>
+                     <p className="text-xs text-slate-500 mt-1">Documento no fiscal generado correctamente.</p>
+                  </div>
+                  <div className="p-6 space-y-4">
+                     <div className="text-center">
+                        <img
+                           src={`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(showReservationReceipt.qrPayload)}`}
+                           alt="QR Reserva"
+                           className="mx-auto w-40 h-40 rounded-xl border border-gray-200"
+                        />
+                        <p className="text-[11px] text-gray-500 font-mono mt-2">{showReservationReceipt.code}</p>
+                     </div>
+                     <div className="p-4 rounded-xl border border-gray-100 bg-gray-50 text-sm">
+                        <div className="flex justify-between"><span className="text-gray-500">Cliente</span><span className="font-bold text-gray-800">{showReservationReceipt.customerName}</span></div>
+                        <div className="flex justify-between mt-1"><span className="text-gray-500">Total</span><span className="font-bold text-gray-800">{baseCurrency.symbol}{showReservationReceipt.total.toFixed(2)}</span></div>
+                        <div className="flex justify-between mt-1"><span className="text-gray-500">Abono</span><span className="font-bold text-gray-800">{baseCurrency.symbol}{(showReservationReceipt.balancePaid || 0).toFixed(2)}</span></div>
+                        <div className="flex justify-between mt-1"><span className="text-gray-500">Vence</span><span className="font-bold text-gray-800">{new Date(showReservationReceipt.expiryDate).toLocaleDateString()}</span></div>
+                     </div>
+                  </div>
+                  <div className="px-6 pb-6 flex justify-end">
+                     <button onClick={() => setShowReservationReceipt(null)} className="px-5 py-2.5 rounded-xl bg-slate-900 text-white font-black hover:bg-black transition-all">
+                        Cerrar
+                     </button>
+                  </div>
+               </div>
+            </div>
+         )}
+
          {/* List of Parked Tickets */}
          {
             showParkedList && (
@@ -2406,6 +2878,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                try {
                   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
                      const data = JSON.parse(trimmed);
+                     if (data.type === 'RESERVATION_NOTE' && (data.id || data.code)) {
+                        const found = (reservations || []).find(r => r.id === data.id || r.code === data.code);
+                        if (found) {
+                           handleRecoverReservation(found);
+                           setIsScannerOpen(false);
+                           return { success: true, message: 'Reserva Recuperada' };
+                        }
+                     }
                      if (data.type === 'INVOICE_RETURN' && data.id) {
                         setReturnInvoiceId(data.id);
                         setShowReturnModal(true);

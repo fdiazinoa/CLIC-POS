@@ -124,7 +124,12 @@ export const DEFAULT_TERMINAL_CONFIG = {
     pantalla_inicio: 'VENTA_DIRECTA' as const,
     bloqueo_meseros: false,
     pedir_comensales: true,
-    usa_modulos_cocina: false
+    usa_modulos_cocina: false,
+    reservationPolicy: {
+      validityDays: 7,
+      requireAdvance: false,
+      minimumAdvancePercent: 20
+    }
   },
   ux: {
     theme: 'LIGHT' as const,

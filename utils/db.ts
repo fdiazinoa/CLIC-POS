@@ -3,7 +3,7 @@ import {
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, PurchaseOrderItem, Supplier, Watchlist,
   NCFType, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
-  Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking
+  Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment
 } from '../types';
 import {
   MOCK_USERS, RETAIL_PRODUCTS, FOOD_PRODUCTS,
@@ -168,8 +168,13 @@ const SEED_DATA = {
     productId: p.id,
     warehouseId: 'wh_central',
     quantity: 100,
+    qtyPhysical: 100,
+    qtyCommitted: 0,
+    qtyAvailable: 100,
     updatedAt: new Date().toISOString()
   })) as ProductStock[],
+  reservations: [] as Reservation[],
+  inventoryCommitments: [] as InventoryCommitment[],
   supplierProductPrices: [] as any[],
   inventoryTracking: [] as InventoryTracking[],
   inventorySnapshots: [] as any[],
@@ -233,6 +238,16 @@ export const db = {
                   const seedVal = seedConfig.terminals.find(st => st.id === t.id) || seedConfig.terminals[0];
                   if (seedVal?.config.hardware.customerDisplay) {
                     t.config.hardware.customerDisplay = JSON.parse(JSON.stringify(seedVal.config.hardware.customerDisplay));
+                    wasPatched = true;
+                  }
+                }
+
+                // Patch 2: Missing Reservation Policy
+                if (!t.config.operational?.reservationPolicy) {
+                  const seedVal = seedConfig.terminals.find(st => st.id === t.id) || seedConfig.terminals[0];
+                  if (seedVal?.config.operational?.reservationPolicy) {
+                    if (!t.config.operational) t.config.operational = {} as any;
+                    t.config.operational.reservationPolicy = JSON.parse(JSON.stringify(seedVal.config.operational.reservationPolicy));
                     wasPatched = true;
                   }
                 }
@@ -975,20 +990,89 @@ export const db = {
 
       // 8. Update Detailed Stocks Collection (productStocks)
       const stockId = `${productId}_${warehouseId}`;
+      const commitments = await dbAdapter.getCollection<InventoryCommitment>('inventoryCommitments') || [];
+      const commitment = (commitments || []).find(c => c.productId === productId && c.warehouseId === warehouseId);
+      const qtyCommitted = Math.max(0, Number(commitment?.qtyCommitted || 0));
       const productStock: ProductStock = {
         id: stockId,
         productId,
         warehouseId,
         quantity: currentBalance,
+        qtyPhysical: currentBalance,
+        qtyCommitted,
+        qtyAvailable: currentBalance - qtyCommitted,
         updatedAt: new Date().toISOString()
       };
       await dbAdapter.saveDocument('productStocks', productStock);
-      console.log(`✅ Detailed stock for ${productId} in ${warehouseId} updated: ${currentBalance}`);
+      console.log(`✅ Detailed stock for ${productId} in ${warehouseId} updated: physical=${currentBalance}, committed=${qtyCommitted}`);
     } else {
       console.error(`❌ Product ${productId} NOT FOUND!`);
     }
 
     console.log(`✅ Recalculation complete. Final balance: ${currentBalance}`);
+  },
+
+  getCommittedStock: async (productId: string, warehouseId: string): Promise<number> => {
+    const commitments = await dbAdapter.getCollection<InventoryCommitment>('inventoryCommitments') || [];
+    const row = (commitments || []).find(c => c.productId === productId && c.warehouseId === warehouseId);
+    return Math.max(0, Number(row?.qtyCommitted || 0));
+  },
+
+  adjustCommittedStock: async (productId: string, warehouseId: string, deltaQty: number): Promise<number> => {
+    const commitments = await dbAdapter.getCollection<InventoryCommitment>('inventoryCommitments') || [];
+    const idx = commitments.findIndex(c => c.productId === productId && c.warehouseId === warehouseId);
+    const now = new Date().toISOString();
+
+    let nextCommitted = 0;
+    if (idx >= 0) {
+      const current = Math.max(0, Number(commitments[idx].qtyCommitted || 0));
+      nextCommitted = Math.max(0, current + deltaQty);
+      commitments[idx] = {
+        ...commitments[idx],
+        qtyCommitted: nextCommitted,
+        updatedAt: now
+      };
+    } else {
+      nextCommitted = Math.max(0, deltaQty);
+      commitments.push({
+        id: `${productId}_${warehouseId}`,
+        productId,
+        warehouseId,
+        qtyCommitted: nextCommitted,
+        updatedAt: now
+      });
+    }
+
+    await dbAdapter.saveCollection('inventoryCommitments', commitments);
+
+    const stockId = `${productId}_${warehouseId}`;
+    const productStock = await dbAdapter.getDocument<ProductStock>('productStocks', stockId);
+    if (productStock) {
+      const qtyPhysical = Number(productStock.qtyPhysical ?? productStock.quantity ?? 0);
+      await dbAdapter.saveDocument('productStocks', {
+        ...productStock,
+        qtyPhysical,
+        qtyCommitted: nextCommitted,
+        qtyAvailable: qtyPhysical - nextCommitted,
+        updatedAt: now
+      });
+    } else {
+      const products = await dbAdapter.getCollection<Product>('products') || [];
+      const product = (products || []).find(p => p.id === productId);
+      const qtyPhysical = Number(product?.stockBalances?.[warehouseId] ?? product?.stock ?? 0);
+      await dbAdapter.saveDocument('productStocks', {
+        id: stockId,
+        productId,
+        warehouseId,
+        quantity: qtyPhysical,
+        qtyPhysical,
+        qtyCommitted: nextCommitted,
+        qtyAvailable: qtyPhysical - nextCommitted,
+        updatedAt: now
+      } as ProductStock);
+    }
+
+    return nextCommitted;
   },
 
   getNextGlobalSequence: async (): Promise<number> => {

@@ -58,6 +58,24 @@ class BackgroundSyncManager {
     }
 
     /**
+     * Resolve the best timestamp field across heterogeneous operational documents.
+     * Z-Reports use closedAt/openedAt, while others usually use createdAt/timestamp/date.
+     */
+    private resolveItemDate(item: any): Date | null {
+        const rawDate =
+            item?.closedAt ||
+            item?.openedAt ||
+            item?.createdAt ||
+            item?.timestamp ||
+            item?.date ||
+            item?.updatedAt;
+
+        if (!rawDate) return null;
+        const parsed = new Date(rawDate);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    /**
      * Main sync loop
      */
     async sync() {
@@ -112,7 +130,17 @@ class BackgroundSyncManager {
     /**
      * Process a collection sequentially (FIFO)
      */
-    private async processCollection<T extends { id: string, syncStatus?: SyncStatus, syncError?: string, createdAt?: string, timestamp?: string, date?: string }>(
+    private async processCollection<T extends {
+        id: string,
+        syncStatus?: SyncStatus,
+        syncError?: string,
+        createdAt?: string,
+        timestamp?: string,
+        date?: string,
+        closedAt?: string,
+        openedAt?: string,
+        updatedAt?: string
+    }>(
         collectionName: string,
         pushFn: (item: T) => Promise<void>
     ) {
@@ -128,8 +156,8 @@ class BackgroundSyncManager {
 
         // Sort by date to maintain integrity
         pending.sort((a, b) => {
-            const dateA = new Date(a.createdAt || a.timestamp || a.date || 0).getTime();
-            const dateB = new Date(b.createdAt || b.timestamp || b.date || 0).getTime();
+            const dateA = this.resolveItemDate(a)?.getTime() ?? 0;
+            const dateB = this.resolveItemDate(b)?.getTime() ?? 0;
             return dateA - dateB;
         });
 
@@ -219,8 +247,8 @@ class BackgroundSyncManager {
                 const toPruneIds: string[] = [];
 
                 data.forEach(item => {
-                    const itemDate = new Date(item.createdAt || item.timestamp || item.date || 0);
-                    const isOld = itemDate < cutoff;
+                    const itemDate = this.resolveItemDate(item);
+                    const isOld = !!itemDate && itemDate < cutoff;
                     const isSynced = item.syncStatus === 'COMPLETED';
 
                     if (isSynced && isOld) {

@@ -124,7 +124,11 @@ class TransactionService {
             ncfType: data.ncfType,
             relatedTransactions: data.relatedTransactions,
             originalTransactionId: data.originalTransactionId,
-            refundReason: data.refundReason
+            refundReason: data.refundReason,
+            reservationId: data.reservationId,
+            reservationCode: data.reservationCode,
+            priorAdvancePaid: data.priorAdvancePaid,
+            balanceDueAtSale: data.balanceDueAtSale
         };
 
         // Save to database

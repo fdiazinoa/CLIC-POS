@@ -415,8 +415,12 @@ const MobileReception: React.FC<MobileReceptionProps> = ({
     setIsSaving(true);
 
     try {
+      const onlinePayload = {
+        ...payload,
+        documentType: selectedDocument.type as 'PURCHASE_ORDER' | 'TRANSFER_IN'
+      };
       const result = await db.processReceipt({
-        ...payload
+        ...onlinePayload
       });
 
       await triggerAutoPrint(result.autoPrintItems || []);

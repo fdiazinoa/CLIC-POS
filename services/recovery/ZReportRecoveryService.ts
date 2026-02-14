@@ -5,6 +5,8 @@ import { ZReport, Transaction } from '../../types';
 type RecoveryOptions = {
     notifyUser?: boolean;
     runOncePerSession?: boolean;
+    enrichHistory?: boolean;
+    maxReports?: number;
 };
 
 export class ZReportRecoveryService {
@@ -13,7 +15,12 @@ export class ZReportRecoveryService {
     private static notifiedInSession = false;
 
     static async recoverOrphanedReports(options: RecoveryOptions = {}): Promise<number> {
-        const { notifyUser = false, runOncePerSession = true } = options;
+        const {
+            notifyUser = false,
+            runOncePerSession = true,
+            enrichHistory = false,
+            maxReports = 500
+        } = options;
 
         if (runOncePerSession && this.alreadyRanInSession) {
             return 0;
@@ -24,7 +31,11 @@ export class ZReportRecoveryService {
             return this.recoveryPromise;
         }
 
-        this.recoveryPromise = this.runRecovery(notifyUser);
+        this.recoveryPromise = this.runRecovery({
+            notifyUser,
+            enrichHistory,
+            maxReports
+        });
 
         try {
             const recoveredCount = await this.recoveryPromise;
@@ -35,10 +46,15 @@ export class ZReportRecoveryService {
         }
     }
 
-    private static async runRecovery(notifyUser: boolean): Promise<number> {
+    private static async runRecovery(params: {
+        notifyUser: boolean;
+        enrichHistory: boolean;
+        maxReports: number;
+    }): Promise<number> {
         console.log("🔍 ZReportRecovery: Checking for orphaned transactions...");
 
         try {
+            const { notifyUser, enrichHistory, maxReports } = params;
             const reports = await db.get('zReports') as ZReport[];
             const history = await db.get('transactionHistory') as (Transaction & { zReportId?: string })[];
 
@@ -65,7 +81,13 @@ export class ZReportRecoveryService {
 
             const recoveredReports: ZReport[] = [];
 
+            let recoveredCounter = 0;
             for (const [reportId, txs] of transactionsByReportId) {
+                if (recoveredCounter >= maxReports) {
+                    console.warn(`⚠️ ZReportRecovery: Reached maxReports=${maxReports}. Remaining reports will be recovered in next run.`);
+                    break;
+                }
+
                 // Calculate Totals
                 const totalsByMethod: Record<string, number> = {};
                 for (const tx of txs) {
@@ -113,17 +135,20 @@ export class ZReportRecoveryService {
                 };
 
                 recoveredReports.push(recoveredReport);
+                recoveredCounter++;
                 console.log(`♻️ Recovered Z-Report ${reportId}:`, recoveredReport);
 
                 await db.saveDocument('zReports', recoveredReport);
 
-                // Enrich historical transactions to avoid UI fallbacks to raw ID
-                for (const tx of txs) {
-                    if ((tx as any).zReportSequence === recoveredReport.sequenceNumber) continue;
-                    await db.saveDocument('transactionHistory', {
-                        ...tx,
-                        zReportSequence: recoveredReport.sequenceNumber
-                    } as any);
+                // Optional and expensive: keep disabled by default for faster recovery.
+                if (enrichHistory) {
+                    for (const tx of txs) {
+                        if ((tx as any).zReportSequence === recoveredReport.sequenceNumber) continue;
+                        await db.saveDocument('transactionHistory', {
+                            ...tx,
+                            zReportSequence: recoveredReport.sequenceNumber
+                        } as any);
+                    }
                 }
             }
 

@@ -3,6 +3,10 @@ import { InventoryCountSession } from '../types';
 import { db } from '../utils/db';
 import { apiSyncAdapter } from '../services/sync/ApiSyncAdapter';
 
+interface UseOfflineInventoryCountSyncOptions {
+  enabled?: boolean;
+}
+
 interface QueueMeta {
   warehouseName?: string;
 }
@@ -32,6 +36,11 @@ const queueCollection = 'offline_inventory_count_queue';
 const conflictsCollection = 'offline_inventory_count_conflicts';
 const scansCollection = 'offline_inventory_counts';
 
+const isDbNotConnectedError = (error: unknown): boolean => {
+  const message = String((error as any)?.message || error || '').toLowerCase();
+  return message.includes('db not connected');
+};
+
 const conflictMessage = (error: unknown): boolean => {
   const message = String((error as any)?.message || error || '').toLowerCase();
   return (
@@ -43,7 +52,7 @@ const conflictMessage = (error: unknown): boolean => {
   );
 };
 
-export const useOfflineInventoryCountSync = () => {
+export const useOfflineInventoryCountSync = ({ enabled = true }: UseOfflineInventoryCountSyncOptions = {}) => {
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
@@ -52,8 +61,19 @@ export const useOfflineInventoryCountSync = () => {
   const runningRef = useRef(false);
 
   const refreshState = useCallback(async () => {
-    const queue = (await db.get(queueCollection as any)) as OfflineInventoryCountQueueItem[] || [];
-    const conflictList = (await db.get(conflictsCollection as any)) as OfflineInventoryCountConflict[] || [];
+    if (!enabled) return;
+
+    let queue: OfflineInventoryCountQueueItem[] = [];
+    let conflictList: OfflineInventoryCountConflict[] = [];
+    try {
+      queue = (await db.get(queueCollection as any)) as OfflineInventoryCountQueueItem[] || [];
+      conflictList = (await db.get(conflictsCollection as any)) as OfflineInventoryCountConflict[] || [];
+    } catch (error) {
+      if (!isDbNotConnectedError(error)) {
+        console.error('OfflineInventoryCountSync.refreshState error:', error);
+      }
+      return;
+    }
 
     const active = queue.filter(i => i.status === 'PENDING' || i.status === 'ERROR' || i.status === 'SYNCING');
     setPendingCount(active.length);
@@ -64,7 +84,7 @@ export const useOfflineInventoryCountSync = () => {
       return timeB - timeA;
     });
     setConflicts(sortedConflicts);
-  }, []);
+  }, [enabled]);
 
   const clearScanLogsForSession = useCallback(async (sessionId: string) => {
     const logs = (await db.get(scansCollection as any)) as Array<{ id: string; sessionId?: string }> || [];
@@ -95,7 +115,7 @@ export const useOfflineInventoryCountSync = () => {
   }, []);
 
   const processQueue = useCallback(async () => {
-    if (runningRef.current || !navigator.onLine) return;
+    if (!enabled || runningRef.current || !navigator.onLine) return;
 
     runningRef.current = true;
     setIsSyncing(true);
@@ -153,14 +173,25 @@ export const useOfflineInventoryCountSync = () => {
           await db.saveDocument(queueCollection as any, failed as any);
         }
       }
+    } catch (error) {
+      if (!isDbNotConnectedError(error)) {
+        console.error('OfflineInventoryCountSync.processQueue error:', error);
+      }
     } finally {
       runningRef.current = false;
       setIsSyncing(false);
       await refreshState();
     }
-  }, [clearScanLogsForSession, moveToConflict, pushSession, refreshState]);
+  }, [clearScanLogsForSession, enabled, moveToConflict, pushSession, refreshState]);
 
   const saveSession = useCallback(async (session: InventoryCountSession, meta: QueueMeta = {}) => {
+    if (!enabled) {
+      return {
+        queued: true,
+        message: 'Inicializando base local. Intenta nuevamente en unos segundos.'
+      };
+    }
+
     const queueItem: OfflineInventoryCountQueueItem = {
       id: `ICQ-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       createdAt: new Date().toISOString(),
@@ -207,7 +238,7 @@ export const useOfflineInventoryCountSync = () => {
         message: 'Conteo guardado localmente. Se sincronizará cuando haya conexión.'
       };
     }
-  }, [clearScanLogsForSession, pushSession, refreshState]);
+  }, [clearScanLogsForSession, enabled, pushSession, refreshState]);
 
   const recordOfflineScan = useCallback(async (params: {
     sessionId: string;
@@ -215,6 +246,7 @@ export const useOfflineInventoryCountSync = () => {
     productId?: string;
     code: string;
   }) => {
+    if (!enabled) return;
     if (navigator.onLine) return;
 
     const log = {
@@ -227,9 +259,10 @@ export const useOfflineInventoryCountSync = () => {
     };
 
     await db.saveDocument(scansCollection as any, log as any);
-  }, []);
+  }, [enabled]);
 
   const resolveConflict = useCallback(async (conflictId: string, action: 'OVERWRITE' | 'CANCEL') => {
+    if (!enabled) return;
     const conflict = await db.getDocument(conflictsCollection as any, conflictId) as OfflineInventoryCountConflict | null;
     if (!conflict) return;
 
@@ -258,11 +291,13 @@ export const useOfflineInventoryCountSync = () => {
     if (navigator.onLine) {
       await processQueue();
     }
-  }, [processQueue, refreshState]);
+  }, [enabled, processQueue, refreshState]);
 
   const clearSyncToast = useCallback(() => setSyncToast(null), []);
 
   useEffect(() => {
+    if (!enabled) return;
+
     refreshState().catch(console.error);
 
     const onOnline = () => {
@@ -278,7 +313,7 @@ export const useOfflineInventoryCountSync = () => {
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
     };
-  }, [processQueue, refreshState]);
+  }, [enabled, processQueue, refreshState]);
 
   return {
     isOnline,

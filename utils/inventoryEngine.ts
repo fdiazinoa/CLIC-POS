@@ -106,6 +106,36 @@ export async function processInventoryDeduction(
     return entries;
 }
 
+/**
+ * Transfer quantities between available stock and committed stock (reservas).
+ * COMMIT increases qty_committed; RELEASE decreases qty_committed.
+ */
+export async function transferStockToCommitted(
+    items: CartItem[],
+    warehouseId: string,
+    allProducts: Product[],
+    mode: 'COMMIT' | 'RELEASE'
+): Promise<Record<string, number>> {
+    const reservationItems = (items || []).filter(item => (item.quantity || 0) > 0);
+    if (reservationItems.length === 0) return {};
+
+    const aggregated: Record<string, number> = {};
+
+    for (const item of reservationItems) {
+        const deductions = await calculateInventoryDeductions(item, item.quantity, allProducts);
+        for (const d of deductions) {
+            aggregated[d.productId] = (aggregated[d.productId] || 0) + d.quantityToDeduct;
+        }
+    }
+
+    const sign = mode === 'COMMIT' ? 1 : -1;
+    for (const [productId, qty] of Object.entries(aggregated)) {
+        await db.adjustCommittedStock(productId, warehouseId, sign * qty);
+    }
+
+    return aggregated;
+}
+
 function moveByProductId(deductions: { productId: string, quantityToDeduct: number }[]): Record<string, number> {
     const minified: Record<string, number> = {};
     for (const d of deductions) {

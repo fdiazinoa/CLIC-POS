@@ -188,7 +188,7 @@ const AppContent: React.FC = () => {
     }
   });
 
-  const inventoryCountSync = useOfflineInventoryCountSync();
+  const inventoryCountSync = useOfflineInventoryCountSync({ enabled: isDataLoaded });
 
   useEffect(() => {
     const status = nativePrintBridge.getContractStatus();
@@ -201,6 +201,8 @@ const AppContent: React.FC = () => {
   }, []);
 
   const flushOfflinePrintQueue = useCallback(async () => {
+    if (!isDataLoaded) return;
+
     try {
       const result = await offlinePrintQueueService.processPendingQueue(config);
       if (result.processed > 0) {
@@ -209,9 +211,11 @@ const AppContent: React.FC = () => {
     } catch (error) {
       console.warn('Offline print queue processing failed:', error);
     }
-  }, [config]);
+  }, [config, isDataLoaded]);
 
   useEffect(() => {
+    if (!isDataLoaded) return;
+
     const wakeQueue = () => {
       flushOfflinePrintQueue().catch(console.error);
     };
@@ -234,7 +238,7 @@ const AppContent: React.FC = () => {
       window.removeEventListener('offlinePrintQueueWake', wakeQueue as EventListener);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [flushOfflinePrintQueue]);
+  }, [flushOfflinePrintQueue, isDataLoaded]);
 
   useEffect(() => {
     const handleAutoPrint = async (event: Event) => {
@@ -360,7 +364,14 @@ const AppContent: React.FC = () => {
       console.log('🚀 loadData started');
       try {
         console.log('⏳ Calling db.init()...');
-        const data = await db.init();
+        const data = await Promise.race([
+          db.init(),
+          new Promise<never>((_, reject) => {
+            window.setTimeout(() => {
+              reject(new Error('Timeout inicializando base local (IndexedDB). Si persiste, cierra otras pestañas de CLIC POS y reintenta.'));
+            }, 60000);
+          })
+        ]);
         console.log('✅ db.init() returned:', data ? Object.keys(data) : 'null');
 
         // RECOVERY: Check for orphaned transactions and rebuild Z-Reports if needed
@@ -1035,157 +1046,164 @@ const AppContent: React.FC = () => {
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     const terminalId = currentTerminal?.id || 'T1';
 
-    console.log(`📊 Z-Report: Starting closure for terminal ${terminalId} (Device: ${deviceId})`);
+    try {
+      console.log(`📊 Z-Report: Starting closure for terminal ${terminalId} (Device: ${deviceId})`);
 
+      // 2. Identify Transactions for closure
+      // STRICT MODE: Only include transactions explicitly tagged with this terminalId.
+      // Untagged transactions must be handled via Admin Recovery tools, not automatically included here.
+      const terminalTransactions = transactions.filter(t => t.terminalId === terminalId);
+      const terminalCashMovements = cashMovements.filter(m => m.terminalId === terminalId);
 
-    // 2. Identify Transactions for closure
-    // STRICT MODE: Only include transactions explicitly tagged with this terminalId.
-    // Untagged transactions must be handled via Admin Recovery tools, not automatically included here.
-    const terminalTransactions = transactions.filter(t => t.terminalId === terminalId);
-    const terminalCashMovements = cashMovements.filter(m => m.terminalId === terminalId);
+      console.log(`🔒 Shift Segregation: Found ${terminalTransactions.length} txns and ${terminalCashMovements.length} cash movements for ${terminalId}`);
 
-    console.log(`🔒 Shift Segregation: Found ${terminalTransactions.length} txns and ${terminalCashMovements.length} cash movements for ${terminalId}`);
+      // 3. Totals and Stats (Prioritize Dashboard-confirmed values)
+      const totalsByMethod = reportData?.totalsByMethod || terminalTransactions.flatMap(t => t?.payments || []).reduce((acc: Record<string, number>, p) => {
+        if (p && p.method) {
+          acc[p.method] = (acc[p.method] || 0) + p.amount;
+        }
+        return acc;
+      }, {});
 
-    // 3. Totals and Stats (Prioritize Dashboard-confirmed values)
-    const totalsByMethod = reportData?.totalsByMethod || terminalTransactions.flatMap(t => t?.payments || []).reduce((acc: Record<string, number>, p) => {
-      if (p && p.method) {
-        acc[p.method] = (acc[p.method] || 0) + p.amount;
+      const stats = reportData?.stats || calculateZReportStats(terminalTransactions);
+      const transactionCount = reportData?.transactionCount ?? terminalTransactions.length;
+
+      // 4. Create and Save Z-Report
+      let sequenceNumber = '';
+      let zReportId = `ZR-${Date.now()}`;
+
+      // DOCUMENT SERIES LOGIC
+      // Attempt to find an assigned series for Z_REPORT
+      const zReportSeriesId = currentTerminal?.config?.documentAssignments?.['Z_REPORT'];
+      // Series are stored inside the terminal config
+      const terminalSeriesList = currentTerminal?.config?.documentSeries || [];
+      const zReportSeries = zReportSeriesId
+        ? terminalSeriesList.find(s => s.id === zReportSeriesId)
+        : undefined;
+
+      if (zReportSeries) {
+        // Use the Series
+        const prefix = zReportSeries.prefix || '';
+        const num = zReportSeries.nextNumber || 1;
+        const padding = zReportSeries.padding || 8;
+        sequenceNumber = `${prefix}${num.toString().padStart(padding, '0')}`;
+
+        console.log(`🎫 Generating Z-Report using Series ${zReportSeries.name}: ${sequenceNumber}`);
+
+        // Increment Series locally
+        const updatedSeries = {
+          ...zReportSeries,
+          nextNumber: num + 1
+        };
+
+        // Update the list of series for this terminal
+        const updatedTerminalSeries = terminalSeriesList.map(s => s.id === zReportSeries.id ? updatedSeries : s);
+
+        // We need to update the global config object to reflect this change inside the specific terminal
+        const updatedTerminals = (config.terminals || []).map(t => {
+          if (t.id === terminalId) {
+            return {
+              ...t,
+              config: {
+                ...t.config,
+                documentSeries: updatedTerminalSeries
+              }
+            };
+          }
+          return t;
+        });
+
+        const updatedConfig = { ...config, terminals: updatedTerminals };
+
+        // Update local state (optimistic)
+        setConfig(updatedConfig);
+
+        // Persist to DB
+        await db.save('config', updatedConfig);
+
+        // If Master, we should push this update to others?
+        // Series updates are critical.
+        if (permissionService.isMasterTerminal()) {
+          // TODO: Implement specific sync for series if needed, or rely on config sync.
+          // For now, simple persistence is key.
+        }
+
+      } else {
+        // Fallback to legacy Logic
+        const existingReports = await db.get('zReports') as ZReport[];
+        const nextSeqNum = (existingReports.length + 1).toString().padStart(6, '0');
+        sequenceNumber = `Z-${nextSeqNum}`;
       }
-      return acc;
-    }, {});
 
-    const stats = reportData?.stats || calculateZReportStats(terminalTransactions);
-    const transactionCount = reportData?.transactionCount ?? terminalTransactions.length;
-
-    // 4. Create and Save Z-Report
-    let sequenceNumber = '';
-    let zReportId = `ZR-${Date.now()}`;
-
-    // DOCUMENT SERIES LOGIC
-    // Attempt to find an assigned series for Z_REPORT
-    const zReportSeriesId = currentTerminal?.config?.documentAssignments?.['Z_REPORT'];
-    // Series are stored inside the terminal config
-    const terminalSeriesList = currentTerminal?.config?.documentSeries || [];
-    const zReportSeries = zReportSeriesId
-      ? terminalSeriesList.find(s => s.id === zReportSeriesId)
-      : undefined;
-
-    if (zReportSeries) {
-      // Use the Series
-      const prefix = zReportSeries.prefix || '';
-      const num = zReportSeries.nextNumber || 1;
-      const padding = zReportSeries.padding || 8;
-      sequenceNumber = `${prefix}${num.toString().padStart(padding, '0')}`;
-
-      console.log(`🎫 Generating Z-Report using Series ${zReportSeries.name}: ${sequenceNumber}`);
-
-      // Increment Series locally
-      const updatedSeries = {
-        ...zReportSeries,
-        nextNumber: num + 1
+      const newZReport: ZReport = {
+        id: zReportId,
+        terminalId,
+        sequenceNumber,
+        openedAt: terminalTransactions.length > 0 ? terminalTransactions[0].date : new Date().toISOString(),
+        closedAt: new Date().toISOString(),
+        closedByUserId: currentUser?.id || 'sys',
+        closedByUserName: currentUser?.name || 'System',
+        baseCurrency: config.currencySymbol,
+        totalsByMethod,
+        cashExpected: reportData?.expectedCashByCurrency || {},
+        cashCounted: reportData?.cashCountedByCurrency || {},
+        cashDiscrepancy: reportData?.cashDiscrepancyByCurrency || {},
+        cashSales: reportData?.cashSalesTotal || 0,
+        cashIn: reportData?.cashIn || 0,
+        cashOut: reportData?.cashOut || 0,
+        transactionCount,
+        notes,
+        stats,
+        syncStatus: 'PENDING' as const
       };
 
-      // Update the list of series for this terminal
-      const updatedTerminalSeries = terminalSeriesList.map(s => s.id === zReportSeries.id ? updatedSeries : s);
+      console.log("💾 Saving Z-Report:", newZReport);
+      await db.saveDocument('zReports', newZReport);
+      await syncManager.pushZReport(newZReport);
 
-      // We need to update the global config object to reflect this change inside the specific terminal
-      const updatedTerminals = (config.terminals || []).map(t => {
-        if (t.id === terminalId) {
-          return {
-            ...t,
-            config: {
-              ...t.config,
-              documentSeries: updatedTerminalSeries
-            }
-          };
-        }
-        return t;
-      });
+      // 5. Build lookup set for IDs that were actually closed to prevent data loss
+      const closedTxnIds = new Set(terminalTransactions.map(t => t.id));
+      const closedMoveIds = new Set(terminalCashMovements.map(m => m.id));
 
-      const updatedConfig = { ...config, terminals: updatedTerminals };
-
-      // Update local state (optimistic)
-      setConfig(updatedConfig);
-
-      // Persist to DB
-      await db.save('config', updatedConfig);
-
-      // If Master, we should push this update to others?
-      // Series updates are critical.
-      if (permissionService.isMasterTerminal()) {
-        // TODO: Implement specific sync for series if needed, or rely on config sync.
-        // For now, simple persistence is key.
+      // 6. Archive locally
+      console.log(`🗄️ Archiving ${terminalTransactions.length} transactions to history...`);
+      for (const tx of terminalTransactions) {
+        // NEW: Save sequence number for easy display
+        await db.saveDocument('transactionHistory', {
+          ...tx,
+          zReportId: newZReport.id,
+          zReportSequence: newZReport.sequenceNumber
+        });
+        // NEW: Explicitly delete from active table to avoid orphans
+        await db.deleteDocument('transactions', tx.id);
       }
 
-    } else {
-      // Fallback to legacy Logic
-      const existingReports = await db.get('zReports') as ZReport[];
-      const nextSeqNum = (existingReports.length + 1).toString().padStart(6, '0');
-      sequenceNumber = `Z-${nextSeqNum}`;
+      // 7. Update states by removing ONLY what was closed
+      const remainingTransactions = transactions.filter(t => !closedTxnIds.has(t.id));
+      const remainingCashMovements = cashMovements.filter(m => !closedMoveIds.has(m.id));
+
+      setTransactions(remainingTransactions);
+      setCashMovements(remainingCashMovements);
+
+      // Note: We don't strictly need db.save('transactions', ...) anymore because we deleted them one by one, 
+      // but we keep it for other non-terminal-specific items if they existed (unlikely here).
+      // Actually, save() as "Replace" is now robust via NetworkAdapter fix.
+      await db.save('transactions', remainingTransactions);
+      await db.save('cashMovements', remainingCashMovements);
+
+      // 8. Global Reset (bounded wait to avoid UI freeze)
+      console.log(`⚙️ Sending Global Reset for Terminal ${terminalId} to Master...`);
+      await Promise.race([
+        syncManager.resetTerminalData(terminalId),
+        new Promise(resolve => setTimeout(resolve, 8000))
+      ]);
+    } catch (error) {
+      console.error('❌ Z-Report closure failed:', error);
+      alert('El cierre terminó con incidencias de sincronización. Se volverá al POS y el reporte quedará en cola para sincronizar.');
+    } finally {
+      setCurrentView('POS');
+      backgroundSyncManager.triggerSync().catch(console.error);
     }
-
-    const newZReport: ZReport = {
-      id: zReportId,
-      terminalId,
-      sequenceNumber,
-      openedAt: terminalTransactions.length > 0 ? terminalTransactions[0].date : new Date().toISOString(),
-      closedAt: new Date().toISOString(),
-      closedByUserId: currentUser?.id || 'sys',
-      closedByUserName: currentUser?.name || 'System',
-      baseCurrency: config.currencySymbol,
-      totalsByMethod,
-      cashExpected: reportData?.expectedCashByCurrency || {},
-      cashCounted: reportData?.cashCountedByCurrency || {},
-      cashDiscrepancy: reportData?.cashDiscrepancyByCurrency || {},
-      cashSales: reportData?.cashSalesTotal || 0,
-      cashIn: reportData?.cashIn || 0,
-      cashOut: reportData?.cashOut || 0,
-      transactionCount,
-      notes,
-      stats,
-      syncStatus: 'PENDING' as const
-    };
-
-    console.log("💾 Saving Z-Report:", newZReport);
-    await db.saveDocument('zReports', newZReport);
-    await syncManager.pushZReport(newZReport);
-
-    // 5. Build lookup set for IDs that were actually closed to prevent data loss
-    const closedTxnIds = new Set(terminalTransactions.map(t => t.id));
-    const closedMoveIds = new Set(terminalCashMovements.map(m => m.id));
-
-    // 6. Archive locally
-    console.log(`🗄️ Archiving ${terminalTransactions.length} transactions to history...`);
-    for (const tx of terminalTransactions) {
-      // NEW: Save sequence number for easy display
-      await db.saveDocument('transactionHistory', {
-        ...tx,
-        zReportId: newZReport.id,
-        zReportSequence: newZReport.sequenceNumber
-      });
-      // NEW: Explicitly delete from active table to avoid orphans
-      await db.deleteDocument('transactions', tx.id);
-    }
-
-    // 7. Update states by removing ONLY what was closed
-    const remainingTransactions = transactions.filter(t => !closedTxnIds.has(t.id));
-    const remainingCashMovements = cashMovements.filter(m => !closedMoveIds.has(m.id));
-
-    setTransactions(remainingTransactions);
-    setCashMovements(remainingCashMovements);
-
-    // Note: We don't strictly need db.save('transactions', ...) anymore because we deleted them one by one, 
-    // but we keep it for other non-terminal-specific items if they existed (unlikely here).
-    // Actually, save() as "Replace" is now robust via NetworkAdapter fix.
-    await db.save('transactions', remainingTransactions);
-    await db.save('cashMovements', remainingCashMovements);
-
-    // 8. Global Reset
-    console.log(`⚙️ Sending Global Reset for Terminal ${terminalId} to Master...`);
-    await syncManager.resetTerminalData(terminalId);
-
-    setCurrentView('POS');
-    backgroundSyncManager.triggerSync().catch(console.error);
   };
 
   // --- VIEW RENDERING LOGIC ---
@@ -2123,67 +2141,10 @@ const AppContent: React.FC = () => {
             products={products}
             warehouseId={viewData?.warehouseId}
             warehouseName={viewData?.warehouseName}
-            isOnline={inventoryCountSync.isOnline}
-            isSyncing={inventoryCountSync.isSyncing}
-            pendingSyncCount={inventoryCountSync.pendingCount}
-            syncToast={inventoryCountSync.syncToast}
-            onClearSyncToast={inventoryCountSync.clearSyncToast}
-            onSyncNow={() => inventoryCountSync.processQueue().catch(console.error)}
-            conflicts={inventoryCountSync.conflicts}
-            onResolveConflict={(conflictId, action) => inventoryCountSync.resolveConflict(conflictId, action).catch(console.error)}
-            scanSessionId={viewData?.countSessionId}
-            onScanEvent={(params) => inventoryCountSync.recordOfflineScan(params)}
-            onSave={async (counts) => {
-              const now = new Date().toISOString();
-              const sessionId = viewData?.countSessionId || `COUNT-${Date.now()}`;
-              const warehouseId = viewData?.warehouseId || '';
-              const warehouseProducts = products.filter(p => {
-                if (!warehouseId) return true;
-                if (p.activeInWarehouses && !p.activeInWarehouses.includes(warehouseId)) return false;
-                return true;
-              });
-              const session: InventoryCountSession & { updatedAt?: string; syncStatus?: string } = {
-                id: sessionId,
-                warehouseId,
-                warehouseName: viewData?.warehouseName,
-                createdAt: now,
-                finalizedAt: now,
-                status: 'FINALIZED',
-                createdBy: currentUser?.id,
-                createdByName: currentUser?.name,
-                systemSnapshot: warehouseProducts.map(p => ({
-                  productId: p.id,
-                  productName: p.name,
-                  category: p.category,
-                  systemQty: warehouseId ? (p.stockBalances?.[warehouseId] ?? 0) : (p.stock ?? 0),
-                  avgCost: p.cost || 0
-                })),
-                items: counts.map((c: any) => ({
-                  productId: c.productId,
-                  productName: c.productName,
-                  category: (products.find(p => p.id === c.productId)?.category) || undefined,
-                  systemQty: c.expectedQty,
-                  countedQty: c.countedQty,
-                  difference: c.difference
-                })),
-                updatedAt: now,
-                syncStatus: 'PENDING'
-              };
-
-              try {
-                const result = await inventoryCountSync.saveSession(session as any, {
-                  warehouseName: viewData?.warehouseName
-                });
-                handleViewChange('INVENTORY_HOME');
-                return {
-                  message: result?.message || `Conteo guardado: ${counts.length} productos`
-                };
-              } catch (err) {
-                console.error('Error saving inventory count session:', err);
-                return { message: 'Error guardando el conteo.' };
-              }
-            }}
             onCancel={() => handleViewChange('INVENTORY_HOME')}
+            terminalId={getCurrentTerminal()?.id || 'T1'}
+            userId={currentUser?.id || 'sys'}
+            userName={currentUser?.name || 'System'}
           />
         );
 

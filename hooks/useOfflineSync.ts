@@ -3,7 +3,7 @@ import { db } from '../utils/db';
 import { apiSyncAdapter } from '../services/sync/ApiSyncAdapter';
 import { PurchaseOrder, StockTransfer } from '../types';
 
-export type OfflineReceiptDocumentType = 'PURCHASE_ORDER' | 'TRANSFER_IN';
+export type OfflineReceiptDocumentType = 'PURCHASE_ORDER' | 'TRANSFER_IN' | 'INVENTORY_COUNT';
 
 type OfflineReceiptItem = {
   productId: string;
@@ -24,6 +24,30 @@ export interface OfflineReceiptPayload {
   terminalId?: string;
   discrepancyReason?: string;
   items: OfflineReceiptItem[];
+  // For INVENTORY_COUNT
+  sessionId?: string;
+  status?: string;
+}
+
+export type OfflineCountItem = {
+  productId: string;
+  productName: string;
+  expectedQty: number;
+  countedQty: number;
+  difference: number;
+  warehouseId?: string;
+};
+
+export interface OfflineCountPayload {
+  id: string; // Session ID
+  warehouseId: string;
+  warehouseName?: string;
+  items: OfflineCountItem[];
+  startedAt: string;
+  finishedAt: string;
+  terminalId: string;
+  userId: string;
+  userName: string;
 }
 
 interface QueueMetadata {
@@ -62,6 +86,8 @@ interface UseOfflineSyncOptions {
 const queueCollection = 'offline_reception_queue';
 const conflictCollection = 'offline_reception_conflicts';
 const scansCollection = 'offline_receptions';
+const countQueueCollection = 'offline_count_queue';
+const countConflictCollection = 'offline_count_conflicts';
 
 const sortByCreatedAt = <T extends { createdAt?: string }>(items: T[]): T[] => (
   [...items].sort((a, b) => {
@@ -95,15 +121,21 @@ export const useOfflineSync = ({ onAfterLocalProcess }: UseOfflineSyncOptions = 
     const queue = (await db.get(queueCollection as any)) as OfflineReceptionQueueItem[] || [];
     const conflictItems = (await db.get(conflictCollection as any)) as OfflineReceptionConflict[] || [];
 
-    const pending = queue.filter(item => item.status === 'PENDING' || item.status === 'ERROR' || item.status === 'SYNCING');
-    setPendingCount(pending.length);
+    // Include counts in global pending count
+    const countQueue = (await db.get(countQueueCollection as any)) as any[] || [];
+    const countConflicts = (await db.get(countConflictCollection as any)) as any[] || [];
 
-    const sortedConflicts = [...conflictItems].sort((a, b) => {
+    const pending = queue.filter(item => item.status === 'PENDING' || item.status === 'ERROR' || item.status === 'SYNCING');
+    const pendingCounts = countQueue.filter(item => item.status === 'PENDING' || item.status === 'ERROR' || item.status === 'SYNCING');
+
+    setPendingCount(pending.length + pendingCounts.length);
+
+    const allConflicts = [...conflictItems, ...countConflicts].sort((a, b) => {
       const timeA = new Date(a.createdAt || 0).getTime();
       const timeB = new Date(b.createdAt || 0).getTime();
       return timeB - timeA;
     });
-    setConflicts(sortedConflicts);
+    setConflicts(allConflicts as any);
   }, []);
 
   const clearScanLogsForDocument = useCallback(async (documentId: string) => {
@@ -113,6 +145,12 @@ export const useOfflineSync = ({ onAfterLocalProcess }: UseOfflineSyncOptions = 
   }, []);
 
   const detectDocumentConflict = useCallback(async (item: OfflineReceptionQueueItem): Promise<string | null> => {
+    if (item.documentType === 'INVENTORY_COUNT') {
+      // For counts, we check if an audit/closure was already performed for this warehouse after our count started
+      // This is a soft check, Master usually handles final logic.
+      return null;
+    }
+
     if (item.documentType === 'PURCHASE_ORDER') {
       const order = await db.getDocument('purchaseOrders', item.documentId) as PurchaseOrder | null;
       if (!order) return 'La Orden de Compra ya no existe en el servidor/local.';
@@ -160,6 +198,11 @@ export const useOfflineSync = ({ onAfterLocalProcess }: UseOfflineSyncOptions = 
   const pushAppliedPackage = useCallback(async (item: OfflineReceptionQueueItem) => {
     if (!navigator.onLine) {
       throw new Error('Cannot push while offline');
+    }
+
+    if (item.documentType === 'INVENTORY_COUNT') {
+      await apiSyncAdapter.pushInventoryCount(item.payload as any);
+      return;
     }
 
     if (item.documentType === 'PURCHASE_ORDER') {
@@ -284,6 +327,29 @@ export const useOfflineSync = ({ onAfterLocalProcess }: UseOfflineSyncOptions = 
     await refreshState();
   }, [refreshState]);
 
+  const enqueueOfflineCount = useCallback(async (
+    payload: OfflineCountPayload
+  ) => {
+    const queueItem: OfflineReceptionQueueItem = {
+      id: `OFFC-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: 'PENDING',
+      attempts: 0,
+      localApplied: false,
+      documentType: 'INVENTORY_COUNT',
+      documentId: payload.id,
+      documentCode: payload.id,
+      originName: payload.warehouseName || 'Almacén',
+      payload: payload as any
+    };
+
+    // We store counts in the same collection for unified processing if possible, 
+    // or separate if distinct logic is needed. Let's stick to same logic for simplicity.
+    await db.saveDocument(queueCollection as any, queueItem as any);
+    await refreshState();
+  }, [refreshState]);
+
   const recordOfflineScan = useCallback(async (params: {
     documentId: string;
     documentCode: string;
@@ -365,6 +431,7 @@ export const useOfflineSync = ({ onAfterLocalProcess }: UseOfflineSyncOptions = 
     conflicts,
     syncToast,
     enqueueOfflineReceipt,
+    enqueueOfflineCount,
     recordOfflineScan,
     processPendingQueue,
     resolveConflict,

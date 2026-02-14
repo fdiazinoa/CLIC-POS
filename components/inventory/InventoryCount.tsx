@@ -9,6 +9,7 @@ import React, { useEffect, useState } from 'react';
 import { ScanBarcode, Plus, Minus, Save, X, Camera, Cloud, Wifi, WifiOff } from 'lucide-react';
 import { Product } from '../../types';
 import BarcodeScannerModal from '../BarcodeScannerModal';
+import { useOfflineSync } from '../../hooks/useOfflineSync';
 
 interface CountedItem {
     productId: string;
@@ -22,18 +23,11 @@ interface InventoryCountProps {
     products: Product[];
     warehouseId?: string;
     warehouseName?: string;
-    onSave: (counts: CountedItem[]) => Promise<{ message?: string } | void>;
+    onSave?: (counts: CountedItem[]) => Promise<{ message?: string } | void>;
     onCancel: () => void;
-    isOnline?: boolean;
-    isSyncing?: boolean;
-    pendingSyncCount?: number;
-    syncToast?: string | null;
-    onClearSyncToast?: () => void;
-    onSyncNow?: () => void;
-    conflicts?: Array<{ id: string; reason: string; queueItem?: { payload?: { id?: string } } }>;
-    onResolveConflict?: (conflictId: string, action: 'OVERWRITE' | 'CANCEL') => void | Promise<void>;
-    scanSessionId?: string;
-    onScanEvent?: (params: { sessionId: string; warehouseId?: string; productId?: string; code: string }) => void | Promise<void>;
+    terminalId: string;
+    userId: string;
+    userName: string;
 }
 
 const InventoryCount: React.FC<InventoryCountProps> = ({
@@ -42,22 +36,30 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
     warehouseName,
     onSave,
     onCancel,
-    isOnline = true,
-    isSyncing = false,
-    pendingSyncCount = 0,
-    syncToast,
-    onClearSyncToast,
-    onSyncNow,
-    conflicts = [],
-    onResolveConflict,
-    scanSessionId,
-    onScanEvent
+    terminalId,
+    userId,
+    userName
 }) => {
+    const {
+        isOnline,
+        isSyncing,
+        pendingCount,
+        conflicts,
+        syncToast,
+        enqueueOfflineCount,
+        recordOfflineScan,
+        processPendingQueue,
+        resolveConflict,
+        clearSyncToast
+    } = useOfflineSync();
+
     const [counts, setCounts] = useState<CountedItem[]>([]);
     const [scanInput, setScanInput] = useState('');
     const [selectedItem, setSelectedItem] = useState<string | null>(null);
     const [showCameraScanner, setShowCameraScanner] = useState(false);
     const [syncTab, setSyncTab] = useState<'PENDING' | 'CONFLICTS'>('PENDING');
+    const [startedAt] = useState(() => new Date().toISOString());
+    const [sessionId] = useState(() => `CNT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
 
     // Get expected qty for a product in the selected warehouse
     const getExpectedQty = (product: Product) => {
@@ -95,14 +97,17 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                 }]);
             }
 
-            if (scanSessionId && onScanEvent) {
-                await Promise.resolve(onScanEvent({
-                    sessionId: scanSessionId,
-                    warehouseId,
-                    productId: product.id,
-                    code: scanInput.trim()
-                }));
+            if (onSave) {
+                // Legacy support if needed, but we prefer hook
             }
+
+            await recordOfflineScan({
+                documentId: sessionId,
+                documentCode: sessionId,
+                warehouseId,
+                productId: product.id,
+                code: scanInput.trim()
+            } as any);
 
             // Clear input
             setScanInput('');
@@ -113,10 +118,10 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
     };
 
     useEffect(() => {
-        if (!syncToast || !onClearSyncToast) return;
-        const timer = window.setTimeout(() => onClearSyncToast(), 4500);
+        if (!syncToast || !clearSyncToast) return;
+        const timer = window.setTimeout(() => clearSyncToast(), 4500);
         return () => window.clearTimeout(timer);
-    }, [onClearSyncToast, syncToast]);
+    }, [clearSyncToast, syncToast]);
 
     // Handle camera scan
     const handleCameraScan = async (code: string): Promise<{ success: boolean; message?: string }> => {
@@ -146,14 +151,13 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                 }]);
             }
 
-            if (scanSessionId && onScanEvent) {
-                await Promise.resolve(onScanEvent({
-                    sessionId: scanSessionId,
-                    warehouseId,
-                    productId: product.id,
-                    code: code.trim()
-                }));
-            }
+            await recordOfflineScan({
+                documentId: sessionId,
+                documentCode: sessionId,
+                warehouseId,
+                productId: product.id,
+                code: code.trim()
+            } as any);
 
             return { success: true, message: `${product.name} agregado` };
         } else {
@@ -187,14 +191,22 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
         }
 
         if (confirm(`¿Guardar conteo de ${counts.length} productos para ${warehouseName || 'el almacén seleccionado'}?`)) {
-            // Tag with warehouseId if provided
-            const finalCounts = warehouseId
-                ? counts.map(c => ({ ...c, warehouseId }))
-                : counts;
-            const result = await onSave(finalCounts as any);
-            if (result && typeof result === 'object' && 'message' in result && result.message) {
-                alert(result.message);
-            }
+            const payload = {
+                id: sessionId,
+                warehouseId: warehouseId || '',
+                warehouseName: warehouseName || '',
+                items: counts.map(c => ({ ...c, warehouseId })),
+                startedAt,
+                finishedAt: new Date().toISOString(),
+                terminalId,
+                userId,
+                userName
+            };
+
+            await enqueueOfflineCount(payload);
+            setCounts([]); // Clear local session
+            alert('Conteo guardado en cola de sincronización.');
+            onCancel(); // Return to home
         }
     };
 
@@ -240,12 +252,12 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                         )}
                     </div>
                     <button
-                        onClick={onSyncNow}
-                        disabled={!isOnline || pendingSyncCount === 0 || isSyncing}
+                        onClick={processPendingQueue}
+                        disabled={!isOnline || pendingCount === 0 || isSyncing}
                         className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white/20 text-[11px] font-black disabled:opacity-40"
                     >
                         <Cloud size={13} />
-                        Cola: {pendingSyncCount}
+                        Cola: {pendingCount}
                     </button>
                 </div>
 
@@ -306,7 +318,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                         onClick={() => setSyncTab('PENDING')}
                         className={`rounded-lg py-1.5 text-[11px] font-black ${syncTab === 'PENDING' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500'}`}
                     >
-                        Pendientes ({pendingSyncCount})
+                        Pendientes ({pendingCount})
                     </button>
                     <button
                         onClick={() => setSyncTab('CONFLICTS')}
@@ -333,20 +345,20 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                                     <div key={conflict.id} className="bg-white rounded-2xl border-2 border-red-200 p-3">
                                         <p className="text-[10px] font-black uppercase text-red-500">Conflicto de sincronización</p>
                                         <p className="text-xs font-bold text-gray-500 mt-1">
-                                            Sesión: {conflict.queueItem?.payload?.id || 'N/A'}
+                                            Sesión: {conflict.queueItem?.payload?.sessionId || conflict.queueItem?.payload?.documentId || 'N/A'}
                                         </p>
                                         <p className="text-xs font-bold text-red-700 mt-2 bg-red-50 border border-red-200 rounded-lg p-2">
                                             {conflict.reason}
                                         </p>
                                         <div className="mt-2 grid grid-cols-2 gap-2">
                                             <button
-                                                onClick={() => onResolveConflict?.(conflict.id, 'OVERWRITE')}
+                                                onClick={() => resolveConflict?.(conflict.id, 'OVERWRITE')}
                                                 className="rounded-lg py-2 bg-blue-600 text-white text-xs font-black"
                                             >
                                                 Sobrescribir
                                             </button>
                                             <button
-                                                onClick={() => onResolveConflict?.(conflict.id, 'CANCEL')}
+                                                onClick={() => resolveConflict?.(conflict.id, 'CANCEL')}
                                                 className="rounded-lg py-2 bg-gray-100 text-gray-700 text-xs font-black"
                                             >
                                                 Cancelar

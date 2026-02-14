@@ -159,6 +159,20 @@ CREATE TABLE IF NOT EXISTS product_stocks (
     productId TEXT NOT NULL,
     warehouseId TEXT NOT NULL,
     quantity REAL DEFAULT 0,
+    qtyPhysical REAL DEFAULT 0,
+    qtyCommitted REAL DEFAULT 0,
+    qtyAvailable REAL DEFAULT 0,
+    updatedAt TEXT,
+    UNIQUE(productId, warehouseId),
+    FOREIGN KEY (productId) REFERENCES products(id),
+    FOREIGN KEY (warehouseId) REFERENCES warehouses(id)
+);
+
+CREATE TABLE IF NOT EXISTS inventory_commitments (
+    id TEXT PRIMARY KEY, -- productId + '_' + warehouseId
+    productId TEXT NOT NULL,
+    warehouseId TEXT NOT NULL,
+    qtyCommitted REAL DEFAULT 0,
     updatedAt TEXT,
     UNIQUE(productId, warehouseId),
     FOREIGN KEY (productId) REFERENCES products(id),
@@ -212,6 +226,10 @@ CREATE TABLE IF NOT EXISTS transactions (
     relatedTransactions TEXT, -- JSON array
     originalTransactionId TEXT,
     refundReason TEXT,
+    reservation_id TEXT,
+    reservation_code TEXT,
+    prior_advance_paid REAL DEFAULT 0,
+    balance_due_at_sale REAL DEFAULT 0,
     affectedInvoiceNumber TEXT,
     affectedNCF TEXT,
     syncStatus TEXT DEFAULT 'PENDING',
@@ -245,6 +263,10 @@ CREATE TABLE IF NOT EXISTS transaction_history (
     relatedTransactions TEXT, -- JSON array
     originalTransactionId TEXT,
     refundReason TEXT,
+    reservation_id TEXT,
+    reservation_code TEXT,
+    prior_advance_paid REAL DEFAULT 0,
+    balance_due_at_sale REAL DEFAULT 0,
     affectedInvoiceNumber TEXT,
     affectedNCF TEXT,
     syncStatus TEXT DEFAULT 'PENDING',
@@ -315,6 +337,30 @@ CREATE TABLE IF NOT EXISTS cash_movements (
 CREATE TABLE IF NOT EXISTS receptions (
     id TEXT PRIMARY KEY,
     data TEXT -- JSON object
+);
+
+CREATE TABLE IF NOT EXISTS reservations (
+    id TEXT PRIMARY KEY,
+    customer_id TEXT NOT NULL,
+    total REAL NOT NULL,
+    balance_paid REAL DEFAULT 0,
+    expiry_date TEXT NOT NULL,
+    status TEXT NOT NULL,
+    code TEXT UNIQUE,
+    qr_payload TEXT,
+    delivery_date TEXT,
+    warehouse_id TEXT,
+    items TEXT, -- JSON array
+    terminal_id TEXT,
+    created_by_id TEXT,
+    created_by_name TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    invoiced_at TEXT,
+    invoiced_transaction_id TEXT,
+    expired_at TEXT,
+    FOREIGN KEY (customer_id) REFERENCES customers(id),
+    FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)
 );
 
 -- 8. Inventory Audit & Close
@@ -391,6 +437,7 @@ CREATE TABLE IF NOT EXISTS currency_audit_logs (
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);
 CREATE INDEX IF NOT EXISTS idx_product_stocks_product ON product_stocks(productId);
+CREATE INDEX IF NOT EXISTS idx_inventory_commitments_product ON inventory_commitments(productId);
 CREATE INDEX IF NOT EXISTS idx_inventory_ledger_product ON inventory_ledger(productId);
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
 CREATE INDEX IF NOT EXISTS idx_transactions_sync ON transactions(syncStatus);
@@ -399,3 +446,5 @@ CREATE INDEX IF NOT EXISTS idx_cash_movements_zreport ON cash_movements(zReportI
 CREATE INDEX IF NOT EXISTS idx_currency_audit_currency ON currency_audit_logs(currencyCode);
 CREATE INDEX IF NOT EXISTS idx_currency_audit_date ON currency_audit_logs(changedAt);
 CREATE INDEX IF NOT EXISTS idx_sync_changes_collection_version ON sync_changes(collection, version);
+CREATE INDEX IF NOT EXISTS idx_reservations_customer ON reservations(customer_id);
+CREATE INDEX IF NOT EXISTS idx_reservations_status ON reservations(status);

@@ -1,75 +1,192 @@
 import { DatabaseAdapter } from '../DatabaseAdapter';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 12; // Incremented to add offline print queue store
+const DB_VERSION = 13; // Incremented to add reservations and inventory commitments
 const OLD_DB_KEY = 'clic_pos_db_v1';
+const OPEN_TIMEOUT_MS = 15000;
+
+const STORES = [
+    'config', 'users', 'roles', 'customers', 'warehouses',
+    'products', 'transactions', 'transactionHistory', 'cashMovements', 'transfers',
+    'parkedTickets', 'purchaseOrders', 'suppliers', 'inventoryLedger',
+    'internalSequences', 'fiscalRanges', 'fiscalAllocations',
+    'localFiscalBuffer', 'campaigns', 'coupons', 'zReports',
+    'receptions', 'productStocks', 'supplierProductPrices',
+    'inventoryTracking', 'rooms', 'tables', 'globalSequenceCounter',
+    'watchlists', 'syncMetadata', 'inventorySnapshots', 'inventoryAuditLogs', 'inventoryCounts',
+    'offline_receptions', 'offline_reception_queue', 'offline_reception_conflicts',
+    'offline_inventory_counts', 'offline_inventory_count_queue', 'offline_inventory_count_conflicts',
+    'offline_print_queue', 'reservations', 'inventoryCommitments'
+];
 
 export class IndexedDBAdapter implements DatabaseAdapter {
     private db: IDBDatabase | null = null;
+    private storageOnlyMode = false;
     public readonly adapterType = 'local';
 
     async connect(): Promise<void> {
+        if (this.db) return;
+
+        try {
+            this.db = await this.openDatabase(DB_VERSION, OPEN_TIMEOUT_MS);
+        } catch (error: any) {
+            const message = String(error?.message || error || '');
+            const canFallback = message.toLowerCase().includes('timeout') || message.toLowerCase().includes('blocked');
+
+            if (!canFallback) {
+                throw error;
+            }
+
+            console.warn('[IndexedDBAdapter] Upgrade open failed. Switching to localStorage-only mode.', error);
+            this.storageOnlyMode = true;
+            await this.migrateFromLocalStorage();
+            return;
+        }
+
+        this.storageOnlyMode = false;
+        console.log('[IndexedDBAdapter] Connected');
+        this.attachVersionChangeHandler();
+        await this.migrateFromLocalStorage();
+    }
+
+    private openDatabase(version?: number, timeoutMs = OPEN_TIMEOUT_MS): Promise<IDBDatabase> {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open(DB_NAME, DB_VERSION);
+            let settled = false;
+            const fail = (error: any) => {
+                if (settled) return;
+                settled = true;
+                reject(error);
+            };
+            const complete = (db: IDBDatabase) => {
+                if (settled) return;
+                settled = true;
+                resolve(db);
+            };
+
+            const request = typeof version === 'number'
+                ? indexedDB.open(DB_NAME, version)
+                : indexedDB.open(DB_NAME);
+
+            const watchdog = window.setTimeout(() => {
+                fail(new Error('IndexedDB open timeout. Possible blocked upgrade on another tab.'));
+            }, timeoutMs);
 
             request.onupgradeneeded = (event: any) => {
-                const db = event.target.result;
-                const oldVersion = event.oldVersion || 0;
-                console.log(`[IndexedDBAdapter] 🔼 Upgrading DB to version ${DB_VERSION}`);
+                const db = event.target.result as IDBDatabase;
+                const oldVersion = Number(event.oldVersion || 0);
+                this.ensureSchema(db, oldVersion);
+            };
 
-                // Legacy schema fixes must run only for old DB versions.
-                if (oldVersion < 7 && db.objectStoreNames.contains('transfers')) {
-                    db.deleteObjectStore('transfers');
-                }
-
-                if (oldVersion < 8 && db.objectStoreNames.contains('zReports')) {
-                    console.log('[IndexedDBAdapter] ♻️ Recreating zReports store to fix schema');
-                    db.deleteObjectStore('zReports');
-                }
-
-                // We'll create it fresh in the loop below or explicitly here
-                // Let's rely on the loop below to create it, but we MUST delete it first if it existed bad.
-
-                // We'll create stores dynamically as needed, 
-                // but we initialize common ones here for safety
-                const stores = [
-                    'config', 'users', 'roles', 'customers', 'warehouses',
-                    'products', 'transactions', 'transactionHistory', 'cashMovements', 'transfers',
-                    'parkedTickets', 'purchaseOrders', 'suppliers', 'inventoryLedger',
-                    'internalSequences', 'fiscalRanges', 'fiscalAllocations',
-                    'localFiscalBuffer', 'campaigns', 'coupons', 'zReports',
-                    'receptions', 'productStocks', 'supplierProductPrices',
-                    'inventoryTracking', 'rooms', 'tables', 'globalSequenceCounter',
-                    'watchlists', 'syncMetadata', 'inventorySnapshots', 'inventoryAuditLogs', 'inventoryCounts',
-                    'offline_receptions', 'offline_reception_queue', 'offline_reception_conflicts',
-                    'offline_inventory_counts', 'offline_inventory_count_queue', 'offline_inventory_count_conflicts',
-                    'offline_print_queue'
-                ];
-
-                stores.forEach(store => {
-                    if (!db.objectStoreNames.contains(store)) {
-                        db.createObjectStore(store, { keyPath: 'id' });
+            request.onsuccess = () => {
+                window.clearTimeout(watchdog);
+                if (settled) {
+                    try {
+                        request.result?.close();
+                    } catch {
+                        // no-op
                     }
-                });
-
-                // Special case for globalSequenceCounter which is a single value, 
-                // but we'll treat it as a collection for consistency with the interface
+                    return;
+                }
+                complete(request.result);
             };
 
-            request.onsuccess = async (event: any) => {
-                this.db = event.target.result;
-                console.log('[IndexedDBAdapter] Connected');
-
-                // Check if we need to migrate from LocalStorage
-                await this.migrateFromLocalStorage();
-                resolve();
+            request.onerror = () => {
+                window.clearTimeout(watchdog);
+                console.error('[IndexedDBAdapter] Connection error:', request.error);
+                fail(request.error || new Error('IndexedDB open error'));
             };
 
-            request.onerror = (event: any) => {
-                console.error('[IndexedDBAdapter] Connection error:', event.target.error);
-                reject(event.target.error);
+            request.onblocked = () => {
+                window.clearTimeout(watchdog);
+                fail(new Error('IndexedDB upgrade blocked by another open tab/session.'));
             };
         });
+    }
+
+    private ensureSchema(db: IDBDatabase, oldVersion: number) {
+        console.log(`[IndexedDBAdapter] 🔼 Upgrading DB to version ${DB_VERSION}`);
+
+        // Legacy schema fixes must run only for old DB versions.
+        if (oldVersion < 7 && db.objectStoreNames.contains('transfers')) {
+            db.deleteObjectStore('transfers');
+        }
+
+        if (oldVersion < 8 && db.objectStoreNames.contains('zReports')) {
+            console.log('[IndexedDBAdapter] ♻️ Recreating zReports store to fix schema');
+            db.deleteObjectStore('zReports');
+        }
+
+        STORES.forEach(store => {
+            if (!db.objectStoreNames.contains(store)) {
+                db.createObjectStore(store, { keyPath: 'id' });
+            }
+        });
+    }
+
+    private attachVersionChangeHandler() {
+        if (!this.db) return;
+        this.db.onversionchange = () => {
+            console.warn('[IndexedDBAdapter] Version change detected. Closing DB connection to unblock upgrade.');
+            this.db?.close();
+            this.db = null;
+        };
+    }
+
+    private hasStore(collectionName: string): boolean {
+        return !this.storageOnlyMode && !!this.db && this.db.objectStoreNames.contains(collectionName);
+    }
+
+    private fallbackKey(collectionName: string): string {
+        return `${DB_NAME}__fallback__${collectionName}`;
+    }
+
+    private readFallbackCollection(collectionName: string): any[] {
+        try {
+            const raw = localStorage.getItem(this.fallbackKey(collectionName));
+            if (!raw) return [];
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch {
+            return [];
+        }
+    }
+
+    private writeFallbackCollection(collectionName: string, docs: any[]): void {
+        localStorage.setItem(this.fallbackKey(collectionName), JSON.stringify(Array.isArray(docs) ? docs : []));
+    }
+
+    private toStoredDocuments(collectionName: string, data: any): any[] {
+        if (collectionName === 'config' && data && !Array.isArray(data)) {
+            return [{ ...data, id: (data as any).id || 'current' }];
+        }
+        if (collectionName === 'globalSequenceCounter' && typeof data === 'number') {
+            return [{ id: 'value', count: data }];
+        }
+        return Array.isArray(data) ? data : [];
+    }
+
+    private fromStoredDocuments(collectionName: string, docs: any[]): any {
+        if (collectionName === 'config') {
+            if (!docs.length) return {};
+            const current = docs.find((doc: any) => doc?.id === 'current');
+            return current || docs[0] || {};
+        }
+        if (collectionName === 'globalSequenceCounter') {
+            const row = docs.find((doc: any) => doc?.id === 'value');
+            return Number(row?.count || 0);
+        }
+        return docs;
+    }
+
+    private upsertFallbackDocument(collectionName: string, doc: any): void {
+        const docs = this.readFallbackCollection(collectionName);
+        const index = docs.findIndex(item => item?.id === doc?.id);
+        if (index >= 0) {
+            docs[index] = doc;
+        } else {
+            docs.push(doc);
+        }
+        this.writeFallbackCollection(collectionName, docs);
     }
 
     private async migrateFromLocalStorage() {
@@ -113,18 +230,17 @@ export class IndexedDBAdapter implements DatabaseAdapter {
             this.db.close();
             this.db = null;
         }
+        this.storageOnlyMode = false;
     }
 
-    async getCollection<T>(collectionName: string): Promise<T[]> {
-        if (!this.db) throw new Error('DB not connected');
+    async getCollection<T>(collectionName: string, _queryParams?: Record<string, string>): Promise<T[]> {
+        if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
 
         return new Promise((resolve, reject) => {
             try {
-                // Ensure store exists (handle dynamically)
-                if (!this.db!.objectStoreNames.contains(collectionName)) {
-                    // Can't create store outside of onupgradeneeded easily in vanilla IDB
-                    // For now, return empty array if store missing
-                    return resolve([]);
+                if (!this.hasStore(collectionName)) {
+                    const docs = this.readFallbackCollection(collectionName);
+                    return resolve(this.fromStoredDocuments(collectionName, docs));
                 }
 
                 const transaction = this.db!.transaction(collectionName, 'readonly');
@@ -132,34 +248,25 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                 const request = store.getAll();
 
                 request.onsuccess = () => {
-                    const data = request.result;
-                    if (collectionName === 'config' && data.length > 0) {
-                        // Return the config object if it's the 'current' document
-                        const current = data.find((d: any) => d.id === 'current');
-                        resolve(current || data[0]);
-                    }
-                    if (collectionName === 'globalSequenceCounter' && data.length > 0) {
-                        const val = data.find((d: any) => d.id === 'value');
-                        resolve(val ? val.count : 0);
-                    }
-                    resolve(data as T[]);
+                    const docs = Array.isArray(request.result) ? request.result : [];
+                    resolve(this.fromStoredDocuments(collectionName, docs));
                 };
                 request.onerror = () => reject(request.error);
             } catch (e) {
                 console.error(`Error getting collection ${collectionName}:`, e);
-                resolve([]); // Fallback
+                const docs = this.readFallbackCollection(collectionName);
+                resolve(this.fromStoredDocuments(collectionName, docs));
             }
         });
     }
 
     async saveCollection<T>(collectionName: string, data: T[]): Promise<void> {
-        if (!this.db) throw new Error('DB not connected');
+        if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
+        const docs = this.toStoredDocuments(collectionName, data);
 
-        // Note: For IDB, saveCollection (replace all) is expensive.
-        // We'll clear the store and put all.
         return new Promise((resolve, reject) => {
-            if (!this.db!.objectStoreNames.contains(collectionName)) {
-                console.warn(`Creating store ${collectionName} during saveCollection is not supported directly. Upgrade required.`);
+            if (!this.hasStore(collectionName)) {
+                this.writeFallbackCollection(collectionName, docs);
                 return resolve();
             }
 
@@ -167,14 +274,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
             const store = transaction.objectStore(collectionName);
 
             store.clear();
-
-            if (collectionName === 'config' && !Array.isArray(data)) {
-                store.put({ ...(data as any), id: 'current' });
-            } else if (collectionName === 'globalSequenceCounter' && typeof data === 'number') {
-                store.put({ id: 'value', count: data });
-            } else if (Array.isArray(data)) {
-                data.forEach(doc => store.put(doc));
-            }
+            docs.forEach(doc => store.put(doc));
 
             transaction.oncomplete = () => resolve();
             transaction.onerror = () => reject(transaction.error);
@@ -182,12 +282,11 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     }
 
     async saveDocument<T extends { id: string }>(collectionName: string, doc: T): Promise<void> {
-        if (!this.db) throw new Error('DB not connected');
+        if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
 
         return new Promise((resolve, reject) => {
-            if (!this.db!.objectStoreNames.contains(collectionName)) {
-                // Return silently or error? Let's log.
-                console.error(`Store ${collectionName} missing in IndexedDB`);
+            if (!this.hasStore(collectionName)) {
+                this.upsertFallbackDocument(collectionName, doc);
                 return resolve();
             }
 
@@ -201,10 +300,14 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     }
 
     async getDocument<T>(collectionName: string, id: string): Promise<T | null> {
-        if (!this.db) throw new Error('DB not connected');
+        if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
 
         return new Promise((resolve, reject) => {
-            if (!this.db!.objectStoreNames.contains(collectionName)) return resolve(null);
+            if (!this.hasStore(collectionName)) {
+                const docs = this.readFallbackCollection(collectionName);
+                const match = docs.find((doc: any) => doc?.id === id) || null;
+                return resolve(match);
+            }
 
             const transaction = this.db!.transaction(collectionName, 'readonly');
             const store = transaction.objectStore(collectionName);
@@ -216,10 +319,14 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     }
 
     async deleteDocument(collectionName: string, id: string): Promise<void> {
-        if (!this.db) throw new Error('DB not connected');
+        if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
 
         return new Promise((resolve, reject) => {
-            if (!this.db!.objectStoreNames.contains(collectionName)) return resolve();
+            if (!this.hasStore(collectionName)) {
+                const docs = this.readFallbackCollection(collectionName).filter((doc: any) => doc?.id !== id);
+                this.writeFallbackCollection(collectionName, docs);
+                return resolve();
+            }
 
             const transaction = this.db!.transaction(collectionName, 'readwrite');
             const store = transaction.objectStore(collectionName);
@@ -231,6 +338,6 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     }
 
     async checkHealth(): Promise<boolean> {
-        return !!this.db;
+        return this.storageOnlyMode || !!this.db;
     }
 }

@@ -18,7 +18,7 @@ interface ZReportDashboardProps {
    currentUser: User | null;
    roles: RoleDefinition[];
    onClose: () => void;
-   onConfirmClose: (cashCounted: number, notes: string, reportData?: any) => void;
+   onConfirmClose: (cashCounted: number, notes: string, reportData?: any) => Promise<void> | void;
    terminalId?: string;
 }
 
@@ -113,128 +113,154 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
 
       // Workflow Simulation
       const sequence = async () => {
-         // Step 0: Generando
-         setCurrentStep(0);
-         await new Promise(r => setTimeout(r, 1500));
+         try {
+            // Step 0: Generando
+            setCurrentStep(0);
+            await new Promise(r => setTimeout(r, 1500));
 
-         // Step 1: Impresión
-         setCurrentStep(1);
-         if (activeTerminalConfig?.workflow?.session?.autoPrintZReport) {
-            // Construct temporary report object for printing
-            const tempReport: any = {
-               sequenceNumber: 'PRE-CLOSE', // Will be updated on save, but good for preview
-               closedAt: new Date().toISOString(),
-               closedByUserName: userName,
-               terminalId: activeTerminal?.id || 'POS-01',
-               baseCurrency: baseCurrencyCode,
-               totalsByMethod: {}, // Calculated below
-               cashExpected: expectedCashByCurrency,
-               cashCounted: cashCountedByCurrency,
-               cashDiscrepancy: cashDiscrepancyByCurrency,
-               transactionCount: filteredTransactions.length,
-               stats: calculateZReportStats(filteredTransactions)
-            };
+            // Step 1: Impresión
+            setCurrentStep(1);
+            if (activeTerminalConfig?.workflow?.session?.autoPrintZReport) {
+               // Construct temporary report object for printing
+               const tempReport: any = {
+                  sequenceNumber: 'PRE-CLOSE', // Will be updated on save, but good for preview
+                  closedAt: new Date().toISOString(),
+                  closedByUserName: userName,
+                  terminalId: activeTerminal?.id || 'POS-01',
+                  baseCurrency: baseCurrencyCode,
+                  totalsByMethod: {}, // Calculated below
+                  cashExpected: expectedCashByCurrency,
+                  cashCounted: cashCountedByCurrency,
+                  cashDiscrepancy: cashDiscrepancyByCurrency,
+                  transactionCount: filteredTransactions.length,
+                  stats: calculateZReportStats(filteredTransactions)
+               };
 
-            // Calculate totals by method
-            const totalsByMethod: Record<string, number> = {};
+               // Calculate totals by method
+               const totalsByMethod: Record<string, number> = {};
+               filteredTransactions.forEach(t => {
+                  (t?.payments || []).forEach(p => {
+                     if (p && p.method) {
+                        totalsByMethod[p.method] = (totalsByMethod[p.method] || 0) + p.amount;
+                     }
+                  });
+               });
+               tempReport.totalsByMethod = totalsByMethod;
+
+               // Convert cash counted strings to numbers
+               const cashCountedNums: Record<string, number> = {};
+               Object.entries(cashCountedByCurrency).forEach(([k, v]) => cashCountedNums[k] = parseFloat(v) || 0);
+               tempReport.cashCounted = cashCountedNums;
+
+               // Get hidden modules from current user role
+               const userRole = roles.find(r => r.id === currentUser?.role);
+               const hiddenModules = userRole?.zReportConfig?.hiddenModules || [];
+
+               try {
+                  await Promise.race([
+                     ThermalPrinterService.printZReport(tempReport, hiddenModules, config),
+                     new Promise((_, reject) => setTimeout(() => reject(new Error('PRINT_TIMEOUT')), 12000))
+                  ]);
+               } catch (printError) {
+                  console.warn('⚠️ Z-Report print step failed or timed out, continuing closure:', printError);
+               }
+            }
+            await new Promise(r => setTimeout(r, 1000));
+
+            // Convert cashCountedByCurrency to numbers
+            const cashCountedData: Record<string, number> = {};
+            Object.entries(cashCountedByCurrency).forEach(([curr, val]) => {
+               cashCountedData[curr] = parseFloat(val) || 0;
+            });
+
+            // Calculate final stats and totals once to ensure consistency
+            const finalTotalsByMethod: Record<string, number> = {};
             filteredTransactions.forEach(t => {
                (t?.payments || []).forEach(p => {
                   if (p && p.method) {
-                     totalsByMethod[p.method] = (totalsByMethod[p.method] || 0) + p.amount;
+                     finalTotalsByMethod[p.method] = (finalTotalsByMethod[p.method] || 0) + p.amount;
                   }
                });
             });
-            tempReport.totalsByMethod = totalsByMethod;
+            const finalStats = calculateZReportStats(filteredTransactions);
+            const finalTxCount = filteredTransactions.length;
 
-            // Convert cash counted strings to numbers
-            const cashCountedNums: Record<string, number> = {};
-            Object.entries(cashCountedByCurrency).forEach(([k, v]) => cashCountedNums[k] = parseFloat(v) || 0);
-            tempReport.cashCounted = cashCountedNums;
+            // Step 2: Emails
+            setCurrentStep(2);
+            // Use terminal specific email or fallback to global default
+            const emails = activeTerminalConfig?.workflow?.session?.zReportEmails || config.emailConfig?.defaultRecipient;
+            if (emails) {
+               // Construct report data for email
+               const emailReportData: any = {
+                  sequenceNumber: 'PRE-CLOSE', // Will be updated on save
+                  closedAt: new Date().toISOString(),
+                  closedByUserName: userName,
+                  terminalId: activeTerminal?.id || 'POS-01',
+                  baseCurrency: baseCurrencyCode,
+                  totalsByMethod: finalTotalsByMethod,
+                  cashExpected: expectedCashByCurrency,
+                  cashCounted: cashCountedData,
+                  cashDiscrepancy: cashDiscrepancyByCurrency,
+                  transactionCount: finalTxCount,
+                  stats: finalStats,
+                  companyName: config.companyInfo.name,
+                  notes: notes
+               };
 
-            // Get hidden modules from current user role
-            const userRole = roles.find(r => r.id === currentUser?.role);
-            const hiddenModules = userRole?.zReportConfig?.hiddenModules || [];
-
-            await ThermalPrinterService.printZReport(tempReport, hiddenModules, config);
-         }
-         await new Promise(r => setTimeout(r, 1000));
-
-
-
-         // Convert cashCountedByCurrency to numbers
-         const cashCountedData: Record<string, number> = {};
-         Object.entries(cashCountedByCurrency).forEach(([curr, val]) => {
-            cashCountedData[curr] = parseFloat(val) || 0;
-         });
-
-         // Calculate final stats and totals once to ensure consistency
-         const finalTotalsByMethod: Record<string, number> = {};
-         filteredTransactions.forEach(t => {
-            (t?.payments || []).forEach(p => {
-               if (p && p.method) {
-                  finalTotalsByMethod[p.method] = (finalTotalsByMethod[p.method] || 0) + p.amount;
+               try {
+                  const controller = new AbortController();
+                  const timeoutId = setTimeout(() => controller.abort(), 8000);
+                  await fetch('/smtp/z-report', {
+                     method: 'POST',
+                     headers: { 'Content-Type': 'application/json' },
+                     body: JSON.stringify({
+                        to: emails,
+                        reportData: emailReportData
+                     }),
+                     signal: controller.signal
+                  });
+                  clearTimeout(timeoutId);
+                  console.log(`[EMAIL] Reporte Z enviado a: ${emails}`);
+               } catch (error) {
+                  console.error("Error enviando email:", error);
                }
-            });
-         });
-         const finalStats = calculateZReportStats(filteredTransactions);
-         const finalTxCount = filteredTransactions.length;
+            }
+            await new Promise(r => setTimeout(r, 1000));
 
-         // Step 2: Emails
-         setCurrentStep(2);
-         // Use terminal specific email or fallback to global default
-         const emails = activeTerminalConfig?.workflow?.session?.zReportEmails || config.emailConfig?.defaultRecipient;
-         if (emails) {
-            // Construct report data for email
-            const emailReportData: any = {
-               sequenceNumber: 'PRE-CLOSE', // Will be updated on save
-               closedAt: new Date().toISOString(),
-               closedByUserName: userName,
-               terminalId: activeTerminal?.id || 'POS-01',
-               baseCurrency: baseCurrencyCode,
+            // Step 3: Finalizar
+            setCurrentStep(3);
+            await new Promise(r => setTimeout(r, 1000));
+
+            // Pass base currency cash counted for backwards compatibility, plus full report data
+            const reportData = {
+               cashCountedByCurrency: cashCountedData,
+               expectedCashByCurrency,
+               cashDiscrepancyByCurrency,
+               cashSalesTotal,
+               cashIn,
+               cashOut,
+               expectedCash: expectedCashInDrawer,
                totalsByMethod: finalTotalsByMethod,
-               cashExpected: expectedCashByCurrency,
-               cashCounted: cashCountedData,
-               cashDiscrepancy: cashDiscrepancyByCurrency,
-               transactionCount: finalTxCount,
                stats: finalStats,
-               companyName: config.companyInfo.name,
-               notes: notes
+               transactionCount: finalTxCount
             };
 
-            try {
-               await fetch('/smtp/z-report', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                     to: emails,
-                     reportData: emailReportData
-                  })
+            Promise.resolve(onConfirmClose(parseFloat(cashCountedByCurrency[baseCurrencyCode]) || 0, notes, reportData))
+               .catch((closeError) => {
+                  // Non-blocking by design: App.tsx also handles/report errors.
+                  console.error('❌ onConfirmClose background error:', closeError);
                });
-               console.log(`[EMAIL] Reporte Z enviado a: ${emails}`);
-            } catch (error) {
-               console.error("Error enviando email:", error);
-            }
+
+            setIsProcessing(false);
+            onClose();
+         } catch (error) {
+            console.error('❌ Z-Report closing workflow failed:', error);
+            setIsProcessing(false);
+            onClose();
+            setTimeout(() => {
+               alert('El cierre tardó más de lo esperado. Se regresó al POS y el proceso seguirá en segundo plano.');
+            }, 50);
          }
-         await new Promise(r => setTimeout(r, 1000));
-
-         // Step 3: Finalizar
-         setCurrentStep(3);
-         await new Promise(r => setTimeout(r, 1000));
-
-         // Pass base currency cash counted for backwards compatibility, plus full report data
-         const reportData = {
-            cashCountedByCurrency: cashCountedData,
-            expectedCashByCurrency,
-            cashDiscrepancyByCurrency,
-            cashSalesTotal,
-            cashIn,
-            cashOut,
-            expectedCash: expectedCashInDrawer,
-            totalsByMethod: finalTotalsByMethod,
-            stats: finalStats,
-            transactionCount: finalTxCount
-         };
-         onConfirmClose(parseFloat(cashCountedByCurrency[baseCurrencyCode]) || 0, notes, reportData);
       };
 
       sequence();
@@ -302,10 +328,6 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    // Calculate Stats for Preview
    const stats = calculateZReportStats(filteredTransactions);
 
-
-   if (showHistory) {
-      return <ZReportHistory config={config} onClose={() => setShowHistory(false)} />;
-   }
 
    if (showHistory) {
       return <ZReportHistory config={config} onClose={() => setShowHistory(false)} />;

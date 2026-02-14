@@ -66,7 +66,15 @@ const hasMethod = (bridge: NativePrinterBridge, methodNames: string[]): boolean 
 const runBridgeMethod = async (bridge: NativePrinterBridge, methodNames: string[], payload?: any): Promise<any> => {
   for (const method of methodNames) {
     if (typeof bridge?.[method] !== 'function') continue;
-    return bridge[method](payload);
+    try {
+      console.log(`🔌 NativePrintBridge: Calling ${method} ...`);
+      const result = await bridge[method](payload);
+      console.log(`🔌 NativePrintBridge: ${method} returned`, result);
+      return result;
+    } catch (e) {
+      console.error(`🔌 NativePrintBridge: Error in ${method}:`, e);
+      throw e;
+    }
   }
   return null;
 };
@@ -278,6 +286,25 @@ export const nativePrintBridge = {
       return 'UNKNOWN';
     } catch (error) {
       console.warn('Native host profile detection failed:', error);
+      return 'UNKNOWN';
+    }
+  },
+
+  async checkPrinterStatus(printerId: string): Promise<'ONLINE' | 'OFFLINE' | 'UNKNOWN'> {
+    const resolved = resolveBridge();
+    if (!resolved) return 'UNKNOWN';
+
+    try {
+      const result = await runBridgeMethod(resolved.bridge, ['getPrinterStatus', 'checkStatus'], { printerId });
+      if (!result) return 'UNKNOWN';
+
+      const status = String(result.status || result).toUpperCase();
+      if (status.includes('ONLINE') || status.includes('READY') || status.includes('CONNECTED')) return 'ONLINE';
+      if (status.includes('OFFLINE') || status.includes('ERROR') || status.includes('DISCONNECTED')) return 'OFFLINE';
+
+      return 'UNKNOWN';
+    } catch (error) {
+      console.warn('Native printer status check failed:', error);
       return 'UNKNOWN';
     }
   }

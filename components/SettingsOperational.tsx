@@ -3,7 +3,7 @@ import React from 'react';
 import {
     Building2, LayoutGrid, ShieldCheck,
     Monitor, Utensils, ShoppingBag,
-    Lock, Users, Info, Sparkles
+    Lock, Users, Info, Sparkles, CalendarDays, Percent
 } from 'lucide-react';
 
 interface SettingsOperationalProps {
@@ -39,11 +39,30 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
         usa_mesas: false,
         pantalla_inicio: 'VENTA_DIRECTA',
         bloqueo_meseros: false,
-        pedir_comensales: true
+        pedir_comensales: true,
+        reservationPolicy: {
+            validityDays: 7,
+            requireAdvance: false,
+            minimumAdvancePercent: 20
+        }
+    };
+
+    const reservationPolicy = operational.reservationPolicy || {
+        validityDays: 7,
+        requireAdvance: false,
+        minimumAdvancePercent: 20
     };
 
     const handleToggle = (key: string, val: boolean) => {
         onUpdate('operational', key, val);
+    };
+
+    const handleReservationPolicyChange = (key: 'validityDays' | 'requireAdvance' | 'minimumAdvancePercent', value: number | boolean) => {
+        const nextPolicy = {
+            ...reservationPolicy,
+            [key]: value
+        };
+        onUpdate('operational', 'reservationPolicy', nextPolicy);
     };
 
     return (
@@ -227,6 +246,68 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                         <p className="text-[11px] text-amber-700 leading-relaxed font-medium">
                             El bloqueo de meseros requiere un PIN de Supervisor en caso de que otro empleado necesite acceder a la mesa para cobro o asistencia.
                         </p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Section: Reservation Policies */}
+            <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6">
+                <div className="flex items-center gap-3 mb-2">
+                    <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center">
+                        <CalendarDays size={20} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-black text-gray-800">Políticas de Reserva</h3>
+                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest">Pre-Facturación y Hold</p>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="p-5 rounded-2xl border border-gray-100 bg-slate-50">
+                        <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-3">
+                            Días de Vigencia
+                        </label>
+                        <input
+                            type="number"
+                            min={1}
+                            max={90}
+                            disabled={isReadOnly}
+                            value={reservationPolicy.validityDays}
+                            onChange={(e) => handleReservationPolicyChange('validityDays', Math.max(1, parseInt(e.target.value, 10) || 7))}
+                            className="w-full p-3 rounded-xl border border-slate-200 bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-100"
+                        />
+                        <p className="text-[11px] text-slate-500 mt-2">
+                            Define cuándo caduca una pre-factura de reserva.
+                        </p>
+                    </div>
+
+                    <div className="p-5 rounded-2xl border border-gray-100 bg-slate-50 space-y-4">
+                        <Toggle
+                            label="Anticipo Obligatorio"
+                            description="Exige un pago mínimo para confirmar la reserva."
+                            checked={reservationPolicy.requireAdvance}
+                            onChange={(v: boolean) => handleReservationPolicyChange('requireAdvance', v)}
+                            icon={Percent}
+                            disabled={isReadOnly}
+                        />
+
+                        <div>
+                            <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-3">
+                                Porcentaje Mínimo
+                            </label>
+                            <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                disabled={isReadOnly || !reservationPolicy.requireAdvance}
+                                value={reservationPolicy.minimumAdvancePercent}
+                                onChange={(e) => handleReservationPolicyChange('minimumAdvancePercent', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                                className="w-full p-3 rounded-xl border border-slate-200 bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-100 disabled:opacity-50"
+                            />
+                            <p className="text-[11px] text-slate-500 mt-2">
+                                Porcentaje mínimo de abono para validar la reserva.
+                            </p>
+                        </div>
                     </div>
                 </div>
             </div>

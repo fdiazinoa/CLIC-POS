@@ -525,6 +525,38 @@ class ApiSyncAdapter {
     }
 
     /**
+     * Push a single inventory count session to Master
+     */
+    async pushInventoryCount(countSession: any): Promise<void> {
+        if (!this.config || !this.isOnline) return;
+
+        try {
+            await this.ensureAuthenticated();
+            const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/inventory/counts`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Token': this.authToken || ''
+                },
+                body: JSON.stringify({ items: [countSession] })
+            });
+
+            if (response.status === 401) {
+                await this.authenticate();
+                return this.pushInventoryCount(countSession);
+            }
+
+            if (!response.ok) {
+                throw new Error(`Push inventory count failed: ${response.statusText}`);
+            }
+            console.log(`📤 ApiSyncAdapter: Pushed inventory count ${countSession.id}`);
+        } catch (error) {
+            console.error('❌ ApiSyncAdapter: Error pushing inventory count:', error);
+            throw error;
+        }
+    }
+
+    /**
      * Push a single cash movement to Master
      */
     async pushCashMovement(movement: any): Promise<void> {
