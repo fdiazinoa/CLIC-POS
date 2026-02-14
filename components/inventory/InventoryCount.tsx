@@ -5,8 +5,8 @@
  * Scan products and adjust quantities.
  */
 
-import React, { useState } from 'react';
-import { ScanBarcode, Plus, Minus, Save, X, Camera } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { ScanBarcode, Plus, Minus, Save, X, Camera, Cloud, Wifi, WifiOff } from 'lucide-react';
 import { Product } from '../../types';
 import BarcodeScannerModal from '../BarcodeScannerModal';
 
@@ -22,8 +22,18 @@ interface InventoryCountProps {
     products: Product[];
     warehouseId?: string;
     warehouseName?: string;
-    onSave: (counts: CountedItem[]) => void;
+    onSave: (counts: CountedItem[]) => Promise<{ message?: string } | void>;
     onCancel: () => void;
+    isOnline?: boolean;
+    isSyncing?: boolean;
+    pendingSyncCount?: number;
+    syncToast?: string | null;
+    onClearSyncToast?: () => void;
+    onSyncNow?: () => void;
+    conflicts?: Array<{ id: string; reason: string; queueItem?: { payload?: { id?: string } } }>;
+    onResolveConflict?: (conflictId: string, action: 'OVERWRITE' | 'CANCEL') => void | Promise<void>;
+    scanSessionId?: string;
+    onScanEvent?: (params: { sessionId: string; warehouseId?: string; productId?: string; code: string }) => void | Promise<void>;
 }
 
 const InventoryCount: React.FC<InventoryCountProps> = ({
@@ -31,12 +41,23 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
     warehouseId,
     warehouseName,
     onSave,
-    onCancel
+    onCancel,
+    isOnline = true,
+    isSyncing = false,
+    pendingSyncCount = 0,
+    syncToast,
+    onClearSyncToast,
+    onSyncNow,
+    conflicts = [],
+    onResolveConflict,
+    scanSessionId,
+    onScanEvent
 }) => {
     const [counts, setCounts] = useState<CountedItem[]>([]);
     const [scanInput, setScanInput] = useState('');
     const [selectedItem, setSelectedItem] = useState<string | null>(null);
     const [showCameraScanner, setShowCameraScanner] = useState(false);
+    const [syncTab, setSyncTab] = useState<'PENDING' | 'CONFLICTS'>('PENDING');
 
     // Get expected qty for a product in the selected warehouse
     const getExpectedQty = (product: Product) => {
@@ -45,7 +66,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
     };
 
     // Handle scan
-    const handleScan = () => {
+    const handleScan = async () => {
         if (!scanInput.trim()) return;
 
         const product = products.find(p =>
@@ -74,6 +95,15 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                 }]);
             }
 
+            if (scanSessionId && onScanEvent) {
+                await Promise.resolve(onScanEvent({
+                    sessionId: scanSessionId,
+                    warehouseId,
+                    productId: product.id,
+                    code: scanInput.trim()
+                }));
+            }
+
             // Clear input
             setScanInput('');
         } else {
@@ -81,6 +111,12 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
             setScanInput('');
         }
     };
+
+    useEffect(() => {
+        if (!syncToast || !onClearSyncToast) return;
+        const timer = window.setTimeout(() => onClearSyncToast(), 4500);
+        return () => window.clearTimeout(timer);
+    }, [onClearSyncToast, syncToast]);
 
     // Handle camera scan
     const handleCameraScan = async (code: string): Promise<{ success: boolean; message?: string }> => {
@@ -110,6 +146,15 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                 }]);
             }
 
+            if (scanSessionId && onScanEvent) {
+                await Promise.resolve(onScanEvent({
+                    sessionId: scanSessionId,
+                    warehouseId,
+                    productId: product.id,
+                    code: code.trim()
+                }));
+            }
+
             return { success: true, message: `${product.name} agregado` };
         } else {
             return { success: false, message: 'Producto no encontrado' };
@@ -135,7 +180,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
     };
 
     // Handle save
-    const handleSave = () => {
+    const handleSave = async () => {
         if (counts.length === 0) {
             alert('No hay items contados');
             return;
@@ -146,12 +191,21 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
             const finalCounts = warehouseId
                 ? counts.map(c => ({ ...c, warehouseId }))
                 : counts;
-            onSave(finalCounts as any);
+            const result = await onSave(finalCounts as any);
+            if (result && typeof result === 'object' && 'message' in result && result.message) {
+                alert(result.message);
+            }
         }
     };
 
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col">
+            {!isOnline && (
+                <div className="sticky top-0 z-30 h-7 bg-amber-100 border-b border-amber-200 text-amber-800 text-[11px] font-bold flex items-center justify-center">
+                    Modo Offline: Los datos se guardarán localmente
+                </div>
+            )}
+
             {/* Header */}
             <div className="bg-blue-600 text-white p-4 shadow-md">
                 <div className="flex items-center justify-between mb-1">
@@ -172,6 +226,29 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                     </button>
                 </div>
 
+                <div className="flex items-center justify-between gap-2 mt-2">
+                    <div className="flex items-center gap-2">
+                        <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-black ${isOnline ? 'bg-emerald-500/20 text-emerald-100' : 'bg-amber-500/25 text-amber-100'}`}>
+                            {isOnline ? <Wifi size={13} /> : <WifiOff size={13} />}
+                            {isOnline ? 'Online' : 'Offline'}
+                        </div>
+                        {isSyncing && (
+                            <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-sky-500/25 text-sky-100 text-[11px] font-black">
+                                <Cloud size={13} className="animate-pulse" />
+                                Syncing...
+                            </div>
+                        )}
+                    </div>
+                    <button
+                        onClick={onSyncNow}
+                        disabled={!isOnline || pendingSyncCount === 0 || isSyncing}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white/20 text-[11px] font-black disabled:opacity-40"
+                    >
+                        <Cloud size={13} />
+                        Cola: {pendingSyncCount}
+                    </button>
+                </div>
+
                 {/* Scan Input */}
                 <div className="flex gap-2 mt-4">
                     <div className="flex-1 relative">
@@ -180,7 +257,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                             type="text"
                             value={scanInput}
                             onChange={(e) => setScanInput(e.target.value)}
-                            onKeyPress={(e) => e.key === 'Enter' && handleScan()}
+                            onKeyPress={(e) => e.key === 'Enter' && void handleScan()}
                             placeholder="Escanear código..."
                             className="w-full pl-10 pr-12 py-3 bg-white/10 border-2 border-white/20 rounded-xl text-white placeholder-blue-200 font-bold outline-none focus:bg-white/20"
                             autoFocus
@@ -195,7 +272,7 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                         </button>
                     </div>
                     <button
-                        onClick={handleScan}
+                        onClick={() => void handleScan()}
                         className="px-6 py-3 bg-white text-blue-600 rounded-xl font-bold hover:bg-blue-50"
                     >
                         Agregar
@@ -223,6 +300,21 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                         </div>
                     </div>
                 </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button
+                        onClick={() => setSyncTab('PENDING')}
+                        className={`rounded-lg py-1.5 text-[11px] font-black ${syncTab === 'PENDING' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500'}`}
+                    >
+                        Pendientes ({pendingSyncCount})
+                    </button>
+                    <button
+                        onClick={() => setSyncTab('CONFLICTS')}
+                        className={`rounded-lg py-1.5 text-[11px] font-black ${syncTab === 'CONFLICTS' ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-500'}`}
+                    >
+                        Conflictos ({conflicts.length})
+                    </button>
+                </div>
             </div>
 
             {/* Counted Items List */}
@@ -235,6 +327,36 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                     </div>
                 ) : (
                     <div className="space-y-3">
+                        {syncTab === 'CONFLICTS' && conflicts.length > 0 && (
+                            <div className="space-y-2">
+                                {conflicts.map((conflict) => (
+                                    <div key={conflict.id} className="bg-white rounded-2xl border-2 border-red-200 p-3">
+                                        <p className="text-[10px] font-black uppercase text-red-500">Conflicto de sincronización</p>
+                                        <p className="text-xs font-bold text-gray-500 mt-1">
+                                            Sesión: {conflict.queueItem?.payload?.id || 'N/A'}
+                                        </p>
+                                        <p className="text-xs font-bold text-red-700 mt-2 bg-red-50 border border-red-200 rounded-lg p-2">
+                                            {conflict.reason}
+                                        </p>
+                                        <div className="mt-2 grid grid-cols-2 gap-2">
+                                            <button
+                                                onClick={() => onResolveConflict?.(conflict.id, 'OVERWRITE')}
+                                                className="rounded-lg py-2 bg-blue-600 text-white text-xs font-black"
+                                            >
+                                                Sobrescribir
+                                            </button>
+                                            <button
+                                                onClick={() => onResolveConflict?.(conflict.id, 'CANCEL')}
+                                                className="rounded-lg py-2 bg-gray-100 text-gray-700 text-xs font-black"
+                                            >
+                                                Cancelar
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
                         {counts.map(item => (
                             <div
                                 key={item.productId}
@@ -314,6 +436,12 @@ const InventoryCount: React.FC<InventoryCountProps> = ({
                 onClose={() => setShowCameraScanner(false)}
                 onScan={handleCameraScan}
             />
+
+            {syncToast && (
+                <div className="fixed left-1/2 -translate-x-1/2 bottom-24 z-[160] px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-black shadow-xl">
+                    {syncToast}
+                </div>
+            )}
         </div>
     );
 };

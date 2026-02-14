@@ -1,5 +1,7 @@
 export interface LocalPrintJobPayload {
     html: string;
+    contentType?: 'HTML' | 'ESC_POS';
+    dataBase64?: string;
     printerId?: string;
     printerName?: string;
     printerAddress?: string;
@@ -27,7 +29,10 @@ export const LocalPrintAgentService = {
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
+                body: JSON.stringify({
+                    ...payload,
+                    contentType: 'HTML'
+                }),
                 signal: controller.signal,
             });
 
@@ -37,6 +42,35 @@ export const LocalPrintAgentService = {
             return data.status === 'success' || data.status === 'queued';
         } catch (error) {
             console.warn('Silent print agent unavailable:', error);
+            return false;
+        } finally {
+            clearTimeout(timeout);
+        }
+    },
+
+    sendEscPosJob: async (payload: Omit<LocalPrintJobPayload, 'html'> & { dataBase64: string }): Promise<boolean> => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+
+        try {
+            const endpoint = (import.meta as any)?.env?.VITE_PRINT_AGENT_URL || DEFAULT_AGENT_URL;
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ...payload,
+                    contentType: 'ESC_POS',
+                    html: '',
+                }),
+                signal: controller.signal,
+            });
+
+            if (!response.ok) return false;
+
+            const data = (await response.json()) as LocalPrintJobResponse;
+            return data.status === 'success' || data.status === 'queued';
+        } catch (error) {
+            console.warn('Silent ESC/POS print agent unavailable:', error);
             return false;
         } finally {
             clearTimeout(timeout);

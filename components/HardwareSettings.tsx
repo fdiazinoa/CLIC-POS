@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech, PrinterDevice, ConnectionType, ScaleLabelConfig } from '../types';
 import { parseScaleBarcode } from '../utils/barcodeParser';
+import { nativePrintBridge } from '../services/printer/NativePrintBridge';
 
 // Perfiles predefinidos de balanzas populares
 const SCALE_PRESETS = [
@@ -185,36 +186,75 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       setEditingScale(null);
    };
 
-   const handleStartDiscovery = (type: ConnectionType) => {
+   const handleStartDiscovery = async (type: ConnectionType) => {
       setIsScanning(type);
       setIsManualMode(false);
       setManualData({ name: '', address: '' });
       setDiscoveredDevices([]);
+
+      if (nativePrintBridge.supportsPeripheralBinding()) {
+         try {
+            const nativeDevices = await nativePrintBridge.discoverPrinters(type);
+            if (nativeDevices.length > 0) {
+               setDiscoveredDevices(nativeDevices);
+               return;
+            }
+         } catch (error) {
+            console.warn('Native printer discovery failed, using local fallback:', error);
+         }
+      }
+
       setTimeout(() => { setDiscoveredDevices(MOCK_DISCOVERY[type] || []); }, 1500);
    };
 
-   const handlePairPrinter = (dev: Partial<PrinterDevice>) => {
+   const handlePairPrinter = async (dev: Partial<PrinterDevice>) => {
+      const detectedConnection = isScanning || dev.connection || 'BLUETOOTH';
+      let generatedId = dev.id || `prn_${Date.now()}`;
+
+      if (nativePrintBridge.supportsPeripheralBinding()) {
+         const paired = await nativePrintBridge.pairPrinter({
+            id: dev.id,
+            name: dev.name || 'Impresora',
+            connection: detectedConnection,
+            address: dev.address,
+            type: (dev.type as any) || 'TICKET'
+         });
+         if (paired?.id) generatedId = paired.id;
+      }
+
       const newPrinter: PrinterDevice = {
-         id: `prn_${Date.now()}`,
-         name: dev.name!,
-         connection: isScanning!,
+         id: generatedId,
+         name: dev.name || 'Impresora',
+         connection: detectedConnection,
          address: dev.address,
          status: 'CONNECTED',
-         type: 'TICKET'
+         type: (dev.type as any) || 'TICKET'
       };
       setPrinters([...printers, newPrinter]);
       setIsScanning(null);
    };
 
-   const handleSaveManualPrinter = () => {
+   const handleSaveManualPrinter = async () => {
       if (!manualData.name || !manualData.address) {
          alert("Por favor completa el nombre y la dirección.");
          return;
       }
+      let generatedId = `prn_man_${Date.now()}`;
+
+      if (nativePrintBridge.supportsPeripheralBinding()) {
+         const paired = await nativePrintBridge.pairPrinter({
+            name: manualData.name,
+            connection: isScanning || 'BLUETOOTH',
+            address: manualData.address,
+            type: 'TICKET'
+         });
+         if (paired?.id) generatedId = paired.id;
+      }
+
       const newPrinter: PrinterDevice = {
-         id: `prn_man_${Date.now()}`,
+         id: generatedId,
          name: manualData.name,
-         connection: isScanning!,
+         connection: isScanning || 'BLUETOOTH',
          address: manualData.address,
          status: 'CONNECTED',
          type: 'TICKET'

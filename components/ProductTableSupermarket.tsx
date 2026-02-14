@@ -48,6 +48,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                         const taxAmount = item.price * item.quantity * (config.taxRate || 0.18);
                         const total = item.price * item.quantity;
                         const hasDiscount = item.originalPrice && item.price < item.originalPrice;
+                        const displayCode = item.barcode || item.variantSku || item.id;
 
                         return (
                             <tr
@@ -68,9 +69,9 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                                         <span className="font-bold text-gray-800 text-xs line-clamp-1">
                                             {item.name}
                                         </span>
-                                        {(item.barcode || item.sku) && (
+                                        {displayCode && (
                                             <span className="text-[9px] text-gray-400 font-mono">
-                                                {item.barcode || item.sku}
+                                                {displayCode}
                                             </span>
                                         )}
                                         {hasDiscount && (

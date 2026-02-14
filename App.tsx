@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Layout } from 'lucide-react';
 import {
   User,
@@ -22,6 +22,7 @@ import {
   DeviceRole,
   Reception,
   ProductStock,
+  InventoryCountSession,
   LedgerConcept,
   DocumentSeries,
   Room,
@@ -29,6 +30,7 @@ import {
 } from './types';
 import {
   DEFAULT_ROLES,
+  DEFAULT_LABEL_TEMPLATES,
   FOOD_PRODUCTS,
   RETAIL_PRODUCTS,
   getInitialConfig
@@ -79,6 +81,8 @@ import { KioskSecurityProvider, useKioskSecurityContext } from './components/kio
 import PriceCheckerDisplay from './components/price-checker/PriceCheckerDisplay';
 import InventoryHome from './components/inventory/InventoryHome';
 import InventoryCount from './components/inventory/InventoryCount';
+import MobileReception from './components/inventory/MobileReception';
+import InventoryLabelsMobile from './components/inventory/InventoryLabelsMobile';
 import InventoryTracking from './components/InventoryTracking';
 import KitchenDisplay from './components/kds/KitchenDisplay';
 import InventoryAuditClosure from './components/inventory/InventoryAuditClosure';
@@ -94,6 +98,10 @@ import { ThemeProvider } from './components/ThemeContext';
 import { transactionSyncService } from './services/sync/TransactionSyncService';
 import { inventorySyncService } from './services/sync/InventorySyncService';
 import { processInventoryDeduction } from './utils/inventoryEngine';
+import { useOfflineInventoryCountSync } from './hooks/useOfflineInventoryCountSync';
+import { printLabelsFromTemplate } from './utils/labelPrinter';
+import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
+import { nativePrintBridge } from './services/printer/NativePrintBridge';
 
 const App: React.FC = () => {
   return (
@@ -180,6 +188,96 @@ const AppContent: React.FC = () => {
     }
   });
 
+  const inventoryCountSync = useOfflineInventoryCountSync();
+
+  useEffect(() => {
+    const status = nativePrintBridge.getContractStatus();
+    if (!status.available) {
+      console.log('🖨️ Native print bridge not detected (running with web/agent fallback).');
+      return;
+    }
+
+    console.log('🖨️ Native print bridge detected:', status);
+  }, []);
+
+  const flushOfflinePrintQueue = useCallback(async () => {
+    try {
+      const result = await offlinePrintQueueService.processPendingQueue(config);
+      if (result.processed > 0) {
+        console.log(`🖨️ Offline print queue processed: ${result.processed} jobs`);
+      }
+    } catch (error) {
+      console.warn('Offline print queue processing failed:', error);
+    }
+  }, [config]);
+
+  useEffect(() => {
+    const wakeQueue = () => {
+      flushOfflinePrintQueue().catch(console.error);
+    };
+
+    const handleVisibility = () => {
+      if (document.hidden) return;
+      wakeQueue();
+    };
+
+    const intervalId = window.setInterval(wakeQueue, 15000);
+    window.addEventListener('online', wakeQueue);
+    window.addEventListener('offlinePrintQueueWake', wakeQueue as EventListener);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    wakeQueue();
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('online', wakeQueue);
+      window.removeEventListener('offlinePrintQueueWake', wakeQueue as EventListener);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [flushOfflinePrintQueue]);
+
+  useEffect(() => {
+    const handleAutoPrint = async (event: Event) => {
+      const detail = (event as CustomEvent<any>)?.detail || {};
+      const rawItems = Array.isArray(detail.items) ? detail.items : [];
+      if (!rawItems.length) return;
+
+      const templates = (config.labelTemplates && config.labelTemplates.length > 0)
+        ? config.labelTemplates
+        : DEFAULT_LABEL_TEMPLATES;
+      const template = templates.find(t => t.category === 'ARTICLE') || templates[0];
+      if (!template) return;
+
+      const records = rawItems
+        .map((item: any) => ({
+          productId: String(item.productId || ''),
+          productName: String(item.productName || item.productId || 'Producto'),
+          sku: item.sku ? String(item.sku) : undefined,
+          price: typeof item.price === 'number' ? item.price : undefined,
+          copies: Math.max(1, Math.floor(Number(item.quantityReceived ?? item.copies ?? 1)))
+        }))
+        .filter((record: any) => !!record.productId && record.copies > 0);
+
+      if (!records.length) return;
+
+      try {
+        await printLabelsFromTemplate({
+          config,
+          template,
+          records,
+          terminalId: detail.terminalId || getCurrentTerminal()?.id,
+          referenceId: detail.referenceId || `${detail.source || 'AUTO_LABEL'}-${Date.now()}`
+        });
+        await flushOfflinePrintQueue();
+      } catch (error) {
+        console.warn('Auto label print flow failed:', error);
+      }
+    };
+
+    window.addEventListener('autoPrintLabelRequested', handleAutoPrint as EventListener);
+    return () => window.removeEventListener('autoPrintLabelRequested', handleAutoPrint as EventListener);
+  }, [config, flushOfflinePrintQueue, getCurrentTerminal]);
+
   useEffect(() => {
     // Detect if we should start in Visor Mode (HDMI Display)
     const params = new URLSearchParams(window.location.search);
@@ -192,7 +290,11 @@ const AppContent: React.FC = () => {
 
   const handleViewChange = (view: ViewState, data?: any) => {
     console.log(`🚀 View Change: ${currentView} -> ${view}`, data);
-    setViewData(data);
+    let nextData = data;
+    if (view === 'INVENTORY_COUNT' && !data?.countSessionId) {
+      nextData = { ...(data || {}), countSessionId: `COUNT-${Date.now()}` };
+    }
+    setViewData(nextData);
     setCurrentView(view);
   };
 
@@ -2021,16 +2123,26 @@ const AppContent: React.FC = () => {
             products={products}
             warehouseId={viewData?.warehouseId}
             warehouseName={viewData?.warehouseName}
-            onSave={(counts) => {
+            isOnline={inventoryCountSync.isOnline}
+            isSyncing={inventoryCountSync.isSyncing}
+            pendingSyncCount={inventoryCountSync.pendingCount}
+            syncToast={inventoryCountSync.syncToast}
+            onClearSyncToast={inventoryCountSync.clearSyncToast}
+            onSyncNow={() => inventoryCountSync.processQueue().catch(console.error)}
+            conflicts={inventoryCountSync.conflicts}
+            onResolveConflict={(conflictId, action) => inventoryCountSync.resolveConflict(conflictId, action).catch(console.error)}
+            scanSessionId={viewData?.countSessionId}
+            onScanEvent={(params) => inventoryCountSync.recordOfflineScan(params)}
+            onSave={async (counts) => {
               const now = new Date().toISOString();
-              const sessionId = `COUNT-${Date.now()}`;
+              const sessionId = viewData?.countSessionId || `COUNT-${Date.now()}`;
               const warehouseId = viewData?.warehouseId || '';
               const warehouseProducts = products.filter(p => {
                 if (!warehouseId) return true;
                 if (p.activeInWarehouses && !p.activeInWarehouses.includes(warehouseId)) return false;
                 return true;
               });
-              const session = {
+              const session: InventoryCountSession & { updatedAt?: string; syncStatus?: string } = {
                 id: sessionId,
                 warehouseId,
                 warehouseName: viewData?.warehouseName,
@@ -2057,14 +2169,62 @@ const AppContent: React.FC = () => {
                 updatedAt: now,
                 syncStatus: 'PENDING'
               };
-              db.saveDocument('inventoryCounts' as any, session).then(() => {
-                alert(`Conteo guardado: ${counts.length} productos`);
+
+              try {
+                const result = await inventoryCountSync.saveSession(session as any, {
+                  warehouseName: viewData?.warehouseName
+                });
                 handleViewChange('INVENTORY_HOME');
-              }).catch((err) => {
+                return {
+                  message: result?.message || `Conteo guardado: ${counts.length} productos`
+                };
+              } catch (err) {
                 console.error('Error saving inventory count session:', err);
-                alert('Error guardando el conteo.');
-              });
+                return { message: 'Error guardando el conteo.' };
+              }
             }}
+            onCancel={() => handleViewChange('INVENTORY_HOME')}
+          />
+        );
+
+      case 'INVENTORY_RECEPTION':
+        return (
+          <MobileReception
+            products={products}
+            suppliers={suppliers}
+            purchaseOrders={purchaseOrders}
+            transfers={transfers}
+            warehouses={warehouses}
+            config={config}
+            currentUser={currentUser}
+            terminalId={getCurrentTerminal()?.id || 'LOCAL'}
+            onProcessed={async () => {
+              const [freshProducts, freshOrders, freshTransfers, freshReceptions, freshStocks] = await Promise.all([
+                db.get('products') as Promise<Product[]>,
+                db.get('purchaseOrders') as Promise<PurchaseOrder[]>,
+                db.get('transfers') as Promise<StockTransfer[]>,
+                db.get('receptions') as Promise<Reception[]>,
+                db.get('productStocks') as Promise<ProductStock[]>
+              ]);
+
+              setProducts(freshProducts || []);
+              setPurchaseOrders(freshOrders || []);
+              setTransfers(freshTransfers || []);
+              setReceptions(freshReceptions || []);
+              setProductStocks(freshStocks || []);
+
+              backgroundSyncManager.triggerSync().catch(console.error);
+            }}
+            onCancel={() => handleViewChange('INVENTORY_HOME')}
+          />
+        );
+
+      case 'INVENTORY_LABELS':
+        return (
+          <InventoryLabelsMobile
+            products={products}
+            config={config}
+            terminalId={getCurrentTerminal()?.id || 'LOCAL'}
             onCancel={() => handleViewChange('INVENTORY_HOME')}
           />
         );

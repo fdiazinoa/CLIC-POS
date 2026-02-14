@@ -1,7 +1,7 @@
 import { DatabaseAdapter } from '../DatabaseAdapter';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 9; // Incremented to add inventory counts store
+const DB_VERSION = 12; // Incremented to add offline print queue store
 const OLD_DB_KEY = 'clic_pos_db_v1';
 
 export class IndexedDBAdapter implements DatabaseAdapter {
@@ -14,22 +14,17 @@ export class IndexedDBAdapter implements DatabaseAdapter {
 
             request.onupgradeneeded = (event: any) => {
                 const db = event.target.result;
-                const transaction = event.target.transaction;
+                const oldVersion = event.oldVersion || 0;
                 console.log(`[IndexedDBAdapter] 🔼 Upgrading DB to version ${DB_VERSION}`);
 
-                // SCHEMA FIX V5/V6: Force delete and recreate transfers
-                if (db.objectStoreNames.contains('transfers')) {
+                // Legacy schema fixes must run only for old DB versions.
+                if (oldVersion < 7 && db.objectStoreNames.contains('transfers')) {
                     db.deleteObjectStore('transfers');
                 }
 
-                // SCHEMA FIX V7: Force delete and recreate zReports (User reported visibility issue)
-                if (db.objectStoreNames.contains('zReports')) {
+                if (oldVersion < 8 && db.objectStoreNames.contains('zReports')) {
                     console.log('[IndexedDBAdapter] ♻️ Recreating zReports store to fix schema');
                     db.deleteObjectStore('zReports');
-                }
-                // This fixes the "DataError" caused by bad keyPath or corrupted schema
-                if (db.objectStoreNames.contains('transfers')) {
-                    db.deleteObjectStore('transfers');
                 }
 
                 // We'll create it fresh in the loop below or explicitly here
@@ -45,7 +40,10 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                     'localFiscalBuffer', 'campaigns', 'coupons', 'zReports',
                     'receptions', 'productStocks', 'supplierProductPrices',
                     'inventoryTracking', 'rooms', 'tables', 'globalSequenceCounter',
-                    'watchlists', 'syncMetadata', 'inventorySnapshots', 'inventoryAuditLogs', 'inventoryCounts'
+                    'watchlists', 'syncMetadata', 'inventorySnapshots', 'inventoryAuditLogs', 'inventoryCounts',
+                    'offline_receptions', 'offline_reception_queue', 'offline_reception_conflicts',
+                    'offline_inventory_counts', 'offline_inventory_count_queue', 'offline_inventory_count_conflicts',
+                    'offline_print_queue'
                 ];
 
                 stores.forEach(store => {

@@ -1,5 +1,8 @@
 import { BusinessConfig, LabelElement, LabelTemplate } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
+import { buildEscPosLabelPayload } from '../services/printer/EscPosFormatter';
+import { nativePrintBridge } from '../services/printer/NativePrintBridge';
+import { offlinePrintQueueService } from '../services/printer/OfflinePrintQueueService';
 
 const MM_TO_PX = 3.78;
 
@@ -21,7 +24,7 @@ interface PrintLabelsOptions {
 
 export interface PrintLabelsResult {
   printed: boolean;
-  method: 'silent' | 'browser' | 'none';
+  method: 'silent' | 'browser' | 'queued' | 'none';
   message: string;
 }
 
@@ -185,21 +188,58 @@ export const printLabelsFromTemplate = async ({
     };
   }
 
+  const printRef = referenceId || `LBL-${Date.now()}`;
   const printableHtml = renderPrintableDocument(template, preparedRecords, config.currencySymbol || '$', false);
-  const printedSilently = await PrintRouterService.routeAndPrintHtml({
-    config,
-    html: printableHtml,
-    role: 'LABEL',
-    terminalId,
-    jobType: 'LABEL',
-    referenceId: referenceId || `LBL-${Date.now()}`
-  });
+  const escPosBase64 = buildEscPosLabelPayload(preparedRecords, config.currencySymbol || '$');
+
+  let printedSilently = false;
+
+  if (escPosBase64) {
+    printedSilently = await PrintRouterService.routeAndPrintEscPos({
+      config,
+      escPosBase64,
+      role: 'LABEL',
+      terminalId,
+      jobType: 'LABEL',
+      referenceId: printRef
+    });
+  }
+
+  if (!printedSilently) {
+    printedSilently = await PrintRouterService.routeAndPrintHtml({
+      config,
+      html: printableHtml,
+      role: 'LABEL',
+      terminalId,
+      jobType: 'LABEL',
+      referenceId: printRef
+    });
+  }
 
   if (printedSilently) {
     return {
       printed: true,
       method: 'silent',
       message: 'Etiquetas enviadas a la impresora configurada de la terminal.'
+    };
+  }
+
+  const shouldQueue = !navigator.onLine || nativePrintBridge.isAvailable();
+  if (shouldQueue) {
+    await offlinePrintQueueService.enqueueJob({
+      role: 'LABEL',
+      terminalId,
+      jobType: 'LABEL',
+      referenceId: printRef,
+      html: printableHtml,
+      escPosBase64: escPosBase64 || undefined,
+      source: 'LABEL_PRINT'
+    });
+
+    return {
+      printed: true,
+      method: 'queued',
+      message: 'Impresion en cola. Se enviara automaticamente cuando la impresora este disponible.'
     };
   }
 

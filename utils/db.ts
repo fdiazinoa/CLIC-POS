@@ -1,7 +1,7 @@
 import {
   BusinessConfig, Product, User, Customer, Transaction,
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
-  RoleDefinition, ParkedTicket, PurchaseOrder, Supplier, Watchlist,
+  RoleDefinition, ParkedTicket, PurchaseOrder, PurchaseOrderItem, Supplier, Watchlist,
   NCFType, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
   Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking
 } from '../types';
@@ -55,6 +55,30 @@ const toValidMovementIso = (effectiveDate?: string): string => {
   }
   return parsed.toISOString();
 };
+
+type ProcessReceiptDocumentType = 'PURCHASE_ORDER' | 'TRANSFER_IN';
+
+interface ProcessReceiptItem {
+  productId: string;
+  productName: string;
+  expectedQty: number;
+  receivedQty: number;
+  cost?: number;
+  variantSku?: string;
+  variantInfo?: string;
+}
+
+interface ProcessReceiptPayload {
+  documentType: ProcessReceiptDocumentType;
+  documentId: string;
+  warehouseId: string;
+  receivedBy: string;
+  receivedByUserName: string;
+  terminalId?: string;
+  discrepancyReason?: string;
+  items: ProcessReceiptItem[];
+  effectiveDate?: string;
+}
 
 // --- SEED DATA ---
 const DEFAULT_WAREHOUSES: Warehouse[] = [
@@ -151,6 +175,13 @@ const SEED_DATA = {
   inventorySnapshots: [] as any[],
   inventoryAuditLogs: [] as any[],
   inventoryCounts: [] as any[],
+  offline_receptions: [] as any[],
+  offline_reception_queue: [] as any[],
+  offline_reception_conflicts: [] as any[],
+  offline_inventory_counts: [] as any[],
+  offline_inventory_count_queue: [] as any[],
+  offline_inventory_count_conflicts: [] as any[],
+  offline_print_queue: [] as any[],
   rooms: [] as any[],
   tables: [] as any[]
 };
@@ -496,6 +527,164 @@ export const db = {
 
   getDocument: async (collection: keyof typeof SEED_DATA, id: string) => {
     return await dbAdapter.getDocument(collection as string, id);
+  },
+
+  processReceipt: async (payload: ProcessReceiptPayload): Promise<{
+    reception: Reception;
+    autoPrintItems: Array<{ productId: string; productName: string; sku?: string; price?: number; quantityReceived: number }>;
+    missingItems: ProcessReceiptItem[];
+    overageItems: ProcessReceiptItem[];
+    receivedItemsCount: number;
+  }> => {
+    if (!payload.documentId?.trim()) {
+      throw new Error('Documento inválido para recepción.');
+    }
+
+    const receivedItems = (payload.items || [])
+      .map(item => ({
+        ...item,
+        expectedQty: Math.max(0, Number(item.expectedQty || 0)),
+        receivedQty: Math.max(0, Number(item.receivedQty || 0))
+      }))
+      .filter(item => item.expectedQty > 0 || item.receivedQty > 0);
+
+    if (receivedItems.length === 0) {
+      throw new Error('No hay artículos para procesar.');
+    }
+
+    const linesWithReception = receivedItems.filter(item => item.receivedQty > 0);
+    if (linesWithReception.length === 0) {
+      throw new Error('No hay cantidades recibidas para registrar.');
+    }
+
+    const missingItems = receivedItems.filter(item => item.receivedQty < item.expectedQty);
+    const overageItems = receivedItems.filter(item => item.receivedQty > item.expectedQty);
+
+    if (missingItems.length > 0 && !payload.discrepancyReason?.trim()) {
+      throw new Error('Se requiere motivo de ajuste para registrar faltantes.');
+    }
+
+    const now = toValidMovementIso(payload.effectiveDate);
+    const terminalId = payload.terminalId || 'LOCAL';
+    const products = await dbAdapter.getCollection<Product>('products') || [];
+    const productMap = new Map(products.map(product => [product.id, product]));
+    const itemMap = new Map(receivedItems.map(item => [`${item.productId}::${item.variantSku || 'base'}`, item]));
+
+    if (payload.documentType === 'PURCHASE_ORDER') {
+      const orders = await dbAdapter.getCollection<PurchaseOrder>('purchaseOrders') || [];
+      const order = (orders || []).find(o => o.id === payload.documentId);
+      if (!order) throw new Error('Orden de compra no encontrada.');
+
+      const updatedItems = (order.items || []).map(item => {
+        const key = `${item.productId}::${item.variantSku || 'base'}`;
+        const received = itemMap.get(key)?.receivedQty || 0;
+        if (received <= 0) return item;
+
+        const currentReceived = Math.max(0, Number(item.quantityReceived || 0));
+        const ordered = Math.max(0, Number(item.quantityOrdered || 0));
+        return {
+          ...item,
+          quantityReceived: Math.min(ordered, currentReceived + received)
+        };
+      });
+
+      const totalOrdered = updatedItems.reduce((sum, item) => sum + Math.max(0, Number(item.quantityOrdered || 0)), 0);
+      const totalReceived = updatedItems.reduce((sum, item) => sum + Math.max(0, Number(item.quantityReceived || 0)), 0);
+      const status: PurchaseOrder['status'] =
+        totalReceived <= 0 ? 'ORDERED' : totalReceived >= totalOrdered ? 'COMPLETED' : 'PARTIAL';
+
+      await dbAdapter.saveDocument('purchaseOrders', {
+        ...order,
+        items: updatedItems,
+        status
+      } as PurchaseOrder);
+    } else {
+      const allTransfers = await dbAdapter.getCollection<StockTransfer>('transfers') || [];
+      const transfer = (allTransfers || []).find(t => t.id === payload.documentId);
+      if (!transfer) throw new Error('Traspaso de origen no encontrado.');
+
+      const transferMap = new Map(receivedItems.map(item => [item.productId, item.receivedQty]));
+
+      const updatedTransferItems = (transfer.items || []).map(item => ({
+        ...item,
+        receivedQuantity: Math.max(0, Number(transferMap.get(item.productId) ?? item.receivedQuantity ?? 0))
+      }));
+
+      const hasDiscrepancy = updatedTransferItems.some(item => Number(item.receivedQuantity || 0) !== Number(item.quantity || 0));
+
+      await dbAdapter.saveDocument('transfers', {
+        ...transfer,
+        status: 'COMPLETED',
+        items: updatedTransferItems,
+        receivedAt: now,
+        updatedAt: now,
+        syncStatus: 'PENDING',
+        discrepancyReason: hasDiscrepancy ? payload.discrepancyReason : undefined
+      } as StockTransfer);
+    }
+
+    const movementConcept: LedgerConcept = payload.documentType === 'PURCHASE_ORDER' ? 'COMPRA' : 'TRASPASO_ENTRADA';
+    const movementRef = payload.documentId;
+
+    await db.recordInventoryMovements(linesWithReception.map(item => ({
+      warehouseId: payload.warehouseId,
+      productId: item.productId,
+      concept: movementConcept,
+      documentRef: movementRef,
+      qty: item.receivedQty,
+      movementCost: Number(item.cost || productMap.get(item.productId)?.cost || 0),
+      terminalId,
+      variantId: item.variantSku,
+      variantName: item.variantInfo,
+      effectiveDate: now
+    })));
+
+    const receptionItems: PurchaseOrderItem[] = linesWithReception.map(item => ({
+      productId: item.productId,
+      productName: item.productName || productMap.get(item.productId)?.name || item.productId,
+      quantityOrdered: item.expectedQty,
+      quantityReceived: item.receivedQty,
+      cost: Number(item.cost || productMap.get(item.productId)?.cost || 0),
+      variantSku: item.variantSku,
+      variantInfo: item.variantInfo
+    }));
+
+    const reception: Reception = {
+      id: `REC-${Date.now()}`,
+      purchaseOrderId: payload.documentType === 'PURCHASE_ORDER'
+        ? payload.documentId
+        : `TRANSFER:${payload.documentId}`,
+      date: now,
+      receivedBy: payload.receivedBy,
+      receivedByUserName: payload.receivedByUserName,
+      items: receptionItems,
+      terminalId,
+      syncStatus: 'PENDING',
+      updatedAt: now
+    };
+
+    await dbAdapter.saveDocument('receptions', reception);
+
+    const autoPrintItems = linesWithReception
+      .filter(item => productMap.get(item.productId)?.operationalFlags?.autoPrintLabel)
+      .map(item => {
+        const product = productMap.get(item.productId);
+        return {
+          productId: item.productId,
+          productName: item.productName || product?.name || item.productId,
+          sku: item.variantSku || product?.barcode || item.productId,
+          price: product?.price,
+          quantityReceived: item.receivedQty
+        };
+      });
+
+    return {
+      reception,
+      autoPrintItems,
+      missingItems,
+      overageItems,
+      receivedItemsCount: linesWithReception.length
+    };
   },
 
   canRequestMoreNCF: async (type: NCFType): Promise<boolean> => {
