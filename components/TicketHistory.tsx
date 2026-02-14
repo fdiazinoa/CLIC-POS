@@ -6,7 +6,7 @@ import {
    User as UserIcon, DollarSign, Box, Filter, Gift, QrCode, StickyNote,
    MoreVertical, CreditCard, Banknote, Wallet, TrendingUp, Hash, Percent
 } from 'lucide-react';
-import { Transaction, BusinessConfig, CartItem, RoleDefinition } from '../types';
+import { Transaction, BusinessConfig, CartItem, RoleDefinition, ZReport } from '../types';
 import { validateTerminalDocument } from '../utils/validation';
 import { printTicket } from '../utils/printer';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
@@ -66,7 +66,99 @@ const SalesHistoryTable: React.FC<{
    themeBg: string;
    themeText: string;
    zReportMap?: Map<string, string>;
-}> = ({ transactions, config, onRowClick, themeBg, themeText, zReportMap }) => {
+   zReports?: ZReport[];
+}> = ({ transactions, config, onRowClick, themeBg, themeText, zReportMap, zReports }) => {
+   const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
+   const toTimestamp = (value?: string) => {
+      const ts = value ? new Date(value).getTime() : NaN;
+      return Number.isFinite(ts) ? ts : null;
+   };
+
+   // Fallback for legacy data: infer missing Z sequence using report windows + transactionCount.
+   const inferredZByTxId = useMemo(() => {
+      const inferred = new Map<string, string>();
+      if (!zReports || zReports.length === 0 || transactions.length === 0) return inferred;
+
+      const reportsByTerminal = new Map<string, ZReport[]>();
+      zReports.forEach((report) => {
+         const terminalKey = normalizeTerminalId(report.terminalId);
+         if (!terminalKey) return;
+         const existing = reportsByTerminal.get(terminalKey) || [];
+         existing.push(report);
+         reportsByTerminal.set(terminalKey, existing);
+      });
+
+      reportsByTerminal.forEach((reports) => {
+         reports.sort((a, b) => (toTimestamp(a.closedAt) || 0) - (toTimestamp(b.closedAt) || 0));
+      });
+
+      const explicitCountByReportId = new Map<string, number>();
+      transactions.forEach((tx) => {
+         if (tx.zReportId) {
+            explicitCountByReportId.set(tx.zReportId, (explicitCountByReportId.get(tx.zReportId) || 0) + 1);
+            return;
+         }
+         if (tx.zReportSequence) {
+            const matched = zReports.find(r => r.sequenceNumber === tx.zReportSequence);
+            if (matched) explicitCountByReportId.set(matched.id, (explicitCountByReportId.get(matched.id) || 0) + 1);
+         }
+      });
+
+      const unresolvedByTerminal = new Map<string, Transaction[]>();
+      transactions.forEach((tx) => {
+         if (tx.zReportId || tx.zReportSequence) return;
+         const terminalKey = normalizeTerminalId(tx.terminalId);
+         if (!terminalKey) return;
+         const existing = unresolvedByTerminal.get(terminalKey) || [];
+         existing.push(tx);
+         unresolvedByTerminal.set(terminalKey, existing);
+      });
+
+      unresolvedByTerminal.forEach((terminalTxs, terminalKey) => {
+         const reports = reportsByTerminal.get(terminalKey);
+         if (!reports || reports.length === 0) return;
+
+         terminalTxs.sort((a, b) => (toTimestamp(a.date) || 0) - (toTimestamp(b.date) || 0));
+         const pendingTxIds = new Set(terminalTxs.map(tx => tx.id));
+         let previousClosedAt: number | null = null;
+
+         reports.forEach((report) => {
+            const closedAt = toTimestamp(report.closedAt);
+            if (!closedAt) return;
+
+            const openedAt = toTimestamp(report.openedAt);
+            const explicitCount = explicitCountByReportId.get(report.id) || 0;
+            const expectedCount = typeof report.transactionCount === 'number' ? report.transactionCount : 0;
+            const missingCount = Math.max(expectedCount - explicitCount, 0);
+            if (missingCount === 0) {
+               previousClosedAt = closedAt;
+               return;
+            }
+
+            const candidates = terminalTxs.filter((tx) => {
+               if (!pendingTxIds.has(tx.id)) return false;
+               const txDate = toTimestamp(tx.date);
+               if (!txDate || txDate > closedAt) return false;
+               const lowerBound = openedAt ?? previousClosedAt;
+               if (lowerBound && txDate < lowerBound) return false;
+               return true;
+            });
+
+            candidates
+               .sort((a, b) => (toTimestamp(b.date) || 0) - (toTimestamp(a.date) || 0))
+               .slice(0, missingCount)
+               .forEach((tx) => {
+                  inferred.set(tx.id, report.sequenceNumber);
+                  pendingTxIds.delete(tx.id);
+               });
+
+            previousClosedAt = closedAt;
+         });
+      });
+
+      return inferred;
+   }, [transactions, zReports]);
+
    const getStatusBadge = (tx: Transaction) => {
       if (tx.status === 'REFUNDED') return <span className="px-2 py-0.5 bg-red-100 text-red-600 rounded-full text-[10px] font-bold">ANULADO</span>;
       if (tx.status === 'PARTIAL_REFUND') return <span className="px-2 py-0.5 bg-orange-100 text-orange-600 rounded-full text-[10px] font-bold">PARTIAL</span>;
@@ -107,7 +199,8 @@ const SalesHistoryTable: React.FC<{
                </thead>
                <tbody className="divide-y divide-gray-50">
                   {transactions.map((tx) => {
-                     const zSeq = tx.zReportSequence || (tx.zReportId ? zReportMap?.get(tx.zReportId) : null);
+                     const inferredZSeq = inferredZByTxId.get(tx.id);
+                     const zSeq = tx.zReportSequence || (tx.zReportId ? zReportMap?.get(tx.zReportId) : null) || inferredZSeq;
                      return (
                         <tr
                            key={tx.id}
@@ -134,7 +227,10 @@ const SalesHistoryTable: React.FC<{
                            </td>
                            <td className="px-4 py-3 text-center">
                               {zSeq ? (
-                                 <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-[10px] font-bold border border-purple-200">
+                                 <span
+                                    title={!tx.zReportId && !tx.zReportSequence && inferredZSeq ? 'Cierre Z inferido por ventana horaria' : undefined}
+                                    className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-[10px] font-bold border border-purple-200"
+                                 >
                                     {zSeq}
                                  </span>
                               ) : tx.zReportId ? (
@@ -299,6 +395,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
    const [historyTransactions, setHistoryTransactions] = useState<Transaction[]>([]);
    const [zReportMap, setZReportMap] = useState<Map<string, string>>(new Map()); // Map zReportId -> Sequence
+   const [zReports, setZReports] = useState<ZReport[]>([]);
    const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
 
    // Load History on Mount
@@ -323,6 +420,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                const map = new Map<string, string>();
                zReports.forEach(r => map.set(r.id, r.sequenceNumber));
                setZReportMap(map);
+               setZReports(zReports);
                console.log(`🔍 [TicketHistory] Loaded ${zReports.length} Z-Reports. Sample Map:`, Array.from(map.entries()).slice(0, 3));
             }
 
@@ -623,6 +721,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                themeBg={themeBg}
                themeText={themeText}
                zReportMap={zReportMap}
+               zReports={zReports}
             />
 
             {filteredTransactions.length === 0 && (

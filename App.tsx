@@ -1045,15 +1045,23 @@ const AppContent: React.FC = () => {
     // 1. Robust Terminal ID Discovery
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     const terminalId = currentTerminal?.id || 'T1';
+    const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
+    const terminalKey = normalizeTerminalId(terminalId);
+    const isDefaultTerminal = terminalKey === 't1';
+    const matchesCurrentTerminal = (value?: string | null) => normalizeTerminalId(value) === terminalKey;
 
     try {
       console.log(`📊 Z-Report: Starting closure for terminal ${terminalId} (Device: ${deviceId})`);
 
       // 2. Identify Transactions for closure
-      // STRICT MODE: Only include transactions explicitly tagged with this terminalId.
-      // Untagged transactions must be handled via Admin Recovery tools, not automatically included here.
-      const terminalTransactions = transactions.filter(t => t.terminalId === terminalId);
-      const terminalCashMovements = cashMovements.filter(m => m.terminalId === terminalId);
+      // Include legacy untagged data only for default terminal to avoid orphan records.
+      const terminalTransactions = transactions.filter(t =>
+        !t.zReportId &&
+        (matchesCurrentTerminal(t.terminalId) || (!t.terminalId && isDefaultTerminal))
+      );
+      const terminalCashMovements = cashMovements.filter(m =>
+        (matchesCurrentTerminal(m.terminalId) || (!m.terminalId && isDefaultTerminal))
+      );
 
       console.log(`🔒 Shift Segregation: Found ${terminalTransactions.length} txns and ${terminalCashMovements.length} cash movements for ${terminalId}`);
 
@@ -1689,8 +1697,17 @@ const AppContent: React.FC = () => {
         {
           // Filter for current terminal ONLY (Fix for X-Report showing other terminals' data)
           const currentTerminalId = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
-          const terminalTransactions = transactions.filter(t => t.terminalId === currentTerminalId && !t.zReportId);
-          const terminalMovements = cashMovements.filter(m => m.terminalId === currentTerminalId);
+          const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
+          const terminalKey = normalizeTerminalId(currentTerminalId);
+          const isDefaultTerminal = terminalKey === 't1';
+          const matchesCurrentTerminal = (value?: string | null) => normalizeTerminalId(value) === terminalKey;
+          const terminalTransactions = transactions.filter(t =>
+            !t.zReportId &&
+            (matchesCurrentTerminal(t.terminalId) || (!t.terminalId && isDefaultTerminal))
+          );
+          const terminalMovements = cashMovements.filter(m =>
+            matchesCurrentTerminal(m.terminalId) || (!m.terminalId && isDefaultTerminal)
+          );
 
           return (
             <FinanceDashboard
