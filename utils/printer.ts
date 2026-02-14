@@ -1,6 +1,7 @@
 import { Transaction, BusinessConfig } from '../types';
+import { PrintRouterService } from '../services/printer/PrintRouterService';
 
-export const printTicket = (transaction: Transaction, config: BusinessConfig) => {
+export const printTicket = async (transaction: Transaction, config: BusinessConfig) => {
     const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
     const dateStr = new Date(transaction.date).toLocaleDateString();
     const timeStr = new Date(transaction.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -378,6 +379,22 @@ export const printTicket = (transaction: Transaction, config: BusinessConfig) =>
         </body>
         </html>
     `;
+
+    const silentHtml = receiptHtml.replace(
+        /<script>[\s\S]*?window\.onload[\s\S]*?<\/script>/,
+        ''
+    );
+
+    const printedSilently = await PrintRouterService.routeAndPrintHtml({
+        config,
+        html: silentHtml,
+        role: 'TICKET',
+        terminalId: transaction.terminalId,
+        jobType: 'TICKET',
+        referenceId: transaction.id,
+    });
+
+    if (printedSilently) return;
 
     const printWindow = window.open('', '_blank', 'width=400,height=600');
     if (printWindow) {

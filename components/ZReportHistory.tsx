@@ -127,7 +127,7 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
 
                     <div className="flex gap-2">
                         <button
-                            onClick={() => ThermalPrinterService.printZReport(r)}
+                            onClick={() => ThermalPrinterService.printZReport(r, [], config)}
                             className="px-4 py-2 bg-gray-100 hover:bg-blue-600 hover:text-white rounded-xl text-gray-600 transition-all font-bold text-sm flex items-center gap-2 shadow-sm"
                             title="Imprimir"
                         >

@@ -1,5 +1,6 @@
-import { ZReport } from '../../types';
+import { ZReport, BusinessConfig } from '../../types';
 import { generateZReportReceipt } from './templates/ZReportReceipt';
+import { PrintRouterService } from './PrintRouterService';
 
 export const ThermalPrinterService = {
     /**
@@ -7,12 +8,23 @@ export const ThermalPrinterService = {
      * @param report The Z-Report data to print
      * @returns Promise<boolean> indicating success
      */
-    printZReport: async (report: ZReport, hiddenModules: string[] = []): Promise<boolean> => {
+    printZReport: async (report: ZReport, hiddenModules: string[] = [], config?: BusinessConfig): Promise<boolean> => {
         try {
             console.log("🖨️ Starting Thermal Print Job for Z-Report:", report.sequenceNumber);
 
             // 1. Generate HTML Content for Thermal Paper (80mm width approx)
             const receiptHtml = generateZReportReceipt(report, hiddenModules);
+
+            const printedSilently = await PrintRouterService.routeAndPrintHtml({
+                config: config || ({ terminals: [], availablePrinters: [] } as BusinessConfig),
+                html: receiptHtml,
+                role: 'TICKET',
+                terminalId: report.terminalId,
+                jobType: 'Z_REPORT',
+                referenceId: report.id,
+            });
+
+            if (printedSilently) return true;
 
             // 2. Create a hidden iframe to print without disrupting the UI
             const iframe = document.createElement('iframe');

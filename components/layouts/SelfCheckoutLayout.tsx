@@ -6,7 +6,7 @@
  * - Fullscreen forced
  * - Large touch targets (>60px)
  * - No navigation chrome (no back button, no navbar)
- * - Escape hatch for admin access (logo press 5s OR Ctrl+Alt+A)
+ * - Escape hatch for admin access (hidden 5s corner press OR Ctrl+Alt+A)
  */
 
 import React, { ReactNode, useState, useEffect } from 'react';
@@ -159,64 +159,27 @@ const SelfCheckoutLayout: React.FC<SelfCheckoutLayoutProps> = ({
                 position: 'relative'
             }}
         >
-            {/* Escape Hatch Logo (VISIBLE NOW) */}
-            <button
-                onClick={() => {
-                    // Simple click for easier access
-                    if (onEscapeHatch) onEscapeHatch();
-                }}
+            {/* Hidden Escape Hatch Hotspot: hold top-left corner for 5s */}
+            <div
+                onMouseDown={handleLogoPress}
+                onMouseUp={handleLogoRelease}
+                onMouseLeave={handleLogoRelease}
+                onTouchStart={handleLogoPress}
+                onTouchEnd={handleLogoRelease}
+                onTouchCancel={handleLogoRelease}
                 style={{
                     position: 'absolute',
-                    top: 20,
-                    left: 20,
-                    width: 60,
-                    height: 60,
+                    top: 0,
+                    left: 0,
+                    width: 100,
+                    height: 100,
                     zIndex: 9999,
-                    cursor: 'pointer',
-                    opacity: 0.8, // Visible
-                    border: 'none',
-                    background: 'transparent',
-                    outline: 'none'
+                    cursor: 'default',
+                    opacity: 0,
+                    background: 'transparent'
                 }}
-                title="Click para acceso Admin"
-            >
-                <div
-                    style={{
-                        width: '100%',
-                        height: '100%',
-                        borderRadius: '50%',
-                        backgroundColor: '#333',
-                        color: 'white',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '24px',
-                        boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
-                    }}
-                >
-                    🔒
-                </div>
-            </button>
-
-            {/* Keyboard shortcut hint (dev mode) */}
-            {process.env.NODE_ENV === 'development' && (
-                <div
-                    style={{
-                        position: 'absolute',
-                        top: 90,
-                        left: 20,
-                        padding: '8px 12px',
-                        backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                        color: 'white',
-                        borderRadius: 8,
-                        fontSize: '12px',
-                        fontFamily: 'monospace',
-                        zIndex: 9998
-                    }}
-                >
-                    💡 Ctrl+Alt+A = Admin
-                </div>
-            )}
+                aria-hidden="true"
+            />
 
             {/* Main content area */}
             <div

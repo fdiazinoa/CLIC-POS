@@ -6,6 +6,10 @@ import sqlite3
 import json
 from datetime import datetime
 import os
+import shutil
+import subprocess
+import tempfile
+import socket
 
 app = FastAPI(title="CLIC-POS KDS Service")
 
@@ -38,10 +42,26 @@ class TableOpenRequest(BaseModel):
     waiterId: Optional[str] = None
     waiterName: Optional[str] = None
 
+class PrintJobRequest(BaseModel):
+    html: str
+    printerId: Optional[str] = None
+    printerName: Optional[str] = None
+    printerAddress: Optional[str] = None
+    connection: Optional[str] = None
+    role: Optional[str] = None
+    jobType: Optional[str] = None
+    referenceId: Optional[str] = None
+    copies: Optional[int] = 1
+
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+def send_text_to_network_printer(printer_ip: str, content: str, port: int = 9100, timeout: int = 3):
+    payload = b"\x1b@" + content.encode("ascii", "ignore") + b"\n\n\n" + b"\x1dVA0"
+    with socket.create_connection((printer_ip, port), timeout=timeout) as sock:
+        sock.sendall(payload)
 
 @app.post("/api/ordenes/enviar-comanda/{orden_id}")
 def dispatch_command(orden_id: str):
@@ -104,10 +124,26 @@ def dispatch_command(orden_id: str):
             
             # Printer Routing
             if mode in ('PRINTER', 'AMBOS'):
-                # Mock printer job insertion
-                # conn.execute("INSERT INTO print_jobs (type, content, target_ip) VALUES (?, ?, ?)", ("COMMAND", json.dumps(item), area['printer_ip']))
-                print(f"DEBUG: Printing item {item['name']} to {area['printer_ip']}")
-                dispatched_count += 1
+                printer_ip = area.get('printer_ip')
+                if printer_ip:
+                    ticket = (
+                        f"COMANDA {orden_id}\n"
+                        f"AREA: {area.get('nombre', 'PRODUCCION')}\n"
+                        f"------------------------------\n"
+                        f"{item.get('quantity', 1)} x {item.get('name', 'ITEM')}\n"
+                    )
+                    if item.get('modifiers'):
+                        modifiers = ", ".join(item.get('modifiers', []))
+                        ticket += f"MOD: {modifiers}\n"
+                    ticket += f"------------------------------\n{datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
+
+                    try:
+                        send_text_to_network_printer(printer_ip, ticket)
+                        dispatched_count += 1
+                    except Exception as print_error:
+                        print(f"ERROR printing kitchen item to {printer_ip}: {print_error}")
+                else:
+                    print(f"WARN: Production area {area.get('nombre')} has no printer_ip configured")
 
             # Mark as sent in the original item object
             items[item['_index']]['estado_comanda'] = 'ENVIADO'
@@ -361,6 +397,57 @@ def check_all_ready(conn, orden_id):
     
     if pending['count'] == 0:
         conn.execute("UPDATE transactions SET status = 'PARA_ENTREGAR' WHERE id = ?", (orden_id,))
+
+def spool_to_local_printer(file_path: str, printer_name: Optional[str], copies: int = 1) -> str:
+    safe_copies = max(1, int(copies or 1))
+
+    if shutil.which("lp"):
+        command = ["lp", "-n", str(safe_copies)]
+        if printer_name:
+            command.extend(["-d", printer_name])
+        command.append(file_path)
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "lp failed")
+        return result.stdout.strip() or "Printed with lp"
+
+    if shutil.which("lpr"):
+        for _ in range(safe_copies):
+            command = ["lpr"]
+            if printer_name:
+                command.extend(["-P", printer_name])
+            command.append(file_path)
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "lpr failed")
+        return "Printed with lpr"
+
+    raise RuntimeError("No local print command found (lp/lpr)")
+
+@app.post("/api/print/jobs")
+def print_job(job: PrintJobRequest):
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".html", mode="w", encoding="utf-8") as temp_file:
+            temp_file.write(job.html)
+            temp_path = temp_file.name
+
+        message = spool_to_local_printer(temp_path, job.printerName, job.copies or 1)
+
+        return {
+            "status": "success",
+            "message": message,
+            "printer": job.printerName or job.printerId or "default",
+            "jobType": job.jobType or "GENERIC"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Print error: {str(e)}")
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
 
 if __name__ == "__main__":
     import uvicorn

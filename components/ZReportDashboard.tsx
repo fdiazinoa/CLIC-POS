@@ -155,7 +155,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
             const userRole = roles.find(r => r.id === currentUser?.role);
             const hiddenModules = userRole?.zReportConfig?.hiddenModules || [];
 
-            await ThermalPrinterService.printZReport(tempReport, hiddenModules);
+            await ThermalPrinterService.printZReport(tempReport, hiddenModules, config);
          }
          await new Promise(r => setTimeout(r, 1000));
 
