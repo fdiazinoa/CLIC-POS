@@ -404,6 +404,11 @@ export interface TerminalConfig {
     bloqueo_meseros: boolean;
     pedir_comensales: boolean;
     usa_modulos_cocina: boolean;
+    reservationPolicy?: {
+      validityDays: number;
+      requireAdvance: boolean;
+      minimumAdvancePercent: number;
+    };
   };
   ux: {
     theme: 'LIGHT' | 'DARK';
@@ -488,7 +493,7 @@ export interface CurrencyAuditLog {
   terminalId?: string;             // Terminal donde se hizo el cambio
 }
 
-export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTHER';
+export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTHER' | 'CREDIT';
 
 export interface PaymentMethodDefinition {
   id: string;
@@ -501,6 +506,7 @@ export interface PaymentMethodDefinition {
   requiresSignature: boolean;
   integration: 'NONE' | 'CARNET' | 'VISANET' | 'STRIPE';
   integrationConfig?: Record<string, string>;
+  paymentTermDays?: number; // Solo aplica para tipo CREDIT
 }
 
 
@@ -661,6 +667,11 @@ export interface BusinessConfig {
     bloqueo_meseros: boolean;
     pedir_comensales: boolean;
     usa_modulos_cocina: boolean;
+    reservationPolicy?: {
+      validityDays: number;
+      requireAdvance: boolean;
+      minimumAdvancePercent: number;
+    };
   };
 }
 
@@ -849,6 +860,17 @@ export interface ProductStock {
   productId: string;
   warehouseId: string;
   quantity: number;
+  qtyPhysical?: number;
+  qtyCommitted?: number;
+  qtyAvailable?: number;
+  updatedAt: string;
+}
+
+export interface InventoryCommitment {
+  id: string; // productId + '_' + warehouseId
+  productId: string;
+  warehouseId: string;
+  qtyCommitted: number;
   updatedAt: string;
 }
 
@@ -992,6 +1014,10 @@ export interface Transaction {
   ncfType?: NCFType;
   affectedNCF?: string;             // NCF de la factura afectada (para Notas de Crédito B04)
   affectedInvoiceNumber?: string;   // No. de factura afectada (displayId para búsquedas)
+  reservationId?: string;
+  reservationCode?: string;
+  priorAdvancePaid?: number;
+  balanceDueAtSale?: number;
 
   // Relationships
   relatedTransactions?: string[];   // Related transaction IDs
@@ -1257,9 +1283,38 @@ export interface ParkedTicket {
   timestamp: string;
 }
 
+export type ReservationStatus = 'ACTIVE' | 'INVOICED' | 'EXPIRED' | 'CANCELLED';
+
+export interface Reservation {
+  id: string;
+  code: string;
+  qrPayload: string;
+  customerId: string;
+  customerName: string;
+  total: number;
+  balancePaid: number;
+  expiryDate: string;
+  status: ReservationStatus;
+  items: CartItem[];
+  warehouseId?: string;
+  deliveryDate?: string;
+  notes?: string;
+  terminalId?: string;
+  createdById?: string;
+  createdByName?: string;
+  createdAt: string;
+  updatedAt: string;
+  invoicedAt?: string;
+  invoicedTransactionId?: string;
+  expiredAt?: string;
+}
+
 export interface PaymentEntry {
   id: string;
   method: PaymentMethod;
+  methodId?: string;
+  methodLabel?: string;
+  methodIcon?: string;
   amount: number;
   timestamp: Date;
   currencyCode?: string;

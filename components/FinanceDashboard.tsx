@@ -129,6 +129,7 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
    }, {} as Record<string, number>);
 
    const cashSalesTotal = totalsByMethod['CASH'] || 0;
+   const creditSalesTotal = (totalsByMethod['CREDIT'] || 0) + (totalsByMethod['PENDIENTE'] || 0);
    const cashIn = cashMovements.filter(m => m.type === 'IN').reduce((acc, m) => acc + m.amount, 0);
    const cashOut = cashMovements.filter(m => m.type === 'OUT').reduce((acc, m) => acc + m.amount, 0);
 
@@ -264,6 +265,10 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
                         <div className="flex justify-between items-center text-sm border-b border-white/10 pb-2">
                            <span className="flex items-center gap-2 text-gray-300"><CreditCard size={14} /> Tarjetas</span>
                            <span className="font-bold">{config.currencySymbol}{(totalsByMethod['CARD'] || 0).toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm border-b border-white/10 pb-2">
+                           <span className="flex items-center gap-2 text-gray-300"><CreditCard size={14} /> Crédito</span>
+                           <span className="font-bold">{config.currencySymbol}{creditSalesTotal.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center text-sm">
                            <span className="flex items-center gap-2 text-gray-300"><Smartphone size={14} /> Digital / QR</span>

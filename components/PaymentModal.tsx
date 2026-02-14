@@ -1,9 +1,9 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
    X, CreditCard, Banknote, QrCode, CheckCircle2,
    Trash2, Plus, Wallet, Printer, Mail, ShieldAlert,
-   ArrowRight, Repeat, ChevronDown, ArrowRightLeft
+   Repeat, ArrowRightLeft, DollarSign, Zap, Smartphone
 } from 'lucide-react';
 import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem, Transaction, Customer } from '../types';
 import { printTicket } from '../utils/printer';
@@ -19,9 +19,66 @@ interface PaymentModalProps {
    customer?: Customer | null;
 }
 
+type ResolvedPaymentMethod = {
+   key: string;
+   id: string;
+   type: PaymentMethod;
+   label: string;
+   iconName?: string;
+   Icon: React.ElementType;
+};
+
+const PAYMENT_ICON_BY_NAME: Record<string, React.ElementType> = {
+   Banknote,
+   CreditCard,
+   QrCode,
+   Wallet,
+   DollarSign,
+   Smartphone,
+   Zap,
+   CardIcon: CreditCard
+};
+
+const getDefaultIconByType = (type: PaymentMethod): React.ElementType => {
+   switch (type) {
+      case 'CASH':
+         return Banknote;
+      case 'CARD':
+      case 'CREDIT':
+         return CreditCard;
+      case 'QR':
+         return QrCode;
+      case 'WALLET':
+         return Wallet;
+      case 'ADVANCE':
+         return ArrowRightLeft;
+      default:
+         return Wallet;
+   }
+};
+
+const getDefaultLabelByType = (type: PaymentMethod): string => {
+   switch (type) {
+      case 'CASH':
+         return 'Efectivo';
+      case 'CARD':
+         return 'Tarjeta';
+      case 'QR':
+         return 'Digital';
+      case 'WALLET':
+         return 'Wallet';
+      case 'CREDIT':
+         return 'Crédito';
+      case 'ADVANCE':
+         return 'Anticipo';
+      default:
+         return 'Otro';
+   }
+};
+
 const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, currencySymbol, config, onClose, onConfirm, themeColor, customer }) => {
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
-   const [activeMethod, setActiveMethod] = useState<PaymentMethod>('CASH');
+   const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');
    const [isSuccessScreen, setIsSuccessScreen] = useState(false);
    const [completedTransaction, setCompletedTransaction] = useState<Transaction | null>(null);
@@ -37,7 +94,57 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    const remaining = Math.max(0, parseFloat((absTotal - totalPaid).toFixed(2)));
    const change = Math.max(0, parseFloat((totalPaid - absTotal).toFixed(2)));
 
+   const configuredMethods = useMemo<ResolvedPaymentMethod[]>(() => {
+      const enabledConfigMethods = (config?.paymentMethods || []).filter(m => m.isEnabled);
+
+      const fromConfig = enabledConfigMethods.map((method, index) => {
+         const IconFromName = method.icon ? PAYMENT_ICON_BY_NAME[method.icon] : undefined;
+         return {
+            key: `${method.id}-${index}`,
+            id: method.id,
+            type: method.type,
+            label: method.name || getDefaultLabelByType(method.type),
+            iconName: method.icon,
+            Icon: IconFromName || getDefaultIconByType(method.type)
+         };
+      });
+
+      const methods = fromConfig.length > 0 ? fromConfig : [
+         { key: 'CASH', id: 'CASH', type: 'CASH' as PaymentMethod, label: 'Efectivo', iconName: 'Banknote', Icon: Banknote },
+         { key: 'CARD', id: 'CARD', type: 'CARD' as PaymentMethod, label: 'Tarjeta', iconName: 'CreditCard', Icon: CreditCard },
+         { key: 'QR', id: 'QR', type: 'QR' as PaymentMethod, label: 'Digital', iconName: 'QrCode', Icon: QrCode }
+      ];
+
+      const hasWalletMethod = methods.some(m => m.type === 'WALLET');
+      if (customer?.wallet && !hasWalletMethod) {
+         methods.push({
+            key: 'WALLET',
+            id: 'WALLET',
+            type: 'WALLET',
+            label: 'Wallet',
+            iconName: 'Wallet',
+            Icon: Wallet
+         });
+      }
+
+      return methods;
+   }, [config?.paymentMethods, customer?.wallet]);
+
+   const activePaymentMethod = useMemo(
+      () => configuredMethods.find(method => method.key === activeMethodKey) || configuredMethods[0] || null,
+      [configuredMethods, activeMethodKey]
+   );
+
+   const activeMethod = activePaymentMethod?.type || 'CASH';
+
    const denominations = selectedCurrency.code === 'USD' ? [1, 5, 10, 20, 50, 100] : [50, 100, 200, 500, 1000, 2000];
+
+   useEffect(() => {
+      if (configuredMethods.length === 0) return;
+      if (!configuredMethods.some(method => method.key === activeMethodKey)) {
+         setActiveMethodKey(configuredMethods[0].key);
+      }
+   }, [configuredMethods, activeMethodKey]);
 
    useEffect(() => {
       if (remaining > 0) {
@@ -64,6 +171,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    };
 
    const handleAddPayment = (amountOverride?: number) => {
+      if (!activePaymentMethod) return;
       const valInSelectedCurrency = amountOverride !== undefined ? amountOverride : parseFloat(inputAmount);
       if (!valInSelectedCurrency || valInSelectedCurrency <= 0) return;
 
@@ -71,7 +179,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
       const newPayment: PaymentEntry = {
          id: Math.random().toString(36).substr(2, 9),
-         method: activeMethod,
+         method: activePaymentMethod.type,
+         methodId: activePaymentMethod.id,
+         methodLabel: activePaymentMethod.label,
+         methodIcon: activePaymentMethod.iconName,
          amount: parseFloat(amountInBase.toFixed(2)),
          timestamp: new Date(),
          currencyCode: selectedCurrency.code,
@@ -99,6 +210,17 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
    const themeBgClass = { blue: 'bg-blue-600', orange: 'bg-orange-600', gray: 'bg-gray-800' }[themeColor] || 'bg-indigo-600';
    const themeTextClass = { blue: 'text-blue-600', orange: 'text-orange-600', gray: 'text-gray-800' }[themeColor] || 'text-indigo-600';
+
+   const getEntryIcon = (payment: PaymentEntry): React.ElementType => {
+      if (payment.methodIcon && PAYMENT_ICON_BY_NAME[payment.methodIcon]) {
+         return PAYMENT_ICON_BY_NAME[payment.methodIcon];
+      }
+      return getDefaultIconByType(payment.method);
+   };
+
+   const getEntryLabel = (payment: PaymentEntry): string => {
+      return payment.methodLabel || getDefaultLabelByType(payment.method);
+   };
 
    const [showEmailInput, setShowEmailInput] = useState(false);
    const [emailInput, setEmailInput] = useState('');
@@ -273,25 +395,28 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
                {/* Payments List (Compact on mobile) */}
                <div className="flex-1 overflow-y-auto space-y-2 md:space-y-3 no-scrollbar max-h-[15vh] md:max-h-full">
-                  {payments.map(p => (
-                     <div key={p.id} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-xl md:rounded-2xl shadow-sm border border-gray-100 animate-in slide-in-from-left-2">
-                        <div className="flex items-center gap-2 md:gap-3">
-                           <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
-                              {p.method === 'CASH' ? <Banknote size={16} /> : p.method === 'CARD' ? <CreditCard size={16} /> : <QrCode size={16} />}
+                  {payments.map(p => {
+                     const EntryIcon = getEntryIcon(p);
+                     return (
+                        <div key={p.id} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-xl md:rounded-2xl shadow-sm border border-gray-100 animate-in slide-in-from-left-2">
+                           <div className="flex items-center gap-2 md:gap-3">
+                              <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-600">
+                                 <EntryIcon size={16} />
+                              </div>
+                              <div>
+                                 <span className="font-bold text-[10px] md:text-xs text-gray-800 block">{getEntryLabel(p)}</span>
+                                 {p.currencyCode !== baseCurrency.code && (
+                                    <span className="text-[9px] md:text-[10px] text-gray-400 font-bold">{p.amountOriginal} {p.currencyCode}</span>
+                                 )}
+                              </div>
                            </div>
-                           <div>
-                              <span className="font-bold text-[10px] md:text-xs text-gray-800 block">{p.method}</span>
-                              {p.currencyCode !== baseCurrency.code && (
-                                 <span className="text-[9px] md:text-[10px] text-gray-400 font-bold">{p.amountOriginal} {p.currencyCode}</span>
-                              )}
+                           <div className="flex items-center gap-2 md:gap-4">
+                              <span className="font-bold text-sm md:text-gray-900">{currencySymbol}{p.amount.toFixed(2)}</span>
+                              <button onClick={() => handleRemovePayment(p.id)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>
                            </div>
                         </div>
-                        <div className="flex items-center gap-2 md:gap-4">
-                           <span className="font-bold text-sm md:text-gray-900">{currencySymbol}{p.amount.toFixed(2)}</span>
-                           <button onClick={() => handleRemovePayment(p.id)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>
-                        </div>
-                     </div>
-                  ))}
+                     );
+                  })}
                </div>
 
                <div className="p-3 md:p-4 bg-white border-t border-gray-200 rounded-xl md:rounded-2xl mt-4 shadow-inner shrink-0">
@@ -322,14 +447,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             <div className="flex-1 flex flex-col bg-white overflow-y-auto">
                {/* Payment Methods */}
                <div className="flex p-3 md:p-4 gap-3 md:gap-4 overflow-x-auto no-scrollbar shrink-0">
-                  {[
-                     { id: 'CASH', label: 'Efectivo', icon: Banknote },
-                     { id: 'CARD', label: 'Tarjeta', icon: CreditCard },
-                     { id: 'QR', label: 'Digital', icon: QrCode },
-                     { id: 'WALLET', label: 'Wallet', icon: Wallet }
-                  ].map(m => (
-                     <button key={m.id} onClick={() => setActiveMethod(m.id as PaymentMethod)} className={`flex-1 min-w-[80px] md:min-w-[100px] py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center gap-1 md:gap-2 transition-all ${activeMethod === m.id ? `border-current ${themeTextClass} bg-gray-50 shadow-sm` : 'border-transparent text-gray-400 hover:bg-gray-50'}`}>
-                        <m.icon size={24} className="md:w-8 md:h-8" /><span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{m.label}</span>
+                  {configuredMethods.map(method => (
+                     <button
+                        key={method.key}
+                        onClick={() => setActiveMethodKey(method.key)}
+                        className={`flex-1 min-w-[80px] md:min-w-[100px] py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center gap-1 md:gap-2 transition-all ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} bg-gray-50 shadow-sm` : 'border-transparent text-gray-400 hover:bg-gray-50'}`}
+                     >
+                        <method.Icon size={24} className="md:w-8 md:h-8" />
+                        <span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{method.label}</span>
                      </button>
                   ))}
                </div>

@@ -16,6 +16,8 @@ const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ isOpen, onClo
     const [feedback, setFeedback] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
     const scannerRef = useRef<Html5Qrcode | null>(null);
+    const startPromiseRef = useRef<Promise<void> | null>(null);
+    const stopPromiseRef = useRef<Promise<void> | null>(null);
     const regionId = "html5-qrcode-reader";
 
     // Base64 Beep Sound (Short, high-pitched)
@@ -45,23 +47,28 @@ const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ isOpen, onClo
         }
     };
 
-    useEffect(() => {
-        if (isOpen && !scannerRef.current) {
-            startScanner();
-        } else if (!isOpen && scannerRef.current) {
-            stopScanner();
+    const isBenignTransitionError = (error: unknown): boolean => {
+        const message = (error as any)?.message || String(error || '');
+        return message.includes('already under transition') || message.includes('Cannot transition to a new state');
+    };
+
+    const startScanner = async (): Promise<void> => {
+        if (scannerRef.current || startPromiseRef.current) {
+            return startPromiseRef.current || Promise.resolve();
         }
 
-        return () => {
-            if (scannerRef.current) {
-                stopScanner();
+        const startOp = (async () => {
+            if (stopPromiseRef.current) {
+                try {
+                    await stopPromiseRef.current;
+                } catch {
+                    // no-op; we're about to retry startup
+                }
             }
-        };
-    }, [isOpen]);
+            if (!isOpen) return;
 
-    const startScanner = async () => {
-        setCameraError(null);
-        try {
+            setCameraError(null);
+
             const formatsToSupport = [
                 Html5QrcodeSupportedFormats.EAN_13,
                 Html5QrcodeSupportedFormats.EAN_8,
@@ -128,7 +135,7 @@ const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ isOpen, onClo
                 }
             );
             setIsScanning(true);
-        } catch (err: any) {
+        })().catch(async (err: any) => {
             console.error("Error starting scanner", err);
             let msg = "No se pudo acceder a la cámara.";
             if (err?.name === 'NotAllowedError') msg = "Permiso denegado. Habilite el acceso a la cámara.";
@@ -138,21 +145,86 @@ const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ isOpen, onClo
                 msg += " (Requiere HTTPS o localhost)";
             }
             setCameraError(`${msg} [${err?.name || 'Error'}: ${err?.message || JSON.stringify(err)}]`);
-        }
-    };
-
-    const stopScanner = async () => {
-        if (scannerRef.current) {
-            try {
-                await scannerRef.current.stop();
-                scannerRef.current.clear();
-            } catch (e) {
-                console.error("Error stopping scanner", e);
-            }
+            const scanner = scannerRef.current;
             scannerRef.current = null;
             setIsScanning(false);
-        }
+            setTorchOn(false);
+            if (scanner) {
+                try {
+                    await scanner.clear();
+                } catch {
+                    // ignore cleanup errors after failed start
+                }
+            }
+        }).finally(() => {
+            startPromiseRef.current = null;
+        });
+
+        startPromiseRef.current = startOp;
+        return startOp;
     };
+
+    const stopScanner = async (): Promise<void> => {
+        if (stopPromiseRef.current) {
+            return stopPromiseRef.current;
+        }
+
+        const stopOp = (async () => {
+            if (startPromiseRef.current) {
+                try {
+                    await startPromiseRef.current;
+                } catch {
+                    // start failures are already handled and should not block stop
+                }
+            }
+
+            const scanner = scannerRef.current;
+            scannerRef.current = null;
+
+            if (!scanner) {
+                setIsScanning(false);
+                setTorchOn(false);
+                return;
+            }
+
+            try {
+                await scanner.stop();
+            } catch (e) {
+                if (!isBenignTransitionError(e)) {
+                    console.error("Error stopping scanner", e);
+                }
+            }
+
+            try {
+                await scanner.clear();
+            } catch (e) {
+                // When scanner is already disposed by another transition, ignore.
+                if (!isBenignTransitionError(e)) {
+                    console.error("Error clearing scanner", e);
+                }
+            }
+
+            setIsScanning(false);
+            setTorchOn(false);
+        })().finally(() => {
+            stopPromiseRef.current = null;
+        });
+
+        stopPromiseRef.current = stopOp;
+        return stopOp;
+    };
+
+    useEffect(() => {
+        if (isOpen) {
+            void startScanner();
+        } else {
+            void stopScanner();
+        }
+
+        return () => {
+            void stopScanner();
+        };
+    }, [isOpen]);
 
     const toggleTorch = () => {
         if (scannerRef.current) {

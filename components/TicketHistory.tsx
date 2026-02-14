@@ -79,6 +79,10 @@ const SalesHistoryTable: React.FC<{
          case 'EFECTIVO': return <Banknote size={14} className="text-green-600" />;
          case 'CARD':
          case 'TARJETA': return <CreditCard size={14} className="text-blue-600" />;
+         case 'CREDIT':
+         case 'CRÉDITO':
+         case 'CREDITO':
+         case 'PENDIENTE': return <CreditCard size={14} className="text-cyan-600" />;
          case 'TRANSFER':
          case 'TRANSFERENCIA': return <Wallet size={14} className="text-purple-600" />;
          default: return <DollarSign size={14} className="text-gray-400" />;

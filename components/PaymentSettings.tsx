@@ -4,7 +4,7 @@ import {
   CreditCard, Banknote, QrCode, Wallet, GripVertical, 
   Edit2, Trash2, X, Plus, Save, PenTool, Zap, 
   CreditCard as CardIcon, DollarSign, Smartphone,
-  Key, Server, CheckCircle2, AlertCircle, Wifi, RefreshCw
+  Key, Server, CheckCircle2, AlertCircle, Wifi, RefreshCw, Calendar
 } from 'lucide-react';
 import { BusinessConfig, PaymentMethodDefinition, PaymentMethod } from '../types';
 
@@ -52,10 +52,38 @@ const PROVIDER_SCHEMAS: Record<string, { key: string; label: string; type: 'text
   ]
 };
 
+const isPendingPaymentMethod = (name: string): boolean => name.trim().toLowerCase() === 'pendiente';
+
+const toValidCreditDays = (days?: number): number => {
+  const parsed = Number(days);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.floor(parsed));
+};
+
+const normalizePaymentMethod = (method: PaymentMethodDefinition): PaymentMethodDefinition => {
+  const forcedType: PaymentMethod = isPendingPaymentMethod(method.name) ? 'CREDIT' : method.type;
+
+  const normalizedMethod: PaymentMethodDefinition = {
+    ...method,
+    type: forcedType,
+    integration: forcedType === 'CARD' ? method.integration || 'NONE' : 'NONE',
+    integrationConfig: forcedType === 'CARD' ? method.integrationConfig || {} : {}
+  };
+
+  if (forcedType === 'CREDIT') {
+    return { ...normalizedMethod, paymentTermDays: toValidCreditDays(method.paymentTermDays) };
+  }
+
+  const { paymentTermDays, ...withoutCreditDays } = normalizedMethod;
+  return withoutCreditDays;
+};
+
 const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfig, onClose }) => {
   
   // State Initialization
-  const [methods, setMethods] = useState<PaymentMethodDefinition[]>(config.paymentMethods || DEFAULT_METHODS);
+  const [methods, setMethods] = useState<PaymentMethodDefinition[]>(
+    (config.paymentMethods || DEFAULT_METHODS).map(normalizePaymentMethod)
+  );
   
   // Method Editing State
   const [editingMethod, setEditingMethod] = useState<PaymentMethodDefinition | null>(null);
@@ -100,26 +128,28 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
       opensDrawer: false,
       requiresSignature: false,
       integration: 'NONE',
-      integrationConfig: {}
+      integrationConfig: {},
+      paymentTermDays: 0
     });
     setConnectionStatus('IDLE');
     setIsMethodModalOpen(true);
   };
 
   const handleEditMethod = (method: PaymentMethodDefinition) => {
-    setEditingMethod({ ...method, integrationConfig: method.integrationConfig || {} });
+    setEditingMethod(normalizePaymentMethod({ ...method, integrationConfig: method.integrationConfig || {} }));
     setConnectionStatus('IDLE');
     setIsMethodModalOpen(true);
   };
 
   const handleSaveMethod = () => {
     if (!editingMethod) return;
+    const normalizedMethod = normalizePaymentMethod(editingMethod);
     setMethods(prev => {
-      const exists = prev.find(m => m.id === editingMethod.id);
+      const exists = prev.find(m => m.id === normalizedMethod.id);
       if (exists) {
-        return prev.map(m => m.id === editingMethod.id ? editingMethod : m);
+        return prev.map(m => m.id === normalizedMethod.id ? normalizedMethod : m);
       }
-      return [...prev, editingMethod];
+      return [...prev, normalizedMethod];
     });
     setIsMethodModalOpen(false);
   };
@@ -256,6 +286,11 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                             <PenTool size={10} /> Firma
                           </span>
                         )}
+                        {method.type === 'CREDIT' && (
+                          <span className="text-[10px] bg-cyan-50 text-cyan-700 px-2 py-0.5 rounded border border-cyan-100 font-medium">
+                            {method.paymentTermDays || 0} Días
+                          </span>
+                        )}
                         <span className="text-[10px] bg-gray-50 text-gray-500 px-2 py-0.5 rounded border border-gray-200 uppercase font-bold">
                            {method.type}
                         </span>
@@ -303,7 +338,11 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                   <input 
                     type="text" 
                     value={editingMethod.name}
-                    onChange={(e) => setEditingMethod({...editingMethod, name: e.target.value})}
+                    onChange={(e) => {
+                      const nextName = e.target.value;
+                      const nextType = isPendingPaymentMethod(nextName) ? 'CREDIT' : editingMethod.type;
+                      setEditingMethod(normalizePaymentMethod({ ...editingMethod, name: nextName, type: nextType }));
+                    }}
                     className="w-full p-3 bg-gray-50 rounded-xl border-none outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -311,14 +350,21 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tipo de Fondo</label>
                   <select 
                     value={editingMethod.type}
-                    onChange={(e) => setEditingMethod({...editingMethod, type: e.target.value as PaymentMethod})}
-                    className="w-full p-3 bg-gray-50 rounded-xl border-none outline-none focus:ring-2 focus:ring-blue-500"
+                    onChange={(e) => setEditingMethod(normalizePaymentMethod({ ...editingMethod, type: e.target.value as PaymentMethod }))}
+                    disabled={isPendingPaymentMethod(editingMethod.name)}
+                    className="w-full p-3 bg-gray-50 rounded-xl border-none outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-70 disabled:cursor-not-allowed"
                   >
                     <option value="CASH">Efectivo</option>
                     <option value="CARD">Tarjeta</option>
                     <option value="QR">QR / Digital</option>
+                    <option value="CREDIT">Crédito</option>
                     <option value="OTHER">Otro</option>
                   </select>
+                  {isPendingPaymentMethod(editingMethod.name) && (
+                    <p className="mt-1 text-[11px] font-medium text-cyan-700">
+                      El método &quot;Pendiente&quot; siempre se guarda como Crédito.
+                    </p>
+                  )}
                 </div>
                 
                 {/* Integration Selector */}
@@ -335,6 +381,25 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                       <option value="VISANET">VisaNet</option>
                       <option value="STRIPE">Stripe Terminal</option>
                     </select>
+                  </div>
+                )}
+
+                {editingMethod.type === 'CREDIT' && (
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Días de Crédito</label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={editingMethod.paymentTermDays ?? 0}
+                        onChange={(e) => setEditingMethod({ ...editingMethod, paymentTermDays: toValidCreditDays(parseInt(e.target.value, 10)) })}
+                        className="w-full p-3 pl-10 bg-cyan-50 text-cyan-900 rounded-xl border border-cyan-100 outline-none focus:ring-2 focus:ring-cyan-400 font-medium"
+                      />
+                      <div className="absolute left-3 top-1/2 -translate-y-1/2 text-cyan-400">
+                        <Calendar size={16} />
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
