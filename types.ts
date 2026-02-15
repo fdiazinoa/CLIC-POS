@@ -411,6 +411,7 @@ export interface TerminalConfig {
     };
     fiscalThreshold?: number;
     expandTicket?: boolean;
+    showGlobalSales?: boolean;
   };
   ux: {
     theme: 'LIGHT' | 'DARK';

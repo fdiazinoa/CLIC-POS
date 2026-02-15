@@ -251,6 +251,15 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                         disabled={isReadOnly}
                     />
 
+                    <Toggle
+                        label="Visualizar Ventas de otras Terminales"
+                        description="Permite buscar y ver transacciones realizadas en cualquier caja para propósitos de devolución o auditoría."
+                        checked={operational.showGlobalSales}
+                        onChange={(v: boolean) => handleToggle('showGlobalSales', v)}
+                        icon={Monitor}
+                        disabled={isReadOnly}
+                    />
+
                     <div className="flex items-start gap-4 p-4 rounded-2xl bg-amber-50 border border-amber-100">
                         <Info className="text-amber-500 mt-1 shrink-0" size={18} />
                         <p className="text-[11px] text-amber-700 leading-relaxed font-medium">

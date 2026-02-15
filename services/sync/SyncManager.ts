@@ -357,7 +357,8 @@ class SyncManager {
             'roles',
             'internalSequences',
             'productStocks',
-            ...(isMaster ? ['inventoryLedger' as SyncableCollection] : []),
+            ...(isMaster || permissionService.shouldShowGlobalSales() ? ['inventoryLedger' as SyncableCollection] : []),
+            ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection] : []),
             'transfers',
             'receptions'
         ];
@@ -468,7 +469,8 @@ class SyncManager {
             'internalSequences',
             'productStocks',
             'transfers',
-            'receptions'
+            'receptions',
+            ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection] : [])
         ];
         const updatesAvailable: string[] = [];
 
@@ -545,6 +547,10 @@ class SyncManager {
                 { id: 'zReports', label: 'Cierres de Caja (Z)' },
                 { id: 'inventoryLedger', label: 'Movimientos de Inventario' },
                 { id: 'cashMovements', label: 'Movimientos de Efectivo' }
+            );
+        } else if (permissionService.shouldShowGlobalSales()) {
+            modules.push(
+                { id: 'transactions', label: 'Historial de Ventas Globales' }
             );
         }
 

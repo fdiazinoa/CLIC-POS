@@ -59,6 +59,14 @@ class PermissionService {
     }
 
     /**
+     * Check if terminal should visualize sales from other terminals
+     */
+    shouldShowGlobalSales(): boolean {
+        const terminal = this.getCurrentTerminal();
+        return terminal?.config.operational?.showGlobalSales === true || this.isMasterTerminal();
+    }
+
+    /**
      * Check if user can create/edit products
      */
     canManageProducts(): boolean {
