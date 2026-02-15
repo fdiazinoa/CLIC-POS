@@ -266,6 +266,18 @@ export const db = {
       // Migration Logic: Ensure all collections exist even if config exists
       // SKIP SEEDING ON SLAVES: Slaves must wait for Master snapshot
       if (!isSlave) {
+        // --- CHECK DATABASE INITIALIZATION FLAG ---
+        // This prevents re-seeding of demo data on every reload
+        let isFirstRun = false;
+        try {
+          const initFlag = await dbAdapter.getDocument('config', '_db_initialized');
+          isFirstRun = !initFlag;
+          console.log(`🏁 Database initialization status: ${isFirstRun ? 'FIRST RUN' : 'ALREADY INITIALIZED'}`);
+        } catch (error) {
+          console.log('🏁 No initialization flag found - treating as first run');
+          isFirstRun = true;
+        }
+
         // --- CONFIG PATCHING (Always run if config exists) ---
         if (existingConfig && (Array.isArray(existingConfig) ? existingConfig.length > 0 : Object.keys(existingConfig).length > 0)) {
           const currentConfig = (Array.isArray(existingConfig) ? existingConfig[0] : existingConfig) as any as BusinessConfig;
@@ -312,33 +324,64 @@ export const db = {
         }
 
         // --- SEEDING MISSING COLLECTIONS ---
-        for (const [key, value] of Object.entries(SEED_DATA)) {
-          if (!shouldCheckSeedForCollection(key, value)) continue;
-          try {
-            const existingCollection = await withTimeout(
-              dbAdapter.getCollection(key),
-              isCriticalCollection(key) ? 15000 : 8000,
-              `SEED_CHECK_${key}`
-            );
+        // CRITICAL FIX: Only seed collections on first run
+        // This prevents re-seeding demo data and overwriting user data
+        if (isFirstRun) {
+          console.log('🌱 First run detected - seeding initial data...');
+          for (const [key, value] of Object.entries(SEED_DATA)) {
+            if (!shouldCheckSeedForCollection(key, value)) continue;
+            try {
+              const existingCollection = await withTimeout(
+                dbAdapter.getCollection(key),
+                isCriticalCollection(key) ? 15000 : 8000,
+                `SEED_CHECK_${key}`
+              );
 
-            // If collection is missing or empty (except config which we already handled), seed it
-            if (!existingCollection || (Array.isArray(existingCollection) && existingCollection.length === 0 && key !== 'config')) {
-              console.log(`🌱 Seeding missing collection: ${key}`);
-              await withTimeout(dbAdapter.saveCollection(key, value as any), 8000, `SEED_SAVE_${key}`);
+              // If collection is missing or empty (except config which we already handled), seed it
+              if (!existingCollection || (Array.isArray(existingCollection) && existingCollection.length === 0 && key !== 'config')) {
+                console.log(`🌱 Seeding missing collection: ${key}`);
+                await withTimeout(dbAdapter.saveCollection(key, value as any), 8000, `SEED_SAVE_${key}`);
+              }
+            } catch (error) {
+              console.warn(`⚠️ Failed to seed collection ${key}:`, error);
             }
-          } catch (error) {
-            console.warn(`⚠️ Failed to seed collection ${key}:`, error);
           }
+
+          // Save initialization flag to prevent future re-seeding
+          try {
+            await dbAdapter.saveDocument('config', {
+              id: '_db_initialized',
+              timestamp: new Date().toISOString(),
+              version: 1
+            });
+            console.log('✅ Database initialization flag saved');
+          } catch (error) {
+            console.warn('⚠️ Failed to save initialization flag:', error);
+          }
+        } else {
+          console.log('ℹ️ Skipping auto-seed - database already initialized');
+          console.log('ℹ️ If collections are empty, they were intentionally cleared by the user');
         }
       } else {
         console.log('ℹ️ Slave terminal detected: Skipping auto-seeding. Waiting for Master sync.');
       }
 
-      // Determine if we should return seed data (only for masters that are truly empty)
+      // Determine if we should return seed data (only for masters that are truly empty AND first run)
       const hasConfig = existingConfig && (Array.isArray(existingConfig) ? existingConfig.length > 0 : Object.keys(existingConfig).length > 0);
 
-      if (!hasConfig && !isSlave) {
-        console.log('🌱 No config found on Master: Returning SEED_DATA');
+      // Check if database has been initialized before
+      let isInitialized = false;
+      try {
+        const initFlag = await dbAdapter.getDocument('config', '_db_initialized');
+        isInitialized = !!initFlag;
+      } catch (error) {
+        // Flag doesn't exist, database is not initialized
+        isInitialized = false;
+      }
+
+      // Only return SEED_DATA on first run for master terminals without config
+      if (!hasConfig && !isSlave && !isInitialized) {
+        console.log('🌱 No config found on Master (First Run): Returning SEED_DATA');
         return SEED_DATA;
       }
 
