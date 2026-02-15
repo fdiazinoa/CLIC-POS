@@ -1,4 +1,388 @@
-import { Transaction, Product, InventoryLedgerEntry, Customer, PurchaseOrder, Reception, AttendanceLog, Supplier } from '../types';
+import {
+    AttendanceLog,
+    CashMovement,
+    Customer,
+    InventoryLedgerEntry,
+    Product,
+    ProductStock,
+    ProductVariant,
+    PurchaseOrder,
+    Reception,
+    Transaction,
+    Warehouse,
+    Supplier
+} from '../types';
+
+export type InventoryStatusFilter = 'ALL' | 'WITH_STOCK' | 'OUT_OF_STOCK' | 'LOW_STOCK';
+
+export interface InventoryAnalyticsFilters {
+    warehouseId: string; // "ALL" for consolidated view
+    departmentId: string;
+    sectionId: string;
+    familyId: string;
+    subfamilyId: string;
+    brandId: string;
+    supplierId: string;
+    stockState: InventoryStatusFilter;
+    searchTerm?: string;
+}
+
+export interface InventoryVariantAnalyticsRow {
+    variantId: string;
+    variantLabel: string;
+    quantity: number;
+    avgCost: number;
+    value: number;
+}
+
+export interface InventoryAnalyticsRow {
+    id: string;
+    name: string;
+    code: string;
+    quantity: number;
+    avgCost: number;
+    value: number;
+    minStock: number;
+    status: Exclude<InventoryStatusFilter, 'ALL'>;
+    departmentId?: string;
+    sectionId?: string;
+    familyId?: string;
+    subfamilyId?: string;
+    brandId?: string;
+    supplierId?: string;
+    variants: InventoryVariantAnalyticsRow[];
+    hasVariants: boolean;
+}
+
+interface QueryInventoryAnalyticsParams {
+    products: Product[];
+    productStocks: ProductStock[];
+    warehouses: Warehouse[];
+    inventoryLedger: InventoryLedgerEntry[];
+    filters: InventoryAnalyticsFilters;
+}
+
+const toNumber = (value: unknown): number => {
+    const parsed = Number(value || 0);
+    return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const normalizePaymentMethod = (method: unknown): string => String(method || '').trim().toUpperCase();
+
+const isRefundLikeTransaction = (tx: Transaction): boolean => {
+    return tx.documentType === 'REFUND'
+        || tx.ncfType === 'B04'
+        || tx.status === 'REFUNDED'
+        || tx.status === 'PARTIAL_REFUND'
+        || toNumber(tx.total) < 0;
+};
+
+const isOpeningFundReason = (reason: unknown): boolean => {
+    const normalized = String(reason || '').toLowerCase();
+    if (!normalized) return false;
+    return normalized.includes('apertura')
+        || normalized.includes('fondo')
+        || normalized.includes('cambio inicial')
+        || normalized.includes('fondo inicial');
+};
+
+const paymentMatchesCurrency = (payment: any, currencyCode?: string): boolean => {
+    if (!currencyCode) return true;
+    const paymentCurrency = String(payment?.currencyCode || payment?.currency || '').trim().toUpperCase();
+    if (!paymentCurrency) return true;
+    return paymentCurrency === currencyCode;
+};
+
+const movementMatchesCurrency = (movement: CashMovement, currencyCode?: string): boolean => {
+    if (!currencyCode) return true;
+    const movementCurrency = String(movement.currencyCode || '').trim().toUpperCase();
+    if (!movementCurrency) return true;
+    return movementCurrency === currencyCode;
+};
+
+export interface CashDiscrepancyInput {
+    transactions: Transaction[];
+    cashTransactions: CashMovement[];
+    countedCash?: number | null;
+    openingFund?: number;
+    currencyCode?: string;
+}
+
+export interface CashDiscrepancyResult {
+    openingFund: number;
+    cashSales: number;
+    cashIn: number;
+    cashOut: number;
+    cashRefunds: number;
+    expectedCash: number;
+    countedCash: number | null;
+    discrepancy: number | null;
+}
+
+/**
+ * Cash discrepancy formula:
+ * (Opening Fund + Cash Sales + Cash In) - (Cash Out + Cash Refunds)
+ * Crosses cash transactions and sales documents.
+ */
+export const calculateCashDiscrepancy = ({
+    transactions,
+    cashTransactions,
+    countedCash = null,
+    openingFund = 0,
+    currencyCode
+}: CashDiscrepancyInput): CashDiscrepancyResult => {
+    const normalizedCurrency = currencyCode ? currencyCode.toUpperCase() : undefined;
+
+    let computedOpeningFund = toNumber(openingFund);
+    let cashIn = 0;
+    let cashOut = 0;
+
+    (cashTransactions || []).forEach(movement => {
+        if (!movementMatchesCurrency(movement, normalizedCurrency)) return;
+        const amount = toNumber(movement.amount);
+        if (amount <= 0) return;
+
+        if (movement.type === 'IN') {
+            if (isOpeningFundReason(movement.reason)) {
+                computedOpeningFund += amount;
+            } else {
+                cashIn += amount;
+            }
+            return;
+        }
+
+        cashOut += amount;
+    });
+
+    let cashSales = 0;
+    let cashRefunds = 0;
+
+    (transactions || []).forEach(tx => {
+        const txPayments = Array.isArray(tx.payments) ? tx.payments : [];
+        const cashPaid = txPayments.reduce((sum, payment) => {
+            if (normalizePaymentMethod(payment?.method) !== 'CASH') return sum;
+            if (!paymentMatchesCurrency(payment, normalizedCurrency)) return sum;
+            return sum + Math.abs(toNumber(payment?.amount));
+        }, 0);
+
+        if (cashPaid <= 0) return;
+
+        if (isRefundLikeTransaction(tx)) {
+            cashRefunds += cashPaid;
+        } else {
+            cashSales += cashPaid;
+        }
+    });
+
+    const expectedCash = (computedOpeningFund + cashSales + cashIn) - (cashOut + cashRefunds);
+    const normalizedCounted = countedCash === null || countedCash === undefined
+        ? null
+        : toNumber(countedCash);
+    const discrepancy = normalizedCounted === null ? null : normalizedCounted - expectedCash;
+
+    return {
+        openingFund: computedOpeningFund,
+        cashSales,
+        cashIn,
+        cashOut,
+        cashRefunds,
+        expectedCash,
+        countedCash: normalizedCounted,
+        discrepancy
+    };
+};
+
+const resolveStatus = (
+    quantity: number,
+    minStock: number
+): Exclude<InventoryStatusFilter, 'ALL'> => {
+    if (quantity <= 0) return 'OUT_OF_STOCK';
+    if (minStock > 0 && quantity <= minStock) return 'LOW_STOCK';
+    return 'WITH_STOCK';
+};
+
+const formatVariantLabel = (variant: ProductVariant): string => {
+    const attrs = Object.values(variant.attributeValues || {}).filter(Boolean);
+    if (attrs.length === 0) return variant.sku;
+    return `${variant.sku} · ${attrs.join(' / ')}`;
+};
+
+const buildVariantRows = (
+    product: Product,
+    movements: InventoryLedgerEntry[],
+    warehouseId: string
+): InventoryVariantAnalyticsRow[] => {
+    if (!product.variants || product.variants.length === 0) return [];
+
+    const variantLabelById = new Map<string, string>();
+    const variantRowsMap = new Map<string, { label: string; qty: number; qtyIn: number; inValue: number }>();
+
+    product.variants.forEach(variant => {
+        const label = formatVariantLabel(variant);
+        variantLabelById.set(variant.sku, label);
+        variantRowsMap.set(variant.sku, { label, qty: 0, qtyIn: 0, inValue: 0 });
+    });
+
+    const scopedMovements = (movements || []).filter(move => {
+        if (warehouseId === 'ALL') return true;
+        return move.warehouseId === warehouseId;
+    });
+
+    scopedMovements.forEach(move => {
+        const rawVariant = move.variantId || move.variantName;
+        if (!rawVariant) return;
+
+        let variantKey = rawVariant;
+        if (!variantLabelById.has(variantKey)) {
+            const matchedByLabel = Array.from(variantLabelById.entries()).find(([, label]) => label === rawVariant)?.[0];
+            if (matchedByLabel) variantKey = matchedByLabel;
+        }
+
+        const existing = variantRowsMap.get(variantKey) || {
+            label: variantLabelById.get(variantKey) || move.variantName || variantKey,
+            qty: 0,
+            qtyIn: 0,
+            inValue: 0
+        };
+
+        const qtyIn = toNumber(move.qtyIn);
+        const qtyOut = toNumber(move.qtyOut);
+        const unitCost = toNumber(move.unitCost);
+
+        existing.qty += qtyIn - qtyOut;
+        if (qtyIn > 0) {
+            existing.qtyIn += qtyIn;
+            existing.inValue += qtyIn * unitCost;
+        }
+
+        variantRowsMap.set(variantKey, existing);
+    });
+
+    return Array.from(variantRowsMap.entries())
+        .map(([variantId, row]) => {
+            const baseCost = toNumber(product.cost);
+            const avgCost = row.qtyIn > 0 ? row.inValue / row.qtyIn : baseCost;
+            return {
+                variantId,
+                variantLabel: row.label,
+                quantity: row.qty,
+                avgCost,
+                value: row.qty * avgCost
+            };
+        })
+        .sort((a, b) => a.variantLabel.localeCompare(b.variantLabel));
+};
+
+/**
+ * Inventory analytics query
+ * Crosses Inventory_Stock (productStocks) with Products and applies classification filters.
+ */
+export const queryInventoryAnalytics = ({
+    products,
+    productStocks,
+    warehouses,
+    inventoryLedger,
+    filters
+}: QueryInventoryAnalyticsParams): InventoryAnalyticsRow[] => {
+    const normalizedSearch = (filters.searchTerm || '').trim().toLowerCase();
+    const warehouseIds = (warehouses || []).map(w => w.id);
+
+    const stockByProductWarehouse = new Map<string, ProductStock>();
+    (productStocks || []).forEach(stock => {
+        stockByProductWarehouse.set(`${stock.productId}::${stock.warehouseId}`, stock);
+    });
+
+    const warehouseKeysByProduct = new Map<string, Set<string>>();
+    (productStocks || []).forEach(stock => {
+        if (!warehouseKeysByProduct.has(stock.productId)) {
+            warehouseKeysByProduct.set(stock.productId, new Set<string>());
+        }
+        warehouseKeysByProduct.get(stock.productId)!.add(stock.warehouseId);
+    });
+
+    const movementsByProduct = new Map<string, InventoryLedgerEntry[]>();
+    (inventoryLedger || []).forEach(move => {
+        if (!movementsByProduct.has(move.productId)) {
+            movementsByProduct.set(move.productId, []);
+        }
+        movementsByProduct.get(move.productId)!.push(move);
+    });
+
+    const getWarehouseQty = (product: Product, warehouseId: string): number => {
+        const detailed = stockByProductWarehouse.get(`${product.id}::${warehouseId}`);
+        if (detailed) {
+            return toNumber(detailed.qtyPhysical ?? detailed.quantity);
+        }
+        return toNumber(product.stockBalances?.[warehouseId]);
+    };
+
+    const rows: InventoryAnalyticsRow[] = [];
+
+    (products || []).forEach(product => {
+        if (filters.departmentId !== 'ALL' && product.departmentId !== filters.departmentId) return;
+        if (filters.sectionId !== 'ALL' && product.sectionId !== filters.sectionId) return;
+        if (filters.familyId !== 'ALL' && product.familyId !== filters.familyId) return;
+        if (filters.subfamilyId !== 'ALL' && product.subfamilyId !== filters.subfamilyId) return;
+        if (filters.brandId !== 'ALL' && product.brandId !== filters.brandId) return;
+        if (filters.supplierId !== 'ALL' && product.primarySupplierId !== filters.supplierId) return;
+
+        if (normalizedSearch) {
+            const haystack = `${product.name} ${product.id} ${product.barcode || ''}`.toLowerCase();
+            if (!haystack.includes(normalizedSearch)) return;
+        }
+
+        let quantity = 0;
+        if (filters.warehouseId === 'ALL') {
+            const inferredWarehouses = new Set<string>(warehouseIds);
+            Object.keys(product.stockBalances || {}).forEach(whId => inferredWarehouses.add(whId));
+            warehouseKeysByProduct.get(product.id)?.forEach(whId => inferredWarehouses.add(whId));
+            quantity = Array.from(inferredWarehouses).reduce((sum, whId) => sum + getWarehouseQty(product, whId), 0);
+        } else {
+            quantity = getWarehouseQty(product, filters.warehouseId);
+        }
+
+        const minStock = filters.warehouseId !== 'ALL'
+            ? toNumber(product.warehouseSettings?.[filters.warehouseId]?.min ?? product.minStock)
+            : toNumber(product.minStock);
+
+        const status = resolveStatus(quantity, minStock);
+        if (filters.stockState !== 'ALL' && status !== filters.stockState) return;
+
+        const variantRows = buildVariantRows(
+            product,
+            movementsByProduct.get(product.id) || [],
+            filters.warehouseId
+        );
+
+        const avgCostFromChildren = variantRows.length > 0
+            ? variantRows.reduce((sum, row) => sum + row.avgCost, 0) / variantRows.length
+            : NaN;
+        const avgCost = Number.isFinite(avgCostFromChildren) && avgCostFromChildren > 0
+            ? avgCostFromChildren
+            : toNumber(product.cost);
+
+        rows.push({
+            id: product.id,
+            name: product.name,
+            code: product.barcode || '',
+            quantity,
+            avgCost,
+            value: quantity * avgCost,
+            minStock,
+            status,
+            departmentId: product.departmentId,
+            sectionId: product.sectionId,
+            familyId: product.familyId,
+            subfamilyId: product.subfamilyId,
+            brandId: product.brandId,
+            supplierId: product.primarySupplierId,
+            variants: variantRows,
+            hasVariants: variantRows.length > 0
+        });
+    });
+
+    return rows.sort((a, b) => a.name.localeCompare(b.name));
+};
 
 /**
  * Reconstructs inventory as of a specific date by backtracking through ledger entries.

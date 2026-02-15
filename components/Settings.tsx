@@ -7,7 +7,26 @@ import {
   Cpu, HardDrive, Smartphone, Cloud, Lock, Package, Building2,
   Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw, Layers, ChefHat, UserCircle, BarChart3
 } from 'lucide-react';
-import { BusinessConfig, User, RoleDefinition, Transaction, Product, Warehouse, StockTransfer, Supplier, Customer, PurchaseOrder, Reception, AnalyticsCategory } from '../types';
+import {
+  BusinessConfig,
+  User,
+  RoleDefinition,
+  Transaction,
+  Product,
+  Warehouse,
+  StockTransfer,
+  Supplier,
+  Customer,
+  PurchaseOrder,
+  Reception,
+  AnalyticsCategory,
+  InventoryLedgerEntry,
+  AttendanceLog,
+  ProductStock,
+  InventoryCountSession,
+  CashMovement,
+  ZReport
+} from '../types';
 
 // Component Imports
 import WarehouseManager from './WarehouseManager';
@@ -34,8 +53,7 @@ import CustomerManagement from './CustomerManagement';
 import ReportDashboard from './ReportDashboard';
 import ReportViewer from './ReportViewer';
 import SourcingIntelligence from './SourcingIntelligence';
-import { getInventorySnapshotAtDate, calculateRFMData, getLeadTimePerformance, getABCRanking, getSalesByHour, getHRPerformance, getSuppliersIntelligence, getItemPriceIntelligence, getDiscrepancyReport } from './AnalyticsLogic';
-import { InventoryLedgerEntry, AttendanceLog } from '../types';
+import { getInventorySnapshotAtDate, getLeadTimePerformance, getABCRanking, getHRPerformance } from './AnalyticsLogic';
 
 
 interface SettingsProps {
@@ -81,6 +99,17 @@ const Settings: React.FC<SettingsProps> = (props) => {
   const [selectedCategory, setSelectedCategory] = useState<AnalyticsCategory | null>(null);
   const [ledgerEntries, setLedgerEntries] = useState<InventoryLedgerEntry[]>([]);
   const [attendanceLogs, setAttendanceLogs] = useState<AttendanceLog[]>([]);
+  const [inventoryStocks, setInventoryStocks] = useState<ProductStock[]>([]);
+  const [inventoryCounts, setInventoryCounts] = useState<InventoryCountSession[]>([]);
+  const [customerTransactions, setCustomerTransactions] = useState<Transaction[]>(props.transactions || []);
+  const [operationsTransactions, setOperationsTransactions] = useState<Transaction[]>([]);
+  const [operationsCashMovements, setOperationsCashMovements] = useState<CashMovement[]>([]);
+  const [operationsZReports, setOperationsZReports] = useState<ZReport[]>([]);
+  const [fiscalTransactions, setFiscalTransactions] = useState<Transaction[]>(props.transactions || []);
+  const [fiscalTransactionHistory, setFiscalTransactionHistory] = useState<Transaction[]>([]);
+  const [fiscalPurchaseOrders, setFiscalPurchaseOrders] = useState<PurchaseOrder[]>(props.purchaseOrders || []);
+  const [fiscalReceptions, setFiscalReceptions] = useState<Reception[]>(props.receptions || []);
+  const [fiscalSuppliers, setFiscalSuppliers] = useState<Supplier[]>(props.suppliers || []);
 
 
   const hasPermission = (permission: string): boolean => {
@@ -350,17 +379,28 @@ const Settings: React.FC<SettingsProps> = (props) => {
           if (selectedCategory === 'INVENTORY') {
             reportData = getInventorySnapshotAtDate(props.products, ledgerEntries, new Date().toISOString());
           } else if (selectedCategory === 'CUSTOMERS') {
-            reportData = calculateRFMData(props.customers || [], props.transactions);
+            reportData = [];
           } else if (selectedCategory === 'SOURCING') {
             reportData = getLeadTimePerformance(props.purchaseOrders || [], props.receptions || [], props.suppliers || []);
           } else if (selectedCategory === 'CATALOG') {
             reportData = getABCRanking(props.products, props.transactions);
           } else if (selectedCategory === 'OPERATIONS') {
-            reportData = getSalesByHour(props.transactions);
+            reportData = [];
           } else if (selectedCategory === 'HR') {
             reportData = getHRPerformance(attendanceLogs);
+          } else if (selectedCategory === 'FISCAL') {
+            reportData = [...fiscalTransactions, ...fiscalTransactionHistory].map(tx => ({
+              id: tx.id,
+              ncf: tx.ncf || 'Sin NCF',
+              ticketNo: tx.displayId || tx.id,
+              ncfType: tx.ncfType || '-',
+              terminalId: tx.terminalId || '-',
+              status: tx.status || '-',
+              total: tx.total,
+              date: tx.date
+            }));
           } else {
-            // Fiscal / Other
+            // Other
             reportData = props.transactions.map(tx => ({
               id: tx.id,
               name: tx.ncf || 'Sin NCF',
@@ -387,6 +427,31 @@ const Settings: React.FC<SettingsProps> = (props) => {
               category={selectedCategory}
               config={props.config}
               data={reportData}
+              inventoryContext={selectedCategory === 'INVENTORY' ? {
+                products: props.products,
+                warehouses: props.warehouses,
+                suppliers: props.suppliers || [],
+                productStocks: inventoryStocks,
+                inventoryLedger: ledgerEntries,
+                inventoryCounts
+              } : undefined}
+              customerContext={selectedCategory === 'CUSTOMERS' ? {
+                customers: props.customers || [],
+                transactions: customerTransactions,
+                warehouses: props.warehouses
+              } : undefined}
+              operationsContext={selectedCategory === 'OPERATIONS' ? {
+                transactions: operationsTransactions,
+                cashMovements: operationsCashMovements,
+                zReports: operationsZReports
+              } : undefined}
+              fiscalContext={selectedCategory === 'FISCAL' ? {
+                transactions: fiscalTransactions,
+                transactionHistory: fiscalTransactionHistory,
+                purchaseOrders: fiscalPurchaseOrders,
+                receptions: fiscalReceptions,
+                suppliers: fiscalSuppliers
+              } : undefined}
               onBack={() => setSelectedCategory(null)}
             />
           );
@@ -395,11 +460,79 @@ const Settings: React.FC<SettingsProps> = (props) => {
           <ReportDashboard
             onSelectCategory={(cat) => {
               setSelectedCategory(cat);
-              // Trigger ledger load if needed
-              if (cat === 'INVENTORY' && ledgerEntries.length === 0) {
-                import('../utils/db').then(({ db }) => {
-                  db.get('inventory_ledger' as any).then(entries => setLedgerEntries(entries as InventoryLedgerEntry[]));
+              if (cat === 'INVENTORY') {
+                import('../utils/db').then(async ({ db }) => {
+                  const [entries, stocks, counts] = await Promise.all([
+                    db.get('inventoryLedger' as any),
+                    db.get('productStocks' as any),
+                    db.get('inventoryCounts' as any)
+                  ]);
+                  setLedgerEntries((entries as InventoryLedgerEntry[]) || []);
+                  setInventoryStocks((stocks as ProductStock[]) || []);
+                  setInventoryCounts((counts as InventoryCountSession[]) || []);
+                }).catch(console.error);
+              }
+              if (cat === 'OPERATIONS') {
+                import('../utils/db').then(async ({ db }) => {
+                  const [activeTransactions, historyTransactions, movements, reports] = await Promise.all([
+                    db.get('transactions' as any),
+                    db.get('transactionHistory' as any),
+                    db.get('cashMovements' as any),
+                    db.get('zReports' as any)
+                  ]);
+
+                  const mergedTransactions = [
+                    ...((activeTransactions as Transaction[]) || []),
+                    ...((historyTransactions as Transaction[]) || [])
+                  ];
+
+                  setOperationsTransactions(mergedTransactions);
+                  setOperationsCashMovements((movements as CashMovement[]) || []);
+                  setOperationsZReports((reports as ZReport[]) || []);
+                }).catch(console.error);
+              }
+              if (cat === 'CUSTOMERS') {
+                import('../utils/db').then(async ({ db }) => {
+                  const [activeTransactions, historyTransactions] = await Promise.all([
+                    db.get('transactions' as any),
+                    db.get('transactionHistory' as any)
+                  ]);
+
+                  const mergedById = new Map<string, Transaction>();
+                  const merged = [
+                    ...((activeTransactions as Transaction[]) || []),
+                    ...((historyTransactions as Transaction[]) || [])
+                  ];
+
+                  merged.forEach(tx => {
+                    if (!tx || !tx.id) return;
+                    mergedById.set(tx.id, tx);
+                  });
+
+                  const scopedTransactions = mergedById.size > 0
+                    ? Array.from(mergedById.values())
+                    : (props.transactions || []);
+                  setCustomerTransactions(scopedTransactions);
+                }).catch(() => {
+                  setCustomerTransactions(props.transactions || []);
                 });
+              }
+              if (cat === 'FISCAL') {
+                import('../utils/db').then(async ({ db }) => {
+                  const [activeTransactions, historyTransactions, purchaseOrders, receptions, suppliers] = await Promise.all([
+                    db.get('transactions' as any),
+                    db.get('transactionHistory' as any),
+                    db.get('purchaseOrders' as any),
+                    db.get('receptions' as any),
+                    db.get('suppliers' as any)
+                  ]);
+
+                  setFiscalTransactions((activeTransactions as Transaction[]) || []);
+                  setFiscalTransactionHistory((historyTransactions as Transaction[]) || []);
+                  setFiscalPurchaseOrders((purchaseOrders as PurchaseOrder[]) || []);
+                  setFiscalReceptions((receptions as Reception[]) || []);
+                  setFiscalSuppliers((suppliers as Supplier[]) || []);
+                }).catch(console.error);
               }
               if (cat === 'HR' && attendanceLogs.length === 0) {
                 import('../utils/db').then(({ db }) => {
