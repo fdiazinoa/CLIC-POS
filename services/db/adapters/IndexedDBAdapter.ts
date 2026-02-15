@@ -240,7 +240,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
 
         return new Promise((resolve, reject) => {
             try {
-                // Hard-stop heavy reads that have been timing out and blocking writes.
+                // Use localStorage for heavy collections to avoid IndexedDB lock contention from sync/pruning
                 if (collectionName === 'transactions' || collectionName === 'transactionHistory') {
                     const docs = this.readFallbackCollection(collectionName);
                     return resolve(this.fromStoredDocuments(collectionName, docs));
@@ -301,6 +301,16 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
 
         return new Promise((resolve, reject) => {
+            // Use localStorage for heavy collections to match getCollection behavior and avoid lock contention
+            if (collectionName === 'transactions' || collectionName === 'transactionHistory') {
+                try {
+                    this.upsertFallbackDocument(collectionName, doc);
+                    return resolve();
+                } catch (e) {
+                    return reject(e);
+                }
+            }
+
             if (!this.hasStore(collectionName)) {
                 this.upsertFallbackDocument(collectionName, doc);
                 return resolve();

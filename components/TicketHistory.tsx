@@ -503,12 +503,10 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    useEffect(() => {
       const loadHistory = async () => {
          try {
-            // We use the db utility directly to fetch the history collection
-            // Note: We need to import 'db' from utils/db if not available, but we can use a dynamic import or assume it's available.
-            // Since TicketHistory is a component, we should probably pass 'db' or import it.
-            // Let's import it at the top of the file.
+            // Load transactions directly from the 'transactions' collection (not 'transactionHistory')
+            // This matches where transactionService.createTransaction saves them
             const { db } = await import('../utils/db');
-            const history = await db.get('transactionHistory') as Transaction[];
+            const history = await db.get('transactions') as Transaction[];
             if (history && Array.isArray(history)) {
                // Mark all loaded history as archived so they are highlighted even if missing zReportId
                const markedHistory = history.map(h => ({ ...h, _isArchived: true }));
@@ -526,6 +524,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             }
 
             if (history && history.length > 0) {
+               console.log(`🔍 [TicketHistory] Loaded ${history.length} transactions from 'transactions' collection`);
                console.log(`🔍 [TicketHistory] Inspecting first 3 history items for Z-Report linkage:`);
                history.slice(0, 3).forEach(h => {
                   console.log(`   - Tx ${h.id.slice(-8)}: zReportId=${h.zReportId}, zReportSequence=${h.zReportSequence}`);

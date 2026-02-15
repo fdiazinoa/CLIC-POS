@@ -408,10 +408,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const handleImagePaste = async (e: React.ClipboardEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    if (isPastingImage) return;
+
+    // Prevent concurrent paste operations
+    if (isPastingImage) {
+      console.warn('⚠️ Paste already in progress, ignoring');
+      return;
+    }
 
     setIsPastingImage(true);
+
     try {
+      // Priority 1: Check for direct image files in clipboard
       const fromFiles = Array.from(e.clipboardData.files || []).find(f => f.type.startsWith('image/'));
       if (fromFiles) {
         if (imageTooHeavy(fromFiles.size)) {
@@ -423,6 +430,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         return;
       }
 
+      // Priority 2: Check for image items (screenshot, copy image)
       const items = Array.from(e.clipboardData.items || []);
       const imageItem = items.find(item => item.type.startsWith('image/'));
       if (imageItem) {
@@ -440,47 +448,70 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         return;
       }
 
+      // Priority 3: Check for HTML/URL content
       const html = e.clipboardData.getData('text/html');
       const plainText = e.clipboardData.getData('text/plain')?.trim();
-      const imageSource = extractImageFromHtml(html) || (plainText || null);
+      const imageSource = extractImageFromHtml(html) || plainText;
 
       if (!imageSource) {
-        alert('No se detectó una imagen para pegar. Use "Copiar imagen" o suba un archivo.');
+        alert('No se detectó una imagen para pegar. Use "Copiar imagen" desde el navegador o suba un archivo.');
         return;
       }
 
+      // Handle data URLs directly
       if (imageSource.startsWith('data:image/')) {
         applyImageDataUrl(imageSource);
         return;
       }
 
+      // Handle remote URLs (with shorter timeout)
       if (imageSource.startsWith('http://') || imageSource.startsWith('https://')) {
         try {
           const controller = new AbortController();
-          const timeout = window.setTimeout(() => controller.abort(), 6000);
-          const response = await fetch(imageSource, { signal: controller.signal });
+          const timeout = window.setTimeout(() => controller.abort(), 3000); // Reduced from 6s
+
+          const response = await fetch(imageSource, {
+            signal: controller.signal,
+            mode: 'cors',
+            cache: 'no-cache'
+          });
           window.clearTimeout(timeout);
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
           const blob = await response.blob();
-          if (!blob.type.startsWith('image/')) throw new Error('La URL no apunta a una imagen');
+          if (!blob.type.startsWith('image/')) {
+            throw new Error('La URL no apunta a una imagen válida');
+          }
+
           if (imageTooHeavy(blob.size)) {
             alert(`La imagen en URL es muy pesada (${(blob.size / 1024).toFixed(0)} KB). Máximo ${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB.`);
             return;
           }
+
           const dataUrl = await blobToDataUrl(blob);
           applyImageDataUrl(dataUrl);
           return;
-        } catch {
-          alert('No se pudo pegar la imagen desde esa URL (CORS/bloqueo del navegador). Descárguela y súbala.');
+        } catch (fetchError: any) {
+          console.error('❌ Error fetching image from URL:', fetchError);
+          const errorMsg = fetchError.name === 'AbortError'
+            ? 'La descarga de la imagen tardó demasiado (>3s). Descárguela manualmente y súbala.'
+            : 'No se pudo descargar la imagen desde esa URL (CORS/bloqueado). Descárguela y súbala como archivo.';
+          alert(errorMsg);
           return;
         }
       }
 
-      alert('Formato de portapapeles no soportado. Use "Copiar imagen" o suba un archivo.');
-    } catch (error) {
-      console.error('❌ Error al pegar imagen:', error);
-      alert('No se pudo procesar la imagen pegada.');
+      // Fallback: unrecognized format
+      alert('Formato de portapapeles no soportado. Use "Copiar imagen" o suba un archivo desde su equipo.');
+
+    } catch (error: any) {
+      console.error('❌ Error inesperado al pegar imagen:', error);
+      alert(`Error al procesar la imagen: ${error?.message || 'Error desconocido'}. Intente subir el archivo directamente.`);
     } finally {
+      // Always release the lock
       setIsPastingImage(false);
     }
   };
@@ -888,9 +919,21 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     {formData.image ? <img src={formData.image} className="w-full h-full object-cover" /> : (
                       <div className="flex flex-col items-center gap-2 text-gray-300">
                         <ImageIcon size={48} />
-                        <span className="text-[10px] font-bold uppercase">{isPastingImage ? 'Procesando Pegado...' : 'Click o Pegar (Ctrl+V)'}</span>
+                        <span className="text-[10px] font-bold uppercase">Click o Pegar (Ctrl+V)</span>
                       </div>
                     )}
+
+                    {/* Loading Overlay */}
+                    {isPastingImage && (
+                      <div className="absolute inset-0 bg-blue-50/95 backdrop-blur-sm flex flex-col items-center justify-center z-10 animate-in fade-in duration-200">
+                        <div className="flex flex-col items-center gap-3">
+                          <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+                          <p className="text-sm font-bold text-blue-700">Procesando imagen...</p>
+                          <p className="text-[10px] text-blue-500 font-medium">Por favor espere</p>
+                        </div>
+                      </div>
+                    )}
+
                     <input ref={fileInputRef} type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
 
                     {/* Web Search Button Overlay */}
