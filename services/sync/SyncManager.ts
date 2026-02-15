@@ -524,11 +524,11 @@ class SyncManager {
         }
     }
 
-    async pullCatalog(collection: SyncableCollection): Promise<number> {
+    async pullCatalog(collection: SyncableCollection, force: boolean = false): Promise<number> {
         if (this.isDisabled) return 0;
 
-        const lastVersion = this.syncVersions.get(collection) || 0;
-        console.log(`🔽 SyncManager.pullCatalog('${collection}') - Last Version: ${lastVersion}`);
+        const lastVersion = force ? 0 : (this.syncVersions.get(collection) || 0);
+        console.log(`🔽 SyncManager.pullCatalog('${collection}') - Last Version: ${lastVersion} (force=${force})`);
 
         try {
             // Pull Delta from API

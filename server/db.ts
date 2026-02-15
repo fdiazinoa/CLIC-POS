@@ -97,7 +97,12 @@ export const getCollection = (name: string): any[] => {
                 const fieldsToConvert = booleanFields[name] || [];
                 fieldsToConvert.forEach(field => {
                     if (field in newRow) {
-                        newRow[field] = newRow[field] === 1;
+                        // Special case: is_sellable defaults to true if NULL (legacy data support)
+                        if (field === 'is_sellable' && (newRow[field] === null || newRow[field] === undefined)) {
+                            newRow[field] = true;
+                        } else {
+                            newRow[field] = newRow[field] === 1;
+                        }
                     }
                 });
 

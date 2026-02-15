@@ -604,7 +604,7 @@ const AppContent: React.FC = () => {
             // CRITICAL FIX: Ensure Master terminal has complete product catalog
             // Master should always have authoritative product data from backend
             if (pairedTerminal.config.isPrimaryNode !== false) {
-              console.log('🔍 Master terminal: Verifying product catalog integrity...');
+              console.log('🔍 [AG] Master terminal: Verifying product catalog integrity...');
               try {
                 // Check local vs backend count for drift
                 const localProducts = await db.get('products') as Product[];
@@ -615,29 +615,31 @@ const AppContent: React.FC = () => {
                 const metadata = await apiSyncAdapter.getMetadata('products');
                 const remoteCount = metadata?.itemCount || 0;
 
-                console.log(`📊 Product count - Local: ${localCount}, Remote: ${remoteCount}`);
+                console.log(`📊 [AG] Product count - Local: ${localCount}, Remote: ${remoteCount}`);
 
                 if (remoteCount > localCount || localCount < 10) {
-                  console.warn(`⚠️ CATALOG DRIFT DETECTED: Master has ${localCount} products but backend has ${remoteCount}. Forcing full refresh...`);
+                  console.warn(`⚠️ [AG] CATALOG DRIFT DETECTED: Master has ${localCount} products but backend has ${remoteCount}. Forcing full refresh...`);
 
                   // Clear stale sync version to trigger full pull
                   localStorage.removeItem('sync_version_products');
 
-                  // Force full catalog refresh
-                  const refreshed = await syncManager.pullCatalog('products');
-                  console.log(`✅ Refreshed ${refreshed} products from backend`);
+                  // Force full catalog refresh (bypass in-memory cache with force=true)
+                  const refreshed = await syncManager.pullCatalog('products', true);
+                  console.log(`✅ [AG] Refreshed ${refreshed} products from backend`);
 
                   // Re-load products into state
                   const freshProducts = await db.get('products') as Product[];
-                  if (Array.isArray(freshProducts)) {
+                  if (Array.isArray(freshProducts) && freshProducts.length > 0) {
                     setProducts(freshProducts);
-                    console.log(`✅ Master product state updated with ${freshProducts.length} products`);
+                    console.log(`✅ [AG] Master product state updated with ${freshProducts.length} products`);
+                  } else {
+                    console.error('❌ [AG] Failed to reload products after refresh or collection is empty.');
                   }
                 } else {
-                  console.log('✅ Product catalog is current');
+                  console.log('✅ [AG] Product catalog is current');
                 }
               } catch (driftCheckError) {
-                console.error('❌ Drift check failed:', driftCheckError);
+                console.error('❌ [AG] Drift check failed:', driftCheckError);
                 // Non-blocking - continue app init even if drift check fails
               }
             }
