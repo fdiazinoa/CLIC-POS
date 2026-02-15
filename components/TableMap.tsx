@@ -44,16 +44,17 @@ const TableMap: React.FC<TableMapProps> = ({
     const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || rooms[0]?.id || '');
     const [selectedTable, setSelectedTable] = useState<Table | null>(null);
     const [scale, setScale] = useState(1);
+    const safeTables = Array.isArray(tables) ? tables : [];
 
     // Get active room object
     const activeRoom = rooms.find(r => r.id === activeRoomId);
 
     // Filter tables by active room
-    const visibleTables = tables.filter(t => t.roomId === activeRoomId);
+    const visibleTables = safeTables.filter(t => t.roomId === activeRoomId);
 
     // Occupation Stats
     const stats = useMemo(() => {
-        const roomTables = tables.filter(t => t.roomId === activeRoomId && t.shape !== 'OBSTACLE');
+        const roomTables = safeTables.filter(t => t.roomId === activeRoomId && t.shape !== 'OBSTACLE');
         const occupied = roomTables.filter(t => t.status === 'OCCUPIED');
         const totalAmount = occupied.reduce((acc, t) => acc + (t.currentOrderTotal || 0), 0);
 
@@ -63,7 +64,7 @@ const TableMap: React.FC<TableMapProps> = ({
             free: roomTables.length - occupied.length,
             amount: totalAmount
         };
-    }, [tables, activeRoomId]);
+    }, [safeTables, activeRoomId]);
 
     const handleZoom = (delta: number) => {
         setScale(prev => Math.min(Math.max(0.5, prev + delta), 2));
@@ -142,7 +143,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 <div className="bg-white/90 backdrop-blur-xl p-2 rounded-full border border-white shadow-[0_20px_50px_rgba(0,0,0,0.15)] flex items-center gap-1">
                     {rooms.map(room => {
                         const isSelected = activeRoomId === room.id;
-                        const occupiedInRoom = tables.filter(t => t.roomId === room.id && t.status === 'OCCUPIED').length;
+                        const occupiedInRoom = safeTables.filter(t => t.roomId === room.id && t.status === 'OCCUPIED').length;
 
                         return (
                             <button
@@ -231,7 +232,7 @@ const TableMap: React.FC<TableMapProps> = ({
                 <TableOptionsModal
                     table={selectedTable}
                     room={activeRoom}
-                    allTables={tables}
+                    allTables={safeTables}
                     onClose={() => setSelectedTable(null)}
                     onAddOrder={() => {
                         onTableClick(selectedTable);

@@ -221,10 +221,31 @@ const AppContent: React.FC = () => {
 
   const fetchTables = async () => {
     try {
-      const res = await fetch('/api/mesas');
+      const terminalId = getCurrentTerminal()?.id;
+      const query = terminalId ? `?terminal_id=${encodeURIComponent(terminalId)}` : '';
+      const res = await fetch(`/api/mesas${query}`);
       if (res.ok) {
         const data = await res.json();
-        setTables(data);
+
+        // Backward compatibility: some endpoints may return only Table[].
+        if (Array.isArray(data)) {
+          setTables(data);
+          return;
+        }
+
+        const nextTables = Array.isArray(data?.tables) ? data.tables : [];
+        const nextRooms = Array.isArray(data?.rooms) ? data.rooms : [];
+
+        setTables(nextTables);
+
+        if (nextRooms.length > 0) {
+          setRooms(nextRooms);
+          setActiveRoomId(prev =>
+            prev && nextRooms.some((room: Room) => room.id === prev)
+              ? prev
+              : (nextRooms[0]?.id || '')
+          );
+        }
       }
     } catch (e) {
       console.error("Failed to fetch tables:", e);
