@@ -194,9 +194,12 @@ const AppContent: React.FC = () => {
       if (!belongsToTerminal) return false;
       if (t.zReportId) return false;
 
+      // Relaxed timestamp check: only filter out if it's significantly before the last close
+      // to account for clock drift between terminals.
       const txTime = new Date(t.date).getTime();
+      const DRIFT_TOLERANCE_MS = 1000 * 60 * 5; // 5 minutes tolerance
       if (!Number.isFinite(txTime)) return latestCloseTs <= 0;
-      return latestCloseTs <= 0 || txTime > latestCloseTs;
+      return latestCloseTs <= 0 || txTime > (latestCloseTs - DRIFT_TOLERANCE_MS);
     });
   };
 
@@ -210,8 +213,9 @@ const AppContent: React.FC = () => {
       if (!belongsToTerminal) return false;
 
       const moveTime = new Date(m.timestamp).getTime();
+      const DRIFT_TOLERANCE_MS = 1000 * 60 * 5; // 5 minutes tolerance
       if (!Number.isFinite(moveTime)) return latestCloseTs <= 0;
-      return latestCloseTs <= 0 || moveTime > latestCloseTs;
+      return latestCloseTs <= 0 || moveTime > (latestCloseTs - DRIFT_TOLERANCE_MS);
     });
   };
 
@@ -486,15 +490,21 @@ const AppContent: React.FC = () => {
 
         if (data) {
           const hydrateDeferredCollections = async () => {
-            // Avoid long full scans of transactions during startup.
-            // Checkout and sync flows update in-memory transactions incrementally.
+            // Avoid long full scans of transactions during startup for history, 
+            // but ALWAYS load active transactions to ensure Monitor X / Finance Dashboard accuracy.
             try {
+              console.log('📦 Loading active transactions for session...');
+              const activeTxns = await db.get('transactions') as Transaction[];
+              if (Array.isArray(activeTxns) && activeTxns.length > 0) {
+                setTransactions(activeTxns.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+              }
+
               const txHistory = await db.get('transactionHistory') as Transaction[];
               if (Array.isArray(txHistory) && txHistory.length > 0) {
                 console.log(`📦 Deferred load: transactionHistory=${txHistory.length}`);
               }
             } catch (error) {
-              console.info('ℹ️ Deferred transactionHistory load skipped:', error);
+              console.info('ℹ️ Deferred hydration partial failure:', error);
             }
           };
 
