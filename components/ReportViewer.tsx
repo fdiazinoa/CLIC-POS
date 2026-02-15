@@ -226,6 +226,7 @@ interface HourlyBehaviorRow {
 type OperationsTab = 'Z_HISTORY' | 'DISCREPANCY_AUDIT' | 'PAYMENT_ANALYSIS' | 'HOURLY_BEHAVIOR';
 type FiscalExportFormatOption = '607' | '606' | '608' | 'TODOS';
 type FiscalExportFormat = '607' | '606' | '608';
+type FiscalReportMode = 'NCF_DETAIL' | 'TAX_SUMMARY';
 
 interface FiscalExportFeedback {
     title: string;
@@ -245,6 +246,31 @@ const resolveFiscalFormats = (selection: FiscalExportFormatOption): FiscalExport
     if (selection === 'TODOS') return ['607', '606', '608'];
     return [selection];
 };
+
+interface FiscalTaxSummaryRow {
+    taxLabel: string;
+    taxRatePercent: number;
+    lineCount: number;
+    taxableBase: number;
+    taxAmount: number;
+    total: number;
+}
+
+const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const normalizeTaxRatePercent = (rawRate: unknown): number => {
+    const rate = toNumber(rawRate);
+    if (rate <= 0) return 0;
+    return rate <= 1 ? rate * 100 : rate;
+};
+
+const formatTaxRateLabel = (ratePercent: number): string => {
+    if (Math.abs(ratePercent) <= EPSILON) return '0% (Exento)';
+    if (Number.isInteger(ratePercent)) return `${ratePercent}%`;
+    return `${ratePercent.toFixed(2)}%`;
+};
+
+const SALES_NCF_REGEX = /^B(01|02|04|14|15)/;
 
 const ReportViewer: React.FC<ReportViewerProps> = ({
     category,
@@ -282,10 +308,10 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
     const [fiscalTerminalFilter, setFiscalTerminalFilter] = useState('ALL');
     const [isFiscalExportModalOpen, setIsFiscalExportModalOpen] = useState(false);
     const [fiscalExportFormat, setFiscalExportFormat] = useState<FiscalExportFormatOption>('607');
-    const [fiscalExportConsolidateB02, setFiscalExportConsolidateB02] = useState(false);
     const [fiscalExportError, setFiscalExportError] = useState('');
     const [isFiscalExporting, setIsFiscalExporting] = useState(false);
     const [fiscalExportFeedback, setFiscalExportFeedback] = useState<FiscalExportFeedback | null>(null);
+    const [fiscalReportMode, setFiscalReportMode] = useState<FiscalReportMode>('NCF_DETAIL');
 
     const isInventoryView = category === 'INVENTORY' && !!inventoryContext;
     const isCustomersView = category === 'CUSTOMERS' && !!customerContext;
@@ -369,6 +395,15 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                     { key: 'total', label: 'Total Ventas', type: 'currency' },
                 ];
             case 'FISCAL':
+                if (fiscalReportMode === 'TAX_SUMMARY') {
+                    return [
+                        { key: 'taxLabel', label: 'Tasa Impuesto', type: 'text' },
+                        { key: 'lineCount', label: 'Líneas', type: 'number' },
+                        { key: 'taxableBase', label: 'Base Imponible', type: 'currency' },
+                        { key: 'taxAmount', label: 'Impuesto', type: 'currency' },
+                        { key: 'total', label: 'Total Gravado', type: 'currency' },
+                    ];
+                }
                 return [
                     { key: 'ncf', label: 'NCF', type: 'text' },
                     { key: 'ticketNo', label: 'Ticket No.', type: 'text' },
@@ -391,7 +426,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                     { key: 'value', label: 'Valor', type: 'currency' },
                 ];
         }
-    }, [category]);
+    }, [category, fiscalReportMode]);
 
     const classificationMaps = useMemo(() => {
         const toMap = (items?: { id: string; name: string }[]) => {
@@ -639,6 +674,137 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
         }
         return result;
     }, [data, searchTerm, sortConfig, dateRange.startMs, dateRange.endMs, isFiscalView, fiscalTerminalFilter]);
+
+    const fiscalTaxSummaryRows = useMemo<FiscalTaxSummaryRow[]>(() => {
+        if (!isFiscalView || !fiscalContext || fiscalReportMode !== 'TAX_SUMMARY') return [];
+
+        const dedupedTransactions = new Map<string, Transaction>();
+        [...fiscalContext.transactions, ...fiscalContext.transactionHistory].forEach(tx => {
+            if (!tx?.id) return;
+            dedupedTransactions.set(tx.id, tx);
+        });
+
+        const salesTransactions = Array.from(dedupedTransactions.values()).filter(tx => {
+            if (!isWithinDateRange(tx.date)) return false;
+            if (!isFiscalTerminalMatch(tx.terminalId)) return false;
+            return SALES_NCF_REGEX.test(String(tx.ncf || '').toUpperCase());
+        });
+
+        const taxesById = new Map((config.taxes || []).map(tax => [tax.id, tax]));
+        const buckets = new Map<string, FiscalTaxSummaryRow>();
+
+        const ensureBucket = (taxRatePercent: number): FiscalTaxSummaryRow => {
+            const key = taxRatePercent.toFixed(4);
+            if (!buckets.has(key)) {
+                buckets.set(key, {
+                    taxLabel: formatTaxRateLabel(taxRatePercent),
+                    taxRatePercent,
+                    lineCount: 0,
+                    taxableBase: 0,
+                    taxAmount: 0,
+                    total: 0
+                });
+            }
+            return buckets.get(key)!;
+        };
+
+        salesTransactions.forEach(tx => {
+            const items = Array.isArray(tx.items) ? tx.items : [];
+            if (items.length === 0) return;
+
+            const grossLineTotal = items.reduce(
+                (sum, item) => sum + Math.max(0, toNumber((item as any).price) * toNumber((item as any).quantity)),
+                0
+            );
+            const discountAmount = Math.max(0, toNumber(tx.discountAmount));
+            const sign = isRefundLikeTransaction(tx) ? -1 : 1;
+
+            items.forEach((item) => {
+                const quantity = toNumber((item as any).quantity);
+                const price = toNumber((item as any).price);
+                const lineGross = Math.max(0, price * quantity);
+                if (lineGross <= EPSILON) return;
+
+                const itemRatio = grossLineTotal > 0 ? lineGross / grossLineTotal : 0;
+                const lineDiscount = discountAmount * itemRatio;
+                const lineBaseAfterDiscount = Math.max(0, lineGross - lineDiscount);
+
+                const taxIds = Array.isArray((item as any).appliedTaxIds)
+                    ? ((item as any).appliedTaxIds as string[])
+                    : [];
+                const taxes = taxIds.map(taxId => taxesById.get(taxId)).filter(Boolean);
+
+                if (taxes.length === 0) {
+                    const bucket = ensureBucket(0);
+                    bucket.lineCount += 1;
+                    bucket.taxableBase += sign * lineBaseAfterDiscount;
+                    bucket.total += sign * lineBaseAfterDiscount;
+                    return;
+                }
+
+                const totalTaxRatePercent = taxes.reduce(
+                    (sum, tax) => sum + normalizeTaxRatePercent(tax?.rate),
+                    0
+                );
+                const totalTaxRate = totalTaxRatePercent / 100;
+                const lineNet = tx.isTaxIncluded && totalTaxRate > 0
+                    ? lineBaseAfterDiscount / (1 + totalTaxRate)
+                    : lineBaseAfterDiscount;
+
+                taxes.forEach((tax) => {
+                    const taxRatePercent = normalizeTaxRatePercent(tax?.rate);
+                    const taxRate = taxRatePercent / 100;
+                    const taxAmount = lineNet * taxRate;
+
+                    const bucket = ensureBucket(taxRatePercent);
+                    bucket.lineCount += 1;
+                    bucket.taxableBase += sign * lineNet;
+                    bucket.taxAmount += sign * taxAmount;
+                    bucket.total += sign * (lineNet + taxAmount);
+                });
+            });
+        });
+
+        let rows = Array.from(buckets.values()).map(row => ({
+            ...row,
+            lineCount: Math.max(0, Math.round(row.lineCount)),
+            taxableBase: round2(row.taxableBase),
+            taxAmount: round2(row.taxAmount),
+            total: round2(row.total)
+        }));
+
+        if (searchTerm.trim()) {
+            const query = searchTerm.trim().toLowerCase();
+            rows = rows.filter(row =>
+                [row.taxLabel, row.lineCount, row.taxableBase, row.taxAmount, row.total]
+                    .some(value => String(value).toLowerCase().includes(query))
+            );
+        }
+
+        if (sortConfig) {
+            rows.sort((a: any, b: any) => {
+                const aVal = a[sortConfig.key];
+                const bVal = b[sortConfig.key];
+                if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+                if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+                return 0;
+            });
+        } else {
+            rows.sort((a, b) => b.taxRatePercent - a.taxRatePercent);
+        }
+
+        return rows;
+    }, [
+        isFiscalView,
+        fiscalContext,
+        fiscalReportMode,
+        config.taxes,
+        dateRange.startMs,
+        dateRange.endMs,
+        fiscalTerminalFilter,
+        searchTerm,
+        sortConfig
+    ]);
 
     const operationsSearch = searchTerm.trim().toLowerCase();
     const taxRate = toNumber((config as any).taxRate) || 0.18;
@@ -1139,9 +1305,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                 return;
             }
 
-            const consolidateB02 = (fiscalExportFormat === '607' || fiscalExportFormat === 'TODOS')
-                ? fiscalExportConsolidateB02
-                : false;
+            const consolidateB02 = false;
 
             const periodDate = dateRange.endMs !== null ? new Date(dateRange.endMs) : new Date();
             const period = `${periodDate.getFullYear()}${String(periodDate.getMonth() + 1).padStart(2, '0')}`;
@@ -1238,7 +1402,6 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
         if (isFiscalView && fiscalContext) {
             setFiscalExportError('');
             setFiscalExportFormat('607');
-            setFiscalExportConsolidateB02(false);
             setIsFiscalExportModalOpen(true);
             return;
         }
@@ -1470,7 +1633,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                                     </div>
                                 </div>
                                 <span className="text-[10px] font-black text-gray-400 truncate w-full text-center uppercase tracking-tighter">
-                                    {item.name || item.hour || item.label || 'Item'}
+                                    {item.name || item.hour || item.label || item.taxLabel || item.ncf || 'Item'}
                                 </span>
                             </div>
                         );
@@ -1871,12 +2034,16 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
         ? sortedInventoryRows
         : isCustomersView
             ? sortedCustomerRows
-            : filteredData;
+            : isFiscalView && fiscalReportMode === 'TAX_SUMMARY'
+                ? fiscalTaxSummaryRows
+                : filteredData;
     const chartItems = isInventoryView
         ? sortedInventoryRows
         : isCustomersView
             ? sortedCustomerRows
-            : filteredData;
+            : isFiscalView && fiscalReportMode === 'TAX_SUMMARY'
+                ? fiscalTaxSummaryRows
+                : filteredData;
 
     return (
         <div className="flex flex-col h-full bg-gray-50 animate-in slide-in-from-right duration-300 print:bg-white">
@@ -1984,19 +2151,32 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                             <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                         </div>
                     ) : isFiscalView ? (
-                        <div className="relative">
-                            <select
-                                value={fiscalTerminalFilter}
-                                onChange={(e) => setFiscalTerminalFilter(e.target.value)}
-                                className="appearance-none min-w-[220px] h-[50px] pl-4 pr-10 bg-white border border-gray-200 rounded-2xl text-sm font-black text-gray-700 shadow-sm hover:border-blue-400 transition-all outline-none"
-                            >
-                                <option value="ALL">Todas las cajas (Master)</option>
-                                {fiscalTerminalOptions.map(terminalId => (
-                                    <option key={terminalId} value={terminalId}>{terminalId}</option>
-                                ))}
-                            </select>
-                            <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                        </div>
+                        <>
+                            <div className="relative">
+                                <select
+                                    value={fiscalTerminalFilter}
+                                    onChange={(e) => setFiscalTerminalFilter(e.target.value)}
+                                    className="appearance-none min-w-[220px] h-[50px] pl-4 pr-10 bg-white border border-gray-200 rounded-2xl text-sm font-black text-gray-700 shadow-sm hover:border-blue-400 transition-all outline-none"
+                                >
+                                    <option value="ALL">Todas las cajas (Master)</option>
+                                    {fiscalTerminalOptions.map(terminalId => (
+                                        <option key={terminalId} value={terminalId}>{terminalId}</option>
+                                    ))}
+                                </select>
+                                <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                            </div>
+                            <div className="relative">
+                                <select
+                                    value={fiscalReportMode}
+                                    onChange={(e) => setFiscalReportMode(e.target.value as FiscalReportMode)}
+                                    className="appearance-none min-w-[240px] h-[50px] pl-4 pr-10 bg-white border border-gray-200 rounded-2xl text-sm font-black text-gray-700 shadow-sm hover:border-blue-400 transition-all outline-none"
+                                >
+                                    <option value="NCF_DETAIL">Detalle de Comprobantes</option>
+                                    <option value="TAX_SUMMARY">Resumen por Impuesto</option>
+                                </select>
+                                <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                            </div>
+                        </>
                     ) : (
                         <div className="flex items-center gap-3 px-5 py-3 bg-white border border-gray-200 rounded-2xl text-sm font-black text-gray-600 shadow-sm cursor-pointer hover:border-blue-400 transition-all">
                             <Filter size={18} className="text-blue-500" />
@@ -2407,9 +2587,6 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                                     onChange={(e) => {
                                         const nextValue = e.target.value as FiscalExportFormatOption;
                                         setFiscalExportFormat(nextValue);
-                                        if (nextValue !== '607' && nextValue !== 'TODOS') {
-                                            setFiscalExportConsolidateB02(false);
-                                        }
                                     }}
                                     className="w-full h-[44px] px-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-black text-slate-700 outline-none focus:border-blue-400"
                                 >
@@ -2418,20 +2595,6 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                                     ))}
                                 </select>
                             </div>
-
-                            {(fiscalExportFormat === '607' || fiscalExportFormat === 'TODOS') && (
-                                <label className="flex items-start gap-3 p-3 bg-gray-50 border border-gray-200 rounded-xl">
-                                    <input
-                                        type="checkbox"
-                                        checked={fiscalExportConsolidateB02}
-                                        onChange={(e) => setFiscalExportConsolidateB02(e.target.checked)}
-                                        className="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                    />
-                                    <span className="text-xs font-bold text-slate-600">
-                                        Consolidar facturas B02 menores a RD$250,000.00 en una sola línea (Norma 10-18).
-                                    </span>
-                                </label>
-                            )}
 
                             {fiscalExportError && (
                                 <p className="text-xs font-black text-red-600">{fiscalExportError}</p>
