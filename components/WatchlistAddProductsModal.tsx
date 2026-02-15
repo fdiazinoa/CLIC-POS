@@ -17,6 +17,7 @@ const WatchlistAddProductsModal: React.FC<WatchlistAddProductsModalProps> = ({
    const [activeSubTab, setActiveSubTab] = useState<'INDIVIDUAL' | 'GROUPS' | 'CATEGORIES'>('INDIVIDUAL');
    const [searchTerm, setSearchTerm] = useState('');
    const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
 
    // --- FILTERS ---
    const filteredProducts = useMemo(() => {
@@ -38,7 +39,8 @@ const WatchlistAddProductsModal: React.FC<WatchlistAddProductsModalProps> = ({
       setPendingIds(next);
    };
 
-   const addFromGroup = (group: ProductGroup) => {
+   const addFromGroup = (group: ProductGroup, e?: React.MouseEvent) => {
+      if (e) e.stopPropagation();
       const next = new Set(pendingIds);
       group.productIds.forEach(id => {
          if (!selectedProductIds.includes(id)) next.add(id);
@@ -83,7 +85,10 @@ const WatchlistAddProductsModal: React.FC<WatchlistAddProductsModalProps> = ({
                ].map(tab => (
                   <button
                      key={tab.id}
-                     onClick={() => setActiveSubTab(tab.id as any)}
+                     onClick={() => {
+                        setActiveSubTab(tab.id as any);
+                        setExpandedGroupId(null);
+                     }}
                      className={`py-4 text-sm font-bold border-b-4 flex items-center gap-2 transition-all ${activeSubTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                   >
                      <tab.icon size={16} /> {tab.label}
@@ -128,28 +133,76 @@ const WatchlistAddProductsModal: React.FC<WatchlistAddProductsModalProps> = ({
                )}
 
                {activeSubTab === 'GROUPS' && (
-                  <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {availableGroups.map(group => (
-                           <div key={group.id} className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center justify-between group">
-                              <div className="flex items-center gap-4">
-                                 <div className={`p-3 rounded-2xl ${group.color || 'bg-slate-800'} text-white shadow-md`}>
-                                    <Grid size={24} />
-                                 </div>
-                                 <div>
-                                    <h4 className="font-black text-slate-800">{group.name}</h4>
-                                    <p className="text-xs text-slate-400">{group.productIds.length} artículos definidos</p>
-                                 </div>
-                              </div>
-                              <button
-                                 onClick={() => addFromGroup(group)}
-                                 className="px-4 py-2 bg-slate-50 text-slate-600 rounded-xl font-bold text-xs hover:bg-blue-600 hover:text-white transition-all flex items-center gap-2"
+                  <div className="flex-1 overflow-hidden flex flex-col p-6">
+                     {!expandedGroupId ? (
+                        <div className="flex-1 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-4">
+                           {availableGroups.map(group => (
+                              <div
+                                 key={group.id}
+                                 onClick={() => setExpandedGroupId(group.id)}
+                                 className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center justify-between group cursor-pointer hover:border-blue-500 transition-all"
                               >
-                                 Añadir Todo <ArrowRight size={14} />
+                                 <div className="flex items-center gap-4">
+                                    <div className={`p-3 rounded-2xl ${group.color || 'bg-slate-800'} text-white shadow-md`}>
+                                       <Grid size={24} />
+                                    </div>
+                                    <div>
+                                       <h4 className="font-black text-slate-800">{group.name}</h4>
+                                       <p className="text-xs text-slate-400">{group.productIds.length} artículos definidos</p>
+                                    </div>
+                                 </div>
+                                 <button
+                                    onClick={(e) => addFromGroup(group, e)}
+                                    className="px-4 py-2 bg-slate-50 text-slate-600 rounded-xl font-bold text-xs hover:bg-blue-600 hover:text-white transition-all flex items-center gap-2"
+                                 >
+                                    Añadir Todo <ArrowRight size={14} />
+                                 </button>
+                              </div>
+                           ))}
+                        </div>
+                     ) : (
+                        <div className="flex-1 flex flex-col overflow-hidden">
+                           <div className="flex items-center justify-between mb-4">
+                              <button
+                                 onClick={() => setExpandedGroupId(null)}
+                                 className="flex items-center gap-2 text-slate-500 font-bold hover:text-blue-600 transition-colors"
+                              >
+                                 <ArrowRight size={18} className="rotate-180" /> Volver a Grupos
                               </button>
+                              <h3 className="font-black text-slate-700">
+                                 {availableGroups.find(g => g.id === expandedGroupId)?.name}
+                              </h3>
                            </div>
-                        ))}
-                     </div>
+                           <div className="flex-1 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-3 pb-4">
+                              {products
+                                 .filter(p => availableGroups.find(g => g.id === expandedGroupId)?.productIds.includes(p.id))
+                                 .map(p => (
+                                    <div
+                                       key={p.id}
+                                       onClick={() => !selectedProductIds.includes(p.id) && toggleId(p.id)}
+                                       className={`p-4 rounded-2xl border-2 transition-all flex items-center justify-between ${selectedProductIds.includes(p.id) ? 'bg-slate-50 border-slate-100 opacity-60 cursor-not-allowed' : pendingIds.has(p.id) ? 'bg-blue-50 border-blue-500 shadow-sm cursor-pointer' : 'bg-white border-transparent hover:border-slate-200 cursor-pointer'}`}
+                                    >
+                                       <div className="flex items-center gap-3">
+                                          <div className="w-10 h-10 rounded-lg bg-slate-100 overflow-hidden border border-slate-200">
+                                             {p.image && <img src={p.image} className="w-full h-full object-cover" />}
+                                          </div>
+                                          <div>
+                                             <p className="font-bold text-slate-800 text-sm">{p.name}</p>
+                                             <p className="text-[10px] text-slate-400 font-mono">{p.barcode}</p>
+                                          </div>
+                                       </div>
+                                       {selectedProductIds.includes(p.id) ? (
+                                          <Check className="text-slate-300" />
+                                       ) : pendingIds.has(p.id) ? (
+                                          <Check className="text-blue-600" />
+                                       ) : (
+                                          <Plus className="text-slate-300" />
+                                       )}
+                                    </div>
+                                 ))}
+                           </div>
+                        </div>
+                     )}
                   </div>
                )}
 
