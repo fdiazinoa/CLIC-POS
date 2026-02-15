@@ -782,6 +782,33 @@ const AppContent: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    const handleConfigUpdated = async (event: Event) => {
+      const incomingConfig = (event as CustomEvent<BusinessConfig>)?.detail;
+      if (!incomingConfig || Array.isArray(incomingConfig) || !incomingConfig.terminals) return;
+
+      console.log('🔔 App: configUpdated received. Applying synchronized config...');
+      setConfig(incomingConfig);
+
+      const currentTerminal = (incomingConfig.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+      if (!currentTerminal) return;
+
+      try {
+        permissionService.initialize(incomingConfig, currentTerminal.id);
+        authLevelService.init(incomingConfig, currentTerminal.id);
+        terminalRouter.init(incomingConfig, currentTerminal.id, currentTerminal.config.deviceRole || null);
+        await syncManager.initialize(incomingConfig, currentTerminal.id);
+      } catch (error) {
+        console.error('❌ Failed to apply synced config at runtime:', error);
+      }
+    };
+
+    window.addEventListener('configUpdated', handleConfigUpdated as EventListener);
+    return () => {
+      window.removeEventListener('configUpdated', handleConfigUpdated as EventListener);
+    };
+  }, [deviceId]);
+
   // --- GLOBAL KEYBOARD SHORTCUT FOR ADMIN ACCESS ---
   useEffect(() => {
     const handleGlobalKeyboard = (e: KeyboardEvent) => {

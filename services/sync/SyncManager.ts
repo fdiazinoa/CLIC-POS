@@ -164,7 +164,7 @@ class SyncManager {
      * For API mode, we track versions locally
      */
     private async loadSyncVersions() {
-        const collections: SyncableCollection[] = ['products', 'customers', 'suppliers', 'users', 'roles', 'internalSequences'];
+        const collections: (SyncableCollection | 'config')[] = ['products', 'customers', 'suppliers', 'users', 'roles', 'internalSequences', 'config'];
 
         for (const collection of collections) {
             // Load timestamp from localStorage
@@ -367,6 +367,32 @@ class SyncManager {
 
         const results: SyncStatus[] = [];
 
+        // 0. Pull singleton config first on slaves (document assignments/terminal behavior live there).
+        if (!permissionService.isMasterTerminal()) {
+            try {
+                await this.pullConfig();
+                const metadata = await apiSyncAdapter.getMetadata('config');
+                const localVersion = this.syncVersions.get('config') || 0;
+
+                results.push({
+                    collection: 'config',
+                    lastSyncedAt: metadata?.lastSyncedAt || null,
+                    localVersion,
+                    remoteVersion: metadata?.version || null,
+                    status: 'SYNCED'
+                });
+            } catch (error: any) {
+                results.push({
+                    collection: 'config',
+                    lastSyncedAt: null,
+                    localVersion: this.syncVersions.get('config') || 0,
+                    remoteVersion: null,
+                    status: 'ERROR',
+                    error: error.message
+                });
+            }
+        }
+
         // 1. Sync Catalogs
         for (const collection of catalogs) {
             try {
@@ -460,6 +486,18 @@ class SyncManager {
             }
         }
 
+        // Config is a singleton object. Slaves must also track updates for terminal assignments.
+        if (!permissionService.isMasterTerminal()) {
+            const localVersion = this.syncVersions.get('config') || 0;
+            const hasNewConfig = await apiSyncAdapter.hasNewData('config', localVersion);
+            const localConfig = await db.get('config');
+            const isConfigMissing = !localConfig || Array.isArray(localConfig) || Object.keys(localConfig).length === 0;
+
+            if (hasNewConfig || (isConfigMissing && localVersion === 0)) {
+                updatesAvailable.push('config');
+            }
+        }
+
         return updatesAvailable;
     }
 
@@ -524,7 +562,9 @@ class SyncManager {
 
                 if (module.id === 'config') {
                     // Special handling for config object
-                    await this.pullConfig();
+                    this.syncVersions.set('config', 0);
+                    localStorage.setItem('sync_version_config', '0');
+                    await this.pullConfig(true);
                     count = 1; // Config is a single object, not a collection of items
                 } else {
                     // Standard collection sync
@@ -551,23 +591,49 @@ class SyncManager {
     }
 
     /**
-     * Pull global configuration (Master only)
+     * Pull global configuration (mainly for Slave terminals)
      */
-    async pullConfig(): Promise<void> {
-        if (!permissionService.isMasterTerminal()) return;
+    async pullConfig(force: boolean = false): Promise<void> {
+        if (this.isDisabled) return;
 
-        console.log('⬇️ Pulling global configuration...');
+        // Master already owns source-of-truth config locally; skip unless explicitly forced.
+        if (!force && permissionService.isMasterTerminal()) return;
 
         try {
-            const config = await apiSyncAdapter.pullConfig();
-            if (config) {
-                console.log('💾 Saving global configuration...');
-                await db.save('config', config);
-                console.log('✅ Global configuration saved.');
+            const localVersion = this.syncVersions.get('config') || 0;
+            const localConfig = await db.get('config');
+            const metadata = await apiSyncAdapter.getMetadata('config');
+            const remoteVersion = metadata?.version;
 
-                // Reload config in memory if needed, or dispatch event
-                window.dispatchEvent(new CustomEvent('configUpdated', { detail: config }));
+            console.log('⬇️ Pulling global configuration...');
+            const config = await apiSyncAdapter.pullConfig();
+            if (!config) return;
+
+            const localConfigJson = JSON.stringify(localConfig || {});
+            const incomingConfigJson = JSON.stringify(config || {});
+            const changed = force || localConfigJson !== incomingConfigJson;
+
+            if (!changed) {
+                if (typeof remoteVersion === 'number') {
+                    this.syncVersions.set('config', remoteVersion);
+                    localStorage.setItem('sync_version_config', remoteVersion.toString());
+                }
+                return;
             }
+
+            console.log('💾 Saving global configuration...');
+            await db.save('config', config);
+
+            const finalVersion = (typeof remoteVersion === 'number')
+                ? remoteVersion
+                : Math.max(localVersion + 1, 1);
+            this.syncVersions.set('config', finalVersion);
+            localStorage.setItem('sync_version_config', finalVersion.toString());
+
+            console.log('✅ Global configuration saved.');
+
+            // Notify runtime so the app can apply it immediately without restart.
+            window.dispatchEvent(new CustomEvent('configUpdated', { detail: config }));
         } catch (error) {
             console.error('❌ SyncManager: Failed to pull config:', error);
             throw error;
@@ -631,6 +697,14 @@ class SyncManager {
         this.autoSyncInterval = setInterval(async () => {
             // Auto-sync for ALL terminals (including Master w/ LocalStorage)
             // console.log('🔄 Auto-sync: Checking for updates...');
+            if (!permissionService.isMasterTerminal()) {
+                try {
+                    await this.pullConfig();
+                } catch (error) {
+                    console.warn('⚠️ Auto-sync: Failed to refresh config:', error);
+                }
+            }
+
             const updates = await this.checkForUpdates();
 
             if (updates.length > 0) {
