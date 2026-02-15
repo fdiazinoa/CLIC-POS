@@ -462,9 +462,34 @@ const AppContent: React.FC = () => {
           .catch((recoveryError) => console.warn('⚠️ Startup Z-report recovery skipped:', recoveryError));
 
         let currentConfig = data.config;
-        const masterIp = localStorage.getItem('pos_master_ip');
 
-        if (masterIp) {
+        // 2. Gestión de Identidad de Dispositivo (early, used for safe config source selection)
+        let storedDeviceId = localStorage.getItem('pos_device_id');
+        if (!storedDeviceId) {
+          storedDeviceId = 'DEV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+          localStorage.setItem('pos_device_id', storedDeviceId);
+        }
+        setDeviceId(storedDeviceId);
+
+        // IMPORTANT:
+        // Only pull remote config when this device is a SLAVE (or not yet paired locally).
+        // If a MASTER keeps stale pos_master_ip, blindly pulling here corrupts local runtime config.
+        const masterIp = localStorage.getItem('pos_master_ip');
+        const localTerminals = (!Array.isArray(currentConfig) && currentConfig?.terminals) ? currentConfig.terminals : [];
+        const localPairedTerminal = (localTerminals || []).find(
+          (t: any) => t.config?.currentDeviceId === storedDeviceId
+        );
+
+        const shouldFetchConfigFromMaster = !!masterIp && (
+          !localPairedTerminal || localPairedTerminal?.config?.isPrimaryNode === false
+        );
+
+        if (masterIp && !shouldFetchConfigFromMaster && localPairedTerminal?.config?.isPrimaryNode) {
+          console.warn('⚠️ Stale pos_master_ip detected on MASTER terminal. Clearing slave pointer.');
+          localStorage.removeItem('pos_master_ip');
+        }
+
+        if (shouldFetchConfigFromMaster) {
           console.log("🔄 Slave Mode: Fetching latest config from Master...");
           try {
             const currentProtocol = window.location.protocol;
@@ -571,14 +596,6 @@ const AppContent: React.FC = () => {
           // 1.5 Sequence repair is intentionally deferred; running it here can block startup
           // when transaction stores are large or locked.
 
-          // 2. Gestión de Identidad de Dispositivo
-          let storedDeviceId = localStorage.getItem('pos_device_id');
-          if (!storedDeviceId) {
-            storedDeviceId = 'DEV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
-            localStorage.setItem('pos_device_id', storedDeviceId);
-          }
-          setDeviceId(storedDeviceId);
-
           // 3. Verificación de Vinculación - USE finalConfig (Master prioritized)
           const terminals = finalConfig.terminals || [];
           const pairedTerminal = terminals.find(
@@ -601,67 +618,68 @@ const AppContent: React.FC = () => {
 
             await syncManager.initialize(finalConfig, pairedTerminal.id);
 
-            // CRITICAL FIX: Ensure Master terminal has complete product catalog
-            // Master should always have authoritative product data from backend
-            if (pairedTerminal.config.isPrimaryNode !== false) {
-              console.log('🔍 [AG] Master terminal: Verifying product catalog integrity...');
-              try {
-                // Check local vs backend count for drift
-                const localProducts = await db.get('products') as Product[];
-                const localCount = Array.isArray(localProducts) ? localProducts.length : 0;
+            // Auto-heal catalog/config drift on startup.
+            // This catches the "2 categories / old products" mixed-state on both master and slaves.
+            try {
+              const normalizeCategory = (value: any) =>
+                typeof value === 'string' ? value.trim().toLowerCase() : '';
 
-                // Get backend count via sync metadata
-                const { apiSyncAdapter } = await import('./services/sync/ApiSyncAdapter');
-                const metadata = await apiSyncAdapter.getMetadata('products');
-                const remoteCount = metadata?.itemCount || 0;
+              const localProducts = await db.get('products') as Product[];
+              const localCount = Array.isArray(localProducts) ? localProducts.length : 0;
+              const sellableCategories = new Set(
+                (localProducts || [])
+                  .filter((p: any) => p && p.is_sellable !== false)
+                  .map((p: any) => normalizeCategory(p.category))
+                  .filter(Boolean)
+              );
 
-                console.log(`📊 [AG] Product count - Local: ${localCount}, Remote: ${remoteCount}`);
+              const terminalAllowedCategories = (pairedTerminal.config?.catalog?.allowedCategories || [])
+                .map((cat: any) => normalizeCategory(cat))
+                .filter(Boolean);
 
-                if (remoteCount > localCount || localCount < 10) {
-                  console.warn(`⚠️ [AG] CATALOG DRIFT DETECTED: Master has ${localCount} products but backend has ${remoteCount}. Forcing full refresh...`);
+              const hasTinyCatalog = localCount > 0 && localCount <= 5;
+              const hasCategoryMismatch = terminalAllowedCategories.length >= 5 && sellableCategories.size <= 2;
 
-                  // Clear stale sync version to trigger full pull
-                  localStorage.removeItem('sync_version_products');
-
-                  // Force full catalog refresh (bypass in-memory cache with force=true)
-                  const refreshed = await syncManager.pullCatalog('products', true);
-                  console.log(`✅ [AG] Refreshed ${refreshed} products from backend`);
-
-                  // Re-load products into state
-                  const freshProducts = await db.get('products') as Product[];
-                  if (Array.isArray(freshProducts) && freshProducts.length > 0) {
-                    setProducts(freshProducts);
-                    console.log(`✅ [AG] Master product state updated with ${freshProducts.length} products`);
-                  } else {
-                    console.error('❌ [AG] Failed to reload products after refresh or collection is empty.');
-                  }
-                } else {
-                  console.log('✅ [AG] Product catalog is current');
-                }
-              } catch (driftCheckError) {
-                console.error('❌ [AG] Drift check failed:', driftCheckError);
-                // Non-blocking - continue app init even if drift check fails
+              if (hasTinyCatalog || hasCategoryMismatch) {
+                console.warn(
+                  `⚠️ Catalog drift detected on ${pairedTerminal.id}. ` +
+                  `localProducts=${localCount}, sellableCategories=${sellableCategories.size}, allowedCategories=${terminalAllowedCategories.length}. ` +
+                  `Running forcePullAll...`
+                );
+                await syncManager.forcePullAll();
               }
+            } catch (driftCheckError) {
+              console.error('❌ Catalog auto-heal check failed:', driftCheckError);
             }
 
-            // Rehydrate from DB after sync init to avoid rendering stale in-memory snapshots.
-            // This is critical when drift recovery updates IndexedDB during initialize().
+            // Master Re-hydration Step: This ensures state is always up to date with DB 
+            // after any async drift fixes or sync initializations.
             try {
-              const [syncedConfig, syncedProducts, syncedUsers, syncedSequences] = await Promise.all([
+              const [dbConfig, dbProducts, dbUsers, dbSequences] = await Promise.all([
                 db.get('config') as Promise<any>,
                 db.get('products') as Promise<Product[]>,
                 db.get('users') as Promise<User[]>,
                 db.get('internalSequences') as Promise<any[]>
               ]);
 
-              if (syncedConfig && !Array.isArray(syncedConfig) && syncedConfig.terminals) {
+              // CRITICAL: db.get returns an array from IndexedDB. We must unwrap config.
+              let syncedConfig = dbConfig;
+              if (Array.isArray(dbConfig)) {
+                syncedConfig = dbConfig.find((c: any) => c.id !== '_db_initialized' && c.id !== 'config_metadata') || dbConfig[0];
+              }
+
+              if (syncedConfig && syncedConfig.terminals) {
+                console.log('📦 App: Hydrating config from DB:', syncedConfig.id || 'main');
                 setConfig(syncedConfig);
               }
-              if (Array.isArray(syncedProducts)) setProducts(syncedProducts);
-              if (Array.isArray(syncedUsers)) setUsers(syncedUsers);
-              if (Array.isArray(syncedSequences)) setInternalSequences(syncedSequences);
+
+              if (Array.isArray(dbProducts) && dbProducts.length > 0) {
+                setProducts(dbProducts);
+              }
+              if (Array.isArray(dbUsers)) setUsers(dbUsers);
+              if (Array.isArray(dbSequences)) setInternalSequences(dbSequences);
             } catch (rehydrationError) {
-              console.warn('⚠️ Post-sync rehydration failed:', rehydrationError);
+              console.warn('⚠️ Post-init rehydration failed:', rehydrationError);
             }
 
             if (pairedTerminal.config.isPrimaryNode === false) {
@@ -924,84 +942,102 @@ const AppContent: React.FC = () => {
   // --- CORE EVENT HANDLERS ---
 
   const handlePairTerminal = async (terminalId: string) => {
-    const newTerminals = (config.terminals || []).map(t => {
-      // Desvincular este dispositivo de cualquier otra terminal donde estuviera
-      if (t.config.currentDeviceId === deviceId) {
-        return { ...t, config: { ...t.config, currentDeviceId: undefined } };
-      }
-      // Vincular a la terminal seleccionada
-      if (t.id === terminalId) {
-        return {
-          ...t,
-          config: {
-            ...t.config,
-            currentDeviceId: deviceId,
-            lastPairingDate: new Date().toISOString()
-          }
-        };
-      }
-      return t;
-    });
+    setRestoringHistory(true);
+    try {
+      const newTerminals = (config.terminals || []).map(t => {
+        // Desvincular este dispositivo de cualquier otra terminal donde estuviera
+        if (t.config.currentDeviceId === deviceId) {
+          return { ...t, config: { ...t.config, currentDeviceId: undefined } };
+        }
+        // Vincular a la terminal seleccionada
+        if (t.id === terminalId) {
+          return {
+            ...t,
+            config: {
+              ...t.config,
+              currentDeviceId: deviceId,
+              lastPairingDate: new Date().toISOString()
+            }
+          };
+        }
+        return t;
+      });
 
-    const updatedConfig = { ...config, terminals: newTerminals };
-    setConfig(updatedConfig);
-    await db.save('config', updatedConfig);
+      const updatedConfig = { ...config, terminals: newTerminals };
+      setConfig(updatedConfig);
+      await db.save('config', updatedConfig);
 
-    // SYNC BINDING TO MASTER (If Slave)
-    const masterIp = localStorage.getItem('pos_master_ip');
-    if (masterIp) {
-      console.log(`📤 Slave Binding: Pushing updated config to Master at ${masterIp}...`);
+      const selectedTerminal = (newTerminals || []).find(t => t.id === terminalId);
+      const isSlave = selectedTerminal?.config?.isPrimaryNode === false;
+
+      // If user takes control of a MASTER terminal, clear stale slave pointers.
+      if (!isSlave) {
+        localStorage.removeItem('pos_master_ip');
+        const runtimeMasterUrl = `${window.location.protocol}//${window.location.hostname}:3001`;
+        localStorage.setItem('CLIC_POS_MASTER_URL', runtimeMasterUrl);
+      }
+
+      // Always persist binding to backend before re-initializing sync.
+      // This prevents pulling old config right after takeover.
+      const currentProtocol = window.location.protocol;
+      const masterIp = localStorage.getItem('pos_master_ip');
+      const targetUrl = masterIp
+        ? `${currentProtocol}//${masterIp}:3001/api/config`
+        : `${currentProtocol}//${window.location.hostname}:3001/api/config`;
+
       try {
-        const currentProtocol = window.location.protocol;
-        const targetUrl = `${currentProtocol}//${masterIp}:3001/api/config`;
-
-        await fetch(targetUrl, {
+        const res = await fetch(targetUrl, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(updatedConfig)
         });
-        console.log("✅ Binding synced to Master.");
+        if (!res.ok) {
+          const detail = await res.text().catch(() => '');
+          throw new Error(`HTTP ${res.status} ${detail}`.trim());
+        }
+        console.log(`✅ Binding synced to backend at ${targetUrl}`);
       } catch (e) {
-        console.error("❌ Failed to sync binding to Master:", e);
-        // Non-blocking error, we continue with local setup
+        console.error("❌ Failed to sync binding to backend:", e);
+        // We continue; local binding is already saved.
       }
-    }
 
-    // If it's a slave terminal, restore history
-    const isSlave = (newTerminals || []).find(t => t.id === terminalId)?.config?.isPrimaryNode === false;
-    if (isSlave) {
-      setRestoringHistory(true);
-      try {
-        // Re-initialize sync manager with new config
+      // If it's a slave terminal, restore history
+      if (isSlave) {
+        try {
+          // Re-initialize sync manager with new config
+          await syncManager.initialize(updatedConfig, terminalId);
+          await syncManager.restoreHistory(terminalId);
+
+          // CRITICAL: Force full catalog sync to ensure sequences are loaded immediately
+          // restoreHistory only pulls operational data (txns, z-reports), but we need sequences too.
+          console.log('🔄 Forcing full catalog sync to restore sequences...');
+          await syncManager.syncAllCatalogs();
+
+          // Reload data from DB after restoration
+          const freshData = await db.init();
+          setTransactions(freshData.transactions);
+          setProducts(freshData.products);
+          setCashMovements(freshData.cashMovements);
+          setZReports(freshData.zReports || []);
+        } catch (error) {
+          console.error('Failed to restore history:', error);
+          alert('No se pudo restaurar el historial desde la Maestra. El equipo funcionará, pero sin datos previos.');
+        }
+      } else {
+        // CRITICAL: Even if not a slave (Master mode), we MUST re-initialize services
+        // with the new terminal ID and updated config, otherwise they stay uninitialized.
+        console.log("🛠️ Re-initializing services for Master/Local terminal...");
+        permissionService.initialize(updatedConfig, terminalId);
         await syncManager.initialize(updatedConfig, terminalId);
-        await syncManager.restoreHistory(terminalId);
-
-        // CRITICAL: Force full catalog sync to ensure sequences are loaded immediately
-        // restoreHistory only pulls operational data (txns, z-reports), but we need sequences too.
-        console.log('🔄 Forcing full catalog sync to restore sequences...');
-        await syncManager.syncAllCatalogs();
-
-        // Reload data from DB after restoration
-        const freshData = await db.init();
-        setTransactions(freshData.transactions);
-        setProducts(freshData.products);
-        setCashMovements(freshData.cashMovements);
-        setZReports(freshData.zReports || []);
-      } catch (error) {
-        console.error('Failed to restore history:', error);
-        alert('No se pudo restaurar el historial desde la Maestra. El equipo funcionará, pero sin datos previos.');
-      } finally {
-        setRestoringHistory(false);
       }
-    } else {
-      // CRITICAL: Even if not a slave (Master mode), we MUST re-initialize services
-      // with the new terminal ID and updated config, otherwise they stay uninitialized.
-      console.log("🛠️ Re-initializing services for Master/Local terminal...");
-      permissionService.initialize(updatedConfig, terminalId);
-      await syncManager.initialize(updatedConfig, terminalId);
-    }
 
-    setCurrentView('LOGIN');
+      setCurrentView('LOGIN');
+    } catch (error) {
+      console.error('❌ Failed to take terminal control:', error);
+      alert('No se pudo tomar control de la terminal. Revisa conexión y vuelve a intentar.');
+    } finally {
+      setRestoringHistory(false);
+    }
   };
 
   const handleConfigUpdate = async (newConfig: BusinessConfig) => {
@@ -1486,19 +1522,30 @@ const AppContent: React.FC = () => {
 
 
 
-      case 'TABLE_MAP':
+      case 'TABLE_MAP': {
+        const activeRoleId = currentUser?.roleId || currentUser?.role;
+        const activeRole = roles.find(role => role.id === activeRoleId);
+        const canViewBusinessMetrics = Boolean(
+          activeRole &&
+          (
+            activeRole.permissions.includes('ALL') ||
+            activeRole.permissions.includes('REPORTS_VIEW_FINANCIAL') ||
+            /admin|gerente|super/i.test(activeRole.name)
+          )
+        );
+
         return (
-          <div className="h-screen flex flex-col bg-slate-50">
-            <div className="bg-white border-b p-4 flex justify-between items-center z-20 shrink-0 shadow-sm">
+          <div className="h-screen flex flex-col bg-slate-950">
+            <div className="border-b border-white/10 p-4 flex justify-between items-center z-20 shrink-0 bg-white/[0.06] backdrop-blur-xl shadow-[0_12px_34px_rgba(2,6,23,0.45)]">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-900 text-white rounded-lg shadow-lg">
+                <div className="p-2 bg-gradient-to-br from-sky-500 to-blue-700 text-white rounded-xl shadow-[0_10px_24px_rgba(2,132,199,0.45)]">
                   <Layout size={20} />
                 </div>
-                <h2 className="font-black text-slate-800 tracking-tight uppercase text-sm">Mapa de Mesas</h2>
+                <h2 className="font-black text-slate-100 tracking-tight uppercase text-sm">Mapa de Mesas</h2>
               </div>
               <button
                 onClick={() => setCurrentView('POS')}
-                className="px-6 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold transition-all flex items-center gap-2 border border-slate-200"
+                className="px-6 py-2 rounded-xl font-bold transition-all flex items-center gap-2 border border-white/15 bg-white/[0.08] backdrop-blur-xl text-slate-100 hover:bg-white/[0.15] active:scale-[0.98]"
               >
                 Cerrar
               </button>
@@ -1532,10 +1579,12 @@ const AppContent: React.FC = () => {
                 isAdmin={currentUser?.role === 'ADMIN'}
                 bloqueoMeseros={getCurrentTerminal()?.config?.operational?.bloqueo_meseros}
                 isRestaurantMode={config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL'}
+                canViewBusinessMetrics={canViewBusinessMetrics}
               />
             </div>
           </div>
         );
+      }
 
       case 'TABLE_DESIGNER':
         return (

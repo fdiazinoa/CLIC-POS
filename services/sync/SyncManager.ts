@@ -73,6 +73,18 @@ class SyncManager {
         const isSavedLoopback = savedHost === 'localhost' || savedHost === '127.0.0.1';
         const isRuntimeLoopback = runtimeHost === 'localhost' || runtimeHost === '127.0.0.1';
 
+        // Master must always point to itself. Never reuse slave pointers.
+        if (this.isMaster) {
+            if (localStorage.getItem('pos_master_ip')) {
+                localStorage.removeItem('pos_master_ip');
+            }
+            if (savedMasterUrl !== runtimeMasterUrl) {
+                console.warn(`⚠️ SyncManager: MASTER overriding masterUrl (${savedMasterUrl || 'none'}) -> ${runtimeMasterUrl}`);
+            }
+            savedMasterUrl = runtimeMasterUrl;
+            localStorage.setItem('CLIC_POS_MASTER_URL', runtimeMasterUrl);
+        }
+
         // Master terminal must not keep localhost URL when running from a remote browser.
         if (this.isMaster && savedMasterUrl && isSavedLoopback && !isRuntimeLoopback) {
             console.warn(`⚠️ SyncManager: Replacing stale master URL (${savedMasterUrl}) with runtime host (${runtimeMasterUrl})`);
