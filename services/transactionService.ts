@@ -41,6 +41,16 @@ class TransactionService {
         seriesConfig.nextNumber = seriesNumber + 1;
         await db.save('internalSequences', series);
 
+        // Broadcast change to Master (and other terminals)
+        try {
+            const { syncManager } = await import('./sync/SyncManager');
+            await syncManager.broadcastChange('internalSequences', seriesConfig, 'UPDATE');
+            console.log(`📡 Broadcasted sequence update for ${seriesId} (next: ${seriesConfig.nextNumber})`);
+        } catch (e) {
+            // Silently fail if syncManager is not yet initialized or fails
+            console.warn(`⚠️ Failed to broadcast sequence update for ${seriesId}:`, e);
+        }
+
         return {
             globalSequence,
             displayId,

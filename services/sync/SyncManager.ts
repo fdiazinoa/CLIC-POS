@@ -199,7 +199,7 @@ class SyncManager {
     async pushCatalog(collection: SyncableCollection): Promise<void> {
         if (this.isDisabled) return;
 
-        if (!permissionService.isMasterTerminal()) {
+        if (!permissionService.isMasterTerminal() && collection !== 'internalSequences') {
             console.warn(`⚠️  Slave terminal cannot push ${collection}`);
             return;
         }
@@ -259,6 +259,10 @@ class SyncManager {
                 console.log(`💾 SyncManager: Performing FULL save for ${collection}...`);
                 const cleanItems = items.map((item: any) => {
                     const { _op, ...rest } = item;
+                    // Add repair logic for internalSequences
+                    if (collection === 'internalSequences') {
+                        return this.repairSequenceData(rest);
+                    }
                     return rest;
                 });
                 await db.save(collection, cleanItems);
@@ -272,7 +276,9 @@ class SyncManager {
                         console.log(`🗑️ SyncManager: Deleting item ${item.id} from ${collection}`);
                         await db.deleteDocument(collection, item.id);
                     } else {
-                        await db.saveDocument(collection, cleanItem);
+                        // Add repair logic for internalSequences
+                        const finalItem = collection === 'internalSequences' ? this.repairSequenceData(cleanItem) : cleanItem;
+                        await db.saveDocument(collection, finalItem);
                     }
                 }
             }
@@ -323,6 +329,9 @@ class SyncManager {
 
             // Dispatch event for UI to refresh
             window.dispatchEvent(new CustomEvent(`${collection}Updated`));
+            if (collection === 'internalSequences') {
+                window.dispatchEvent(new CustomEvent('seriesUpdated'));
+            }
 
             return items.length;
         } catch (error) {
@@ -441,7 +450,12 @@ class SyncManager {
             const localVersion = this.syncVersions.get(collection) || 0;
             const hasNew = await apiSyncAdapter.hasNewData(collection, localVersion);
 
-            if (hasNew) {
+            // CRITICAL: Also check if local collection is empty. 
+            // This handles the case where remote version is 0 but server has data (Slave first pull).
+            const localData = await db.get(collection);
+            const isEmpty = !localData || (Array.isArray(localData) && localData.length === 0);
+
+            if (hasNew || (isEmpty && localVersion === 0)) {
                 updatesAvailable.push(collection);
             }
         }
@@ -649,8 +663,8 @@ class SyncManager {
             return;
         }
 
-        if (!permissionService.isMasterTerminal()) {
-            console.warn('⚠️  Only master terminal can broadcast changes');
+        if (!permissionService.isMasterTerminal() && collection !== 'internalSequences') {
+            console.warn('⚠️  Only master terminal can broadcast changes (except internalSequences)');
             return;
         }
 
@@ -823,6 +837,33 @@ class SyncManager {
             console.error('❌ SyncManager: Error restoring history:', error);
             throw error;
         }
+    }
+    /**
+     * Repair missing documentType in sequence data (Legacy/Imported Fix)
+     */
+    private repairSequenceData(item: any): any {
+        if (item.documentType) return item;
+
+        console.log(`🛠️ SyncManager: Repairing missing documentType for sequence ${item.id} (${item.prefix})`);
+
+        // Match by ID first (Defaults)
+        if (item.id === 'TICKET') return { ...item, documentType: 'TICKET' };
+        if (item.id === 'REFUND') return { ...item, documentType: 'REFUND' };
+        if (item.id === 'TRANSFER') return { ...item, documentType: 'TRANSFER' };
+        if (item.id === 'VOID') return { ...item, documentType: 'VOID' };
+
+        // Match by Prefix
+        const prefix = item.prefix || '';
+        if (prefix.startsWith('TCK')) return { ...item, documentType: 'TICKET' };
+        if (prefix.startsWith('NC') || prefix.startsWith('REF')) return { ...item, documentType: 'REFUND' };
+        if (prefix.startsWith('TR')) return { ...item, documentType: 'TRANSFER' };
+        if (prefix.startsWith('VOID')) return { ...item, documentType: 'VOID' };
+        if (prefix.startsWith('AJ')) return { ...item, documentType: 'ADJUSTMENT_IN' };
+        if (prefix.startsWith('CR') || prefix.startsWith('CK')) return { ...item, documentType: 'Z_REPORT' };
+        if (prefix.startsWith('XP')) return { ...item, documentType: 'X_REPORT' };
+
+        // Fallback for everything else
+        return { ...item, documentType: 'TICKET' };
     }
 }
 
