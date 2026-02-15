@@ -2063,7 +2063,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <button onClick={() => setMobileView('PRODUCTS')} className="p-2 -ml-2 text-gray-400 hover:text-blue-600 transition-colors">
                         <ArrowLeft size={24} />
                      </button>
-                     <h2 className="font-black text-gray-800 text-lg">Ticket Actual</h2>
+                     <h2 className="font-black text-gray-800 text-lg">
+                        {activeTable ? `Mesa ${activeTable.nombre || activeTable.name}` : 'Ticket Actual'}
+                     </h2>
                   </div>
                   <div className="flex gap-1">
                      <button onClick={handleParkCurrentTicket} className="p-2 text-gray-400 hover:text-blue-600" title="Guardar Ticket">
@@ -2119,7 +2121,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                <div className="flex justify-between items-center gap-4">
                   <div className="flex items-center gap-2 shrink-0">
                      <div className="flex flex-col">
-                        <h2 className="font-black text-gray-800 uppercase text-xs tracking-widest whitespace-nowrap">Ticket Actual</h2>
+                        <h2 className="font-black text-gray-800 uppercase text-xs tracking-widest whitespace-nowrap">
+                           {activeTable ? (
+                              <span className="flex items-center gap-1.5 text-blue-600">
+                                 <Layout size={14} className="shrink-0" />
+                                 Mesa {activeTable.nombre || activeTable.name}
+                              </span>
+                           ) : (
+                              'Ticket Actual'
+                           )}
+                        </h2>
                         {
                            (() => {
                               const ticketSeriesId = activeTerminalConfig?.documentAssignments?.['TICKET'];
