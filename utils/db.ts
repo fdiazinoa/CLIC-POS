@@ -198,123 +198,207 @@ export const db = {
       return initPromise;
     }
 
-    const _initRunner = async () => {
-      console.log('🏁 _initRunner started');
+    const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
+      let timeoutHandle: number | undefined;
       try {
-        console.log('🔌 Connecting to DB Adapter...');
-        await dbAdapter.connect();
-        console.log('✅ DB Adapter connected');
-
-        // Check if seeded
-        console.log('🔍 Checking config collection...');
-        const existingConfig = await dbAdapter.getCollection('config');
-        console.log('✅ Config check complete, exists:', !!existingConfig);
-        const isSlave = permissionService.isSlaveTerminal();
-        console.log('🤖 isSlave:', isSlave);
-
-        // Migration Logic: Ensure all collections exist even if config exists
-        // SKIP SEEDING ON SLAVES: Slaves must wait for Master snapshot
-        if (!isSlave) {
-          // --- CONFIG PATCHING (Always run if config exists) ---
-          if (existingConfig && (Array.isArray(existingConfig) ? existingConfig.length > 0 : Object.keys(existingConfig).length > 0)) {
-            const currentConfig = (Array.isArray(existingConfig) ? existingConfig[0] : existingConfig) as any as BusinessConfig;
-            let wasPatched = false;
-            const seedConfig = SEED_DATA.config;
-
-            if (currentConfig.terminals) {
-              currentConfig.terminals.forEach(t => {
-                // Patch 0: Special fix for t1 role (Price Checker -> STANDARD_POS)
-                if (t.id === 't1' && (t.config.deviceRole?.role !== 'STANDARD_POS')) {
-                  console.warn('🩹 Patching terminal t1: Force role to STANDARD_POS');
-                  const seedVal = seedConfig.terminals.find(st => st.id === 't1');
-                  if (seedVal?.config.deviceRole) {
-                    t.config.deviceRole = JSON.parse(JSON.stringify(seedVal.config.deviceRole));
-                    wasPatched = true;
-                  }
-                }
-
-                // Patch 1: Missing Customer Display
-                if (!t.config.hardware.customerDisplay) {
-                  const seedVal = seedConfig.terminals.find(st => st.id === t.id) || seedConfig.terminals[0];
-                  if (seedVal?.config.hardware.customerDisplay) {
-                    t.config.hardware.customerDisplay = JSON.parse(JSON.stringify(seedVal.config.hardware.customerDisplay));
-                    wasPatched = true;
-                  }
-                }
-
-                // Patch 2: Missing Reservation Policy
-                if (!t.config.operational?.reservationPolicy) {
-                  const seedVal = seedConfig.terminals.find(st => st.id === t.id) || seedConfig.terminals[0];
-                  if (seedVal?.config.operational?.reservationPolicy) {
-                    if (!t.config.operational) t.config.operational = {} as any;
-                    t.config.operational.reservationPolicy = JSON.parse(JSON.stringify(seedVal.config.operational.reservationPolicy));
-                    wasPatched = true;
-                  }
-                }
-              });
-            }
-
-            if (wasPatched) {
-              console.log('🩹 Config patched with new defaults');
-              await dbAdapter.saveCollection('config', currentConfig as any);
-            }
-          }
-
-          // --- SEEDING MISSING COLLECTIONS ---
-          for (const [key, value] of Object.entries(SEED_DATA)) {
-            try {
-              const existingCollection = await dbAdapter.getCollection(key);
-
-              // If collection is missing or empty (except config which we already handled), seed it
-              if (!existingCollection || (Array.isArray(existingCollection) && existingCollection.length === 0 && key !== 'config')) {
-                console.log(`🌱 Seeding missing collection: ${key}`);
-                await dbAdapter.saveCollection(key, value as any);
-              }
-            } catch (error) {
-              console.warn(`⚠️ Failed to seed collection ${key}:`, error);
-            }
-          }
-        } else {
-          console.log('ℹ️ Slave terminal detected: Skipping auto-seeding. Waiting for Master sync.');
-        }
-
-        // Determine if we should return seed data (only for masters that are truly empty)
-        const hasConfig = existingConfig && (Array.isArray(existingConfig) ? existingConfig.length > 0 : Object.keys(existingConfig).length > 0);
-
-        if (!hasConfig && !isSlave) {
-          console.log('🌱 No config found on Master: Returning SEED_DATA');
-          return SEED_DATA;
-        }
-
-        // Load all data to return consistent structure (Legacy support)
-        // Use Promise.allSettled to ensure one failure doesn't break everything
-        console.log('📦 Loading all collections...');
-        const keys = Object.keys(SEED_DATA);
-        const results = await Promise.allSettled(keys.map(key =>
-          dbAdapter.getCollection(key, (terminalId && key === 'rooms') ? { terminal_id: terminalId } : undefined)
-        ));
-        console.log('✅ All collections loaded (settled)');
-
-        const data: any = {};
-        results.forEach((result, index) => {
-          const key = keys[index];
-          if (result.status === 'fulfilled') {
-            data[key] = result.value;
-          } else {
-            console.error(`❌ Failed to load ${key}:`, result.reason);
-            data[key] = []; // Fallback to empty array
-          }
-        });
-
-        console.log('📤 _initRunner returning data');
-        return data;
-      } catch (e) {
-        initPromise = null;
-        throw e;
+        return await Promise.race([
+          promise,
+          new Promise<T>((_, reject) => {
+            timeoutHandle = window.setTimeout(() => reject(new Error(`TIMEOUT:${label}`)), ms);
+          })
+        ]);
+      } finally {
+        if (timeoutHandle) window.clearTimeout(timeoutHandle);
       }
     };
 
-    initPromise = _initRunner();
+    const getFallbackCollectionValue = (key: string) => {
+      const seedValue = (SEED_DATA as any)[key];
+      if (Array.isArray(seedValue)) return [];
+      if (typeof seedValue === 'number') return 0;
+      return {};
+    };
+
+    const isCriticalCollection = (key: string) =>
+      [
+        'config',
+        'users',
+        'roles',
+        'customers',
+        'warehouses',
+        'products',
+        'cashMovements',
+        'internalSequences',
+        'zReports',
+        'productStocks',
+        'reservations',
+        'inventoryCommitments'
+      ].includes(key);
+
+    const isDeferredHeavyCollection = (key: string) =>
+      ['transactions', 'transactionHistory'].includes(key);
+
+    const shouldCheckSeedForCollection = (key: string, value: any) => {
+      if (key === 'config') return true;
+      if (Array.isArray(value)) return value.length > 0;
+      if (typeof value === 'number') return value !== 0;
+      if (value && typeof value === 'object') return Object.keys(value).length > 0;
+      return !!value;
+    };
+
+    const _initRunner = async () => {
+      console.log('🏁 _initRunner started');
+      console.log('🔌 Connecting to DB Adapter...');
+      await withTimeout(dbAdapter.connect(), 15000, 'DB_CONNECT');
+      console.log('✅ DB Adapter connected');
+
+      // Check if seeded
+      console.log('🔍 Checking config collection...');
+      const existingConfig = await withTimeout(
+        dbAdapter.getCollection('config'),
+        8000,
+        'GET_CONFIG_COLLECTION'
+      );
+      console.log('✅ Config check complete, exists:', !!existingConfig);
+      const isSlave = permissionService.isSlaveTerminal();
+      console.log('🤖 isSlave:', isSlave);
+
+      // Migration Logic: Ensure all collections exist even if config exists
+      // SKIP SEEDING ON SLAVES: Slaves must wait for Master snapshot
+      if (!isSlave) {
+        // --- CONFIG PATCHING (Always run if config exists) ---
+        if (existingConfig && (Array.isArray(existingConfig) ? existingConfig.length > 0 : Object.keys(existingConfig).length > 0)) {
+          const currentConfig = (Array.isArray(existingConfig) ? existingConfig[0] : existingConfig) as any as BusinessConfig;
+          let wasPatched = false;
+          const seedConfig = SEED_DATA.config;
+
+          if (currentConfig.terminals) {
+            currentConfig.terminals.forEach(t => {
+              // Patch 0: Special fix for t1 role (Price Checker -> STANDARD_POS)
+              if (t.id === 't1' && (t.config.deviceRole?.role !== 'STANDARD_POS')) {
+                console.warn('🩹 Patching terminal t1: Force role to STANDARD_POS');
+                const seedVal = seedConfig.terminals.find(st => st.id === 't1');
+                if (seedVal?.config.deviceRole) {
+                  t.config.deviceRole = JSON.parse(JSON.stringify(seedVal.config.deviceRole));
+                  wasPatched = true;
+                }
+              }
+
+              // Patch 1: Missing Customer Display
+              if (!t.config.hardware.customerDisplay) {
+                const seedVal = seedConfig.terminals.find(st => st.id === t.id) || seedConfig.terminals[0];
+                if (seedVal?.config.hardware.customerDisplay) {
+                  t.config.hardware.customerDisplay = JSON.parse(JSON.stringify(seedVal.config.hardware.customerDisplay));
+                  wasPatched = true;
+                }
+              }
+
+              // Patch 2: Missing Reservation Policy
+              if (!t.config.operational?.reservationPolicy) {
+                const seedVal = seedConfig.terminals.find(st => st.id === t.id) || seedConfig.terminals[0];
+                if (seedVal?.config.operational?.reservationPolicy) {
+                  if (!t.config.operational) t.config.operational = {} as any;
+                  t.config.operational.reservationPolicy = JSON.parse(JSON.stringify(seedVal.config.operational.reservationPolicy));
+                  wasPatched = true;
+                }
+              }
+            });
+          }
+
+          if (wasPatched) {
+            console.log('🩹 Config patched with new defaults');
+            await withTimeout(dbAdapter.saveCollection('config', currentConfig as any), 8000, 'SAVE_PATCHED_CONFIG');
+          }
+        }
+
+        // --- SEEDING MISSING COLLECTIONS ---
+        for (const [key, value] of Object.entries(SEED_DATA)) {
+          if (!shouldCheckSeedForCollection(key, value)) continue;
+          try {
+            const existingCollection = await withTimeout(
+              dbAdapter.getCollection(key),
+              isCriticalCollection(key) ? 15000 : 8000,
+              `SEED_CHECK_${key}`
+            );
+
+            // If collection is missing or empty (except config which we already handled), seed it
+            if (!existingCollection || (Array.isArray(existingCollection) && existingCollection.length === 0 && key !== 'config')) {
+              console.log(`🌱 Seeding missing collection: ${key}`);
+              await withTimeout(dbAdapter.saveCollection(key, value as any), 8000, `SEED_SAVE_${key}`);
+            }
+          } catch (error) {
+            console.warn(`⚠️ Failed to seed collection ${key}:`, error);
+          }
+        }
+      } else {
+        console.log('ℹ️ Slave terminal detected: Skipping auto-seeding. Waiting for Master sync.');
+      }
+
+      // Determine if we should return seed data (only for masters that are truly empty)
+      const hasConfig = existingConfig && (Array.isArray(existingConfig) ? existingConfig.length > 0 : Object.keys(existingConfig).length > 0);
+
+      if (!hasConfig && !isSlave) {
+        console.log('🌱 No config found on Master: Returning SEED_DATA');
+        return SEED_DATA;
+      }
+
+      // Load all data to return consistent structure (Legacy support)
+      // Bounded waits prevent the whole init from hanging on one store.
+      console.log('📦 Loading all collections...');
+      const keys = Object.keys(SEED_DATA);
+      const results = await Promise.allSettled(keys.map(async key => {
+        if (isDeferredHeavyCollection(key)) {
+          // Non-blocking startup for heavy stores. They are loaded later by dedicated flows.
+          console.warn(`⏭️ Skipping heavy collection during init: ${key}`);
+          return getFallbackCollectionValue(key);
+        }
+        try {
+          return await withTimeout(
+            dbAdapter.getCollection(key, (terminalId && key === 'rooms') ? { terminal_id: terminalId } : undefined),
+            isCriticalCollection(key) ? 25000 : 10000,
+            `LOAD_COLLECTION_${key}`
+          );
+        } catch (error) {
+          if (isCriticalCollection(key)) {
+            console.warn(`⚠️ Timeout/error loading critical collection ${key}. Retrying with extended timeout...`, error);
+            return await withTimeout(
+              dbAdapter.getCollection(key, (terminalId && key === 'rooms') ? { terminal_id: terminalId } : undefined),
+              45000,
+              `LOAD_COLLECTION_RETRY_${key}`
+            );
+          }
+          console.warn(`⚠️ Timeout/error loading ${key}. Using fallback.`, error);
+          return getFallbackCollectionValue(key);
+        }
+      }));
+      console.log('✅ All collections loaded (settled)');
+
+      const data: any = {};
+      results.forEach((result, index) => {
+        const key = keys[index];
+        if (result.status === 'fulfilled') {
+          data[key] = result.value;
+        } else {
+          console.error(`❌ Failed to load ${key}:`, result.reason);
+          data[key] = getFallbackCollectionValue(key);
+        }
+      });
+
+      console.log('📤 _initRunner returning data');
+      return data;
+    };
+
+    const dedupedInit = (async () => {
+      try {
+        return await _initRunner();
+      } finally {
+        // Important: do not cache resolved/stuck init forever.
+        // Keep only in-flight deduplication.
+        initPromise = null;
+      }
+    })();
+
+    initPromise = dedupedInit;
     return initPromise;
   },
 
@@ -743,34 +827,12 @@ export const db = {
       buffer = (buffers || []).find((b: LocalFiscalBuffer) => b.type === type) as LocalFiscalBuffer;
     }
 
-    // Fetch existing transactions to check for NCF duplicity
-    const transactions = await dbAdapter.getCollection<Transaction>('transactions') || [];
-
     if (!buffer) {
       console.error(`❌ getNextNCF: Buffer for type ${type} is still undefined after request!`);
       return null;
     }
 
-    let ncf = `${buffer.prefix}${buffer.currentNumber.toString().padStart(8, '0')}`;
-    let isDuplicate = transactions.some(t => t.ncf === ncf);
-
-    // If duplicate, skip and try next number in buffer
-    while (isDuplicate && buffer.currentNumber <= buffer.endNumber) {
-      console.warn(`⚠️ Duplicate NCF detected: ${ncf}. Skipping to next number.`);
-      buffer.currentNumber += 1;
-
-      if (buffer.currentNumber > buffer.endNumber) {
-        // Buffer exhausted while skipping duplicates, need a new batch
-        buffer = await db.requestFiscalBatch(terminalId, type, customBatchSize || 100) as LocalFiscalBuffer;
-        if (!buffer) return null;
-        // Refresh buffers
-        buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
-        buffer = (buffers || []).find((b: LocalFiscalBuffer) => b.type === type) as LocalFiscalBuffer;
-      }
-
-      ncf = `${buffer.prefix}${buffer.currentNumber.toString().padStart(8, '0')}`;
-      isDuplicate = transactions.some(t => t.ncf === ncf);
-    }
+    const ncf = `${buffer.prefix}${buffer.currentNumber.toString().padStart(8, '0')}`;
 
     if (buffer.currentNumber > buffer.endNumber) return null;
 

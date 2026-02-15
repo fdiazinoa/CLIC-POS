@@ -365,72 +365,77 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    if (viewMode === 'CLASSIFICATIONS') return <ClassificationManager config={config} onUpdateConfig={onUpdateConfig} onClose={() => setViewMode('PRODUCTS')} />;
 
    async function handleSaveProduct(savedProduct: Product) {
-      const oldProduct = products.find(p => p.id === savedProduct.id);
-      const exists = !!oldProduct;
+      try {
+         const oldProduct = products.find(p => p.id === savedProduct.id);
+         const exists = !!oldProduct;
 
-      // 1. Persist ONLY the modified product
-      await db.saveDocument('products', savedProduct);
+         // 1. Persist ONLY the modified product
+         await db.saveDocument('products', savedProduct);
 
-      // Update local state for UI
-      const currentProducts = products;
-      let updatedProductsList;
-      if (exists) {
-         updatedProductsList = currentProducts.map(p => p.id === savedProduct.id ? { ...p, ...savedProduct } : p);
-      } else {
-         updatedProductsList = [...currentProducts, savedProduct];
-      }
-
-      // Detect stock changes and record movements
-      if (exists) {
-         const whIds = Array.from(new Set([
-            ...Object.keys(oldProduct.stockBalances || {}),
-            ...Object.keys(savedProduct.stockBalances || {})
-         ]));
-
-         for (const whId of whIds) {
-            const oldQty = oldProduct.stockBalances?.[whId] || 0;
-            const newQty = savedProduct.stockBalances?.[whId] || 0;
-            if (oldQty !== newQty) {
-               const diff = newQty - oldQty;
-               await db.recordInventoryMovement(
-                  whId,
-                  savedProduct.id,
-                  diff > 0 ? 'AJUSTE_ENTRADA' : 'AJUSTE_SALIDA',
-                  'AJUSTE MANUAL',
-                  diff,
-                  savedProduct.cost,
-                  terminalId || 'LOCAL'
-               );
-            }
+         // Update local state for UI
+         const currentProducts = products;
+         let updatedProductsList;
+         if (exists) {
+            updatedProductsList = currentProducts.map(p => p.id === savedProduct.id ? { ...p, ...savedProduct } : p);
+         } else {
+            updatedProductsList = [...currentProducts, savedProduct];
          }
 
-         // Reload from DB to get the correct stock values after movement recording (which updates products again)
-         const freshProducts = await db.get('products') as Product[];
-         onUpdateProducts(freshProducts || products);
-      } else {
-         // New product with initial stock
-         for (const [whId, qty] of Object.entries(savedProduct.stockBalances || {})) {
-            if (qty !== 0) {
-               await db.recordInventoryMovement(
-                  whId,
-                  savedProduct.id,
-                  'INICIAL',
-                  'CARGA INICIAL',
-                  qty as number,
-                  savedProduct.cost,
-                  terminalId || 'LOCAL'
-               );
+         // Detect stock changes and record movements
+         if (exists) {
+            const whIds = Array.from(new Set([
+               ...Object.keys(oldProduct.stockBalances || {}),
+               ...Object.keys(savedProduct.stockBalances || {})
+            ]));
+
+            for (const whId of whIds) {
+               const oldQty = oldProduct.stockBalances?.[whId] || 0;
+               const newQty = savedProduct.stockBalances?.[whId] || 0;
+               if (oldQty !== newQty) {
+                  const diff = newQty - oldQty;
+                  await db.recordInventoryMovement(
+                     whId,
+                     savedProduct.id,
+                     diff > 0 ? 'AJUSTE_ENTRADA' : 'AJUSTE_SALIDA',
+                     'AJUSTE MANUAL',
+                     diff,
+                     savedProduct.cost,
+                     terminalId || 'LOCAL'
+                  );
+               }
             }
+
+            // Reload from DB to get the correct stock values after movement recording (which updates products again)
+            const freshProducts = await db.get('products') as Product[];
+            onUpdateProducts(freshProducts || products);
+         } else {
+            // New product with initial stock
+            for (const [whId, qty] of Object.entries(savedProduct.stockBalances || {})) {
+               if (qty !== 0) {
+                  await db.recordInventoryMovement(
+                     whId,
+                     savedProduct.id,
+                     'INICIAL',
+                     'CARGA INICIAL',
+                     qty as number,
+                     savedProduct.cost,
+                     terminalId || 'LOCAL'
+                  );
+               }
+            }
+
+            // For new products, reload to get accurate stock after movement recording
+            const freshProducts = await db.get('products') as Product[];
+            onUpdateProducts(freshProducts || products);
          }
+         setEditingProduct(null);
 
-         // For new products, reload to get accurate stock after movement recording
-         const freshProducts = await db.get('products') as Product[];
-         onUpdateProducts(freshProducts || products);
+         // Broadcast change to other terminals (if master)
+         syncManager.broadcastChange('products', savedProduct, exists ? 'UPDATE' : 'CREATE').catch(console.error);
+      } catch (error) {
+         console.error('❌ CatalogManager: Error saving product', error);
+         alert('No se pudo guardar el producto. Revise la consola para más detalle.');
       }
-      setEditingProduct(null);
-
-      // Broadcast change to other terminals (if master)
-      syncManager.broadcastChange('products', savedProduct, exists ? 'UPDATE' : 'CREATE').catch(console.error);
    }
 
    function handleSaveTariff(savedTariff: Tariff) {

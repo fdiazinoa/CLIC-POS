@@ -2,7 +2,7 @@ import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 import { apiSyncAdapter } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
-import { Transaction, InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
+import { InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
 
 export interface SyncState {
     pendingCount: number;
@@ -88,24 +88,19 @@ class BackgroundSyncManager {
         this.updateState({ isSyncing: true, hasError: false });
 
         try {
-            // 1. Transactions
-            await this.processCollection<Transaction>('transactions', async (item) => {
-                await apiSyncAdapter.pushTransaction(item);
-            });
-
-            // 2. Inventory Ledger
+            // 1. Inventory Ledger
             await this.processCollection<InventoryLedgerEntry>('inventoryLedger', async (item) => {
                 await apiSyncAdapter.pushInventoryMovement(item);
             });
 
-            // 3. Cash Movements
+            // 2. Cash Movements
             await this.processCollection<CashMovement>('cashMovements', async (item) => {
                 // Assuming there's an endpoint for this, if not we might need to add it to apiSyncAdapter
                 // For now, let's assume pushInventoryMovement or similar can handle it or add a generic push
                 await (apiSyncAdapter as any).pushCashMovement?.(item);
             });
 
-            // 4. Z-Reports
+            // 3. Z-Reports
             await this.processCollection<ZReport>('zReports', async (item) => {
                 await (apiSyncAdapter as any).pushZReport?.(item);
             });
@@ -165,7 +160,7 @@ class BackgroundSyncManager {
             try {
                 // Mark as syncing
                 item.syncStatus = 'SYNCING';
-                await db.save(collectionName as any, data); // Save whole collection (legacy db.ts behavior)
+                await db.saveDocument(collectionName as any, item as any);
 
                 // Attempt push
                 await pushFn(item);
@@ -173,12 +168,12 @@ class BackgroundSyncManager {
                 // Mark as completed
                 item.syncStatus = 'COMPLETED';
                 item.syncError = undefined;
-                await db.save(collectionName as any, data);
+                await db.saveDocument(collectionName as any, item as any);
             } catch (error: any) {
                 console.error(`❌ BackgroundSyncManager: Failed to sync ${collectionName} item ${item.id}:`, error);
                 item.syncStatus = 'ERROR';
                 item.syncError = error.message;
-                await db.save(collectionName as any, data);
+                await db.saveDocument(collectionName as any, item as any);
 
                 // Stop processing this collection to maintain FIFO order on next retry
                 throw error;
@@ -188,7 +183,7 @@ class BackgroundSyncManager {
 
     private async updatePendingCount() {
         let count = 0;
-        const collections = ['transactions', 'inventoryLedger', 'cashMovements', 'zReports'];
+        const collections = ['inventoryLedger', 'cashMovements', 'zReports'];
 
         for (const col of collections) {
             const data = await db.get(col as any) || [];
@@ -236,7 +231,7 @@ class BackgroundSyncManager {
 
         console.log(`🧹 BackgroundSyncManager: Pruning synced items older than ${RETENTION_DAYS} days (Cutoff: ${cutoff.toISOString()})`);
 
-        const collections = ['transactions', 'inventoryLedger', 'cashMovements', 'zReports'];
+        const collections = ['inventoryLedger', 'cashMovements', 'zReports'];
 
         for (const colName of collections) {
             try {

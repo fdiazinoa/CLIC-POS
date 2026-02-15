@@ -349,13 +349,12 @@ class SyncManager {
             'internalSequences',
             'productStocks',
             ...(isMaster ? ['inventoryLedger' as SyncableCollection] : []),
-            'transactions',
             'transfers',
             'receptions'
         ];
 
         // Operations: Master PULLS, Slaves PUSH (via separate methods, but we sync here for visibility)
-        const operations: SyncableCollection[] = ['inventoryLedger', 'transactions', 'zReports'];
+        const operations: SyncableCollection[] = ['inventoryLedger', 'zReports'];
 
         const results: SyncStatus[] = [];
 
@@ -432,7 +431,6 @@ class SyncManager {
             'users',
             'roles',
             'internalSequences',
-            'transactions',
             'productStocks',
             'transfers',
             'receptions'

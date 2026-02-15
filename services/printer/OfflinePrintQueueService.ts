@@ -34,9 +34,30 @@ interface EnqueuePrintJobPayload {
 
 const queueCollection = 'offline_print_queue';
 let processing = false;
+let lastDbNotReadyLogAt = 0;
+
+const isDbNotReadyError = (error: unknown): boolean => {
+  const message = String((error as any)?.message || error || '').toLowerCase();
+  return message.includes('db not connected') || message.includes('not connected');
+};
+
+const logDbNotReadyOnce = () => {
+  const now = Date.now();
+  if (now - lastDbNotReadyLogAt < 15000) return;
+  lastDbNotReadyLogAt = now;
+  console.info('🖨️ Offline print queue skipped: DB not connected yet.');
+};
 
 const getQueue = async (): Promise<OfflinePrintQueueItem[]> => {
-  return ((await db.get(queueCollection as any)) as OfflinePrintQueueItem[]) || [];
+  try {
+    return ((await db.get(queueCollection as any)) as OfflinePrintQueueItem[]) || [];
+  } catch (error) {
+    if (isDbNotReadyError(error)) {
+      logDbNotReadyOnce();
+      return [];
+    }
+    throw error;
+  }
 };
 
 const sortByCreatedAt = (items: OfflinePrintQueueItem[]): OfflinePrintQueueItem[] => {
@@ -169,6 +190,12 @@ export const offlinePrintQueueService = {
           failed += 1;
         }
       }
+    } catch (error) {
+      if (isDbNotReadyError(error)) {
+        logDbNotReadyOnce();
+        return { processed, failed, pending: 0 };
+      }
+      throw error;
     } finally {
       processing = false;
     }

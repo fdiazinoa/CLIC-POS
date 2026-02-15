@@ -273,6 +273,50 @@ const TicketDetailDrawer: React.FC<{
    users: User[];
 }> = ({ tx, config, onClose, onPrint, onVoid, themeText, themeBg, users }) => {
    if (!tx) return null;
+   const cashierName = tx.userName || users.find(u => u.id === tx.userId)?.name || 'Sistema';
+   const supervisorName = tx.authorizedByName || users.find(u => u.id === tx.authorizedById)?.name || null;
+   const payments = Array.isArray(tx.payments) ? tx.payments : [];
+   const paymentTotal = payments.reduce((acc, p: any) => acc + Number(p?.amount || 0), 0);
+
+   const getPaymentMethodLabel = (payment: any): string => {
+      const method = (payment?.method || '').toString().toUpperCase();
+      if (payment?.methodLabel) return payment.methodLabel;
+      switch (method) {
+         case 'CASH':
+         case 'EFECTIVO': return 'Efectivo';
+         case 'CARD':
+         case 'TARJETA': return 'Tarjeta';
+         case 'QR': return 'QR / Digital';
+         case 'TRANSFER':
+         case 'TRANSFERENCIA': return 'Transferencia';
+         case 'WALLET': return 'Wallet';
+         case 'CREDIT':
+         case 'CREDITO':
+         case 'CRÉDITO':
+         case 'PENDIENTE': return 'Crédito';
+         case 'ADVANCE':
+         case 'ANTICIPO': return 'Anticipo';
+         default: return payment?.method || 'Otro';
+      }
+   };
+
+   const getPaymentMethodIcon = (method?: string) => {
+      const normalized = (method || '').toUpperCase();
+      switch (normalized) {
+         case 'CASH':
+         case 'EFECTIVO': return <Banknote size={14} className="text-green-600" />;
+         case 'CARD':
+         case 'TARJETA': return <CreditCard size={14} className="text-blue-600" />;
+         case 'QR': return <QrCode size={14} className="text-indigo-600" />;
+         case 'TRANSFER':
+         case 'TRANSFERENCIA': return <Wallet size={14} className="text-purple-600" />;
+         case 'CREDIT':
+         case 'CREDITO':
+         case 'CRÉDITO':
+         case 'PENDIENTE': return <CreditCard size={14} className="text-cyan-600" />;
+         default: return <DollarSign size={14} className="text-gray-400" />;
+      }
+   };
 
    return (
       <div className="fixed inset-0 z-[100] overflow-hidden">
@@ -314,7 +358,7 @@ const TicketDetailDrawer: React.FC<{
                      </div>
                      <div className="p-3 bg-white border border-gray-100 rounded-xl">
                         <p className="text-[10px] font-bold text-gray-400 uppercase">Cajero</p>
-                        <p className="text-xs font-bold text-gray-700">{tx.userName || 'Sistema'}</p>
+                        <p className="text-xs font-bold text-gray-700">{cashierName}</p>
                      </div>
                   </div>
                </section>
@@ -346,6 +390,63 @@ const TicketDetailDrawer: React.FC<{
                   <div className="flex justify-between text-lg font-black text-blue-900 border-t border-blue-100 pt-2 mt-2">
                      <span>Total Final</span>
                      <span>{config.currencySymbol}{tx.total.toFixed(2)}</span>
+                  </div>
+               </section>
+
+               <section className="bg-white p-4 rounded-2xl border border-gray-100 space-y-4">
+                  <h4 className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Auditoría de Cobro</h4>
+
+                  <div className="grid grid-cols-2 gap-3">
+                     <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase">Cobrado por</p>
+                        <p className="text-xs font-bold text-gray-800 truncate">{cashierName}</p>
+                     </div>
+                     <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase">Hora Cobro</p>
+                        <p className="text-xs font-bold text-gray-800">{new Date(tx.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</p>
+                     </div>
+                     <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase">Terminal</p>
+                        <p className="text-xs font-bold text-gray-800">{tx.terminalId || 'N/D'}</p>
+                     </div>
+                     <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase">NCF</p>
+                        <p className="text-xs font-bold text-gray-800 truncate">{tx.ncf || 'N/A'}</p>
+                     </div>
+                  </div>
+
+                  {supervisorName && (
+                     <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase">Autorizado por</p>
+                        <p className="text-xs font-bold text-gray-800 truncate">{supervisorName}</p>
+                     </div>
+                  )}
+
+                  <div className="rounded-xl border border-gray-100 overflow-hidden">
+                     <div className="px-3 py-2 bg-gray-50 border-b border-gray-100">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">Formas de Pago</p>
+                     </div>
+                     <div className="p-3 space-y-2">
+                        {payments.length === 0 ? (
+                           <p className="text-xs text-gray-400 italic">Sin información de pagos</p>
+                        ) : (
+                           payments.map((payment: any, index: number) => (
+                              <div key={`${tx.id}-payment-${index}`} className="flex items-center justify-between rounded-lg bg-white border border-gray-100 px-3 py-2">
+                                 <div className="flex items-center gap-2">
+                                    {getPaymentMethodIcon(payment?.method)}
+                                    <span className="text-xs font-bold text-gray-700">{getPaymentMethodLabel(payment)}</span>
+                                 </div>
+                                 <span className="text-xs font-black text-gray-900">
+                                    {config.currencySymbol}{Number(payment?.amount || 0).toFixed(2)}
+                                 </span>
+                              </div>
+                           ))
+                        )}
+                        <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+                           <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Total Recibido</span>
+                           <span className="text-sm font-black text-gray-900">{config.currencySymbol}{paymentTotal.toFixed(2)}</span>
+                        </div>
+                     </div>
                   </div>
                </section>
             </div>

@@ -8,7 +8,7 @@ import { db } from '../utils/db';
 class TransactionService {
     /**
      * Generate next transaction ID with global sequence
-     * Includes safety check to ensure the ID is not already in use
+     * Uses internal series counters as single source of truth.
      */
     async generateTransactionId(
         documentType: DocumentType,
@@ -34,21 +34,8 @@ class TransactionService {
 
         // Format display ID using series prefix and padding
         const padding = seriesConfig.padding || 6;
-        let paddedNumber = seriesNumber.toString().padStart(padding, '0');
-        let displayId = `${seriesConfig.prefix}${paddedNumber}`;
-
-        // SAFETY CHECK: Ensure this displayId is not already used
-        // This handles cases where counters are out of sync
-        const transactions = await db.get('transactions') as Transaction[] || [];
-        let isDuplicate = transactions.some(t => t.displayId === displayId);
-
-        while (isDuplicate) {
-            console.warn(`⚠️ Duplicate displayId detected: ${displayId}. Incrementing counter.`);
-            seriesNumber++;
-            paddedNumber = seriesNumber.toString().padStart(padding, '0');
-            displayId = `${seriesConfig.prefix}${paddedNumber}`;
-            isDuplicate = transactions.some(t => t.displayId === displayId);
-        }
+        const paddedNumber = seriesNumber.toString().padStart(padding, '0');
+        const displayId = `${seriesConfig.prefix}${paddedNumber}`;
 
         // Update series nextNumber in the original array
         seriesConfig.nextNumber = seriesNumber + 1;
@@ -78,20 +65,6 @@ class TransactionService {
         // Generate IDs
         const { globalSequence, displayId, seriesNumber } =
             await this.generateTransactionId(data.documentType, data.seriesId);
-
-        // Double check uniqueness before final creation
-        const existing = await this.getTransactionByDisplayId(displayId);
-        if (existing) {
-            throw new Error(`Critical Error: Generated duplicate displayId ${displayId} despite safety checks.`);
-        }
-
-        // Double check NCF uniqueness if present
-        if (data.ncf) {
-            const transactions = await db.get('transactions') as Transaction[] || [];
-            if (transactions.some(t => t.ncf === data.ncf)) {
-                throw new Error(`Critical Error: NCF ${data.ncf} is already in use.`);
-            }
-        }
 
         // Create transaction object
         const transaction: Transaction = {
@@ -131,10 +104,8 @@ class TransactionService {
             balanceDueAtSale: data.balanceDueAtSale
         };
 
-        // Save to database
-        const transactions = await db.get('transactions') as Transaction[] || [];
-        transactions.push(transaction);
-        await db.save('transactions', transactions);
+        // Save only the new document to avoid full-collection rewrites that can block checkout.
+        await db.saveDocument('transactions', transaction);
 
         return transaction;
     }

@@ -83,16 +83,25 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    const [isSuccessScreen, setIsSuccessScreen] = useState(false);
    const [completedTransaction, setCompletedTransaction] = useState<Transaction | null>(null);
    const [shouldClearInput, setShouldClearInput] = useState(true);
+   const [isFinalizing, setIsFinalizing] = useState(false);
+   const [finalizeError, setFinalizeError] = useState<string | null>(null);
 
    const currencies = config?.currencies || [];
    const baseCurrency = currencies.find(c => c.isBase) || { code: 'DOP', symbol: 'RD$', rate: 1 };
    const [selectedCurrency, setSelectedCurrency] = useState<CurrencyConfig>(baseCurrency as CurrencyConfig);
 
-   const isRefund = total < 0;
-   const absTotal = Math.abs(total);
+   // Lock total/refund mode at modal open to avoid recalculating to 0 when parent clears cart.
+   const [isRefund] = useState(() => total < 0);
+   const [absTotal] = useState(() => Math.abs(total));
    const totalPaid = payments.reduce((acc, p) => acc + p.amount, 0);
    const remaining = Math.max(0, parseFloat((absTotal - totalPaid).toFixed(2)));
    const change = Math.max(0, parseFloat((totalPaid - absTotal).toFixed(2)));
+   const typedAmount = parseFloat(inputAmount || '0');
+   const typedAmountInBase = Number.isFinite(typedAmount) && typedAmount > 0
+      ? parseFloat((typedAmount * selectedCurrency.rate).toFixed(2))
+      : 0;
+   const canFinalizeWithTypedAmount = remaining > 0.01 && typedAmountInBase >= (remaining - 0.01);
+   const canFinalize = remaining <= 0.01 || canFinalizeWithTypedAmount;
 
    const configuredMethods = useMemo<ResolvedPaymentMethod[]>(() => {
       const enabledConfigMethods = (config?.paymentMethods || []).filter(m => m.isEnabled);
@@ -197,14 +206,62 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    const handleRemovePayment = (id: string) => { setPayments(prev => prev.filter(p => p.id !== id)); };
 
    const handleFinalize = async () => {
-      if (totalPaid < absTotal - 0.01) {
+      if (isFinalizing) return;
+      if (!canFinalize) {
          alert("Monto insuficiente");
          return;
       }
-      const txn = await onConfirm(payments);
-      if (txn) {
-         setCompletedTransaction(txn);
-         setIsSuccessScreen(true);
+
+      setFinalizeError(null);
+      setIsFinalizing(true);
+      try {
+         let paymentsToConfirm = payments;
+
+         // UX: If cashier typed an amount but didn't press "Agregar",
+         // auto-create the payment entry so "Finalizar Venta" still works.
+         if (canFinalizeWithTypedAmount) {
+            if (!activePaymentMethod) {
+               setFinalizeError('Seleccione un método de pago.');
+               return;
+            }
+            const autoPayment: PaymentEntry = {
+               id: Math.random().toString(36).substr(2, 9),
+               method: activePaymentMethod.type,
+               methodId: activePaymentMethod.id,
+               methodLabel: activePaymentMethod.label,
+               methodIcon: activePaymentMethod.iconName,
+               amount: typedAmountInBase,
+               timestamp: new Date(),
+               currencyCode: selectedCurrency.code,
+               amountOriginal: typedAmount,
+               exchangeRate: selectedCurrency.rate
+            };
+            paymentsToConfirm = [...payments, autoPayment];
+            setPayments(paymentsToConfirm);
+         }
+
+         let slowProcessTimer: number | undefined;
+         try {
+            slowProcessTimer = window.setTimeout(() => {
+               setFinalizeError('El cobro está tardando más de lo esperado, espere unos segundos...');
+            }, 15000);
+            const txn = await onConfirm(paymentsToConfirm);
+
+            if (txn) {
+               setCompletedTransaction(txn);
+               setIsSuccessScreen(true);
+            } else {
+               setFinalizeError('No se pudo completar la venta. Verifique secuencia fiscal y configuración de terminal.');
+            }
+         } finally {
+            if (slowProcessTimer) window.clearTimeout(slowProcessTimer);
+         }
+      } catch (error) {
+         console.error('❌ Payment finalization failed:', error);
+         const message = error instanceof Error ? error.message : '';
+         setFinalizeError(message ? `Error al finalizar: ${message}` : 'Ocurrió un error al finalizar. Intente nuevamente.');
+      } finally {
+         setIsFinalizing(false);
       }
    };
 
@@ -420,6 +477,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                </div>
 
                <div className="p-3 md:p-4 bg-white border-t border-gray-200 rounded-xl md:rounded-2xl mt-4 shadow-inner shrink-0">
+                  {finalizeError && (
+                     <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-600">
+                        {finalizeError}
+                     </div>
+                  )}
                   <div className="flex justify-between items-end mb-3 md:mb-4">
                      {change > 0 ? (
                         <div className="w-full text-right">
@@ -435,10 +497,16 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                   </div>
                   <button
                      onClick={handleFinalize}
-                     disabled={remaining > 0.01}
-                     className={`w-full py-3 md:py-4 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${remaining > 0.01 ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : `${themeBgClass} hover:brightness-110`}`}`}
+                     disabled={!canFinalize || isFinalizing}
+                     className={`w-full py-3 md:py-4 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${!canFinalize || isFinalizing ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : `${themeBgClass} hover:brightness-110`}`}`}
                   >
-                     {remaining > 0 ? 'PAGO INCOMPLETO' : isRefund ? 'PROCESAR DEVOLUCIÓN' : 'FINALIZAR VENTA'}
+                     {isFinalizing
+                        ? 'PROCESANDO...'
+                        : !canFinalize
+                           ? 'PAGO INCOMPLETO'
+                           : isRefund
+                              ? 'PROCESAR DEVOLUCIÓN'
+                              : 'FINALIZAR VENTA'}
                   </button>
                </div>
             </div>

@@ -18,7 +18,7 @@ import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType,
-   PaymentEntry, Table, Reservation
+   PaymentEntry, Table, Reservation, ZReport
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import UnifiedPaymentModal from './PaymentModal';
@@ -67,6 +67,7 @@ interface POSInterfaceProps {
    warehouses: Warehouse[];
    cart: CartItem[];
    transactions: Transaction[];
+   zReports: ZReport[];
    onUpdateCart: React.Dispatch<React.SetStateAction<CartItem[]>>;
    selectedCustomer: Customer | null;
    onSelectCustomer: (customer: Customer | null) => void;
@@ -100,6 +101,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    warehouses,
    cart,
    transactions,
+   zReports,
    onUpdateCart,
    selectedCustomer,
    onSelectCustomer,
@@ -300,12 +302,46 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return activeTerminalConfig?.pricing?.defaultTariffId || allowedTariffs[0]?.id || config.tariffs[0]?.id || '';
    });
 
-   // FILTER: Only care about transactions for THIS terminal for active session checks
+   // FILTER: Only pending transactions (after latest Z close for this terminal)
    const terminalTransactions = useMemo(() => {
+      const normalize = (value?: string | null) => (value || '').trim().toLowerCase();
+      const terminalKey = normalize(terminalId);
+      const isDefaultTerminal = terminalKey === 't1';
+
+      const latestCloseTs = (zReports || [])
+         .filter(r => normalize(r.terminalId) === terminalKey || (!r.terminalId && isDefaultTerminal))
+         .map(r => new Date(r.closedAt).getTime())
+         .filter((value) => Number.isFinite(value))
+         .reduce((max, value) => value > max ? value : max, 0);
+
       return transactions
-         .filter(t => t.terminalId === terminalId || (!t.terminalId && terminalId === 'T1'))
+         .filter(t => {
+            const belongsToTerminal = normalize(t.terminalId) === terminalKey || (!t.terminalId && isDefaultTerminal);
+            if (!belongsToTerminal) return false;
+            if (t.zReportId) return false;
+
+            const txTime = new Date(t.date).getTime();
+            if (!Number.isFinite(txTime)) return latestCloseTs <= 0;
+            return latestCloseTs <= 0 || txTime > latestCloseTs;
+         })
          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-   }, [transactions, terminalId]);
+   }, [transactions, terminalId, zReports]);
+
+   const canProceedWithOperationalSession = useCallback((): boolean => {
+      if (!activeTerminalConfig || terminalTransactions.length === 0) return true;
+
+      const sessionStartDate = terminalTransactions[0]?.date;
+      if (!sessionStartDate) return true;
+
+      if (!isSessionExpired(sessionStartDate, activeTerminalConfig)) return true;
+
+      return confirm(
+         "⚠️ ADVERTENCIA DE JORNADA\n\n" +
+         "El sistema detecta que la jornada operativa ha cambiado (hay transacciones pendientes de jornadas anteriores).\n\n" +
+         "¿Desea continuar facturando de todos modos?\n" +
+         "(Seleccione 'Aceptar' para continuar, 'Cancelar' para ir a Cierre Z)"
+      );
+   }, [activeTerminalConfig, terminalTransactions]);
 
    const [showTariffSelector, setShowTariffSelector] = useState(false);
    const [isReturnMode, setIsReturnMode] = useState(false);
@@ -387,6 +423,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [reservationAdvanceInput, setReservationAdvanceInput] = useState<string>('0');
    const [reservationDeliveryDate, setReservationDeliveryDate] = useState<string>('');
    const [reservationSearchTerm, setReservationSearchTerm] = useState<string>('');
+   const [reservationCustomerFilterId, setReservationCustomerFilterId] = useState<string | null>(null);
    const [activeRecoveredReservation, setActiveRecoveredReservation] = useState<Reservation | null>(null);
    const [committedByProduct, setCommittedByProduct] = useState<Record<string, number>>({});
 
@@ -453,6 +490,28 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return () => window.clearInterval(timer);
    }, [reloadReservations, expireReservationsIfNeeded]);
 
+   const closeRecoverReservationModal = useCallback(() => {
+      setShowRecoverReservationModal(false);
+      setReservationSearchTerm('');
+      setReservationCustomerFilterId(null);
+   }, []);
+
+   const openRecoverReservationModal = useCallback(() => {
+      setReservationSearchTerm('');
+      setReservationCustomerFilterId(null);
+      setShowRecoverReservationModal(true);
+   }, []);
+
+   const openRecoverReservationForSelectedCustomer = useCallback(() => {
+      if (!selectedCustomer) {
+         openRecoverReservationModal();
+         return;
+      }
+      setReservationSearchTerm('');
+      setReservationCustomerFilterId(selectedCustomer.id);
+      setShowRecoverReservationModal(true);
+   }, [selectedCustomer, openRecoverReservationModal]);
+
    const handleRecoverReservation = useCallback((reservation: Reservation) => {
       const hydratedItems = (reservation.items || []).map((item, idx) => ({
          ...item,
@@ -463,24 +522,41 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const customer = customers.find(c => c.id === reservation.customerId) || null;
       onSelectCustomer(customer);
       setActiveRecoveredReservation(reservation);
-      setShowRecoverReservationModal(false);
-      setReservationSearchTerm('');
+      closeRecoverReservationModal();
       setSuccessToast(`Reserva ${reservation.code} cargada`);
-   }, [customers, onSelectCustomer, onUpdateCart]);
+   }, [customers, onSelectCustomer, onUpdateCart, closeRecoverReservationModal]);
 
    const activeReservations = useMemo(() => {
       return (reservations || []).filter(r => r.status === 'ACTIVE');
    }, [reservations]);
 
+   const selectedCustomerActiveReservationsCount = useMemo(() => {
+      if (!selectedCustomer) return 0;
+      return activeReservations.filter(r => r.customerId === selectedCustomer.id).length;
+   }, [activeReservations, selectedCustomer]);
+
+   const reservationFilterCustomerName = useMemo(() => {
+      if (!reservationCustomerFilterId) return '';
+      if (selectedCustomer?.id === reservationCustomerFilterId) return selectedCustomer.name;
+      const fromCustomers = customers.find(c => c.id === reservationCustomerFilterId)?.name;
+      if (fromCustomers) return fromCustomers;
+      return activeReservations.find(r => r.customerId === reservationCustomerFilterId)?.customerName || 'Cliente';
+   }, [reservationCustomerFilterId, selectedCustomer, customers, activeReservations]);
+
    const filteredActiveReservations = useMemo(() => {
+      const scoped = reservationCustomerFilterId
+         ? activeReservations.filter(r => r.customerId === reservationCustomerFilterId)
+         : activeReservations;
+
       const term = reservationSearchTerm.trim().toLowerCase();
-      if (!term) return activeReservations;
-      return activeReservations.filter(r =>
+      if (!term) return scoped;
+      return scoped.filter(r =>
          r.customerName.toLowerCase().includes(term) ||
+         (r.customerId || '').toLowerCase().includes(term) ||
          r.code.toLowerCase().includes(term) ||
          r.id.toLowerCase().includes(term)
       );
-   }, [activeReservations, reservationSearchTerm]);
+   }, [activeReservations, reservationSearchTerm, reservationCustomerFilterId]);
 
    const handleRedeemCoupon = () => {
       if (!couponCode) return;
@@ -915,6 +991,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const reservationAdvanceApplied = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
    const reservationBalanceDue = Math.max(0, cartTotal - reservationAdvanceApplied);
    const amountDueNow = activeRecoveredReservation ? reservationBalanceDue : cartTotal;
+   const isEditingRecoveredReservation = !!activeRecoveredReservation;
 
    const handleCreateReservation = async () => {
       if (cart.length === 0) {
@@ -924,7 +1001,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const customer = customers.find(c => c.id === reservationCustomerId) || selectedCustomer;
       if (!customer) {
-         alert('Debe seleccionar un cliente para crear la reserva.');
+         alert(`Debe seleccionar un cliente para ${isEditingRecoveredReservation ? 'actualizar' : 'crear'} la reserva.`);
          return;
       }
 
@@ -952,10 +1029,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const expiryDate = new Date(now);
       expiryDate.setDate(expiryDate.getDate() + Math.max(1, reservationPolicy.validityDays || 7));
 
-      const reservationId = `RSV-${Date.now()}`;
-      const reservationCode = `RSV-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-      const qrPayload = JSON.stringify({ type: 'RESERVATION_NOTE', id: reservationId, code: reservationCode });
-      const warehouseId = defaultSalesWarehouseId || 'wh_central';
+      const reservationId = activeRecoveredReservation?.id || `RSV-${Date.now()}`;
+      const reservationCode = activeRecoveredReservation?.code || `RSV-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      const qrPayload = activeRecoveredReservation?.qrPayload || JSON.stringify({ type: 'RESERVATION_NOTE', id: reservationId, code: reservationCode });
+      const warehouseId = activeRecoveredReservation?.warehouseId || defaultSalesWarehouseId || 'wh_central';
       const reservationItems = processedCart.filter(i => (i.quantity || 0) > 0).map(item => ({ ...item }));
 
       if (reservationItems.length === 0) {
@@ -971,20 +1048,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          customerName: customer.name,
          total: cartTotal,
          balancePaid: advance,
-         expiryDate: expiryDate.toISOString(),
+         expiryDate: activeRecoveredReservation?.expiryDate || expiryDate.toISOString(),
          status: 'ACTIVE',
          items: reservationItems,
          warehouseId,
          deliveryDate: reservationDeliveryDate ? new Date(`${reservationDeliveryDate}T00:00:00`).toISOString() : undefined,
          terminalId,
-         createdById: currentUser.id,
-         createdByName: currentUser.name,
-         createdAt: now.toISOString(),
+         createdById: activeRecoveredReservation?.createdById || currentUser.id,
+         createdByName: activeRecoveredReservation?.createdByName || currentUser.name,
+         createdAt: activeRecoveredReservation?.createdAt || now.toISOString(),
          updatedAt: now.toISOString()
       };
 
       await db.saveDocument('reservations', reservation);
-      await transferStockToCommitted(reservation.items, warehouseId, products, 'COMMIT');
+      if (activeRecoveredReservation) {
+         const previousWarehouseId = activeRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
+         await transferStockToCommitted(activeRecoveredReservation.items || [], previousWarehouseId, products, 'RELEASE');
+         await transferStockToCommitted(reservation.items, warehouseId, products, 'COMMIT');
+      } else {
+         await transferStockToCommitted(reservation.items, warehouseId, products, 'COMMIT');
+      }
       await reloadReservations();
 
       setShowReservationModal(false);
@@ -995,7 +1078,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       onUpdateCart([]);
       onSelectCustomer(null);
       setActiveRecoveredReservation(null);
-      setSuccessToast(`Reserva ${reservation.code} creada`);
+      setSuccessToast(`Reserva ${reservation.code} ${isEditingRecoveredReservation ? 'actualizada' : 'creada'}`);
    };
 
    const pointsEarned = useMemo(() => calculatePointsEarned(processedCart, config), [processedCart, config]);
@@ -1085,47 +1168,66 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
    const handlePaymentConfirm = async (payments: PaymentEntry[]): Promise<Transaction | null> => {
-      // --- FISCAL COMPLIANCE CHECK (DGII RNC VALIDATION) ---
-      if (fiscalStatus && fiscalStatus.type === 'B01' && selectedCustomer) {
-         if (selectedCustomer.fiscalStatus && selectedCustomer.fiscalStatus !== 'ACTIVO') {
-            alert(
-               `⛔ COMPROBANTE BLOQUEADO\n\n` +
-               `El contribuyente ${selectedCustomer.name} tiene estatus: ${selectedCustomer.fiscalStatus || 'DESCONOCIDO'}.\n` +
-               `No se puede emitir Crédito Fiscal (B01) según normas de la DGII.\n\n` +
-               `Acción requerida: Cambie el tipo de comprobante a Consumo (B02) o seleccione otro cliente.`
-            );
-            return null;
+      const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
+         let timeoutHandle: number | undefined;
+         try {
+            return await Promise.race([
+               promise,
+               new Promise<T>((_, reject) => {
+                  timeoutHandle = window.setTimeout(() => reject(new Error(timeoutLabel)), timeoutMs);
+               })
+            ]);
+         } finally {
+            if (timeoutHandle) window.clearTimeout(timeoutHandle);
          }
-      }
-
-      const terminalId = activeTerminalId || 't1';
-      const finalNcf = await db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100);
-
-      if (!finalNcf) {
-         alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
-         return null;
-      }
-
-      const validation = validateTerminalSeries(activeTerminalConfig, 'TICKET');
-      if (!validation.isValid) {
-         alert(validation.message);
-         return null;
-      }
-
-      const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
-      const hasReturns = processedCart.some(i => i.quantity < 0);
-      const hasSales = processedCart.some(i => i.quantity > 0);
-      const reservationAdvance = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
-      const paymentsForTransaction = reservationAdvance > 0
-         ? [...payments, { id: `ADV-${Date.now()}`, method: 'ADVANCE', amount: reservationAdvance, timestamp: new Date() }]
-         : payments;
-
-      if (activeRecoveredReservation && hasReturns) {
-         alert('La recuperación de reserva no admite líneas de devolución. Finalice la reserva y procese devoluciones por separado.');
-         return null;
-      }
+      };
 
       try {
+         // --- FISCAL COMPLIANCE CHECK (DGII RNC VALIDATION) ---
+         if (fiscalStatus && fiscalStatus.type === 'B01' && selectedCustomer) {
+            if (selectedCustomer.fiscalStatus && selectedCustomer.fiscalStatus !== 'ACTIVO') {
+               alert(
+                  `⛔ COMPROBANTE BLOQUEADO\n\n` +
+                  `El contribuyente ${selectedCustomer.name} tiene estatus: ${selectedCustomer.fiscalStatus || 'DESCONOCIDO'}.\n` +
+                  `No se puede emitir Crédito Fiscal (B01) según normas de la DGII.\n\n` +
+                  `Acción requerida: Cambie el tipo de comprobante a Consumo (B02) o seleccione otro cliente.`
+               );
+               return null;
+            }
+         }
+
+         const terminalId = activeTerminalId || 't1';
+         const finalNcf = await withTimeout(
+            db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100),
+            8000,
+            'TIMEOUT_GET_NCF'
+         );
+
+         if (!finalNcf) {
+            alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
+            return null;
+         }
+
+         const validation = validateTerminalSeries(activeTerminalConfig, 'TICKET');
+         if (!validation.isValid) {
+            alert(validation.message);
+            return null;
+         }
+
+         const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
+         const hasReturns = processedCart.some(i => i.quantity < 0);
+         const hasSales = processedCart.some(i => i.quantity > 0);
+         const reservationAdvance = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
+         const paymentsForTransaction = reservationAdvance > 0
+            ? [...payments, { id: `ADV-${Date.now()}`, method: 'ADVANCE', amount: reservationAdvance, timestamp: new Date() }]
+            : payments;
+
+         if (activeRecoveredReservation && hasReturns) {
+            alert('La recuperación de reserva no admite líneas de devolución. Finalice la reserva y procese devoluciones por separado.');
+            return null;
+         }
+
+         try {
          // If it's a mixed transaction, use the split endpoint
          if (hasReturns && hasSales) {
             const saleItems = processedCart.filter(i => i.quantity > 0);
@@ -1139,7 +1241,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
             const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
 
-            const response = await fetch('/api/transactions/split', {
+            const response = await withTimeout(fetch('/api/transactions/split', {
                method: 'POST',
                headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({
@@ -1182,9 +1284,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   walletDeposit: walletDepositAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletDepositAmount } : undefined,
                   walletPayment: walletPaymentAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletPaymentAmount } : undefined
                })
-            });
+            }), 25000, 'TIMEOUT_SPLIT_FETCH');
 
-            const data = await response.json();
+            const data = await withTimeout(response.json(), 4000, 'TIMEOUT_SPLIT_PARSE');
             if (data.success) {
                onUpdateCart([]);
                onSelectCustomer(null);
@@ -1202,7 +1304,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                ? (grossLineTotal - discountAmount - taxAmount)
                : (grossLineTotal - discountAmount);
 
-            const txn = await transactionService.createTransaction({
+            const txn = await withTimeout(transactionService.createTransaction({
                documentType: hasReturns ? 'REFUND' : 'TICKET',
                seriesId: hasReturns
                   ? (activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC')
@@ -1236,7 +1338,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                reservationCode: activeRecoveredReservation?.code,
                priorAdvancePaid: reservationAdvance > 0 ? reservationAdvance : undefined,
                balanceDueAtSale: activeRecoveredReservation ? reservationBalanceDue : undefined
-            });
+            }), 25000, 'TIMEOUT_CREATE_TRANSACTION');
 
             // Ensure seriesId is preserved (Backend might not return it in the root object)
             const finalTxn = {
@@ -1248,26 +1350,37 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             if (activeRecoveredReservation) {
                const warehouseId = activeRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
-               await transferStockToCommitted(activeRecoveredReservation.items || [], warehouseId, products, 'RELEASE');
-               await db.saveDocument('reservations', {
+               await withTimeout(
+                  transferStockToCommitted(activeRecoveredReservation.items || [], warehouseId, products, 'RELEASE'),
+                  10000,
+                  'TIMEOUT_RELEASE_COMMITTED'
+               );
+               await withTimeout(db.saveDocument('reservations', {
                   ...activeRecoveredReservation,
                   status: 'INVOICED',
                   invoicedAt: new Date().toISOString(),
                   invoicedTransactionId: txn.id,
                   updatedAt: new Date().toISOString()
-               });
-               await reloadReservations();
+               }), 6000, 'TIMEOUT_SAVE_RESERVATION_INVOICE');
+               await withTimeout(reloadReservations(), 6000, 'TIMEOUT_RELOAD_RESERVATIONS');
             }
 
             // --- CRITICAL: Ticket Closing Logic ---
             if (activeTable) {
                try {
                   // 1. Free Table in Backend (KDS)
-                  await fetch(`http://localhost:8001/api/mesas/liberar`, {
-                     method: 'POST',
-                     headers: { 'Content-Type': 'application/json' },
-                     body: JSON.stringify({ tableId: activeTable.id })
-                  });
+                  const controller = new AbortController();
+                  const timeoutId = window.setTimeout(() => controller.abort(), 4000);
+                  try {
+                     await fetch(`http://localhost:8001/api/mesas/liberar`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tableId: activeTable.id }),
+                        signal: controller.signal
+                     });
+                  } finally {
+                     window.clearTimeout(timeoutId);
+                  }
 
                   // 2. Remove from Parked Tickets (Local Persistence)
                   if (activeTable.currentOrderId) {
@@ -1292,9 +1405,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             setActiveRecoveredReservation(null);
             return txn;
          }
+         } catch (error: any) {
+            console.error('Split Transaction Error:', error);
+            alert(`Error de red: ${error.message}`);
+            return null;
+         }
       } catch (error: any) {
-         console.error('Split Transaction Error:', error);
-         alert(`Error de red: ${error.message}`);
+         console.error('Payment confirm error:', error);
+         alert(`Error al finalizar venta: ${error?.message || 'Error desconocido'}`);
          return null;
       }
    };
@@ -1344,10 +1462,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const openReservationModal = () => {
+      const formatDateForInput = (value?: string) => {
+         if (!value) return '';
+         const d = new Date(value);
+         if (Number.isNaN(d.getTime())) return '';
+         const yyyy = d.getFullYear();
+         const mm = String(d.getMonth() + 1).padStart(2, '0');
+         const dd = String(d.getDate()).padStart(2, '0');
+         return `${yyyy}-${mm}-${dd}`;
+      };
       const today = new Date().toISOString().slice(0, 10);
-      setReservationCustomerId(selectedCustomer?.id || '');
-      setReservationAdvanceInput('0');
-      setReservationDeliveryDate(today);
+      if (activeRecoveredReservation) {
+         setReservationCustomerId(activeRecoveredReservation.customerId || selectedCustomer?.id || '');
+         setReservationAdvanceInput(String(activeRecoveredReservation.balancePaid || 0));
+         setReservationDeliveryDate(formatDateForInput(activeRecoveredReservation.deliveryDate) || today);
+      } else {
+         setReservationCustomerId(selectedCustomer?.id || '');
+         setReservationAdvanceInput('0');
+         setReservationDeliveryDate(today);
+      }
       setShowReservationModal(true);
    };
 
@@ -1877,7 +2010,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <div className="w-6 h-6 bg-blue-200 text-blue-700 rounded-full flex items-center justify-center font-bold text-[10px]">{selectedCustomer.name.charAt(0)}</div>
                            <span className="text-xs font-bold text-blue-900 truncate max-w-[150px]">{selectedCustomer.name}</span>
                         </div>
-                        <button onClick={(e) => { e.stopPropagation(); onSelectCustomer(null); }} className="p-1 text-blue-400"><X size={14} /></button>
+                        <div className="flex items-center gap-1">
+                           <button
+                              onClick={(e) => { e.stopPropagation(); openRecoverReservationForSelectedCustomer(); }}
+                              className="px-2 py-1 rounded-full bg-teal-100 text-teal-700 text-[10px] font-black hover:bg-teal-200 transition-colors"
+                              title="Reservas del cliente"
+                           >
+                              Res. {selectedCustomerActiveReservationsCount}
+                           </button>
+                           <button onClick={(e) => { e.stopPropagation(); onSelectCustomer(null); }} className="p-1 text-blue-400"><X size={14} /></button>
+                        </div>
                      </div>
                   ) : (
                      <button onClick={onOpenCustomers} className="flex items-center gap-2 px-4 py-2 bg-gray-50 border border-dashed border-gray-300 rounded-full text-gray-400 text-xs font-bold uppercase tracking-wider">
@@ -2008,9 +2150,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               )}
                            </div>
                         </div>
-                        <button onClick={() => onSelectCustomer(null)} className="p-2 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-lg transition-colors">
-                           <X size={16} />
-                        </button>
+                        <div className="flex items-center gap-2">
+                           <button
+                              onClick={openRecoverReservationForSelectedCustomer}
+                              title="Ver reservas activas del cliente"
+                              className="px-2.5 py-1.5 rounded-lg border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 transition-all flex items-center gap-1"
+                           >
+                              <QrCode size={14} />
+                              <span className="text-[10px] font-black uppercase">Res. {selectedCustomerActiveReservationsCount}</span>
+                           </button>
+                           <button onClick={() => onSelectCustomer(null)} className="p-2 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-lg transition-colors">
+                              <X size={16} />
+                           </button>
+                        </div>
                      </div>
                   ) : (
                      <button onClick={onOpenCustomers} className="w-full flex items-center justify-between p-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 group"><div className="flex items-center gap-2"><UserPlus size={18} /><span className="text-xs font-bold uppercase">Asignar Cliente</span></div><ChevronRight size={16} /></button>
@@ -2217,14 +2369,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        alert(validation.error);
                                        return;
                                     }
-                                    if (terminalTransactions.length > 0 && activeTerminalConfig) {
-                                       const sessionStartDate = terminalTransactions[0].date;
-                                       if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
-                                          // Allow bypass if user insists (Fix for "Zombie Transactions" issue)
-                                          const proceed = confirm("⚠️ ADVERTENCIA DE JORNADA\n\nEl sistema detecta que la jornada operativa ha cambiado (hay transacciones abiertas de días anteriores).\n\n¿Desea continuar facturando de todos modos?\n(Seleccione 'Aceptar' para ignorar y facturar, 'Cancelar' para ir a Cierre Z)");
-                                          if (!proceed) return;
-                                       }
-                                    }
+                                    if (!canProceedWithOperationalSession()) return;
                                     proceedToCheckout();
                                  } else if (!fiscalStatus.hasNCF) {
                                     alert("No hay secuencias fiscales disponibles.");
@@ -2257,7 +2402,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <StickyNote size={18} />
                               <span className="text-[9px] font-black uppercase mt-1">Reserva</span>
                            </button>
-                           <button onClick={() => setShowRecoverReservationModal(true)} title="Recuperar Reserva" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-teal-50 border-teal-100 text-teal-700 hover:bg-teal-100 transition-all min-w-[60px]">
+                           <button onClick={openRecoverReservationModal} title="Recuperar Reserva" className="h-14 px-4 flex flex-col items-center justify-center rounded-xl border-2 bg-teal-50 border-teal-100 text-teal-700 hover:bg-teal-100 transition-all min-w-[60px]">
                               <QrCode size={18} />
                               <span className="text-[9px] font-black uppercase mt-1">Rec. Res.</span>
                            </button>
@@ -2414,7 +2559,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     <StickyNote size={16} />
                                     <span className="text-[9px] font-black uppercase mt-1">Reserva</span>
                                  </button>
-                                 <button onClick={() => setShowRecoverReservationModal(true)} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-teal-50 border-teal-100 text-teal-700 hover:bg-teal-100 hover:border-teal-200 transition-all">
+                                 <button onClick={openRecoverReservationModal} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-teal-50 border-teal-100 text-teal-700 hover:bg-teal-100 hover:border-teal-200 transition-all">
                                     <QrCode size={16} />
                                     <span className="text-[9px] font-black uppercase mt-1">Rec. Res.</span>
                                  </button>
@@ -2484,13 +2629,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           alert(validation.error);
                                           return;
                                        }
-                                       if (terminalTransactions.length > 0 && activeTerminalConfig) {
-                                          const sessionStartDate = terminalTransactions[0].date;
-                                          if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
-                                             alert("⚠️ CIERRE Z REQUERIDO\n\nLa jornada operativa ha cambiado. Debe realizar el Cierre Z antes de continuar facturando.");
-                                             return;
-                                          }
-                                       }
+                                       if (!canProceedWithOperationalSession()) return;
                                        proceedToCheckout();
                                     } else if (!fiscalStatus.hasNCF) {
                                        alert("No hay secuencias fiscales disponibles.");
@@ -2537,7 +2676,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <StickyNote size={18} />
                            <span className="text-[9px] font-bold uppercase">Res.</span>
                         </button>
-                        <button onClick={() => setShowRecoverReservationModal(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-teal-600">
+                        <button onClick={openRecoverReservationModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-teal-600">
                            <QrCode size={18} />
                            <span className="text-[9px] font-bold uppercase">Rec.</span>
                         </button>
@@ -2565,13 +2704,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <button
                         onClick={() => {
                            if (cart.length > 0 && fiscalStatus.hasNCF) {
-                              if (terminalTransactions.length > 0 && activeTerminalConfig) {
-                                 const sessionStartDate = terminalTransactions[0].date;
-                                 if (isSessionExpired(sessionStartDate, activeTerminalConfig)) {
-                                    const proceed = confirm("⚠️ ADVERTENCIA DE JORNADA\n\nEl sistema detecta que la jornada operativa ha cambiado.\n\n¿Desea continuar facturando de todos modos?");
-                                    if (!proceed) return;
-                                 }
-                              }
+                              if (!canProceedWithOperationalSession()) return;
                               proceedToCheckout();
                            }
                         }}
@@ -2658,13 +2791,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <div className="p-6 border-b bg-amber-50 flex justify-between items-center">
                      <h3 className="font-black text-xl text-amber-900 flex items-center gap-2">
                         <StickyNote size={20} />
-                        Reserva / Hold
+                        {isEditingRecoveredReservation ? 'Actualizar Reserva' : 'Reserva / Hold'}
                      </h3>
                      <button onClick={() => setShowReservationModal(false)} className="p-2 hover:bg-amber-100 rounded-full text-amber-700">
                         <X size={18} />
                      </button>
                   </div>
                   <div className="p-6 space-y-4">
+                     {isEditingRecoveredReservation && activeRecoveredReservation && (
+                        <div className="p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-xs font-bold">
+                           Editando {activeRecoveredReservation.code}. Se guardará con la misma referencia y QR.
+                        </div>
+                     )}
+
                      <div>
                         <label className="block text-[11px] font-black text-gray-500 uppercase tracking-widest mb-2">Cliente (Obligatorio)</label>
                         <select
@@ -2725,7 +2864,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         Cancelar
                      </button>
                      <button onClick={handleCreateReservation} className="px-5 py-2.5 rounded-xl bg-amber-600 text-white font-black hover:bg-amber-700 transition-all">
-                        Guardar Reserva
+                        {isEditingRecoveredReservation ? 'Actualizar Reserva' : 'Guardar Reserva'}
                      </button>
                   </div>
                </div>
@@ -2740,7 +2879,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <QrCode size={20} />
                         Recuperar Reserva
                      </h3>
-                     <button onClick={() => setShowRecoverReservationModal(false)} className="p-2 hover:bg-teal-100 rounded-full text-teal-700">
+                     <button onClick={closeRecoverReservationModal} className="p-2 hover:bg-teal-100 rounded-full text-teal-700">
                         <X size={18} />
                      </button>
                   </div>
@@ -2758,7 +2897,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </div>
                         <button
                            onClick={() => {
-                              setShowRecoverReservationModal(false);
+                              closeRecoverReservationModal();
                               setIsScannerOpen(true);
                            }}
                            className="px-4 py-2.5 rounded-xl border border-teal-200 bg-teal-50 text-teal-700 font-bold hover:bg-teal-100"
@@ -2766,6 +2905,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            Escanear QR
                         </button>
                      </div>
+
+                     {reservationCustomerFilterId && (
+                        <div className="flex items-center justify-between rounded-xl border border-teal-100 bg-teal-50 px-3 py-2">
+                           <p className="text-xs font-bold text-teal-800">
+                              Mostrando reservas activas de {reservationFilterCustomerName}
+                           </p>
+                           <button
+                              onClick={openRecoverReservationModal}
+                              className="text-[11px] font-black uppercase text-teal-700 hover:text-teal-900"
+                           >
+                              Ver todas
+                           </button>
+                        </div>
+                     )}
 
                      <div className="max-h-[45vh] overflow-y-auto space-y-2">
                         {filteredActiveReservations.map(reservation => (

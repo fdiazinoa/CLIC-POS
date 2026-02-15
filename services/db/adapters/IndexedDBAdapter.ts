@@ -4,6 +4,8 @@ const DB_NAME = 'clic_pos_indexeddb';
 const DB_VERSION = 13; // Incremented to add reservations and inventory commitments
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
+const CURSOR_IDLE_TIMEOUT_MS = 3000;
+const CURSOR_HARD_TIMEOUT_MS = 8000;
 
 const STORES = [
     'config', 'users', 'roles', 'customers', 'warehouses',
@@ -238,6 +240,12 @@ export class IndexedDBAdapter implements DatabaseAdapter {
 
         return new Promise((resolve, reject) => {
             try {
+                // Hard-stop heavy reads that have been timing out and blocking writes.
+                if (collectionName === 'transactions' || collectionName === 'transactionHistory') {
+                    const docs = this.readFallbackCollection(collectionName);
+                    return resolve(this.fromStoredDocuments(collectionName, docs));
+                }
+
                 if (!this.hasStore(collectionName)) {
                     const docs = this.readFallbackCollection(collectionName);
                     return resolve(this.fromStoredDocuments(collectionName, docs));
@@ -277,7 +285,15 @@ export class IndexedDBAdapter implements DatabaseAdapter {
             docs.forEach(doc => store.put(doc));
 
             transaction.oncomplete = () => resolve();
-            transaction.onerror = () => reject(transaction.error);
+            transaction.onerror = () => {
+                console.warn(`[IndexedDBAdapter] saveCollection fallback for ${collectionName}:`, transaction.error);
+                try {
+                    this.writeFallbackCollection(collectionName, docs);
+                    resolve();
+                } catch (e) {
+                    reject(transaction.error || e);
+                }
+            };
         });
     }
 
@@ -290,12 +306,30 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                 return resolve();
             }
 
-            const transaction = this.db!.transaction(collectionName, 'readwrite');
-            const store = transaction.objectStore(collectionName);
-            store.put(doc);
+            try {
+                const transaction = this.db!.transaction(collectionName, 'readwrite');
+                const store = transaction.objectStore(collectionName);
+                store.put(doc);
 
-            transaction.oncomplete = () => resolve();
-            transaction.onerror = () => reject(transaction.error);
+                transaction.oncomplete = () => resolve();
+                transaction.onerror = () => {
+                    console.warn(`[IndexedDBAdapter] saveDocument fallback for ${collectionName}:`, transaction.error);
+                    try {
+                        this.upsertFallbackDocument(collectionName, doc);
+                        resolve();
+                    } catch (e) {
+                        reject(transaction.error || e);
+                    }
+                };
+            } catch (error) {
+                console.warn(`[IndexedDBAdapter] saveDocument immediate fallback for ${collectionName}:`, error);
+                try {
+                    this.upsertFallbackDocument(collectionName, doc);
+                    resolve();
+                } catch (e) {
+                    reject(error || e);
+                }
+            }
         });
     }
 

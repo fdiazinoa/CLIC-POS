@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Layout } from 'lucide-react';
 import {
   User,
@@ -130,6 +130,7 @@ const AppContent: React.FC = () => {
   const [isDataLoaded, setIsDataLoaded] = useState<boolean>(false);
   const [initialConnError, setInitialConnError] = useState<string | null>(null);
   const [failedMasterIp, setFailedMasterIp] = useState<string>('');
+  const initLoadStartedRef = useRef(false);
 
   // Helper: Get current terminal configuration
   const getCurrentTerminal = React.useCallback(() => {
@@ -150,6 +151,7 @@ const AppContent: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
+  const [zReports, setZReports] = useState<ZReport[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [parkedTickets, setParkedTickets] = useState<ParkedTicket[]>([]);
@@ -168,6 +170,50 @@ const AppContent: React.FC = () => {
   const [viewData, setViewData] = useState<any>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+
+  const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
+
+  const getLatestZCloseTimestamp = (terminalId: string) => {
+    const terminalKey = normalizeTerminalId(terminalId);
+    const isDefaultTerminal = terminalKey === 't1';
+
+    return zReports
+      .filter(r => normalizeTerminalId(r.terminalId) === terminalKey || (!r.terminalId && isDefaultTerminal))
+      .map(r => new Date(r.closedAt).getTime())
+      .filter((value) => Number.isFinite(value))
+      .reduce((max, value) => value > max ? value : max, 0);
+  };
+
+  const getPendingTransactionsForTerminal = (terminalId: string) => {
+    const terminalKey = normalizeTerminalId(terminalId);
+    const isDefaultTerminal = terminalKey === 't1';
+    const latestCloseTs = getLatestZCloseTimestamp(terminalId);
+
+    return transactions.filter(t => {
+      const belongsToTerminal = normalizeTerminalId(t.terminalId) === terminalKey || (!t.terminalId && isDefaultTerminal);
+      if (!belongsToTerminal) return false;
+      if (t.zReportId) return false;
+
+      const txTime = new Date(t.date).getTime();
+      if (!Number.isFinite(txTime)) return latestCloseTs <= 0;
+      return latestCloseTs <= 0 || txTime > latestCloseTs;
+    });
+  };
+
+  const getPendingCashMovementsForTerminal = (terminalId: string) => {
+    const terminalKey = normalizeTerminalId(terminalId);
+    const isDefaultTerminal = terminalKey === 't1';
+    const latestCloseTs = getLatestZCloseTimestamp(terminalId);
+
+    return cashMovements.filter(m => {
+      const belongsToTerminal = normalizeTerminalId(m.terminalId) === terminalKey || (!m.terminalId && isDefaultTerminal);
+      if (!belongsToTerminal) return false;
+
+      const moveTime = new Date(m.timestamp).getTime();
+      if (!Number.isFinite(moveTime)) return latestCloseTs <= 0;
+      return latestCloseTs <= 0 || moveTime > latestCloseTs;
+    });
+  };
 
   const fetchTables = async () => {
     try {
@@ -209,6 +255,10 @@ const AppContent: React.FC = () => {
         console.log(`🖨️ Offline print queue processed: ${result.processed} jobs`);
       }
     } catch (error) {
+      const message = String((error as any)?.message || error || '');
+      if (message.toLowerCase().includes('db not connected')) {
+        return;
+      }
       console.warn('Offline print queue processing failed:', error);
     }
   }, [config, isDataLoaded]);
@@ -360,6 +410,9 @@ const AppContent: React.FC = () => {
 
   // --- INITIAL DATA LOAD ---
   useEffect(() => {
+    if (initLoadStartedRef.current) return;
+    initLoadStartedRef.current = true;
+
     const loadData = async () => {
       console.log('🚀 loadData started');
       try {
@@ -374,9 +427,10 @@ const AppContent: React.FC = () => {
         ]);
         console.log('✅ db.init() returned:', data ? Object.keys(data) : 'null');
 
-        // RECOVERY: Check for orphaned transactions and rebuild Z-Reports if needed
-        // This fixes history visibility issues even if some reports were deleted or lost
-        await ZReportRecoveryService.recoverOrphanedReports({ notifyUser: false });
+        // RECOVERY: Run in background so startup never blocks on heavy history stores.
+        void ZReportRecoveryService
+          .recoverOrphanedReports({ notifyUser: false })
+          .catch((recoveryError) => console.warn('⚠️ Startup Z-report recovery skipped:', recoveryError));
 
         let currentConfig = data.config;
         const masterIp = localStorage.getItem('pos_master_ip');
@@ -431,6 +485,19 @@ const AppContent: React.FC = () => {
         }
 
         if (data) {
+          const hydrateDeferredCollections = async () => {
+            // Avoid long full scans of transactions during startup.
+            // Checkout and sync flows update in-memory transactions incrementally.
+            try {
+              const txHistory = await db.get('transactionHistory') as Transaction[];
+              if (Array.isArray(txHistory) && txHistory.length > 0) {
+                console.log(`📦 Deferred load: transactionHistory=${txHistory.length}`);
+              }
+            } catch (error) {
+              console.info('ℹ️ Deferred transactionHistory load skipped:', error);
+            }
+          };
+
           // 1. Cargar persistencia - PRIORITIZE currentConfig (which might be from Master)
           const finalConfig = (currentConfig && !Array.isArray(currentConfig) && Object.keys(currentConfig).length > 0) ? currentConfig : config;
 
@@ -447,6 +514,7 @@ const AppContent: React.FC = () => {
           setProducts(data.products || []);
           setWarehouses(data.warehouses || []);
           setCashMovements(data.cashMovements || []);
+          setZReports(data.zReports || []);
           setPurchaseOrders(data.purchaseOrders || []);
           setSuppliers(data.suppliers || []);
           setParkedTickets(Array.isArray(data.parkedTickets) ? data.parkedTickets : []);
@@ -459,18 +527,14 @@ const AppContent: React.FC = () => {
           if (data.rooms && data.rooms.length > 0) setActiveRoomId(data.rooms[0].id);
           setSupplierProductPrices(data.supplierProductPrices || []);
 
-          // 1.5 Repair sequences
-          try {
-            const repairResult = await transactionService.repairSequences();
-            if (repairResult.fixed.length > 0) {
-              console.log("🔧 Sequences repaired on startup:", repairResult.details);
-              // RELOAD sequences into state to reflect repairs
-              const repairedSequences = await db.get('internalSequences');
-              setInternalSequences(repairedSequences || []);
-            }
-          } catch (error) {
-            console.error('Error repairing sequences:', error);
-          }
+          // Transactions/history are intentionally deferred in db.init to avoid startup lockups.
+          // Delay hydration a bit to reduce contention with startup writes/sync handshakes.
+          window.setTimeout(() => {
+            void hydrateDeferredCollections();
+          }, 2000);
+
+          // 1.5 Sequence repair is intentionally deferred; running it here can block startup
+          // when transaction stores are large or locked.
 
           // 2. Gestión de Identidad de Dispositivo
           let storedDeviceId = localStorage.getItem('pos_device_id');
@@ -535,8 +599,13 @@ const AppContent: React.FC = () => {
                   });
                 }
                 await apiSyncAdapter.ackPendingTransactions(txns.map(t => t.id));
-                const updatedTransactions = await db.get('transactions') as Transaction[];
-                setTransactions(updatedTransactions);
+                setTransactions(prev => {
+                  const merged = new Map<string, Transaction>();
+                  (prev || []).forEach(t => merged.set(t.id, t));
+                  txns.forEach(t => merged.set(t.id, t));
+                  return Array.from(merged.values())
+                    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                });
               });
 
               inventorySyncService.startInventoryPolling(15000, async (movements) => {
@@ -662,6 +731,8 @@ const AppContent: React.FC = () => {
         case 'suppliers': setSuppliers(freshData as Supplier[]); break;
         case 'internalSequences': /* No state for this, used directly from DB */ break;
         case 'transactions': setTransactions(freshData as Transaction[]); break;
+        case 'cashMovements': setCashMovements(freshData as CashMovement[]); break;
+        case 'zReports': setZReports(freshData as ZReport[]); break;
         case 'productStocks':
           setProductStocks(freshData as ProductStock[]);
           // CRITICAL: When detailed stocks change, we should also refresh products 
@@ -672,7 +743,7 @@ const AppContent: React.FC = () => {
       }
     };
 
-    const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'productStocksUpdated', 'tablesUpdated'];
+    const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'cashMovementsUpdated', 'zReportsUpdated', 'productStocksUpdated', 'tablesUpdated'];
     syncEvents.forEach(e => window.addEventListener(e, handleSyncUpdate));
 
     return () => {
@@ -787,6 +858,7 @@ const AppContent: React.FC = () => {
         setTransactions(freshData.transactions);
         setProducts(freshData.products);
         setCashMovements(freshData.cashMovements);
+        setZReports(freshData.zReports || []);
       } catch (error) {
         console.error('Failed to restore history:', error);
         alert('No se pudo restaurar el historial desde la Maestra. El equipo funcionará, pero sin datos previos.');
@@ -1045,23 +1117,13 @@ const AppContent: React.FC = () => {
     // 1. Robust Terminal ID Discovery
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
     const terminalId = currentTerminal?.id || 'T1';
-    const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
-    const terminalKey = normalizeTerminalId(terminalId);
-    const isDefaultTerminal = terminalKey === 't1';
-    const matchesCurrentTerminal = (value?: string | null) => normalizeTerminalId(value) === terminalKey;
 
     try {
       console.log(`📊 Z-Report: Starting closure for terminal ${terminalId} (Device: ${deviceId})`);
 
-      // 2. Identify Transactions for closure
-      // Include legacy untagged data only for default terminal to avoid orphan records.
-      const terminalTransactions = transactions.filter(t =>
-        !t.zReportId &&
-        (matchesCurrentTerminal(t.terminalId) || (!t.terminalId && isDefaultTerminal))
-      );
-      const terminalCashMovements = cashMovements.filter(m =>
-        (matchesCurrentTerminal(m.terminalId) || (!m.terminalId && isDefaultTerminal))
-      );
+      // 2. Identify pending operational data since the last Z of this terminal.
+      const terminalTransactions = getPendingTransactionsForTerminal(terminalId);
+      const terminalCashMovements = getPendingCashMovementsForTerminal(terminalId);
 
       console.log(`🔒 Shift Segregation: Found ${terminalTransactions.length} txns and ${terminalCashMovements.length} cash movements for ${terminalId}`);
 
@@ -1167,6 +1229,7 @@ const AppContent: React.FC = () => {
 
       console.log("💾 Saving Z-Report:", newZReport);
       await db.saveDocument('zReports', newZReport);
+      setZReports(prev => [...prev, newZReport].sort((a, b) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime()));
       await syncManager.pushZReport(newZReport);
 
       // 5. Build lookup set for IDs that were actually closed to prevent data loss
@@ -1403,6 +1466,7 @@ const AppContent: React.FC = () => {
             warehouses={warehouses}
             cart={cart}
             transactions={transactions}
+            zReports={zReports}
             onUpdateCart={setCart}
             selectedCustomer={selectedCustomer}
             onSelectCustomer={setSelectedCustomer}
@@ -1695,19 +1759,9 @@ const AppContent: React.FC = () => {
 
       case 'FINANCE':
         {
-          // Filter for current terminal ONLY (Fix for X-Report showing other terminals' data)
           const currentTerminalId = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
-          const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
-          const terminalKey = normalizeTerminalId(currentTerminalId);
-          const isDefaultTerminal = terminalKey === 't1';
-          const matchesCurrentTerminal = (value?: string | null) => normalizeTerminalId(value) === terminalKey;
-          const terminalTransactions = transactions.filter(t =>
-            !t.zReportId &&
-            (matchesCurrentTerminal(t.terminalId) || (!t.terminalId && isDefaultTerminal))
-          );
-          const terminalMovements = cashMovements.filter(m =>
-            matchesCurrentTerminal(m.terminalId) || (!m.terminalId && isDefaultTerminal)
-          );
+          const terminalTransactions = getPendingTransactionsForTerminal(currentTerminalId);
+          const terminalMovements = getPendingCashMovementsForTerminal(currentTerminalId);
 
           return (
             <FinanceDashboard
@@ -1724,16 +1778,21 @@ const AppContent: React.FC = () => {
         }
 
       case 'Z_REPORT':
+        {
+          const currentTerminalId = getCurrentTerminal()?.id || 'T1';
+          const terminalTransactions = getPendingTransactionsForTerminal(currentTerminalId);
+          const terminalMovements = getPendingCashMovementsForTerminal(currentTerminalId);
+
         return (
           <ZReportDashboard
-            transactions={transactions}
-            cashMovements={cashMovements}
+            transactions={terminalTransactions}
+            cashMovements={terminalMovements}
             config={config}
             userName={currentUser?.name || ''}
             currentUser={currentUser}
             roles={roles}
             onConfirmClose={handleZReport}
-            terminalId={getCurrentTerminal()?.id}
+            terminalId={currentTerminalId}
             onClose={() => {
               const role = getCurrentDeviceRole();
               if (role === DeviceRole.SELF_CHECKOUT) setCurrentView('KIOSK_WELCOME');
@@ -1744,6 +1803,7 @@ const AppContent: React.FC = () => {
             }}
           />
         );
+        }
 
       case 'SUPPLY_CHAIN':
         return (

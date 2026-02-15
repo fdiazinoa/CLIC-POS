@@ -35,7 +35,7 @@ interface ProductFormProps {
   hasHistory?: boolean;
   currentUser?: any;
   roles?: any[];
-  onSave: (product: Product) => void;
+  onSave: (product: Product) => Promise<void> | void;
   onClose: () => void;
   suppliers?: Supplier[];
   seasons?: Season[];
@@ -67,6 +67,7 @@ const VARIANT_TEMPLATES = [
 ];
 
 const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], transfers = [], purchaseOrders = [], hasHistory = false, currentUser, roles = [], onSave, onClose, suppliers = [], seasons = [], initialTab = 'GENERAL', allProducts = [] }) => {
+  const MAX_IMAGE_BYTES = 700 * 1024; // ~700 KB to avoid oversized base64 blobs blocking saves
   const [activeTab, setActiveTab] = useState<ProductTab>(initialTab || 'GENERAL');
   const [showConversionHelper, setShowConversionHelper] = useState(false);
   const [kardexWarehouse, setKardexWarehouse] = useState<string>(
@@ -78,6 +79,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [showProfitCalc, setShowProfitCalc] = useState<string | null>(null);
   const [showTemplateMenu, setShowTemplateMenu] = useState(false);
   const [isLabelModalOpen, setIsLabelModalOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isPastingImage, setIsPastingImage] = useState(false);
   const [pendingOption, setPendingOption] = useState<Record<string, string>>({});
 
   // Kardex Filter State
@@ -373,11 +376,131 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     setFormData({ ...formData, stockBalances: { ...(formData.stockBalances || {}), [whId]: value } });
   };
 
+  const imageTooHeavy = (bytes: number) => bytes > MAX_IMAGE_BYTES;
+  const estimateDataUrlBytes = (dataUrl: string) => dataUrl.length * 0.75;
+
+  const applyImageDataUrl = (dataUrl: string) => {
+    if (!dataUrl?.startsWith('data:image/')) {
+      alert('El contenido pegado no es una imagen válida.');
+      return;
+    }
+    if (imageTooHeavy(estimateDataUrlBytes(dataUrl))) {
+      alert(`La imagen pegada supera el límite (~${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB).`);
+      return;
+    }
+    setFormData(prev => ({ ...prev, image: dataUrl }));
+  };
+
+  const blobToDataUrl = (blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve((reader.result as string) || '');
+      reader.onerror = () => reject(reader.error || new Error('No se pudo leer la imagen pegada.'));
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  const extractImageFromHtml = (html: string): string | null => {
+    const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+    return match?.[1] || null;
+  };
+
+  const handleImagePaste = async (e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isPastingImage) return;
+
+    setIsPastingImage(true);
+    try {
+      const fromFiles = Array.from(e.clipboardData.files || []).find(f => f.type.startsWith('image/'));
+      if (fromFiles) {
+        if (imageTooHeavy(fromFiles.size)) {
+          alert(`La imagen pegada es muy pesada (${(fromFiles.size / 1024).toFixed(0)} KB). Máximo ${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB.`);
+          return;
+        }
+        const dataUrl = await blobToDataUrl(fromFiles);
+        applyImageDataUrl(dataUrl);
+        return;
+      }
+
+      const items = Array.from(e.clipboardData.items || []);
+      const imageItem = items.find(item => item.type.startsWith('image/'));
+      if (imageItem) {
+        const blob = imageItem.getAsFile();
+        if (!blob) {
+          alert('No se pudo leer la imagen del portapapeles.');
+          return;
+        }
+        if (imageTooHeavy(blob.size)) {
+          alert(`La imagen pegada es muy pesada (${(blob.size / 1024).toFixed(0)} KB). Máximo ${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB.`);
+          return;
+        }
+        const dataUrl = await blobToDataUrl(blob);
+        applyImageDataUrl(dataUrl);
+        return;
+      }
+
+      const html = e.clipboardData.getData('text/html');
+      const plainText = e.clipboardData.getData('text/plain')?.trim();
+      const imageSource = extractImageFromHtml(html) || (plainText || null);
+
+      if (!imageSource) {
+        alert('No se detectó una imagen para pegar. Use "Copiar imagen" o suba un archivo.');
+        return;
+      }
+
+      if (imageSource.startsWith('data:image/')) {
+        applyImageDataUrl(imageSource);
+        return;
+      }
+
+      if (imageSource.startsWith('http://') || imageSource.startsWith('https://')) {
+        try {
+          const controller = new AbortController();
+          const timeout = window.setTimeout(() => controller.abort(), 6000);
+          const response = await fetch(imageSource, { signal: controller.signal });
+          window.clearTimeout(timeout);
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const blob = await response.blob();
+          if (!blob.type.startsWith('image/')) throw new Error('La URL no apunta a una imagen');
+          if (imageTooHeavy(blob.size)) {
+            alert(`La imagen en URL es muy pesada (${(blob.size / 1024).toFixed(0)} KB). Máximo ${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB.`);
+            return;
+          }
+          const dataUrl = await blobToDataUrl(blob);
+          applyImageDataUrl(dataUrl);
+          return;
+        } catch {
+          alert('No se pudo pegar la imagen desde esa URL (CORS/bloqueo del navegador). Descárguela y súbala.');
+          return;
+        }
+      }
+
+      alert('Formato de portapapeles no soportado. Use "Copiar imagen" o suba un archivo.');
+    } catch (error) {
+      console.error('❌ Error al pegar imagen:', error);
+      alert('No se pudo procesar la imagen pegada.');
+    } finally {
+      setIsPastingImage(false);
+    }
+  };
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (imageTooHeavy(file.size)) {
+        alert(`La imagen es muy pesada (${(file.size / 1024).toFixed(0)} KB). Máximo permitido: ${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB.`);
+        return;
+      }
       const reader = new FileReader();
-      reader.onloadend = () => setFormData(prev => ({ ...prev, image: reader.result as string }));
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        if (result && imageTooHeavy(estimateDataUrlBytes(result))) {
+          alert(`La imagen es muy pesada para guardar. Súbela reducida (máx ${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB).`);
+          return;
+        }
+        setFormData(prev => ({ ...prev, image: result }));
+      };
       reader.readAsDataURL(file);
     }
   };
@@ -428,8 +551,13 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     }
   };
 
-  const handleFinalSave = () => {
+  const handleFinalSave = async () => {
+    if (isSaving) return;
     if (!formData.name.trim()) return alert("Debe asignar un nombre al artículo.");
+    if (formData.image && estimateDataUrlBytes(formData.image) > MAX_IMAGE_BYTES) { // rough bytes estimate
+      alert(`La imagen pegada/suelta supera el límite (~${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB). Súbela reducida o quítala e inténtalo de nuevo.`);
+      return;
+    }
 
     // Ensure updatedAt is set for Delta Sync
     const updatedProduct = {
@@ -438,7 +566,15 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       updatedAt: new Date().toISOString()
     };
 
-    onSave(updatedProduct);
+    try {
+      setIsSaving(true);
+      await Promise.resolve(onSave(updatedProduct));
+    } catch (error) {
+      console.error('❌ Error saving product:', error);
+      alert('No se pudo guardar el producto. Verifique su conexión y vuelva a intentar.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const OperationalSwitch = ({ label, description, checked, onChange, icon: Icon }: any) => (
@@ -745,30 +881,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   <label className="block text-[10px] font-black text-gray-500 uppercase ml-1">Imagen Principal</label>
                   <div
                     onClick={() => fileInputRef.current?.click()}
-                    onPaste={(e) => {
-                      const items = e.clipboardData.items;
-                      for (let i = 0; i < items.length; i++) {
-                        if (items[i].type.indexOf("image") !== -1) {
-                          const blob = items[i].getAsFile();
-                          if (blob) {
-                            const reader = new FileReader();
-                            reader.onload = (event) => {
-                              setFormData(prev => ({ ...prev, image: event.target?.result as string }));
-                            };
-                            reader.readAsDataURL(blob);
-                            e.preventDefault(); // Prevent default paste behavior
-                            e.stopPropagation();
-                          }
-                        }
-                      }
-                    }}
+                    onPaste={handleImagePaste}
                     tabIndex={0} // Make div focusable to receive paste events
                     className="aspect-square bg-white rounded-[2rem] border-4 border-dashed border-gray-200 flex flex-col items-center justify-center relative overflow-hidden group cursor-pointer hover:border-blue-400 transition-all outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-50"
                   >
                     {formData.image ? <img src={formData.image} className="w-full h-full object-cover" /> : (
                       <div className="flex flex-col items-center gap-2 text-gray-300">
                         <ImageIcon size={48} />
-                        <span className="text-[10px] font-bold uppercase">Click o Pegar (Ctrl+V)</span>
+                        <span className="text-[10px] font-bold uppercase">{isPastingImage ? 'Procesando Pegado...' : 'Click o Pegar (Ctrl+V)'}</span>
                       </div>
                     )}
                     <input ref={fileInputRef} type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
@@ -1729,7 +1849,13 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
           <div>{hasHistory && <span className="flex items-center gap-2 text-xs text-orange-600 bg-orange-50 px-3 py-2 rounded-xl font-bold"><ShieldAlert size={16} /> Producto con historial</span>}</div>
           <div className="flex gap-3">
             <button onClick={onClose} className="px-6 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors">Cancelar</button>
-            <button onClick={handleFinalSave} className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 active:scale-95 flex items-center gap-2"><Save size={20} /> Guardar Producto</button>
+            <button
+              onClick={handleFinalSave}
+              disabled={isSaving}
+              className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 active:scale-95 flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-blue-600"
+            >
+              <Save size={20} /> {isSaving ? 'Guardando...' : 'Guardar Producto'}
+            </button>
           </div>
         </div >
 
