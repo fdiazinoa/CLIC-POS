@@ -105,6 +105,11 @@ class BackgroundSyncManager {
                 await (apiSyncAdapter as any).pushZReport?.(item);
             });
 
+            // 4. Transactions (Slaves → Master)
+            await this.processCollection<any>('transactions', async (item) => {
+                await apiSyncAdapter.pushTransaction(item);
+            });
+
             this.updateState({
                 isSyncing: false,
                 hasError: false,
@@ -183,7 +188,7 @@ class BackgroundSyncManager {
 
     private async updatePendingCount() {
         let count = 0;
-        const collections = ['inventoryLedger', 'cashMovements', 'zReports'];
+        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions'];
 
         for (const col of collections) {
             const data = await db.get(col as any) || [];
@@ -231,7 +236,7 @@ class BackgroundSyncManager {
 
         console.log(`🧹 BackgroundSyncManager: Pruning synced items older than ${RETENTION_DAYS} days (Cutoff: ${cutoff.toISOString()})`);
 
-        const collections = ['inventoryLedger', 'cashMovements', 'zReports'];
+        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions'];
 
         for (const colName of collections) {
             try {
