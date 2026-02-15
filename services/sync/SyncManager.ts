@@ -88,9 +88,9 @@ class SyncManager {
                 console.error('❌ Failed to initialize API sync adapter:', error);
             }
         } else if (this.isMaster) {
-            // Master terminal: Authenticate with own server (via proxy)
-            // Use current origin to leverage the Vite proxy (avoids Mixed Content on HTTPS)
-            const masterUrl = this.syncConfig.masterUrl || window.location.origin;
+            // Master terminal: Authenticate with own server
+            // Backend runs on port 3001 (Vite runs on 3000)
+            const masterUrl = this.syncConfig.masterUrl || 'http://localhost:3001';
 
             // Ensure config has the URL for future reference
             if (!this.syncConfig.masterUrl) {
