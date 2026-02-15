@@ -271,6 +271,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
          id: `PO-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
          supplierId: selectedSupplier,
          date: new Date().toISOString(),
+         expectedDate: dueDate.toISOString(),
          dueDate: dueDate.toISOString(),
          status: 'ORDERED',
          items: orderCart,

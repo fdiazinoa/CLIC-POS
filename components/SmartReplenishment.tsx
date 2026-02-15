@@ -215,6 +215,7 @@ const SmartReplenishment: React.FC<SmartReplenishmentProps> = ({
                     id: `PO-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 1000)}`,
                     supplierId: supplierId === 'UNKNOWN' ? suppliers[0]?.id || '' : supplierId,
                     date: new Date().toISOString(),
+                    expectedDate: dueDate.toISOString(),
                     dueDate: dueDate.toISOString(),
                     status: 'ORDERED',
                     items: poItems,
