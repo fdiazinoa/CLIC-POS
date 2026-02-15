@@ -865,7 +865,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    useEffect(() => {
       const checkFiscalStatus = async () => {
-         const type: NCFType = selectedCustomer?.defaultNcfType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02');
+         const threshold = activeTerminalConfig?.operational?.fiscalThreshold || 0;
+         const isOverThreshold = threshold > 0 && cartTotal > threshold;
+
+         const type: NCFType = isOverThreshold
+            ? 'B01'
+            : (selectedCustomer?.defaultNcfType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02'));
          const buffers = await db.get('localFiscalBuffer') || [];
          const localBuffer = (buffers || []).find((b: any) => b.type === type && b.isActive) as FiscalRangeDGII | undefined;
 
@@ -1418,6 +1423,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const proceedToCheckout = () => {
+      const threshold = activeTerminalConfig?.operational?.fiscalThreshold || 0;
+      if (threshold > 0 && cartTotal > threshold && !selectedCustomer) {
+         alert(`ATENCIÓN: El monto de la venta (${baseCurrency.symbol}${cartTotal.toFixed(2)}) excede el umbral fiscal permitido para facturas de consumo (${baseCurrency.symbol}${threshold.toFixed(2)}).\n\nEs obligatorio identificar al cliente y emitir una Factura de Crédito Fiscal (B01).`);
+         onOpenCustomers();
+         return;
+      }
+
       if (activeRecoveredReservation && amountDueNow <= 0.0001) {
          handlePaymentConfirm([]).catch(console.error);
          return;
@@ -1966,6 +1978,79 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   />
                </div>
             )}
+
+            {/* --- Novedad: Barra de Acciones Horizontal (High Density Mode) --- */}
+            {activeTerminalConfig?.operational?.expandTicket && !isMobile && (
+               <div className="bg-white border-t border-gray-200 p-3 shrink-0 shadow-[0_-4px_20px_rgba(0,0,0,0.03)] z-10 transition-all animate-in slide-in-from-bottom-2">
+                  <div className="grid grid-cols-6 gap-2">
+                     <button onClick={() => setShowGlobalDiscount(true)} className={`flex flex-col items-center justify-center py-2 rounded-xl border transition-all ${globalDiscount.value > 0 ? 'bg-red-50 border-red-200 text-red-600 font-bold' : 'bg-pink-50 border-pink-100 text-pink-600 hover:bg-pink-100 hover:border-pink-200'}`}>
+                        <Percent size={14} />
+                        <span className="text-[9px] font-black uppercase mt-1">Descuento</span>
+                     </button>
+                     <button onClick={() => setShowCouponModal(true)} className="flex flex-col items-center justify-center py-2 rounded-xl border bg-cyan-50 border-cyan-100 text-cyan-600 hover:bg-cyan-100 hover:border-cyan-200 transition-all font-bold">
+                        <QrCode size={14} />
+                        <span className="text-[9px] font-black uppercase mt-1">Cupón</span>
+                     </button>
+                     <button onClick={onOpenFinance} className="flex flex-col items-center justify-center py-2 rounded-xl border bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all font-bold">
+                        <Lock size={14} />
+                        <span className="text-[9px] font-black uppercase mt-1">Cierre Z</span>
+                     </button>
+                     <button onClick={() => setShowLoyaltyModal(true)} className="flex flex-col items-center justify-center py-2 rounded-xl border bg-white border-gray-100 text-blue-500 hover:border-blue-200 hover:bg-blue-50 transition-all font-bold">
+                        <CreditCard size={14} />
+                        <span className="text-[9px] font-black uppercase mt-1">Tarjeta</span>
+                     </button>
+                     <button onClick={onLogout} className="flex flex-col items-center justify-center py-2 rounded-xl border bg-white border-gray-100 text-gray-400 hover:border-red-100 hover:text-red-500 transition-all font-bold">
+                        <LogOut size={14} />
+                        <span className="text-[9px] font-black uppercase mt-1">Salir</span>
+                     </button>
+                     <button onClick={handleParkCurrentTicket} className="flex flex-col items-center justify-center py-2 rounded-xl border bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 hover:border-blue-200 transition-all font-bold">
+                        <Save size={14} />
+                        <span className="text-[9px] font-black uppercase mt-1">Guardar</span>
+                     </button>
+                     <button onClick={() => setShowParkedList(!showParkedList)} className="flex flex-col items-center justify-center py-2 rounded-xl border bg-orange-50 border-orange-100 text-orange-600 hover:bg-orange-100 hover:border-orange-200 transition-all relative font-bold">
+                        <Inbox size={14} />
+                        <span className="text-[9px] font-black uppercase mt-1">Espera</span>
+                        {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-1 right-2 w-2 h-2 bg-orange-500 rounded-full border border-white"></span>}
+                     </button>
+                     <button onClick={openReservationModal} className="flex flex-col items-center justify-center py-2 rounded-xl border bg-amber-50 border-amber-100 text-amber-700 hover:bg-amber-100 hover:border-amber-200 transition-all font-bold">
+                        <StickyNote size={14} />
+                        <span className="text-[9px] font-black uppercase mt-1">Reserva</span>
+                     </button>
+                     <button onClick={openRecoverReservationModal} className="flex flex-col items-center justify-center py-2 rounded-xl border bg-teal-50 border-teal-100 text-teal-700 hover:bg-teal-100 hover:border-teal-200 transition-all font-bold">
+                        <QrCode size={14} />
+                        <span className="text-[9px] font-black uppercase mt-1">Rec. Res.</span>
+                     </button>
+                     <button onClick={() => onOpenInventoryTracking()} className="flex flex-col items-center justify-center py-2 rounded-xl border bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all font-bold">
+                        <Package size={14} />
+                        <span className="text-[9px] font-black uppercase mt-1">Rastreo</span>
+                     </button>
+                     <button
+                        onClick={() => {
+                           if (!isReturnMode) {
+                              const hasPermission = (currentUser as any).permissions?.includes('CAN_REFUND') ||
+                                 ['ADMIN', 'MANAGER'].includes(currentUser.role);
+                              if (!hasPermission) {
+                                 setShowSupervisorAuth(true);
+                                 return;
+                              }
+                           }
+                           if (isReturnMode) setRefundAuthorizedBy(null);
+                           setIsReturnMode(!isReturnMode);
+                        }}
+                        className={`flex flex-col items-center justify-center py-2 rounded-xl border transition-all font-bold ${isReturnMode ? 'border-red-500 bg-red-50 text-red-600' : 'bg-white border-gray-100 text-gray-400 hover:border-red-100 hover:text-red-500'}`}
+                     >
+                        <ArrowRightLeft size={14} />
+                        <span className="text-[9px] font-black uppercase mt-1">{isReturnMode ? 'VENTA' : 'DEVOL.'}</span>
+                     </button>
+                     {activeTerminalConfig?.operational?.usa_mesas && (
+                        <button onClick={handleBackToMap} className="flex flex-col items-center justify-center py-2 rounded-xl border bg-teal-50 border-teal-100 text-teal-600 hover:bg-teal-100 hover:border-teal-200 transition-all font-bold">
+                           <Layout size={14} />
+                           <span className="text-[9px] font-black uppercase mt-1">Mesas</span>
+                        </button>
+                     )}
+                  </div>
+               </div>
+            )}
          </div >
 
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
@@ -2213,7 +2298,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toFixed(2)}</span>}
                                           </div>
                                           <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">
-                                             ITBIS: {baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)}
+                                             ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)})
                                           </span>
                                        </div>
                                        {item.salespersonId && (
@@ -2266,9 +2351,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                                     <div className="flex items-center justify-between">
                                        <div className="flex flex-col">
-                                          <div className="flex items-center gap-1 text-[10px] text-gray-500">
-                                             <span>{item.quantity} x {baseCurrency.symbol}{item.price.toFixed(2)}</span>
-                                             {item.modifiers && item.modifiers.length > 0 && <span className="text-blue-600 font-bold ml-1">+{item.modifiers.length} mod</span>}
+                                          <div className="flex flex-col">
+                                             <div className="flex items-center gap-1 text-[10px] text-gray-500">
+                                                <span>{item.quantity} x {baseCurrency.symbol}{item.price.toFixed(2)}</span>
+                                                {item.modifiers && item.modifiers.length > 0 && <span className="text-blue-600 font-bold ml-1">+{item.modifiers.length} mod</span>}
+                                             </div>
+                                             <div className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">
+                                                ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)})
+                                             </div>
                                           </div>
                                           {/* Salesperson Badge */}
                                           {item.salespersonId && (
@@ -2525,73 +2615,75 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         ) : (
                            <>
                               {/* --- BOTONES DE ACCIÓN (POS) --- */}
-                              <div className="grid grid-cols-3 gap-2">
-                                 <button onClick={() => setShowGlobalDiscount(true)} className={`flex flex-col items-center justify-center py-2 rounded-xl border-2 transition-all ${globalDiscount.value > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-pink-50 border-pink-100 text-pink-600 hover:bg-pink-100 hover:border-pink-200'}`}>
-                                    <Percent size={16} />
-                                    <span className="text-[9px] font-black uppercase mt-1">Descuento</span>
-                                 </button>
-                                 <button onClick={() => setShowCouponModal(true)} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-cyan-50 border-cyan-100 text-cyan-600 hover:bg-cyan-100 hover:border-cyan-200 transition-all">
-                                    <QrCode size={16} />
-                                    <span className="text-[9px] font-black uppercase mt-1">Cupón</span>
-                                 </button>
-                                 <button onClick={onOpenFinance} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all">
-                                    <Lock size={16} />
-                                    <span className="text-[9px] font-black uppercase mt-1">Cierre Z</span>
-                                 </button>
-                                 <button onClick={() => setShowLoyaltyModal(true)} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-white border-gray-100 text-blue-500 hover:border-blue-200 hover:bg-blue-50 transition-all">
-                                    <CreditCard size={16} />
-                                    <span className="text-[9px] font-black uppercase mt-1">Tarjeta</span>
-                                 </button>
-                                 <button onClick={onLogout} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-white border-gray-100 text-gray-400 hover:border-red-100 hover:text-red-500 transition-all">
-                                    <LogOut size={16} />
-                                    <span className="text-[9px] font-black uppercase mt-1">Salir</span>
-                                 </button>
-                                 <button onClick={handleParkCurrentTicket} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 hover:border-blue-200 transition-all">
-                                    <Save size={16} />
-                                    <span className="text-[9px] font-black uppercase mt-1">Guardar</span>
-                                 </button>
-                                 <button onClick={() => setShowParkedList(!showParkedList)} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-orange-50 border-orange-100 text-orange-600 hover:bg-orange-100 hover:border-orange-200 transition-all relative">
-                                    <Inbox size={16} />
-                                    <span className="text-[9px] font-black uppercase mt-1">Espera</span>
-                                    {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-1 right-2 w-2 h-2 bg-orange-500 rounded-full border border-white"></span>}
-                                 </button>
-                                 <button onClick={openReservationModal} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-amber-50 border-amber-100 text-amber-700 hover:bg-amber-100 hover:border-amber-200 transition-all">
-                                    <StickyNote size={16} />
-                                    <span className="text-[9px] font-black uppercase mt-1">Reserva</span>
-                                 </button>
-                                 <button onClick={openRecoverReservationModal} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-teal-50 border-teal-100 text-teal-700 hover:bg-teal-100 hover:border-teal-200 transition-all">
-                                    <QrCode size={16} />
-                                    <span className="text-[9px] font-black uppercase mt-1">Rec. Res.</span>
-                                 </button>
-                                 <button onClick={() => onOpenInventoryTracking()} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all">
-                                    <Package size={16} />
-                                    <span className="text-[9px] font-black uppercase mt-1">Rastreo</span>
-                                 </button>
-                                 <button
-                                    onClick={() => {
-                                       if (!isReturnMode) {
-                                          const hasPermission = (currentUser as any).permissions?.includes('CAN_REFUND') ||
-                                             ['ADMIN', 'MANAGER'].includes(currentUser.role);
-                                          if (!hasPermission) {
-                                             setShowSupervisorAuth(true);
-                                             return;
-                                          }
-                                       }
-                                       if (isReturnMode) setRefundAuthorizedBy(null);
-                                       setIsReturnMode(!isReturnMode);
-                                    }}
-                                    className={`flex flex-col items-center justify-center py-2 rounded-xl border-2 transition-all ${isReturnMode ? 'border-red-500 bg-red-50 text-red-600' : 'bg-white border-gray-100 text-gray-400 hover:border-red-100 hover:text-red-500'}`}
-                                 >
-                                    <ArrowRightLeft size={16} />
-                                    <span className="text-[9px] font-black uppercase mt-1">{isReturnMode ? 'VENTA' : 'DEVOL.'}</span>
-                                 </button>
-                                 {activeTerminalConfig?.operational?.usa_mesas && (
-                                    <button onClick={handleBackToMap} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-teal-50 border-teal-100 text-teal-600 hover:bg-teal-100 hover:border-teal-200 transition-all">
-                                       <Layout size={16} />
-                                       <span className="text-[9px] font-black uppercase mt-1">Mesas</span>
+                              {!activeTerminalConfig?.operational?.expandTicket && (
+                                 <div className="grid grid-cols-3 gap-2 animate-in fade-in duration-300">
+                                    <button onClick={() => setShowGlobalDiscount(true)} className={`flex flex-col items-center justify-center py-2 rounded-xl border-2 transition-all ${globalDiscount.value > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-pink-50 border-pink-100 text-pink-600 hover:bg-pink-100 hover:border-pink-200'}`}>
+                                       <Percent size={16} />
+                                       <span className="text-[9px] font-black uppercase mt-1">Descuento</span>
                                     </button>
-                                 )}
-                              </div>
+                                    <button onClick={() => setShowCouponModal(true)} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-cyan-50 border-cyan-100 text-cyan-600 hover:bg-cyan-100 hover:border-cyan-200 transition-all">
+                                       <QrCode size={16} />
+                                       <span className="text-[9px] font-black uppercase mt-1">Cupón</span>
+                                    </button>
+                                    <button onClick={onOpenFinance} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all">
+                                       <Lock size={16} />
+                                       <span className="text-[9px] font-black uppercase mt-1">Cierre Z</span>
+                                    </button>
+                                    <button onClick={() => setShowLoyaltyModal(true)} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-white border-gray-100 text-blue-500 hover:border-blue-200 hover:bg-blue-50 transition-all">
+                                       <CreditCard size={16} />
+                                       <span className="text-[9px] font-black uppercase mt-1">Tarjeta</span>
+                                    </button>
+                                    <button onClick={onLogout} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-white border-gray-100 text-gray-400 hover:border-red-100 hover:text-red-500 transition-all">
+                                       <LogOut size={16} />
+                                       <span className="text-[9px] font-black uppercase mt-1">Salir</span>
+                                    </button>
+                                    <button onClick={handleParkCurrentTicket} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100 hover:border-blue-200 transition-all">
+                                       <Save size={16} />
+                                       <span className="text-[9px] font-black uppercase mt-1">Guardar</span>
+                                    </button>
+                                    <button onClick={() => setShowParkedList(!showParkedList)} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-orange-50 border-orange-100 text-orange-600 hover:bg-orange-100 hover:border-orange-200 transition-all relative">
+                                       <Inbox size={16} />
+                                       <span className="text-[9px] font-black uppercase mt-1">Espera</span>
+                                       {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-1 right-2 w-2 h-2 bg-orange-500 rounded-full border border-white"></span>}
+                                    </button>
+                                    <button onClick={openReservationModal} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-amber-50 border-amber-100 text-amber-700 hover:bg-amber-100 hover:border-amber-200 transition-all">
+                                       <StickyNote size={16} />
+                                       <span className="text-[9px] font-black uppercase mt-1">Reserva</span>
+                                    </button>
+                                    <button onClick={openRecoverReservationModal} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-teal-50 border-teal-100 text-teal-700 hover:bg-teal-100 hover:border-teal-200 transition-all">
+                                       <QrCode size={16} />
+                                       <span className="text-[9px] font-black uppercase mt-1">Rec. Res.</span>
+                                    </button>
+                                    <button onClick={() => onOpenInventoryTracking()} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100 hover:border-indigo-200 transition-all">
+                                       <Package size={16} />
+                                       <span className="text-[9px] font-black uppercase mt-1">Rastreo</span>
+                                    </button>
+                                    <button
+                                       onClick={() => {
+                                          if (!isReturnMode) {
+                                             const hasPermission = (currentUser as any).permissions?.includes('CAN_REFUND') ||
+                                                ['ADMIN', 'MANAGER'].includes(currentUser.role);
+                                             if (!hasPermission) {
+                                                setShowSupervisorAuth(true);
+                                                return;
+                                             }
+                                          }
+                                          if (isReturnMode) setRefundAuthorizedBy(null);
+                                          setIsReturnMode(!isReturnMode);
+                                       }}
+                                       className={`flex flex-col items-center justify-center py-2 rounded-xl border-2 transition-all ${isReturnMode ? 'border-red-500 bg-red-50 text-red-600' : 'bg-white border-gray-100 text-gray-400 hover:border-red-100 hover:text-red-500'}`}
+                                    >
+                                       <ArrowRightLeft size={16} />
+                                       <span className="text-[9px] font-black uppercase mt-1">{isReturnMode ? 'VENTA' : 'DEVOL.'}</span>
+                                    </button>
+                                    {activeTerminalConfig?.operational?.usa_mesas && (
+                                       <button onClick={handleBackToMap} className="flex flex-col items-center justify-center py-2 rounded-xl border-2 bg-teal-50 border-teal-100 text-teal-600 hover:bg-teal-100 hover:border-teal-200 transition-all">
+                                          <Layout size={16} />
+                                          <span className="text-[9px] font-black uppercase mt-1">Mesas</span>
+                                       </button>
+                                    )}
+                                 </div>
+                              )}
 
                               {/* --- BLOQUE DE TOTALES --- */}
                               <div className="space-y-1.5 pt-1 border-t border-dashed border-gray-200 mt-2">

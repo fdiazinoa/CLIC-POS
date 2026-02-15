@@ -3,7 +3,7 @@ import React from 'react';
 import {
     Building2, LayoutGrid, ShieldCheck,
     Monitor, Utensils, ShoppingBag,
-    Lock, Users, Info, Sparkles, CalendarDays, Percent
+    Lock, Users, Info, Sparkles, CalendarDays, Percent, Landmark
 } from 'lucide-react';
 
 interface SettingsOperationalProps {
@@ -44,7 +44,8 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
             validityDays: 7,
             requireAdvance: false,
             minimumAdvancePercent: 20
-        }
+        },
+        expandTicket: false
     };
 
     const reservationPolicy = operational.reservationPolicy || {
@@ -216,6 +217,15 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                         icon={LayoutGrid}
                         disabled={isReadOnly}
                     />
+
+                    <Toggle
+                        label="Ampliar Ticket (Vista de Alta Densidad)"
+                        description="Al activar, el ticket ocupará todo el alto lateral y los botones de acción se moverán a una barra inferior."
+                        checked={operational.expandTicket}
+                        onChange={(v: boolean) => handleToggle('expandTicket', v)}
+                        icon={LayoutGrid}
+                        disabled={isReadOnly}
+                    />
                 </div>
             </div>
 
@@ -309,6 +319,40 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                             </p>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            {/* Section: Fiscal Threshold */}
+            <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6">
+                <div className="flex items-center gap-3 mb-2">
+                    <div className="w-10 h-10 bg-amber-100 text-amber-600 rounded-2xl flex items-center justify-center">
+                        <Landmark size={20} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-black text-gray-800">Límites Fiscales</h3>
+                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest">Control de Facturación</p>
+                    </div>
+                </div>
+
+                <div className="p-5 rounded-2xl border border-gray-100 bg-slate-50">
+                    <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-3">
+                        Umbral para Factura de Crédito Fiscal (B01)
+                    </label>
+                    <div className="relative">
+                        <input
+                            type="number"
+                            min={0}
+                            disabled={isReadOnly}
+                            value={operational.fiscalThreshold || 0}
+                            onChange={(e) => onUpdate('operational', 'fiscalThreshold', Math.max(0, parseFloat(e.target.value) || 0))}
+                            className="w-full p-4 pl-12 bg-white border border-slate-200 rounded-2xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-amber-100 transition-all"
+                            placeholder="Ej: 50000"
+                        />
+                        <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-black text-lg">$</div>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-3 leading-relaxed">
+                        Si el monto de la factura excede este valor, el sistema forzará el uso de **Comprobante de Crédito Fiscal (B01)** y requerirá la asociación obligatoria de un cliente con RNC.
+                    </p>
                 </div>
             </div>
         </div>

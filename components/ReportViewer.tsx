@@ -224,6 +224,27 @@ interface HourlyBehaviorRow {
 }
 
 type OperationsTab = 'Z_HISTORY' | 'DISCREPANCY_AUDIT' | 'PAYMENT_ANALYSIS' | 'HOURLY_BEHAVIOR';
+type FiscalExportFormatOption = '607' | '606' | '608' | 'TODOS';
+type FiscalExportFormat = '607' | '606' | '608';
+
+interface FiscalExportFeedback {
+    title: string;
+    summaries: string[];
+    warnings: string[];
+    isError?: boolean;
+}
+
+const FISCAL_EXPORT_OPTIONS: Array<{ value: FiscalExportFormatOption; label: string }> = [
+    { value: '607', label: '607 - Ventas' },
+    { value: '606', label: '606 - Compras' },
+    { value: '608', label: '608 - Anulaciones' },
+    { value: 'TODOS', label: 'Todos (607, 606 y 608)' }
+];
+
+const resolveFiscalFormats = (selection: FiscalExportFormatOption): FiscalExportFormat[] => {
+    if (selection === 'TODOS') return ['607', '606', '608'];
+    return [selection];
+};
 
 const ReportViewer: React.FC<ReportViewerProps> = ({
     category,
@@ -259,6 +280,12 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
     const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
     const [includeVariantsInExport, setIncludeVariantsInExport] = useState(true);
     const [fiscalTerminalFilter, setFiscalTerminalFilter] = useState('ALL');
+    const [isFiscalExportModalOpen, setIsFiscalExportModalOpen] = useState(false);
+    const [fiscalExportFormat, setFiscalExportFormat] = useState<FiscalExportFormatOption>('607');
+    const [fiscalExportConsolidateB02, setFiscalExportConsolidateB02] = useState(false);
+    const [fiscalExportError, setFiscalExportError] = useState('');
+    const [isFiscalExporting, setIsFiscalExporting] = useState(false);
+    const [fiscalExportFeedback, setFiscalExportFeedback] = useState<FiscalExportFeedback | null>(null);
 
     const isInventoryView = category === 'INVENTORY' && !!inventoryContext;
     const isCustomersView = category === 'CUSTOMERS' && !!customerContext;
@@ -1098,6 +1125,91 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
         });
     };
 
+    const handleRunFiscalExport = () => {
+        if (!isFiscalView || !fiscalContext) return;
+
+        setFiscalExportError('');
+        setIsFiscalExporting(true);
+
+        try {
+            const selectedFormats = resolveFiscalFormats(fiscalExportFormat);
+            if (selectedFormats.length === 0) {
+                setFiscalExportError('Debe seleccionar al menos un formato.');
+                setIsFiscalExporting(false);
+                return;
+            }
+
+            const consolidateB02 = (fiscalExportFormat === '607' || fiscalExportFormat === 'TODOS')
+                ? fiscalExportConsolidateB02
+                : false;
+
+            const periodDate = dateRange.endMs !== null ? new Date(dateRange.endMs) : new Date();
+            const period = `${periodDate.getFullYear()}${String(periodDate.getMonth() + 1).padStart(2, '0')}`;
+
+            const txInRange = fiscalContext.transactions.filter(tx =>
+                isWithinDateRange(tx.date) && isFiscalTerminalMatch(tx.terminalId)
+            );
+            const historyInRange = fiscalContext.transactionHistory.filter(tx =>
+                isWithinDateRange(tx.date) && isFiscalTerminalMatch(tx.terminalId)
+            );
+            const purchaseOrdersInRange = fiscalContext.purchaseOrders.filter(order =>
+                isWithinDateRange(order.date) && isFiscalTerminalMatch((order as any).terminalId)
+            );
+            const receptionsInRange = fiscalContext.receptions.filter(reception =>
+                isWithinDateRange(reception.date) && isFiscalTerminalMatch(reception.terminalId)
+            );
+
+            const exportSummaries: string[] = [];
+            const allWarnings: string[] = [];
+            const terminalSuffix = fiscalTerminalFilter === 'ALL'
+                ? 'todas_cajas'
+                : normalizeTerminalId(fiscalTerminalFilter);
+            const terminalScopeLabel = fiscalTerminalFilter === 'ALL'
+                ? 'Todas las cajas'
+                : `Terminal ${normalizeTerminalId(fiscalTerminalFilter)}`;
+
+            selectedFormats.forEach((formatType) => {
+                const result = formatFiscalExcel({
+                    config,
+                    transactions: txInRange,
+                    transactionHistory: historyInRange,
+                    purchaseOrders: purchaseOrdersInRange,
+                    receptions: receptionsInRange,
+                    suppliers: fiscalContext.suppliers,
+                    period,
+                    consolidateB02,
+                    formatType,
+                    suggestedFileName: `DGII_${formatType}_${period}_${terminalSuffix}.xlsx`
+                });
+
+                exportSummaries.push(`${formatType}: ${result.fileName} (${terminalScopeLabel})`);
+                allWarnings.push(...result.warnings.map(w => `[${formatType}] ${w}`));
+            });
+
+            const warningsPreview = allWarnings.slice(0, 8);
+            if (allWarnings.length > 8) {
+                warningsPreview.push(`... y ${allWarnings.length - 8} advertencias adicionales.`);
+            }
+
+            setIsFiscalExportModalOpen(false);
+            setFiscalExportFeedback({
+                title: allWarnings.length > 0 ? 'Exportación completada con advertencias' : 'Exportación completada',
+                summaries: exportSummaries,
+                warnings: warningsPreview
+            });
+        } catch (error: any) {
+            setIsFiscalExportModalOpen(false);
+            setFiscalExportFeedback({
+                title: 'Error al generar el Excel fiscal DGII',
+                summaries: [error?.message || 'Ocurrió un error inesperado durante la exportación.'],
+                warnings: [],
+                isError: true
+            });
+        } finally {
+            setIsFiscalExporting(false);
+        }
+    };
+
     const handleExportExcel = () => {
         const toCsvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
         const downloadCsv = (headers: string[], rows: (string | number)[][], filename: string) => {
@@ -1124,81 +1236,10 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
         };
 
         if (isFiscalView && fiscalContext) {
-            const formatAnswer = window.prompt(
-                '¿Qué formato desea exportar? Escriba: 607, 606, 608 o TODOS',
-                '607'
-            );
-            if (formatAnswer === null) return;
-            const normalizedFormat = formatAnswer.trim().toUpperCase();
-            const selectedFormats = normalizedFormat === 'TODOS' || normalizedFormat === 'ALL'
-                ? (['607', '606', '608'] as const)
-                : ([normalizedFormat] as const);
-            const validFormatSet = new Set(['607', '606', '608']);
-            if (selectedFormats.some(format => !validFormatSet.has(format))) {
-                alert('Formato inválido. Use 607, 606, 608 o TODOS.');
-                return;
-            }
-
-            // "Consolidado" en esta vista significa todas las cajas (terminales),
-            // no agrupar NCF B02 en una sola linea.
-            const consolidateB02 = false;
-
-            const periodDate = dateRange.endMs !== null ? new Date(dateRange.endMs) : new Date();
-            const period = `${periodDate.getFullYear()}${String(periodDate.getMonth() + 1).padStart(2, '0')}`;
-
-            try {
-                const txInRange = fiscalContext.transactions.filter(tx =>
-                    isWithinDateRange(tx.date) && isFiscalTerminalMatch(tx.terminalId)
-                );
-                const historyInRange = fiscalContext.transactionHistory.filter(tx =>
-                    isWithinDateRange(tx.date) && isFiscalTerminalMatch(tx.terminalId)
-                );
-                const purchaseOrdersInRange = fiscalContext.purchaseOrders.filter(order =>
-                    isWithinDateRange(order.date) && isFiscalTerminalMatch((order as any).terminalId)
-                );
-                const receptionsInRange = fiscalContext.receptions.filter(reception =>
-                    isWithinDateRange(reception.date) && isFiscalTerminalMatch(reception.terminalId)
-                );
-
-                const exportSummaries: string[] = [];
-                const allWarnings: string[] = [];
-                const terminalSuffix = fiscalTerminalFilter === 'ALL'
-                    ? 'todas_cajas'
-                    : normalizeTerminalId(fiscalTerminalFilter);
-                const terminalScopeLabel = fiscalTerminalFilter === 'ALL'
-                    ? 'Todas las cajas'
-                    : `Terminal ${normalizeTerminalId(fiscalTerminalFilter)}`;
-
-                selectedFormats.forEach((formatType) => {
-                    const result = formatFiscalExcel({
-                        config,
-                        transactions: txInRange,
-                        transactionHistory: historyInRange,
-                        purchaseOrders: purchaseOrdersInRange,
-                        receptions: receptionsInRange,
-                        suppliers: fiscalContext.suppliers,
-                        period,
-                        consolidateB02,
-                        formatType: formatType as '607' | '606' | '608',
-                        suggestedFileName: `DGII_${formatType}_${period}_${terminalSuffix}.xlsx`
-                    });
-
-                    exportSummaries.push(`${formatType}: ${result.fileName} (${terminalScopeLabel})`);
-                    allWarnings.push(...result.warnings.map(w => `[${formatType}] ${w}`));
-                });
-
-                if (allWarnings.length > 0) {
-                    const preview = allWarnings.slice(0, 8).map(w => `- ${w}`).join('\n');
-                    const extra = allWarnings.length > 8
-                        ? `\n... y ${allWarnings.length - 8} advertencias adicionales.`
-                        : '';
-                    alert(`Exportación completada:\n${exportSummaries.join('\n')}\n\nAdvertencias:\n${preview}${extra}`);
-                } else {
-                    alert(`Exportación completada:\n${exportSummaries.join('\n')}`);
-                }
-            } catch (error: any) {
-                alert(error?.message || 'Error al generar el Excel fiscal DGII.');
-            }
+            setFiscalExportError('');
+            setFiscalExportFormat('607');
+            setFiscalExportConsolidateB02(false);
+            setIsFiscalExportModalOpen(true);
             return;
         }
 
@@ -2343,6 +2384,118 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                     </>
                 )}
             </div>
+
+            {isFiscalExportModalOpen && (
+                <div className="fixed inset-0 z-[70] no-print flex items-center justify-center p-4">
+                    <button
+                        type="button"
+                        aria-label="Cerrar modal"
+                        onClick={() => !isFiscalExporting && setIsFiscalExportModalOpen(false)}
+                        className="absolute inset-0 bg-slate-900/45"
+                    />
+                    <div className="relative w-full max-w-xl bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 sm:p-7">
+                        <h3 className="text-lg font-black text-slate-900">Exportar Formatos DGII</h3>
+                        <p className="mt-1 text-sm font-bold text-slate-500">
+                            Seleccione el formato a generar para el periodo filtrado.
+                        </p>
+
+                        <div className="mt-5 space-y-4">
+                            <div className="space-y-1.5">
+                                <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider">Formato</label>
+                                <select
+                                    value={fiscalExportFormat}
+                                    onChange={(e) => {
+                                        const nextValue = e.target.value as FiscalExportFormatOption;
+                                        setFiscalExportFormat(nextValue);
+                                        if (nextValue !== '607' && nextValue !== 'TODOS') {
+                                            setFiscalExportConsolidateB02(false);
+                                        }
+                                    }}
+                                    className="w-full h-[44px] px-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-black text-slate-700 outline-none focus:border-blue-400"
+                                >
+                                    {FISCAL_EXPORT_OPTIONS.map(option => (
+                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {(fiscalExportFormat === '607' || fiscalExportFormat === 'TODOS') && (
+                                <label className="flex items-start gap-3 p-3 bg-gray-50 border border-gray-200 rounded-xl">
+                                    <input
+                                        type="checkbox"
+                                        checked={fiscalExportConsolidateB02}
+                                        onChange={(e) => setFiscalExportConsolidateB02(e.target.checked)}
+                                        className="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                    />
+                                    <span className="text-xs font-bold text-slate-600">
+                                        Consolidar facturas B02 menores a RD$250,000.00 en una sola línea (Norma 10-18).
+                                    </span>
+                                </label>
+                            )}
+
+                            {fiscalExportError && (
+                                <p className="text-xs font-black text-red-600">{fiscalExportError}</p>
+                            )}
+                        </div>
+
+                        <div className="mt-6 flex justify-end gap-2.5">
+                            <button
+                                onClick={() => setIsFiscalExportModalOpen(false)}
+                                disabled={isFiscalExporting}
+                                className="px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-black text-slate-600 hover:bg-gray-50 transition-colors disabled:opacity-60"
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                onClick={handleRunFiscalExport}
+                                disabled={isFiscalExporting}
+                                className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-black hover:bg-emerald-700 transition-colors disabled:opacity-60"
+                            >
+                                {isFiscalExporting ? 'Exportando...' : 'Exportar'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {fiscalExportFeedback && (
+                <div className="fixed inset-0 z-[75] no-print flex items-center justify-center p-4">
+                    <button
+                        type="button"
+                        aria-label="Cerrar modal"
+                        onClick={() => setFiscalExportFeedback(null)}
+                        className="absolute inset-0 bg-slate-900/45"
+                    />
+                    <div className="relative w-full max-w-2xl bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 sm:p-7">
+                        <h3 className={`text-lg font-black ${fiscalExportFeedback.isError ? 'text-red-700' : 'text-slate-900'}`}>
+                            {fiscalExportFeedback.title}
+                        </h3>
+                        <div className="mt-4 space-y-2">
+                            {fiscalExportFeedback.summaries.map((line, index) => (
+                                <p key={`summary-${index}`} className="text-sm font-bold text-slate-700">{line}</p>
+                            ))}
+                        </div>
+                        {fiscalExportFeedback.warnings.length > 0 && (
+                            <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                                <p className="text-[11px] font-black text-amber-700 uppercase tracking-wider mb-2">Advertencias</p>
+                                <div className="space-y-1">
+                                    {fiscalExportFeedback.warnings.map((line, index) => (
+                                        <p key={`warning-${index}`} className="text-xs font-bold text-amber-700">{line}</p>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        <div className="mt-6 flex justify-end">
+                            <button
+                                onClick={() => setFiscalExportFeedback(null)}
+                                className="px-5 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-black hover:bg-black transition-colors"
+                            >
+                                Entendido
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

@@ -409,6 +409,8 @@ export interface TerminalConfig {
       requireAdvance: boolean;
       minimumAdvancePercent: number;
     };
+    fiscalThreshold?: number;
+    expandTicket?: boolean;
   };
   ux: {
     theme: 'LIGHT' | 'DARK';
