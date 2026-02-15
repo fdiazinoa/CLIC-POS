@@ -106,7 +106,28 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    useEffect(() => {
       const loadSequences = async () => {
          const seqs = (await db.get('internalSequences') || []) as DocumentSeries[];
-         setMasterSequences(seqs);
+         const configSeries = (config.terminals || [])
+            .flatMap(t => (Array.isArray(t.config?.documentSeries) ? t.config.documentSeries : []))
+            .filter((s: any) => !!s?.id && !!s?.documentType) as DocumentSeries[];
+
+         // Keep internalSequences as canonical source, but backfill missing IDs from terminal-level config.
+         const mergedMap = new Map<string, DocumentSeries>();
+         seqs.forEach(s => {
+            if (!s?.id || !s?.documentType) return;
+            mergedMap.set(s.id, s);
+         });
+         configSeries.forEach(s => {
+            if (!mergedMap.has(s.id)) {
+               mergedMap.set(s.id, s);
+            }
+         });
+
+         const merged = Array.from(mergedMap.values());
+         if (merged.length !== seqs.length) {
+            await db.save('internalSequences', merged);
+         }
+
+         setMasterSequences(merged);
 
          const rooms = (await db.get('rooms') || []) as Room[];
          setAllRooms(rooms);
@@ -124,7 +145,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       return () => {
          window.removeEventListener('seriesUpdated', handleSeriesUpdate);
       };
-   }, []);
+   }, [config.terminals]);
 
    const activeTerminal = useMemo(() =>
       terminals.find(t => t.id === selectedTerminalId),
