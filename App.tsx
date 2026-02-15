@@ -1527,6 +1527,7 @@ const AppContent: React.FC = () => {
             onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
             onUpdateProducts={async (p) => { setProducts(p); /* db.save('products', p) removed for efficiency */ syncManager.broadcastChange('products', null, 'UPDATE').catch(console.error); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
+            onUpdateCustomers={async (c) => { setCustomers(c); await db.save('customers', c); }}
             onAdjustStock={async (adjustments) => {
               const pairedTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
               const terminalId = pairedTerminal?.id || 'LOCAL';
@@ -1587,6 +1588,7 @@ const AppContent: React.FC = () => {
             onUpdateRoles={async (r) => { setRoles(r); await db.save('roles', r); }}
             onUpdateProducts={async (p) => { setProducts(p); await db.save('products', p); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
+            onUpdateCustomers={async (c) => { setCustomers(c); await db.save('customers', c); }}
             onAdjustStock={async (adjustments) => {
               const pairedTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
               const terminalId = pairedTerminal?.id || 'LOCAL';
@@ -1783,26 +1785,26 @@ const AppContent: React.FC = () => {
           const terminalTransactions = getPendingTransactionsForTerminal(currentTerminalId);
           const terminalMovements = getPendingCashMovementsForTerminal(currentTerminalId);
 
-        return (
-          <ZReportDashboard
-            transactions={terminalTransactions}
-            cashMovements={terminalMovements}
-            config={config}
-            userName={currentUser?.name || ''}
-            currentUser={currentUser}
-            roles={roles}
-            onConfirmClose={handleZReport}
-            terminalId={currentTerminalId}
-            onClose={() => {
-              const role = getCurrentDeviceRole();
-              if (role === DeviceRole.SELF_CHECKOUT) setCurrentView('KIOSK_WELCOME');
-              else if (role === DeviceRole.PRICE_CHECKER) setCurrentView('CHECKER_SCAN');
-              else if (role === DeviceRole.KITCHEN_DISPLAY) setCurrentView('KITCHEN_ORDERS');
-              else if (role === DeviceRole.HANDHELD_INVENTORY) setCurrentView('INVENTORY_HOME');
-              else setCurrentView('POS');
-            }}
-          />
-        );
+          return (
+            <ZReportDashboard
+              transactions={terminalTransactions}
+              cashMovements={terminalMovements}
+              config={config}
+              userName={currentUser?.name || ''}
+              currentUser={currentUser}
+              roles={roles}
+              onConfirmClose={handleZReport}
+              terminalId={currentTerminalId}
+              onClose={() => {
+                const role = getCurrentDeviceRole();
+                if (role === DeviceRole.SELF_CHECKOUT) setCurrentView('KIOSK_WELCOME');
+                else if (role === DeviceRole.PRICE_CHECKER) setCurrentView('CHECKER_SCAN');
+                else if (role === DeviceRole.KITCHEN_DISPLAY) setCurrentView('KITCHEN_ORDERS');
+                else if (role === DeviceRole.HANDHELD_INVENTORY) setCurrentView('INVENTORY_HOME');
+                else setCurrentView('POS');
+              }}
+            />
+          );
         }
 
       case 'SUPPLY_CHAIN':

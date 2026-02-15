@@ -1252,8 +1252,10 @@ export interface PurchaseOrderItem {
 export interface PurchaseOrder {
   id: string;
   supplierId: string;
+  supplierName?: string; // Denormalized for reports
   warehouseId?: string;
   date: string;
+  expectedDate: string; // NEW: Promised delivery date
   dueDate?: string; // Derived from supplier.paymentTermDays
   status: 'ORDERED' | 'PARTIAL' | 'COMPLETED';
   items: PurchaseOrderItem[];
@@ -1625,4 +1627,53 @@ export interface ZReport {
   stats?: ZReportStats;
   syncStatus?: SyncStatus;
   syncError?: string;
+}
+// --- ANALYTICS & ADVANCED REPORTING ---
+export type AnalyticsCategory =
+  | 'SOURCING'
+  | 'INVENTORY'
+  | 'CUSTOMERS'
+  | 'FISCAL'
+  | 'OPERATIONS'
+  | 'CATALOG'
+  | 'HR';
+
+export interface ReportField {
+  key: string;
+  label: string;
+  type: 'TEXT' | 'NUMBER' | 'CURRENCY' | 'DATE' | 'PERCENT' | 'STATUS';
+  align?: 'left' | 'center' | 'right';
+  bold?: boolean;
+}
+
+export interface ReportDefinition {
+  id: string;
+  category: AnalyticsCategory;
+  title: string;
+  description: string;
+  icon: string; // Lucide icon name or component
+  fields: ReportField[];
+  filters: {
+    warehouse?: boolean;
+    dateRange?: boolean;
+    supplier?: boolean;
+    customer?: boolean;
+    category?: boolean;
+  };
+}
+
+// --- HR & ATTENDANCE ---
+export interface AttendanceLog {
+  id: string;
+  userId: string;
+  userName: string;
+  type: 'CLOCK_IN' | 'CLOCK_OUT';
+  timestamp: string;
+  terminalId: string;
+  gpsLocation?: {
+    lat: number;
+    lng: number;
+  };
+  notes?: string;
+  syncStatus?: SyncStatus;
 }

@@ -1228,183 +1228,183 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          try {
-         // If it's a mixed transaction, use the split endpoint
-         if (hasReturns && hasSales) {
-            const saleItems = processedCart.filter(i => i.quantity > 0);
-            const returnItems = processedCart.filter(i => i.quantity < 0);
+            // If it's a mixed transaction, use the split endpoint
+            if (hasReturns && hasSales) {
+               const saleItems = processedCart.filter(i => i.quantity > 0);
+               const returnItems = processedCart.filter(i => i.quantity < 0);
 
-            // Calculate totals for each part
-            const saleTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-            const returnTotal = returnItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               // Calculate totals for each part
+               const saleTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               const returnTotal = returnItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
 
-            // Prepare wallet operations
-            const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
-            const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
+               // Prepare wallet operations
+               const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
+               const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
 
-            const response = await withTimeout(fetch('/api/transactions/split', {
-               method: 'POST',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({
-                  saleTransaction: {
-                     documentType: 'TICKET',
-                     seriesId: assignedSequenceId,
-                     items: saleItems,
-                     total: saleTotal,
-                     payments: payments.filter(p => !['WALLET', 'ADVANCE'].includes(p.method)),
-                     userId: currentUser.id,
-                     userName: currentUser.name,
-                     terminalId: terminalId,
-                     customerId: selectedCustomer?.id,
-                     customerName: selectedCustomer?.name,
-                     ncf: finalNcf,
-                     ncfType: fiscalStatus.type,
-                     taxAmount: isTaxIncluded ? saleTotal * 0.18 : 0,
-                     netAmount: isTaxIncluded ? saleTotal / 1.18 : saleTotal,
-                     customerSnapshot: selectedCustomer ? {
-                        name: selectedCustomer.name,
-                        taxId: selectedCustomer.taxId
-                     } : undefined,
-                     walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined
-                  },
-                  refundTransaction: {
-                     documentType: 'REFUND',
-                     seriesId: activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC',
-                     items: returnItems,
-                     total: returnTotal,
-                     userId: currentUser.id,
-                     userName: currentUser.name,
-                     terminalId: terminalId,
-                     customerId: selectedCustomer?.id,
-                     customerName: selectedCustomer?.name,
-                     status: 'COMPLETED',
-                     walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
-                     authorizedById: refundAuthorizedBy?.id,
-                     authorizedByName: refundAuthorizedBy?.name
-                  },
-                  walletDeposit: walletDepositAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletDepositAmount } : undefined,
-                  walletPayment: walletPaymentAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletPaymentAmount } : undefined
-               })
-            }), 25000, 'TIMEOUT_SPLIT_FETCH');
+               const response = await withTimeout(fetch('/api/transactions/split', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                     saleTransaction: {
+                        documentType: 'TICKET',
+                        seriesId: assignedSequenceId,
+                        items: saleItems,
+                        total: saleTotal,
+                        payments: payments.filter(p => !['WALLET', 'ADVANCE'].includes(p.method)),
+                        userId: currentUser.id,
+                        userName: currentUser.name,
+                        terminalId: terminalId,
+                        customerId: selectedCustomer?.id,
+                        customerName: selectedCustomer?.name,
+                        ncf: finalNcf,
+                        ncfType: fiscalStatus.type,
+                        taxAmount: isTaxIncluded ? saleTotal * 0.18 : 0,
+                        netAmount: isTaxIncluded ? saleTotal / 1.18 : saleTotal,
+                        customerSnapshot: selectedCustomer ? {
+                           name: selectedCustomer.name,
+                           taxId: selectedCustomer.taxId
+                        } : undefined,
+                        walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined
+                     },
+                     refundTransaction: {
+                        documentType: 'REFUND',
+                        seriesId: activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC',
+                        items: returnItems,
+                        total: returnTotal,
+                        userId: currentUser.id,
+                        userName: currentUser.name,
+                        terminalId: terminalId,
+                        customerId: selectedCustomer?.id,
+                        customerName: selectedCustomer?.name,
+                        status: 'COMPLETED',
+                        walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
+                        authorizedById: refundAuthorizedBy?.id,
+                        authorizedByName: refundAuthorizedBy?.name
+                     },
+                     walletDeposit: walletDepositAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletDepositAmount } : undefined,
+                     walletPayment: walletPaymentAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletPaymentAmount } : undefined
+                  })
+               }), 25000, 'TIMEOUT_SPLIT_FETCH');
 
-            const data = await withTimeout(response.json(), 4000, 'TIMEOUT_SPLIT_PARSE');
-            if (data.success) {
+               const data = await withTimeout(response.json(), 4000, 'TIMEOUT_SPLIT_PARSE');
+               if (data.success) {
+                  onUpdateCart([]);
+                  onSelectCustomer(null);
+                  setIsReturnMode(false);
+                  setRefundAuthorizedBy(null);
+                  return data.result.sale || data.result.refund;
+               } else {
+                  alert(`Error en transacción: ${data.message}`);
+                  return null;
+               }
+            } else {
+               // Standard single transaction logic
+               const taxAmount = cartTax;
+               const netAmount = isTaxIncluded
+                  ? (grossLineTotal - discountAmount - taxAmount)
+                  : (grossLineTotal - discountAmount);
+
+               const txn = await withTimeout(transactionService.createTransaction({
+                  documentType: hasReturns ? 'REFUND' : 'TICKET',
+                  seriesId: hasReturns
+                     ? (activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC')
+                     : assignedSequenceId,
+                  date: new Date().toISOString(),
+                  items: processedCart,
+                  total: cartTotal,
+                  payments: paymentsForTransaction,
+                  userId: currentUser.id,
+                  userName: currentUser.name,
+                  terminalId: terminalId,
+                  status: 'COMPLETED',
+                  customerId: selectedCustomer?.id,
+                  customerName: selectedCustomer?.name,
+                  ncf: finalNcf,
+                  ncfType: fiscalStatus.type,
+                  taxAmount: taxAmount,
+                  netAmount: netAmount,
+                  discountAmount: discountAmount,
+                  customerSnapshot: selectedCustomer ? {
+                     name: selectedCustomer.name,
+                     taxId: selectedCustomer.taxId,
+                     address: selectedCustomer.address,
+                     phone: selectedCustomer.phone,
+                     email: selectedCustomer.email
+                  } : undefined,
+                  isTaxIncluded: isTaxIncluded,
+                  authorizedById: hasReturns ? refundAuthorizedBy?.id : undefined,
+                  authorizedByName: hasReturns ? refundAuthorizedBy?.name : undefined,
+                  reservationId: activeRecoveredReservation?.id,
+                  reservationCode: activeRecoveredReservation?.code,
+                  priorAdvancePaid: reservationAdvance > 0 ? reservationAdvance : undefined,
+                  balanceDueAtSale: activeRecoveredReservation ? reservationBalanceDue : undefined
+               }), 25000, 'TIMEOUT_CREATE_TRANSACTION');
+
+               // Ensure seriesId is preserved (Backend might not return it in the root object)
+               const finalTxn = {
+                  ...txn,
+                  seriesId: txn.seriesId || assignedSequenceId
+               };
+
+               onTransactionComplete(finalTxn);
+
+               if (activeRecoveredReservation) {
+                  const warehouseId = activeRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
+                  await withTimeout(
+                     transferStockToCommitted(activeRecoveredReservation.items || [], warehouseId, products, 'RELEASE'),
+                     10000,
+                     'TIMEOUT_RELEASE_COMMITTED'
+                  );
+                  await withTimeout(db.saveDocument('reservations', {
+                     ...activeRecoveredReservation,
+                     status: 'INVOICED',
+                     invoicedAt: new Date().toISOString(),
+                     invoicedTransactionId: txn.id,
+                     updatedAt: new Date().toISOString()
+                  }), 6000, 'TIMEOUT_SAVE_RESERVATION_INVOICE');
+                  await withTimeout(reloadReservations(), 6000, 'TIMEOUT_RELOAD_RESERVATIONS');
+               }
+
+               // --- CRITICAL: Ticket Closing Logic ---
+               if (activeTable) {
+                  try {
+                     // 1. Free Table in Backend (KDS)
+                     const controller = new AbortController();
+                     const timeoutId = window.setTimeout(() => controller.abort(), 4000);
+                     try {
+                        await fetch(`http://localhost:8001/api/mesas/liberar`, {
+                           method: 'POST',
+                           headers: { 'Content-Type': 'application/json' },
+                           body: JSON.stringify({ tableId: activeTable.id }),
+                           signal: controller.signal
+                        });
+                     } finally {
+                        window.clearTimeout(timeoutId);
+                     }
+
+                     // 2. Remove from Parked Tickets (Local Persistence)
+                     if (activeTable.currentOrderId) {
+                        const remaining = parkedTickets.filter(p => p.id !== activeTable.currentOrderId);
+                        onUpdateParkedTickets(remaining);
+                     }
+                  } catch (e) {
+                     console.error("Failed to free table:", e);
+                  }
+                  // 3. Clear Active Table in UI
+                  if (onClearActiveTable) onClearActiveTable();
+               } else {
+                  // If not a table (e.g. Counter Sale), check if it was a parked ticket we just recovered
+                  // Heuristic: If we have a selected customer or just checking if the current cart matches a parked ID?
+                  // For now, mostly relevant for Tables.
+               }
+
                onUpdateCart([]);
                onSelectCustomer(null);
                setIsReturnMode(false);
                setRefundAuthorizedBy(null);
-               return data.result.sale || data.result.refund;
-            } else {
-               alert(`Error en transacción: ${data.message}`);
-               return null;
+               setActiveRecoveredReservation(null);
+               return txn;
             }
-         } else {
-            // Standard single transaction logic
-            const taxAmount = cartTax;
-            const netAmount = isTaxIncluded
-               ? (grossLineTotal - discountAmount - taxAmount)
-               : (grossLineTotal - discountAmount);
-
-            const txn = await withTimeout(transactionService.createTransaction({
-               documentType: hasReturns ? 'REFUND' : 'TICKET',
-               seriesId: hasReturns
-                  ? (activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC')
-                  : assignedSequenceId,
-               date: new Date().toISOString(),
-               items: processedCart,
-               total: cartTotal,
-               payments: paymentsForTransaction,
-               userId: currentUser.id,
-               userName: currentUser.name,
-               terminalId: terminalId,
-               status: 'COMPLETED',
-               customerId: selectedCustomer?.id,
-               customerName: selectedCustomer?.name,
-               ncf: finalNcf,
-               ncfType: fiscalStatus.type,
-               taxAmount: taxAmount,
-               netAmount: netAmount,
-               discountAmount: discountAmount,
-               customerSnapshot: selectedCustomer ? {
-                  name: selectedCustomer.name,
-                  taxId: selectedCustomer.taxId,
-                  address: selectedCustomer.address,
-                  phone: selectedCustomer.phone,
-                  email: selectedCustomer.email
-               } : undefined,
-               isTaxIncluded: isTaxIncluded,
-               authorizedById: hasReturns ? refundAuthorizedBy?.id : undefined,
-               authorizedByName: hasReturns ? refundAuthorizedBy?.name : undefined,
-               reservationId: activeRecoveredReservation?.id,
-               reservationCode: activeRecoveredReservation?.code,
-               priorAdvancePaid: reservationAdvance > 0 ? reservationAdvance : undefined,
-               balanceDueAtSale: activeRecoveredReservation ? reservationBalanceDue : undefined
-            }), 25000, 'TIMEOUT_CREATE_TRANSACTION');
-
-            // Ensure seriesId is preserved (Backend might not return it in the root object)
-            const finalTxn = {
-               ...txn,
-               seriesId: txn.seriesId || assignedSequenceId
-            };
-
-            onTransactionComplete(finalTxn);
-
-            if (activeRecoveredReservation) {
-               const warehouseId = activeRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
-               await withTimeout(
-                  transferStockToCommitted(activeRecoveredReservation.items || [], warehouseId, products, 'RELEASE'),
-                  10000,
-                  'TIMEOUT_RELEASE_COMMITTED'
-               );
-               await withTimeout(db.saveDocument('reservations', {
-                  ...activeRecoveredReservation,
-                  status: 'INVOICED',
-                  invoicedAt: new Date().toISOString(),
-                  invoicedTransactionId: txn.id,
-                  updatedAt: new Date().toISOString()
-               }), 6000, 'TIMEOUT_SAVE_RESERVATION_INVOICE');
-               await withTimeout(reloadReservations(), 6000, 'TIMEOUT_RELOAD_RESERVATIONS');
-            }
-
-            // --- CRITICAL: Ticket Closing Logic ---
-            if (activeTable) {
-               try {
-                  // 1. Free Table in Backend (KDS)
-                  const controller = new AbortController();
-                  const timeoutId = window.setTimeout(() => controller.abort(), 4000);
-                  try {
-                     await fetch(`http://localhost:8001/api/mesas/liberar`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ tableId: activeTable.id }),
-                        signal: controller.signal
-                     });
-                  } finally {
-                     window.clearTimeout(timeoutId);
-                  }
-
-                  // 2. Remove from Parked Tickets (Local Persistence)
-                  if (activeTable.currentOrderId) {
-                     const remaining = parkedTickets.filter(p => p.id !== activeTable.currentOrderId);
-                     onUpdateParkedTickets(remaining);
-                  }
-               } catch (e) {
-                  console.error("Failed to free table:", e);
-               }
-               // 3. Clear Active Table in UI
-               if (onClearActiveTable) onClearActiveTable();
-            } else {
-               // If not a table (e.g. Counter Sale), check if it was a parked ticket we just recovered
-               // Heuristic: If we have a selected customer or just checking if the current cart matches a parked ID?
-               // For now, mostly relevant for Tables.
-            }
-
-            onUpdateCart([]);
-            onSelectCustomer(null);
-            setIsReturnMode(false);
-            setRefundAuthorizedBy(null);
-            setActiveRecoveredReservation(null);
-            return txn;
-         }
          } catch (error: any) {
             console.error('Split Transaction Error:', error);
             alert(`Error de red: ${error.message}`);
@@ -2138,15 +2138,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <p className="font-bold text-gray-800 truncate">{selectedCustomer.name}</p>
                               {/* Save to contact feature temporarily disabled due to missing prop plumbing */}
                            </div>
-                           <div className="flex items-center gap-2">
+                           <div className="flex items-center gap-2 flex-wrap">
                               {selectedCustomer.taxId && (
                                  <span className="text-xs font-mono text-gray-500">{selectedCustomer.taxId}</span>
                               )}
                               {selectedCustomer.fiscalStatus === 'ACTIVO' && (
-                                 <span className="text-[9px] bg-green-100 text-green-700 px-1 py-0.5 rounded font-bold">FISCAL</span>
+                                 <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">FISCAL</span>
                               )}
                               {selectedCustomer.isTemporary && (
-                                 <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1 py-0.5 rounded font-bold">TEMP</span>
+                                 <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold">TEMP</span>
                               )}
                            </div>
                         </div>

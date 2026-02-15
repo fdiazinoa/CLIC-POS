@@ -5,9 +5,9 @@ import {
   Monitor, Users, Truck, ShieldCheck, FileText,
   Globe, Database, Activity, Mail, Coins, Grid,
   Cpu, HardDrive, Smartphone, Cloud, Lock, Package, Building2,
-  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw, Layers, ChefHat
+  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw, Layers, ChefHat, UserCircle, BarChart3
 } from 'lucide-react';
-import { BusinessConfig, User, RoleDefinition, Transaction, Product, Warehouse, StockTransfer, Supplier, Customer, PurchaseOrder, Reception } from '../types';
+import { BusinessConfig, User, RoleDefinition, Transaction, Product, Warehouse, StockTransfer, Supplier, Customer, PurchaseOrder, Reception, AnalyticsCategory } from '../types';
 
 // Component Imports
 import WarehouseManager from './WarehouseManager';
@@ -30,6 +30,13 @@ import WalletIntegrations from './WalletIntegrations';
 import SyncSettings from './SyncSettings';
 import ProductionAreaManager from './ProductionAreaManager';
 import LabelDesigner from './LabelDesigner';
+import CustomerManagement from './CustomerManagement';
+import ReportDashboard from './ReportDashboard';
+import ReportViewer from './ReportViewer';
+import SourcingIntelligence from './SourcingIntelligence';
+import { getInventorySnapshotAtDate, calculateRFMData, getLeadTimePerformance, getABCRanking, getSalesByHour, getHRPerformance, getSuppliersIntelligence, getItemPriceIntelligence, getDiscrepancyReport } from './AnalyticsLogic';
+import { InventoryLedgerEntry, AttendanceLog } from '../types';
+
 
 interface SettingsProps {
   config: BusinessConfig;
@@ -53,6 +60,7 @@ interface SettingsProps {
   onUpdateRoles: (roles: RoleDefinition[]) => void;
   onUpdateProducts: (products: Product[]) => void;
   onUpdateWarehouses: (warehouses: Warehouse[]) => void;
+  onUpdateCustomers?: (customers: Customer[]) => void;
   onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
   onOpenZReport: () => void;
   onOpenSupplyChain: () => void;
@@ -66,10 +74,14 @@ interface SettingsProps {
   initialData?: any;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS';
 
 const Settings: React.FC<SettingsProps> = (props) => {
   const [currentView, setCurrentView] = useState<SettingsView>(props.initialView || 'HOME');
+  const [selectedCategory, setSelectedCategory] = useState<AnalyticsCategory | null>(null);
+  const [ledgerEntries, setLedgerEntries] = useState<InventoryLedgerEntry[]>([]);
+  const [attendanceLogs, setAttendanceLogs] = useState<AttendanceLog[]>([]);
+
 
   const hasPermission = (permission: string): boolean => {
     // ADMIN MODE OVERRIDE
@@ -311,7 +323,96 @@ const Settings: React.FC<SettingsProps> = (props) => {
           />
         );
 
+      case 'CUSTOMERS':
+        return (
+          <CustomerManagement
+            customers={props.customers || []}
+            config={props.config}
+            onAddCustomer={(customer) => {
+              const updated = [...(props.customers || []), customer];
+              props.onUpdateCustomers?.(updated);
+            }}
+            onUpdateCustomer={(customer) => {
+              const updated = (props.customers || []).map(c => c.id === customer.id ? customer : c);
+              props.onUpdateCustomers?.(updated);
+            }}
+            onDeleteCustomer={(id) => {
+              const updated = (props.customers || []).filter(c => c.id !== id);
+              props.onUpdateCustomers?.(updated);
+            }}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'REPORTS':
+        if (selectedCategory) {
+          let reportData: any[] = [];
+          if (selectedCategory === 'INVENTORY') {
+            reportData = getInventorySnapshotAtDate(props.products, ledgerEntries, new Date().toISOString());
+          } else if (selectedCategory === 'CUSTOMERS') {
+            reportData = calculateRFMData(props.customers || [], props.transactions);
+          } else if (selectedCategory === 'SOURCING') {
+            reportData = getLeadTimePerformance(props.purchaseOrders || [], props.receptions || [], props.suppliers || []);
+          } else if (selectedCategory === 'CATALOG') {
+            reportData = getABCRanking(props.products, props.transactions);
+          } else if (selectedCategory === 'OPERATIONS') {
+            reportData = getSalesByHour(props.transactions);
+          } else if (selectedCategory === 'HR') {
+            reportData = getHRPerformance(attendanceLogs);
+          } else {
+            // Fiscal / Other
+            reportData = props.transactions.map(tx => ({
+              id: tx.id,
+              name: tx.ncf || 'Sin NCF',
+              total: tx.total,
+              date: tx.date
+            }));
+          }
+
+          if (selectedCategory === 'SOURCING') {
+            return (
+              <SourcingIntelligence
+                purchaseOrders={props.purchaseOrders || []}
+                receptions={props.receptions || []}
+                suppliers={props.suppliers || []}
+                products={props.products}
+                config={props.config}
+                onBack={() => setSelectedCategory(null)}
+              />
+            );
+          }
+
+          return (
+            <ReportViewer
+              category={selectedCategory}
+              config={props.config}
+              data={reportData}
+              onBack={() => setSelectedCategory(null)}
+            />
+          );
+        }
+        return (
+          <ReportDashboard
+            onSelectCategory={(cat) => {
+              setSelectedCategory(cat);
+              // Trigger ledger load if needed
+              if (cat === 'INVENTORY' && ledgerEntries.length === 0) {
+                import('../utils/db').then(({ db }) => {
+                  db.get('inventory_ledger' as any).then(entries => setLedgerEntries(entries as InventoryLedgerEntry[]));
+                });
+              }
+              if (cat === 'HR' && attendanceLogs.length === 0) {
+                import('../utils/db').then(({ db }) => {
+                  db.get('attendance_logs' as any).then(entries => setAttendanceLogs(entries as AttendanceLog[]));
+                });
+              }
+            }}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
       case 'LOGS':
+
         return (
           <div className="relative h-full">
             <button
@@ -423,6 +524,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Equipo y Marketing</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                   <SettingsCard icon={Users} label="Equipo y Roles" description="Usuarios, Turnos, Permisos" color="bg-pink-500" onClick={() => setCurrentView('TEAM')} locked={!hasPermission('SETTINGS_USERS')} />
+                  <SettingsCard icon={UserCircle} label="Clientes" description="Directorio, Histórico, Fiscal" color="bg-teal-600" onClick={() => setCurrentView('CUSTOMERS')} locked={!hasPermission('CUSTOMER_MANAGE')} />
                   <SettingsCard icon={Award} label="Programa de Lealtad" description="Puntos, Canjes y Reglas" color="bg-purple-500" onClick={() => setCurrentView('LOYALTY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Percent} label="Promociones" description="Descuentos, 2x1 y Temporadas" color="bg-rose-500" onClick={() => setCurrentView('PROMOTIONS')} locked={!hasPermission('CATALOG_MANAGE')} />
                   <SettingsCard icon={Receipt} label="Diseño de Ticket" description="Logo, Cabecera y Pie" color="bg-rose-600" onClick={() => setCurrentView('RECEIPT')} locked={!hasPermission('SETTINGS_ACCESS')} />
@@ -437,8 +539,10 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={RefreshCw} label="Sincronización" description="Estado de Red y Réplicas" color="bg-indigo-600" onClick={() => setCurrentView('SYNC')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} locked={!hasPermission('AUDIT_LOG_VIEW')} />
+                  <SettingsCard icon={BarChart3} label="Informes y Analítica" description="BI, Snapshots y KPIs" color="bg-blue-700" onClick={() => setCurrentView('REPORTS')} locked={!hasPermission('REPORTS_VIEW_SALES')} />
                 </div>
               </section>
+
             </div>
           </div>
         );

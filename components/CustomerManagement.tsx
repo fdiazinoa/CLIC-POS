@@ -6,10 +6,11 @@ import {
    TrendingUp, TrendingDown, AlertCircle, CreditCard, History, Check,
    MessageCircle, Star, Tag, ChevronRight, ShoppingBag,
    Globe, Calendar, Map, Navigation, CheckSquare, Clock, Landmark, ShieldCheck, Zap, Gift,
-   Loader2, AlertOctagon
+   Loader2, AlertOctagon, Printer, DollarSign, Banknote, QrCode
 } from 'lucide-react';
-import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType, Wallet, LoyaltyCard } from '../types';
+import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType, Wallet, LoyaltyCard, Transaction } from '../types';
 import { dgiiService, DGIIResponse } from '../services/dgii/DGIIValidationService';
+import { printTicket } from '../utils/printer';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -58,6 +59,10 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    // --- HYBRID SEARCH STATE ---
    const [searchingDGII, setSearchingDGII] = useState(false);
    const [remoteResult, setRemoteResult] = useState<Customer | null>(null);
+
+   // --- TRANSACTION DETAIL STATE ---
+   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
+   const [customerTransactions, setCustomerTransactions] = useState<Transaction[]>([]);
 
    const isRNC = (term: string) => /^\d{9,11}$/.test(term);
 
@@ -264,6 +269,31 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
          setIsValidatingRNC(false);
       }
    };
+
+   // --- LOAD CUSTOMER TRANSACTIONS ---
+   useEffect(() => {
+      const loadCustomerTransactions = async () => {
+         if (!selectedCustomer) {
+            setCustomerTransactions([]);
+            return;
+         }
+
+         try {
+            const { db } = await import('../utils/db');
+            const allTransactions = await db.get('transactions') as Transaction[];
+            if (allTransactions && Array.isArray(allTransactions)) {
+               // Filter transactions for this customer
+               const customerTxs = allTransactions.filter(tx =>
+                  tx.customerId === selectedCustomer.id
+               ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+               setCustomerTransactions(customerTxs);
+            }
+         } catch (e) {
+            console.error("Failed to load customer transactions:", e);
+         }
+      };
+      loadCustomerTransactions();
+   }, [selectedCustomer]);
 
    // --- ADDRESS LOGIC ---
    const handleCreateWallet = () => {
@@ -713,23 +743,41 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                         <div className="animate-in fade-in">
                            {activeProfileTab === 'HISTORY' && (
                               <div className="space-y-3">
-                                 {[1, 2, 3].map(i => (
-                                    <div key={i} className="bg-white p-4 rounded-xl border border-gray-100 flex items-center justify-between hover:shadow-sm transition-shadow">
-                                       <div className="flex items-center gap-4">
-                                          <div className="p-2 bg-gray-50 rounded-lg text-gray-400">
-                                             <ShoppingBag size={20} />
+                                 {customerTransactions.length > 0 ? (
+                                    customerTransactions.map((tx) => (
+                                       <div
+                                          key={tx.id}
+                                          onClick={() => setSelectedTransactionId(tx.id)}
+                                          className="bg-white p-4 rounded-xl border border-gray-100 flex items-center justify-between hover:shadow-md transition-all cursor-pointer group"
+                                       >
+                                          <div className="flex items-center gap-4">
+                                             <div className="p-2 bg-gray-50 rounded-lg text-gray-400 group-hover:bg-blue-50 group-hover:text-blue-600 transition-colors">
+                                                <ShoppingBag size={20} />
+                                             </div>
+                                             <div>
+                                                <p className="font-bold text-gray-800 text-sm">Compra #{tx.displayId || tx.id.slice(-8).toUpperCase()}</p>
+                                                <p className="text-xs text-gray-400">{new Date(tx.date).toLocaleDateString()} • {tx.items.length} items</p>
+                                             </div>
                                           </div>
-                                          <div>
-                                             <p className="font-bold text-gray-800 text-sm">Compra #{1000 + i}</p>
-                                             <p className="text-xs text-gray-400">{new Date().toLocaleDateString()} • 3 items</p>
+                                          <div className="text-right">
+                                             <p className="font-bold text-gray-800">{config.currencySymbol}{tx.total.toFixed(2)}</p>
+                                             <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${tx.status === 'REFUNDED' ? 'bg-red-50 text-red-600' :
+                                                tx.status === 'PARTIAL_REFUND' ? 'bg-orange-50 text-orange-600' :
+                                                   'bg-green-50 text-green-600'
+                                                }`}>
+                                                {tx.status === 'REFUNDED' ? 'ANULADO' :
+                                                   tx.status === 'PARTIAL_REFUND' ? 'PARCIAL' :
+                                                      'PAGADO'}
+                                             </span>
                                           </div>
                                        </div>
-                                       <div className="text-right">
-                                          <p className="font-bold text-gray-800">{config.currencySymbol}150.00</p>
-                                          <span className="text-[10px] bg-green-50 text-green-600 px-2 py-0.5 rounded-full font-bold">PAGADO</span>
-                                       </div>
+                                    ))
+                                 ) : (
+                                    <div className="text-center py-8 text-gray-400 border-2 border-dashed border-gray-100 rounded-xl">
+                                       <ShoppingBag size={32} className="mx-auto mb-2 opacity-50" />
+                                       <p className="text-sm font-medium">Sin historial de compras</p>
                                     </div>
-                                 ))}
+                                 )}
                               </div>
                            )}
 
@@ -1191,6 +1239,187 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                </div>
             )
          }
+
+         {/* TRANSACTION DETAIL DRAWER */}
+         {selectedTransactionId && (() => {
+            const tx = customerTransactions.find(t => t.id === selectedTransactionId);
+            if (!tx) return null;
+
+            const getPaymentMethodLabel = (payment: any): string => {
+               const method = (payment?.method || '').toString().toUpperCase();
+               if (payment?.methodLabel) return payment.methodLabel;
+               switch (method) {
+                  case 'CASH':
+                  case 'EFECTIVO': return 'Efectivo';
+                  case 'CARD':
+                  case 'TARJETA': return 'Tarjeta';
+                  case 'QR': return 'QR / Digital';
+                  case 'TRANSFER':
+                  case 'TRANSFERENCIA': return 'Transferencia';
+                  case 'WALLET': return 'Wallet';
+                  case 'CREDIT':
+                  case 'CREDITO':
+                  case 'CRÉDITO':
+                  case 'PENDIENTE': return 'Crédito';
+                  default: return payment?.method || 'Otro';
+               }
+            };
+
+            const getPaymentMethodIcon = (method?: string) => {
+               const normalized = (method || '').toUpperCase();
+               switch (normalized) {
+                  case 'CASH':
+                  case 'EFECTIVO': return <Banknote size={14} className="text-green-600" />;
+                  case 'CARD':
+                  case 'TARJETA': return <CreditCard size={14} className="text-blue-600" />;
+                  case 'QR': return <QrCode size={14} className="text-indigo-600" />;
+                  case 'TRANSFER':
+                  case 'TRANSFERENCIA': return <WalletIcon size={14} className="text-purple-600" />;
+                  case 'CREDIT':
+                  case 'CREDITO':
+                  case 'CRÉDITO':
+                  case 'PENDIENTE': return <CreditCard size={14} className="text-cyan-600" />;
+                  default: return <DollarSign size={14} className="text-gray-400" />;
+               }
+            };
+
+            const payments = Array.isArray(tx.payments) ? tx.payments : [];
+            const paymentTotal = payments.reduce((acc, p: any) => acc + Number(p?.amount || 0), 0);
+
+            return (
+               <div className="fixed inset-0 z-[100] overflow-hidden">
+                  <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setSelectedTransactionId(null)} />
+                  <div className="absolute inset-y-0 right-0 max-w-md w-full bg-white shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
+                     <header className="p-5 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+                        <div>
+                           <h3 className="text-lg font-black text-gray-900">Detalle de Factura</h3>
+                           <p className="text-xs text-gray-400 font-medium tracking-wider">#{tx.displayId || tx.id}</p>
+                        </div>
+                        <button onClick={() => setSelectedTransactionId(null)} className="p-2 hover:bg-gray-200 rounded-full transition-all">
+                           <X size={20} className="text-gray-500" />
+                        </button>
+                     </header>
+
+                     <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                        <section className="space-y-4">
+                           <div className="flex justify-between items-start p-4 rounded-2xl bg-gray-50 border border-gray-100">
+                              <div>
+                                 <p className="text-[10px] font-bold text-gray-400 uppercase">Total Venta</p>
+                                 <p className="text-3xl font-black text-gray-900">{config.currencySymbol}{tx.total.toFixed(2)}</p>
+                              </div>
+                              <div className="text-right">
+                                 <p className="text-[10px] font-bold text-gray-400 uppercase">Estado</p>
+                                 <div className="mt-1">
+                                    {tx.status === 'REFUNDED' ? (
+                                       <span className="bg-red-100 text-red-600 px-3 py-1 rounded-full text-xs font-black italic">ANULADO</span>
+                                    ) : tx.status === 'PARTIAL_REFUND' ? (
+                                       <span className="bg-orange-100 text-orange-600 px-3 py-1 rounded-full text-xs font-black">PARCIAL</span>
+                                    ) : (
+                                       <span className="bg-green-100 text-green-600 px-3 py-1 rounded-full text-xs font-black">PAGADO</span>
+                                    )}
+                                 </div>
+                              </div>
+                           </div>
+
+                           <div className="grid grid-cols-2 gap-4">
+                              <div className="p-3 bg-white border border-gray-100 rounded-xl">
+                                 <p className="text-[10px] font-bold text-gray-400 uppercase">Fecha / Hora</p>
+                                 <p className="text-xs font-bold text-gray-700">{new Date(tx.date).toLocaleString()}</p>
+                              </div>
+                              <div className="p-3 bg-white border border-gray-100 rounded-xl">
+                                 <p className="text-[10px] font-bold text-gray-400 uppercase">Cajero</p>
+                                 <p className="text-xs font-bold text-gray-700">{tx.userName || 'Sistema'}</p>
+                              </div>
+                           </div>
+                        </section>
+
+                        <section>
+                           <h4 className="text-[10px] font-black uppercase text-gray-400 tracking-widest mb-3">Artículos del Ticket</h4>
+                           <div className="space-y-2">
+                              {tx.items.map((item, i) => (
+                                 <div key={i} className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
+                                    <div className="flex-1">
+                                       <p className="text-sm font-bold text-gray-800">{item.name}</p>
+                                       <p className="text-xs text-gray-400 font-medium">{item.quantity} x {config.currencySymbol}{item.price.toFixed(2)}</p>
+                                    </div>
+                                    <p className="text-sm font-black text-gray-900">{config.currencySymbol}{(item.price * item.quantity).toFixed(2)}</p>
+                                 </div>
+                              ))}
+                           </div>
+                        </section>
+
+                        <section className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-2">
+                           <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                              <span>Subtotal</span>
+                              <span>{config.currencySymbol}{(tx.total / (1 + config.taxRate)).toFixed(2)}</span>
+                           </div>
+                           <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                              <span>Impuestos ({config.taxRate * 100}%)</span>
+                              <span>{config.currencySymbol}{(tx.total - (tx.total / (1 + config.taxRate))).toFixed(2)}</span>
+                           </div>
+                           <div className="flex justify-between text-lg font-black text-blue-900 border-t border-blue-100 pt-2 mt-2">
+                              <span>Total Final</span>
+                              <span>{config.currencySymbol}{tx.total.toFixed(2)}</span>
+                           </div>
+                        </section>
+
+                        <section className="bg-white p-4 rounded-2xl border border-gray-100 space-y-4">
+                           <h4 className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Detalle de Pago</h4>
+
+                           <div className="grid grid-cols-2 gap-3">
+                              <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                 <p className="text-[10px] font-bold text-gray-400 uppercase">Terminal</p>
+                                 <p className="text-xs font-bold text-gray-800">{tx.terminalId || 'N/D'}</p>
+                              </div>
+                              <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                 <p className="text-[10px] font-bold text-gray-400 uppercase">NCF</p>
+                                 <p className="text-xs font-bold text-gray-800 truncate">{tx.ncf || 'N/A'}</p>
+                              </div>
+                           </div>
+
+                           <div className="rounded-xl border border-gray-100 overflow-hidden">
+                              <div className="px-3 py-2 bg-gray-50 border-b border-gray-100">
+                                 <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">Formas de Pago</p>
+                              </div>
+                              <div className="p-3 space-y-2">
+                                 {payments.length === 0 ? (
+                                    <p className="text-xs text-gray-400 italic">Sin información de pagos</p>
+                                 ) : (
+                                    payments.map((payment: any, index: number) => (
+                                       <div key={`${tx.id}-payment-${index}`} className="flex items-center justify-between rounded-lg bg-white border border-gray-100 px-3 py-2">
+                                          <div className="flex items-center gap-2">
+                                             {getPaymentMethodIcon(payment?.method)}
+                                             <span className="text-xs font-bold text-gray-700">{getPaymentMethodLabel(payment)}</span>
+                                          </div>
+                                          <span className="text-xs font-black text-gray-900">
+                                             {config.currencySymbol}{Number(payment?.amount || 0).toFixed(2)}
+                                          </span>
+                                       </div>
+                                    ))
+                                 )}
+                                 <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Total Recibido</span>
+                                    <span className="text-sm font-black text-gray-900">{config.currencySymbol}{paymentTotal.toFixed(2)}</span>
+                                 </div>
+                              </div>
+                           </div>
+                        </section>
+                     </div>
+
+                     <footer className="p-6 border-t border-gray-100 bg-gray-50">
+                        <button
+                           onClick={() => {
+                              printTicket(tx, config);
+                           }}
+                           className="w-full flex items-center justify-center gap-2 py-3 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-lg"
+                        >
+                           <Printer size={18} /> Reimprimir
+                        </button>
+                     </footer>
+                  </div>
+               </div>
+            );
+         })()}
 
       </div >
    );
