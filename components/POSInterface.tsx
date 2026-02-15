@@ -18,7 +18,7 @@ import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType,
-   PaymentEntry, Table, Reservation, ZReport
+   PaymentEntry, Table, Reservation, ZReport, Room
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import UnifiedPaymentModal from './PaymentModal';
@@ -89,6 +89,7 @@ interface POSInterfaceProps {
    onClearActiveTable?: () => void;
    onKioskPay?: () => void;
    internalSequences?: any[]; // Passed from App.tsx (Source of Truth)
+   rooms?: Room[]; // NEW: Room info for table disambiguation
 }
 
 const POSInterface: React.FC<POSInterfaceProps> = ({
@@ -122,7 +123,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    activeTable,
    onClearActiveTable,
    onKioskPay,
-   internalSequences
+   internalSequences,
+   rooms = []
 }) => {
    const cartEndRef = useRef<HTMLDivElement>(null);
    const [quickActionData, setQuickActionData] = useState<{ product: Product; x: number; y: number } | null>(null);
@@ -2063,8 +2065,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <button onClick={() => setMobileView('PRODUCTS')} className="p-2 -ml-2 text-gray-400 hover:text-blue-600 transition-colors">
                         <ArrowLeft size={24} />
                      </button>
-                     <h2 className="font-black text-gray-800 text-lg">
-                        {activeTable ? `Mesa ${activeTable.nombre || activeTable.name}` : 'Ticket Actual'}
+                     <h2 className="font-black text-gray-800 text-lg leading-tight">
+                        {activeTable ? (
+                           <div className="flex flex-col">
+                              {(() => {
+                                 const room = rooms?.find(r => r.id === activeTable.roomId);
+                                 return room ? <span className="text-[10px] text-gray-400 -mb-1 font-bold uppercase">{room.nombre || room.name}</span> : null;
+                              })()}
+                              <span>Mesa {activeTable.nombre || activeTable.name}</span>
+                           </div>
+                        ) : 'Ticket Actual'}
                      </h2>
                   </div>
                   <div className="flex gap-1">
@@ -2123,10 +2133,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <div className="flex flex-col">
                         <h2 className="font-black text-gray-800 uppercase text-xs tracking-widest whitespace-nowrap">
                            {activeTable ? (
-                              <span className="flex items-center gap-1.5 text-blue-600">
-                                 <Layout size={14} className="shrink-0" />
-                                 Mesa {activeTable.nombre || activeTable.name}
-                              </span>
+                              <div className="flex flex-col">
+                                 {(() => {
+                                    const room = rooms?.find(r => r.id === activeTable.roomId);
+                                    if (room) {
+                                       return (
+                                          <span className="text-[9px] text-gray-400 font-bold mb-0.5">
+                                             {room.nombre || room.name}
+                                          </span>
+                                       );
+                                    }
+                                    return null;
+                                 })()}
+                                 <span className="flex items-center gap-1.5 text-blue-600">
+                                    <Layout size={14} className="shrink-0" />
+                                    Mesa {activeTable.nombre || activeTable.name}
+                                 </span>
+                              </div>
                            ) : (
                               'Ticket Actual'
                            )}

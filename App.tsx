@@ -1548,6 +1548,7 @@ const AppContent: React.FC = () => {
             onOpenTableMap={() => handleViewChange('TABLE_MAP')}
             onTransactionComplete={handleTransactionComplete}
             activeTable={activeTable}
+            rooms={rooms}
             onClearActiveTable={() => setActiveTable(null)}
             onAddCustomer={async (c) => {
               const updated = [...customers, c];
