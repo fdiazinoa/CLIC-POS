@@ -220,6 +220,51 @@ server.post('/api/mesas/mover', (req, res) => {
     }
 });
 
+// Abrir mesa (Create/Open Order)
+server.post('/api/mesas/abrir', (req, res) => {
+    const { tableId, waiterId, waiterName } = req.body || {};
+    if (!tableId) {
+        return res.status(400).json({ status: 'error', message: 'tableId is required' });
+    }
+
+    try {
+        const now = new Date().toISOString();
+        const openTableTx = db.transaction(() => {
+            const table = db.prepare("SELECT id, currentOrderId FROM tables WHERE id = ?").get(tableId) as any;
+            if (!table) throw new Error("Table not found");
+
+            // If table already has an active order, return it.
+            if (table.currentOrderId) {
+                return { status: 'success', orden_id: table.currentOrderId };
+            }
+
+            const orderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+            db.prepare(`
+                INSERT INTO transactions (id, status, date, items, total, userId, userName)
+                VALUES (?, 'ABIERTA', ?, '[]', 0, ?, ?)
+            `).run(orderId, now, waiterId || null, waiterName || 'Mesero');
+
+            db.prepare(`
+                UPDATE tables
+                SET currentOrderId = ?,
+                    status = 'OCCUPIED',
+                    currentOrderTotal = 0,
+                    timeSeated = ?,
+                    waiterName = ?,
+                    waiterId = ?
+                WHERE id = ?
+            `).run(orderId, now, waiterName || null, waiterId || null, tableId);
+
+            return { status: 'success', orden_id: orderId };
+        });
+
+        const result = openTableTx();
+        res.json(result);
+    } catch (error: any) {
+        res.status(500).json({ status: 'error', message: error.message });
+    }
+});
+
 
 // Custom GET /api/tables implementation for Dynamic Status (LEFT JOIN)
 server.get('/api/tables', (req, res) => {

@@ -373,6 +373,10 @@ const AppContent: React.FC = () => {
     if (view === 'INVENTORY_COUNT' && !data?.countSessionId) {
       nextData = { ...(data || {}), countSessionId: `COUNT-${Date.now()}` };
     }
+    if (view === 'TABLE_MAP') {
+      // Refresh immediately when returning to table map to avoid stale colors.
+      fetchTables().catch((error) => console.error('Failed to refresh tables on TABLE_MAP view:', error));
+    }
     setViewData(nextData);
     setCurrentView(view);
   };
@@ -597,9 +601,73 @@ const AppContent: React.FC = () => {
 
             await syncManager.initialize(finalConfig, pairedTerminal.id);
 
+            // CRITICAL FIX: Ensure Master terminal has complete product catalog
+            // Master should always have authoritative product data from backend
+            if (pairedTerminal.config.isPrimaryNode !== false) {
+              console.log('🔍 Master terminal: Verifying product catalog integrity...');
+              try {
+                // Check local vs backend count for drift
+                const localProducts = await db.get('products') as Product[];
+                const localCount = Array.isArray(localProducts) ? localProducts.length : 0;
+
+                // Get backend count via sync metadata
+                const { apiSyncAdapter } = await import('./services/sync/ApiSyncAdapter');
+                const metadata = await apiSyncAdapter.getMetadata('products');
+                const remoteCount = metadata?.itemCount || 0;
+
+                console.log(`📊 Product count - Local: ${localCount}, Remote: ${remoteCount}`);
+
+                if (remoteCount > localCount || localCount < 10) {
+                  console.warn(`⚠️ CATALOG DRIFT DETECTED: Master has ${localCount} products but backend has ${remoteCount}. Forcing full refresh...`);
+
+                  // Clear stale sync version to trigger full pull
+                  localStorage.removeItem('sync_version_products');
+
+                  // Force full catalog refresh
+                  const refreshed = await syncManager.pullCatalog('products');
+                  console.log(`✅ Refreshed ${refreshed} products from backend`);
+
+                  // Re-load products into state
+                  const freshProducts = await db.get('products') as Product[];
+                  if (Array.isArray(freshProducts)) {
+                    setProducts(freshProducts);
+                    console.log(`✅ Master product state updated with ${freshProducts.length} products`);
+                  }
+                } else {
+                  console.log('✅ Product catalog is current');
+                }
+              } catch (driftCheckError) {
+                console.error('❌ Drift check failed:', driftCheckError);
+                // Non-blocking - continue app init even if drift check fails
+              }
+            }
+
+            // Rehydrate from DB after sync init to avoid rendering stale in-memory snapshots.
+            // This is critical when drift recovery updates IndexedDB during initialize().
+            try {
+              const [syncedConfig, syncedProducts, syncedUsers, syncedSequences] = await Promise.all([
+                db.get('config') as Promise<any>,
+                db.get('products') as Promise<Product[]>,
+                db.get('users') as Promise<User[]>,
+                db.get('internalSequences') as Promise<any[]>
+              ]);
+
+              if (syncedConfig && !Array.isArray(syncedConfig) && syncedConfig.terminals) {
+                setConfig(syncedConfig);
+              }
+              if (Array.isArray(syncedProducts)) setProducts(syncedProducts);
+              if (Array.isArray(syncedUsers)) setUsers(syncedUsers);
+              if (Array.isArray(syncedSequences)) setInternalSequences(syncedSequences);
+            } catch (rehydrationError) {
+              console.warn('⚠️ Post-sync rehydration failed:', rehydrationError);
+            }
+
             if (pairedTerminal.config.isPrimaryNode === false) {
               syncManager.startAutoSync(30000);
               console.log('🔄 Auto-sync enabled for slave terminal');
+            } else {
+              syncManager.startAutoSync(45000);
+              console.log('🔄 Auto-sync backup enabled for master terminal');
             }
 
             permissionService.initialize(finalConfig, pairedTerminal.id);
@@ -1007,6 +1075,11 @@ const AppContent: React.FC = () => {
   };
 
   const handleTransactionComplete = async (txn: Transaction) => {
+    // Get current terminal ID before persisting.
+    const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+    const terminalId = currentTerminal?.id || 'T1';
+    txn.terminalId = terminalId;
+
     // Add sync status
     txn.syncStatus = 'PENDING';
 
@@ -1020,12 +1093,6 @@ const AppContent: React.FC = () => {
 
     // Update inventory locally (simple stock tracking) AND Record Ledger
     const defaultWarehouseId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
-
-    // Get current terminal ID
-    const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
-    const terminalId = currentTerminal?.id || 'T1';
-
-    txn.terminalId = terminalId;
 
     // Calculate and Record Inventory Deductions (Recursive & UOM Aware)
     for (const item of txn.items) {
@@ -1381,9 +1448,13 @@ const AppContent: React.FC = () => {
         );
 
       case 'LOGIN':
+        if (!getCurrentTerminal()) {
+          setCurrentView('DEVICE_UNAUTHORIZED');
+          return null;
+        }
         return (
           <LoginScreen
-            config={(config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.config || config.terminals?.[0]?.config as any}
+            config={getCurrentTerminal()!.config as any}
             availableUsers={users}
             subVertical={config.subVertical}
             onLogin={(u) => {
@@ -1512,6 +1583,10 @@ const AppContent: React.FC = () => {
         );
 
       case 'POS':
+        if (!getCurrentTerminal()) {
+          setCurrentView('DEVICE_UNAUTHORIZED');
+          return null;
+        }
         if (!currentUser) { setCurrentView('LOGIN'); return null; }
         return (
           <POSInterface
@@ -1558,7 +1633,7 @@ const AppContent: React.FC = () => {
             }}
             onUpdateConfig={handleConfigUpdate}
             onKioskPay={() => handleViewChange('KIOSK_PAYMENT' as any)}
-            activeTerminalId={(config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1'}
+            activeTerminalId={getCurrentTerminal()!.id}
           />
         );
 

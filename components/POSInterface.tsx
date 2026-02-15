@@ -900,6 +900,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
    const filteredProducts = useMemo(() => {
+      const allowedCats = activeTerminalConfig?.catalog?.allowedCategories || [];
+      const allowedCategorySet = new Set(
+         allowedCats
+            .map(cat => (typeof cat === 'string' ? cat.trim().toLowerCase() : ''))
+            .filter(Boolean)
+      );
+
       const filtered = products.filter(p => {
          if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
          const isAvailableInWarehouse = defaultSalesWarehouseId ? p.activeInWarehouses?.includes(defaultSalesWarehouseId) ?? true : true;
@@ -908,8 +915,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const matchCat = categoryFilter === 'ALL' || p.category === categoryFilter;
 
          // Category Scope Check
-         const allowedCats = activeTerminalConfig?.catalog?.allowedCategories || [];
-         const matchAllowedCat = allowedCats.length === 0 || allowedCats.includes(p.category);
+         const normalizedProductCategory = typeof p.category === 'string' ? p.category.trim().toLowerCase() : '';
+         const matchAllowedCat = allowedCategorySet.size === 0 || allowedCategorySet.has(normalizedProductCategory);
 
          const isSellable = p.is_sellable !== false;
 
@@ -927,9 +934,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const categories = useMemo(() => {
       const allowedCats = activeTerminalConfig?.catalog?.allowedCategories || [];
+      const allowedCategorySet = new Set(
+         allowedCats
+            .map(cat => (typeof cat === 'string' ? cat.trim().toLowerCase() : ''))
+            .filter(Boolean)
+      );
       const availableProducts = products.filter(p => {
          if (!p || p.is_sellable === false) return false;
-         if (allowedCats.length > 0 && !allowedCats.includes(p.category)) return false;
+         if (allowedCategorySet.size > 0) {
+            const normalizedCategory = typeof p.category === 'string' ? p.category.trim().toLowerCase() : '';
+            if (!allowedCategorySet.has(normalizedCategory)) return false;
+         }
          return true;
       });
 
@@ -1375,16 +1390,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                // --- CRITICAL: Ticket Closing Logic ---
                if (activeTable) {
                   try {
-                     // 1. Free Table in Backend (KDS)
+                     // 1. Free table in the main API so status/currentOrderId are reset.
                      const controller = new AbortController();
                      const timeoutId = window.setTimeout(() => controller.abort(), 4000);
                      try {
-                        await fetch(`http://localhost:8001/api/mesas/liberar`, {
+                        const releaseRes = await fetch('/api/mesas/liberar', {
                            method: 'POST',
                            headers: { 'Content-Type': 'application/json' },
                            body: JSON.stringify({ tableId: activeTable.id }),
                            signal: controller.signal
                         });
+                        if (!releaseRes.ok) {
+                           throw new Error(`HTTP ${releaseRes.status}`);
+                        }
+                        const releaseData = await releaseRes.json().catch(() => null);
+                        if (releaseData && releaseData.success === false) {
+                           throw new Error(releaseData.message || 'No se pudo liberar la mesa');
+                        }
                      } finally {
                         window.clearTimeout(timeoutId);
                      }

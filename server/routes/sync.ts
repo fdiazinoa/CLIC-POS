@@ -2,6 +2,7 @@ import express from 'express';
 import { db, getCollection, getSetting, saveSetting } from '../db.js';
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'crypto';
 
 const router = express.Router();
 
@@ -89,6 +90,47 @@ const updateMetadata = (collection: string, version: number, fullSyncVersion?: n
         fullSyncVersion: fullSyncVersion ?? syncMetadata[collection]?.fullSyncVersion ?? 0
     };
     saveSetting('syncMetadata', syncMetadata);
+};
+
+const normalizeProductImages = (product: any): { image: string | null; images: string[] } => {
+    const image = typeof product?.image === 'string' && product.image.trim().length > 0
+        ? product.image
+        : null;
+    const images = Array.isArray(product?.images)
+        ? product.images.filter((img: any) => typeof img === 'string' && img.trim().length > 0)
+        : [];
+
+    return { image, images };
+};
+
+const buildProductImageHash = (product: any): string => {
+    const { image, images } = normalizeProductImages(product);
+    return createHash('sha1')
+        .update(JSON.stringify({ image, images }))
+        .digest('hex');
+};
+
+const toFiniteNumber = (value: any, fallback = 0): number => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+};
+
+const toNumericMap = (value: any): Record<string, number> => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const out: Record<string, number> = {};
+    for (const [key, raw] of Object.entries(value)) {
+        out[key] = toFiniteNumber(raw, 0);
+    }
+    return out;
+};
+
+const safeJsonStringify = (value: any, fallback = '{}'): string => {
+    if (value === undefined || value === null) return fallback;
+    try {
+        return JSON.stringify(value, (_key, v) => typeof v === 'bigint' ? Number(v) : v);
+    } catch {
+        return fallback;
+    }
 };
 
 const insertChangeStmt = db.prepare(`
@@ -293,6 +335,126 @@ router.get('/delta/:collection', async (req, res) => {
 });
 
 /**
+ * GET /api/sync/products/images/manifest
+ * Lightweight image channel: returns only image fingerprints to detect drift.
+ */
+router.get('/products/images/manifest', async (req, res) => {
+    const authToken = req.headers['x-sync-token'] as string;
+    const tokens = getTerminalTokens();
+
+    if (!authToken || !tokens[authToken]) {
+        return res.status(401).json({ success: false, message: 'Invalid or missing sync token' });
+    }
+
+    const terminalId = tokens[authToken];
+    if (terminalId) {
+        db.prepare("UPDATE connected_terminals SET lastSeen = ? WHERE terminalId = ?").run(new Date().toISOString(), terminalId);
+    }
+
+    try {
+        const metadata = ensureMetadata('products');
+        const sinceVersion = req.query.sinceVersion ? parseInt(req.query.sinceVersion as string, 10) : 0;
+
+        if (sinceVersion >= metadata.version) {
+            return res.json({
+                success: true,
+                items: [],
+                version: metadata.version,
+                upToDate: true,
+                serverTime: new Date().toISOString()
+            });
+        }
+
+        const idsParam = typeof req.query.ids === 'string' ? req.query.ids : '';
+        const requestedIds = new Set(
+            idsParam.split(',').map(id => id.trim()).filter(Boolean)
+        );
+
+        const products = getCollectionForSync('products');
+        const scopedProducts = requestedIds.size > 0
+            ? products.filter((product: any) => requestedIds.has(product.id))
+            : products;
+
+        const items = scopedProducts
+            .filter((product: any) => product?.id)
+            .map((product: any) => {
+                const { image, images } = normalizeProductImages(product);
+                return {
+                    id: product.id,
+                    hash: buildProductImageHash(product),
+                    hasImage: !!image || images.length > 0,
+                    updatedAt: product.updatedAt || product.createdAt || null
+                };
+            });
+
+        res.json({
+            success: true,
+            items,
+            version: metadata.version,
+            upToDate: false,
+            serverTime: new Date().toISOString()
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+/**
+ * POST /api/sync/products/images/pull
+ * Fetch images only for a subset of products.
+ */
+router.post('/products/images/pull', async (req, res) => {
+    const authToken = req.headers['x-sync-token'] as string;
+    const tokens = getTerminalTokens();
+
+    if (!authToken || !tokens[authToken]) {
+        return res.status(401).json({ success: false, message: 'Invalid or missing sync token' });
+    }
+
+    const terminalId = tokens[authToken];
+    if (terminalId) {
+        db.prepare("UPDATE connected_terminals SET lastSeen = ? WHERE terminalId = ?").run(new Date().toISOString(), terminalId);
+    }
+
+    try {
+        const { ids } = req.body;
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ success: false, message: 'ids must be a non-empty array' });
+        }
+
+        const MAX_BATCH = 300;
+        if (ids.length > MAX_BATCH) {
+            return res.status(400).json({ success: false, message: `Maximum ${MAX_BATCH} ids per request` });
+        }
+
+        const requestedIds = new Set(ids.map((id: any) => String(id)));
+        const products = getCollectionForSync('products');
+
+        const items = products
+            .filter((product: any) => requestedIds.has(String(product?.id)))
+            .map((product: any) => {
+                const { image, images } = normalizeProductImages(product);
+                return {
+                    id: product.id,
+                    image,
+                    images,
+                    hash: buildProductImageHash(product),
+                    updatedAt: product.updatedAt || product.createdAt || null
+                };
+            });
+
+        res.json({
+            success: true,
+            items,
+            itemCount: items.length,
+            serverTime: new Date().toISOString()
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+/**
  * POST /api/sync/collections/:collection/push
  */
 router.post('/collections/:collection/push', async (req, res) => {
@@ -403,8 +565,17 @@ router.post('/collections/:collection/push', async (req, res) => {
                             if (hasDataColumn && dataStmt) {
                                 dataStmt.run(item.id, JSON.stringify(item));
                             } else if (structuredStmt) {
+                                let existingRow: Record<string, any> | null | undefined = undefined;
                                 const values = colNames.map(col => {
                                     let val = item[col];
+                                    if (val === undefined) {
+                                        if (existingRow === undefined) {
+                                            existingRow = db.prepare(`SELECT ${colNames.join(',')} FROM ${resolvedCollection} WHERE id = ?`).get(item.id) as Record<string, any> | null;
+                                        }
+                                        if (existingRow && Object.prototype.hasOwnProperty.call(existingRow, col)) {
+                                            val = existingRow[col];
+                                        }
+                                    }
                                     if (fieldsToStringify.includes(col)) {
                                         return typeof val === 'object' ? JSON.stringify(val) : (val || '[]');
                                     }
@@ -792,44 +963,72 @@ router.post('/z-reports', async (req, res) => {
 
         const collectionKey = 'zReports';
         let addedCount = 0;
+        let skippedCount = 0;
         const now = new Date().toISOString();
         db.transaction(() => {
             const stmt = db.prepare(`INSERT OR IGNORE INTO z_reports (id, openedAt, closedAt, terminalId, userId, userName, openingBalance, closingBalance, totalSales, totalTaxes, totalDiscounts, totalCash, totalCard, totalTransfer, totalOther, status, syncStatus, syncError, sequenceNumber, totalsByMethod, cashExpected, cashCounted, cashDiscrepancy, stats, transactionCount, notes, baseCurrency, cashSales, cashIn, cashOut) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
             for (const report of items) {
-                // Determine total sales from totalsByMethod if possible
-                const totalSales = typeof report.totalsByMethod === 'object' ?
-                    Object.values(report.totalsByMethod).reduce((sum: any, val: any) => sum + (val || 0), 0) :
-                    (report.totalSales || 0);
+                try {
+                    if (!report?.id) {
+                        skippedCount++;
+                        continue;
+                    }
 
-                const result = stmt.run(
-                    report.id, report.openedAt, report.closedAt, report.terminalId, report.userId, report.userName,
-                    report.openingBalance, report.closingBalance, totalSales, report.totalTaxes, report.totalDiscounts,
-                    report.totalCash, report.totalCard, report.totalTransfer, report.totalOther, report.status,
-                    report.syncStatus, report.syncError,
-                    report.sequenceNumber,
-                    typeof report.totalsByMethod === 'object' ? JSON.stringify(report.totalsByMethod) : (report.totalsByMethod || '{}'),
-                    typeof report.cashExpected === 'object' ? JSON.stringify(report.cashExpected) : (report.cashExpected || '{}'),
-                    typeof report.cashCounted === 'object' ? JSON.stringify(report.cashCounted) : (report.cashCounted || '{}'),
-                    typeof report.cashDiscrepancy === 'object' ? JSON.stringify(report.cashDiscrepancy) : (report.cashDiscrepancy || '{}'),
-                    typeof report.stats === 'object' ? JSON.stringify(report.stats) : (report.stats || '{}'),
-                    report.transactionCount || 0,
-                    report.notes || '',
-                    report.baseCurrency || '',
-                    report.cashSales || 0,
-                    report.cashIn || 0,
-                    report.cashOut || 0
-                );
-                if (result.changes > 0) {
-                    addedCount++;
-                    const version = bumpVersion(collectionKey);
-                    insertChangeStmt.run(collectionKey, report.id, version, 'UPSERT', JSON.stringify(report), now);
+                    const totalsByMethod = toNumericMap(report.totalsByMethod);
+                    const cashExpected = toNumericMap(report.cashExpected);
+                    const cashCounted = toNumericMap(report.cashCounted);
+                    const cashDiscrepancy = toNumericMap(report.cashDiscrepancy);
+                    const totalSales = report.totalSales !== undefined
+                        ? toFiniteNumber(report.totalSales, 0)
+                        : Object.values(totalsByMethod).reduce((sum, val) => sum + val, 0);
+
+                    const result = stmt.run(
+                        report.id,
+                        report.openedAt || null,
+                        report.closedAt || null,
+                        report.terminalId || null,
+                        report.userId || report.closedByUserId || null,
+                        report.userName || report.closedByUserName || null,
+                        toFiniteNumber(report.openingBalance, 0),
+                        toFiniteNumber(report.closingBalance, 0),
+                        totalSales,
+                        toFiniteNumber(report.totalTaxes, 0),
+                        toFiniteNumber(report.totalDiscounts, 0),
+                        toFiniteNumber(report.totalCash, 0),
+                        toFiniteNumber(report.totalCard, 0),
+                        toFiniteNumber(report.totalTransfer, 0),
+                        toFiniteNumber(report.totalOther, 0),
+                        report.status || 'CLOSED',
+                        report.syncStatus || 'PENDING',
+                        report.syncError || null,
+                        report.sequenceNumber || '',
+                        safeJsonStringify(totalsByMethod),
+                        safeJsonStringify(cashExpected),
+                        safeJsonStringify(cashCounted),
+                        safeJsonStringify(cashDiscrepancy),
+                        safeJsonStringify(report.stats, '{}'),
+                        toFiniteNumber(report.transactionCount, 0),
+                        report.notes || '',
+                        report.baseCurrency || '',
+                        toFiniteNumber(report.cashSales, 0),
+                        toFiniteNumber(report.cashIn, 0),
+                        toFiniteNumber(report.cashOut, 0)
+                    );
+                    if (result.changes > 0) {
+                        addedCount++;
+                        const version = bumpVersion(collectionKey);
+                        insertChangeStmt.run(collectionKey, report.id, version, 'UPSERT', JSON.stringify(report), now);
+                    }
+                } catch (itemError: any) {
+                    skippedCount++;
+                    console.warn(`[Sync] Skipping malformed z-report ${report?.id || '(no-id)'}: ${itemError?.message || itemError}`);
                 }
             }
 
             updateMetadata(collectionKey, getCurrentVersion(collectionKey));
         })();
 
-        res.json({ success: true, addedCount });
+        res.json({ success: true, addedCount, skippedCount });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
     }

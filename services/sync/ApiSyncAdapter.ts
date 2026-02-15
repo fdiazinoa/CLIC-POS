@@ -22,6 +22,21 @@ export interface SyncMetadata {
     fullSyncVersion?: number;
 }
 
+export interface ProductImageManifestItem {
+    id: string;
+    hash: string;
+    hasImage: boolean;
+    updatedAt: string | null;
+}
+
+export interface ProductImagePayloadItem {
+    id: string;
+    image: string | null;
+    images: string[];
+    hash: string;
+    updatedAt: string | null;
+}
+
 interface SyncConfig {
     masterUrl: string;
     terminalId: string;
@@ -341,6 +356,104 @@ class ApiSyncAdapter {
             return await response.json();
         } catch (error) {
             console.error(`❌ ApiSyncAdapter: Error pulling delta for ${collection}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Pull image manifest for products (lightweight channel).
+     */
+    async pullProductImageManifest(
+        sinceVersion?: number,
+        ids?: string[]
+    ): Promise<{ items: ProductImageManifestItem[]; version: number; upToDate: boolean; serverTime?: string }> {
+        if (!this.config) {
+            throw new Error('Sync configuration missing');
+        }
+
+        await this.ensureAuthenticated();
+
+        if (!this.isOnline) {
+            return { items: [], version: sinceVersion || 0, upToDate: false };
+        }
+
+        try {
+            const url = new URL(`${this.config.masterUrl}/api/sync/products/images/manifest`);
+            if (sinceVersion !== undefined) {
+                url.searchParams.set('sinceVersion', sinceVersion.toString());
+            }
+            if (ids && ids.length > 0) {
+                url.searchParams.set('ids', ids.join(','));
+            }
+
+            const response = await this.fetchWithRetry(url.toString(), {
+                method: 'GET',
+                headers: {
+                    'X-Sync-Token': this.authToken || ''
+                }
+            });
+
+            if (response.status === 401) {
+                await this.authenticate();
+                return this.pullProductImageManifest(sinceVersion, ids);
+            }
+
+            if (!response.ok) {
+                throw new Error(`Pull product image manifest failed: ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            return {
+                items: Array.isArray(data.items) ? data.items : [],
+                version: typeof data.version === 'number' ? data.version : 0,
+                upToDate: !!data.upToDate,
+                serverTime: data.serverTime
+            };
+        } catch (error) {
+            console.error('❌ ApiSyncAdapter: Error pulling product image manifest:', error);
+            this.isOnline = false;
+            throw error;
+        }
+    }
+
+    /**
+     * Pull image payload for specific products.
+     */
+    async pullProductImages(ids: string[]): Promise<ProductImagePayloadItem[]> {
+        if (!this.config) {
+            throw new Error('Sync configuration missing');
+        }
+
+        if (!ids || ids.length === 0) return [];
+
+        await this.ensureAuthenticated();
+
+        if (!this.isOnline) return [];
+
+        try {
+            const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/products/images/pull`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Token': this.authToken || ''
+                },
+                body: JSON.stringify({ ids })
+            });
+
+            if (response.status === 401) {
+                await this.authenticate();
+                return this.pullProductImages(ids);
+            }
+
+            if (!response.ok) {
+                throw new Error(`Pull product images failed: ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            return Array.isArray(data.items) ? data.items : [];
+        } catch (error) {
+            console.error('❌ ApiSyncAdapter: Error pulling product images:', error);
+            this.isOnline = false;
             throw error;
         }
     }

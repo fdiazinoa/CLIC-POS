@@ -198,7 +198,7 @@ const TableMap: React.FC<TableMapProps> = ({
                                 } else if (isRestaurantMode) {
                                     // Direct action for restaurant
                                     try {
-                                        const res = await fetch('http://localhost:8001/api/mesas/abrir', {
+                                        const res = await fetch('/api/mesas/abrir', {
                                             method: 'POST',
                                             headers: { 'Content-Type': 'application/json' },
                                             body: JSON.stringify({
@@ -208,11 +208,11 @@ const TableMap: React.FC<TableMapProps> = ({
                                             })
                                         });
                                         const data = await res.json();
-                                        if (data.status === 'success') {
+                                        if (res.ok && data.status === 'success') {
                                             if (onRefreshTables) onRefreshTables();
                                             onTableClick({ ...table, currentOrderId: data.orden_id });
                                         } else {
-                                            alert("Error abriendo mesa");
+                                            alert(data?.message || "Error abriendo mesa");
                                         }
                                     } catch (e) {
                                         console.error(e);

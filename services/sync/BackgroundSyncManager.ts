@@ -33,6 +33,9 @@ class BackgroundSyncManager {
 
         console.log('🔄 BackgroundSyncManager: Initializing...');
 
+        // Recover interrupted sync states from previous crashes/reloads.
+        await this.recoverStuckSyncItems();
+
         // Initial count of pending items
         await this.updatePendingCount();
 
@@ -55,6 +58,29 @@ class BackgroundSyncManager {
         if (this.interval) clearInterval(this.interval);
         this.interval = setInterval(() => this.sync(), 30000); // Every 30 seconds
         console.log('⚙️ BackgroundSyncManager: Worker started (30s interval)');
+    }
+
+    /**
+     * On slave terminals, only sync operational docs owned by this terminal.
+     * This prevents replaying historical/master documents accidentally present locally.
+     */
+    private shouldSyncItem(collectionName: string, item: any): boolean {
+        if (permissionService.isMasterTerminal()) return true;
+
+        const currentTerminalId = permissionService.getTerminalId();
+        if (!currentTerminalId) return true;
+
+        const terminalScopedCollections = new Set([
+            'inventoryLedger',
+            'cashMovements',
+            'zReports',
+            'transactions'
+        ]);
+
+        if (!terminalScopedCollections.has(collectionName)) return true;
+        if (!item || !item.terminalId) return false;
+
+        return item.terminalId === currentTerminalId;
     }
 
     /**
@@ -87,37 +113,48 @@ class BackgroundSyncManager {
         this.isProcessing = true;
         this.updateState({ isSyncing: true, hasError: false });
 
+        const collectionErrors: string[] = [];
+
         try {
-            // 1. Inventory Ledger
-            await this.processCollection<InventoryLedgerEntry>('inventoryLedger', async (item) => {
-                await apiSyncAdapter.pushInventoryMovement(item);
-            });
-
-            // 2. Cash Movements
-            await this.processCollection<CashMovement>('cashMovements', async (item) => {
-                // Assuming there's an endpoint for this, if not we might need to add it to apiSyncAdapter
-                // For now, let's assume pushInventoryMovement or similar can handle it or add a generic push
-                await (apiSyncAdapter as any).pushCashMovement?.(item);
-            });
-
-            // 3. Z-Reports
-            await this.processCollection<ZReport>('zReports', async (item) => {
-                await (apiSyncAdapter as any).pushZReport?.(item);
-            });
-
-            // 4. Transactions (Slaves → Master)
+            // 1) Transactions first to prioritize sales visibility at central terminal.
             await this.processCollection<any>('transactions', async (item) => {
                 await apiSyncAdapter.pushTransaction(item);
+            }).catch((error: any) => {
+                collectionErrors.push(`transactions: ${error?.message || 'unknown error'}`);
+            });
+
+            // 2) Inventory Ledger
+            await this.processCollection<InventoryLedgerEntry>('inventoryLedger', async (item) => {
+                await apiSyncAdapter.pushInventoryMovement(item);
+            }).catch((error: any) => {
+                collectionErrors.push(`inventoryLedger: ${error?.message || 'unknown error'}`);
+            });
+
+            // 3) Cash Movements
+            await this.processCollection<CashMovement>('cashMovements', async (item) => {
+                await (apiSyncAdapter as any).pushCashMovement?.(item);
+            }).catch((error: any) => {
+                collectionErrors.push(`cashMovements: ${error?.message || 'unknown error'}`);
+            });
+
+            // 4) Z-Reports
+            await this.processCollection<ZReport>('zReports', async (item) => {
+                await (apiSyncAdapter as any).pushZReport?.(item);
+            }).catch((error: any) => {
+                collectionErrors.push(`zReports: ${error?.message || 'unknown error'}`);
             });
 
             this.updateState({
                 isSyncing: false,
-                hasError: false,
+                hasError: collectionErrors.length > 0,
                 lastSyncTime: new Date().toISOString()
             });
 
             // 5. Prune old data to keep the database small
             await this.pruneSyncedItems();
+            if (collectionErrors.length > 0) {
+                console.warn('⚠️ BackgroundSyncManager: Partial sync with errors:', collectionErrors);
+            }
         } catch (error) {
             console.error('❌ BackgroundSyncManager: Sync failed:', error);
             this.updateState({ isSyncing: false, hasError: true });
@@ -148,7 +185,12 @@ class BackgroundSyncManager {
         if (!Array.isArray(data)) return;
 
         // Filter pending items and sort by date (FIFO)
-        const pending = data.filter(item => item.syncStatus === 'PENDING' || item.syncStatus === 'ERROR');
+        const pending = data.filter(item =>
+            this.shouldSyncItem(collectionName, item) &&
+            (item.syncStatus === 'PENDING' ||
+                item.syncStatus === 'ERROR' ||
+                item.syncStatus === 'SYNCING')
+        );
 
         if (pending.length === 0) return;
 
@@ -193,7 +235,12 @@ class BackgroundSyncManager {
         for (const col of collections) {
             const data = await db.get(col as any) || [];
             if (Array.isArray(data)) {
-                count += data.filter((item: any) => item.syncStatus === 'PENDING' || item.syncStatus === 'ERROR').length;
+                count += data.filter((item: any) =>
+                    this.shouldSyncItem(col, item) &&
+                    (item.syncStatus === 'PENDING' ||
+                        item.syncStatus === 'ERROR' ||
+                        item.syncStatus === 'SYNCING')
+                ).length;
             }
         }
 
@@ -224,6 +271,39 @@ class BackgroundSyncManager {
         await this.updatePendingCount();
         // Don't await the sync itself to avoid blocking UI
         this.sync();
+    }
+
+    /**
+     * Convert stale SYNCING records to ERROR so they are retried automatically.
+     * This handles abrupt browser/tab shutdowns during sync.
+     */
+    private async recoverStuckSyncItems() {
+        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions'];
+        for (const colName of collections) {
+            try {
+                const data = await db.get(colName as any) as any[];
+                if (!Array.isArray(data) || data.length === 0) continue;
+
+                let changed = false;
+                for (const item of data) {
+                    if (!this.shouldSyncItem(colName, item)) {
+                        continue;
+                    }
+                    if (item?.syncStatus === 'SYNCING') {
+                        item.syncStatus = 'ERROR';
+                        item.syncError = item.syncError || 'Recovered interrupted sync session';
+                        changed = true;
+                    }
+                }
+
+                if (changed) {
+                    await db.save(colName as any, data);
+                    console.log(`♻️ BackgroundSyncManager: Recovered interrupted SYNCING items in ${colName}`);
+                }
+            } catch (error) {
+                console.warn(`⚠️ Failed recovering stuck sync items in ${colName}:`, error);
+            }
+        }
     }
 
     /**

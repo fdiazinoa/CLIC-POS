@@ -7,7 +7,7 @@
 
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
-import { apiSyncAdapter, SyncMetadata } from './ApiSyncAdapter';
+import { apiSyncAdapter, ProductImageManifestItem, ProductImagePayloadItem } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
 import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig } from '../../types';
 
@@ -25,11 +25,18 @@ interface SyncStatus {
 
 class SyncManager {
     private autoSyncInterval: any = null;
+    private imageSyncInterval: any = null;
     private syncVersions: Map<string, number> = new Map();
     private syncTimestamps: Map<string, string> = new Map();
     private syncConfig: SyncConfig | null = null;
     private isMaster: boolean = false;
     private isDisabled: boolean = false;
+    private imageSyncInProgress = false;
+    private lastProductImageManifestVersion = 0;
+    private productImageHashes: Map<string, string> = new Map();
+    private imageSyncOnlineHandler: (() => void) | null = null;
+    private readonly IMAGE_SYNC_INTERVAL_MS = 180000;
+    private readonly IMAGE_SYNC_BATCH_SIZE = 40;
 
     /**
      * Initialize sync manager
@@ -51,6 +58,27 @@ class SyncManager {
         // Get sync configuration from terminal config
         const terminal = (config.terminals || []).find(t => t.id === terminalId);
         let savedMasterUrl = localStorage.getItem('CLIC_POS_MASTER_URL');
+        const runtimeMasterUrl = `${window.location.protocol}//${window.location.hostname}:3001`;
+
+        const parseHostname = (url: string): string | null => {
+            try {
+                return new URL(url).hostname?.toLowerCase() || null;
+            } catch {
+                return null;
+            }
+        };
+
+        const runtimeHost = window.location.hostname.toLowerCase();
+        const savedHost = savedMasterUrl ? parseHostname(savedMasterUrl) : null;
+        const isSavedLoopback = savedHost === 'localhost' || savedHost === '127.0.0.1';
+        const isRuntimeLoopback = runtimeHost === 'localhost' || runtimeHost === '127.0.0.1';
+
+        // Master terminal must not keep localhost URL when running from a remote browser.
+        if (this.isMaster && savedMasterUrl && isSavedLoopback && !isRuntimeLoopback) {
+            console.warn(`⚠️ SyncManager: Replacing stale master URL (${savedMasterUrl}) with runtime host (${runtimeMasterUrl})`);
+            savedMasterUrl = runtimeMasterUrl;
+            localStorage.setItem('CLIC_POS_MASTER_URL', runtimeMasterUrl);
+        }
 
         // Fallback: Check for 'pos_master_ip' (set by TerminalBindingScreen)
         if (!savedMasterUrl) {
@@ -90,7 +118,7 @@ class SyncManager {
         } else if (this.isMaster) {
             // Master terminal: Authenticate with own server
             // Backend runs on port 3001 (Vite runs on 3000)
-            const masterUrl = this.syncConfig.masterUrl || 'http://localhost:3001';
+            const masterUrl = this.syncConfig.masterUrl || runtimeMasterUrl;
 
             // Ensure config has the URL for future reference
             if (!this.syncConfig.masterUrl) {
@@ -111,13 +139,231 @@ class SyncManager {
         }
 
         await this.loadSyncVersions();
+        this.loadProductImageSyncState();
+
+        if (!this.isMaster) {
+            this.attachImageSyncReconnectHandler();
+            this.syncProductImages({
+                forceManifestCheck: this.productImageHashes.size === 0 || this.lastProductImageManifestVersion === 0
+            }).catch((error) => {
+                console.warn('⚠️ Initial image sync failed:', error);
+            });
+        } else {
+            this.detachImageSyncReconnectHandler();
+        }
 
         // If Master, try to restore data from server if local is empty (HTTPS switch scenario)
         if (this.isMaster) {
+            try {
+                await this.pullConfig(true);
+            } catch (configError) {
+                console.warn('⚠️ SyncManager: Master config refresh failed during init:', configError);
+            }
             await this.initializeMasterData();
         }
 
         console.log('🔄 SyncManager initialized');
+    }
+
+    private loadProductImageSyncState() {
+        try {
+            const rawHashes = localStorage.getItem('sync_product_image_hashes');
+            if (rawHashes) {
+                const parsed = JSON.parse(rawHashes);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    this.productImageHashes = new Map(
+                        Object.entries(parsed)
+                            .filter(([id, hash]) => typeof id === 'string' && typeof hash === 'string')
+                            .map(([id, hash]) => [id, hash as string])
+                    );
+                }
+            }
+        } catch (error) {
+            console.warn('⚠️ Could not load local image hash state, rebuilding cache.', error);
+            this.productImageHashes.clear();
+        }
+
+        const savedVersion = localStorage.getItem('sync_version_product_images');
+        this.lastProductImageManifestVersion = savedVersion ? parseInt(savedVersion, 10) || 0 : 0;
+    }
+
+    private persistProductImageSyncState() {
+        const serialized: Record<string, string> = {};
+        for (const [id, hash] of this.productImageHashes.entries()) {
+            serialized[id] = hash;
+        }
+        localStorage.setItem('sync_product_image_hashes', JSON.stringify(serialized));
+        localStorage.setItem('sync_version_product_images', this.lastProductImageManifestVersion.toString());
+    }
+
+    private normalizeImage(image: any): string | null {
+        return typeof image === 'string' && image.trim().length > 0 ? image : null;
+    }
+
+    private normalizeImages(images: any): string[] {
+        if (!Array.isArray(images)) return [];
+        return images.filter(img => typeof img === 'string' && img.trim().length > 0);
+    }
+
+    private hasAnyImage(product: Pick<Product, 'image' | 'images'>): boolean {
+        return !!this.normalizeImage(product.image) || this.normalizeImages(product.images).length > 0;
+    }
+
+    private imageArraysEqual(a: string[], b: string[]): boolean {
+        return a.length === b.length && a.every((value, idx) => value === b[idx]);
+    }
+
+    private attachImageSyncReconnectHandler() {
+        if (this.imageSyncOnlineHandler) return;
+        this.imageSyncOnlineHandler = () => {
+            this.syncProductImages({ forceManifestCheck: true }).catch((error) => {
+                console.warn('⚠️ Image sync on reconnect failed:', error);
+            });
+        };
+        window.addEventListener('online', this.imageSyncOnlineHandler);
+    }
+
+    private detachImageSyncReconnectHandler() {
+        if (!this.imageSyncOnlineHandler) return;
+        window.removeEventListener('online', this.imageSyncOnlineHandler);
+        this.imageSyncOnlineHandler = null;
+    }
+
+    private startImageSync(intervalMs: number = this.IMAGE_SYNC_INTERVAL_MS) {
+        if (this.imageSyncInterval) {
+            clearInterval(this.imageSyncInterval);
+        }
+
+        this.imageSyncInterval = setInterval(() => {
+            this.syncProductImages().catch((error) => {
+                console.warn('⚠️ Scheduled image sync failed:', error);
+            });
+        }, intervalMs);
+
+        console.log(`🖼️ Image auto-sync started (${intervalMs / 1000}s interval)`);
+    }
+
+    private async syncProductImages(options?: { forceManifestCheck?: boolean }): Promise<number> {
+        if (this.isDisabled) return 0;
+        if (this.imageSyncInProgress) return 0;
+        if (permissionService.isMasterTerminal()) return 0;
+        if (!this.syncConfig?.masterUrl || !navigator.onLine) return 0;
+
+        this.imageSyncInProgress = true;
+
+        try {
+            const localProducts = await db.get('products') as Product[];
+            if (!Array.isArray(localProducts) || localProducts.length === 0) return 0;
+
+            const localById = new Map(localProducts.filter(p => p?.id).map(p => [p.id, p]));
+            const manifestResult = await apiSyncAdapter.pullProductImageManifest(
+                options?.forceManifestCheck ? undefined : this.lastProductImageManifestVersion
+            );
+
+            if (typeof manifestResult.version === 'number') {
+                this.lastProductImageManifestVersion = manifestResult.version;
+            }
+
+            if (manifestResult.upToDate && !options?.forceManifestCheck) {
+                this.persistProductImageSyncState();
+                return 0;
+            }
+
+            const manifestById = new Map<string, ProductImageManifestItem>();
+            const idsToFetch: string[] = [];
+
+            for (const item of manifestResult.items || []) {
+                if (!item?.id) continue;
+                const localProduct = localById.get(item.id);
+                if (!localProduct) continue;
+
+                manifestById.set(item.id, item);
+                const cachedHash = this.productImageHashes.get(item.id);
+                const localHasImage = this.hasAnyImage(localProduct);
+                const shouldFetch = cachedHash !== item.hash || localHasImage !== !!item.hasImage;
+
+                if (shouldFetch) {
+                    idsToFetch.push(item.id);
+                }
+            }
+
+            for (const cachedId of Array.from(this.productImageHashes.keys())) {
+                if (!localById.has(cachedId)) {
+                    this.productImageHashes.delete(cachedId);
+                }
+            }
+
+            if (idsToFetch.length === 0) {
+                for (const [id, item] of manifestById.entries()) {
+                    this.productImageHashes.set(id, item.hash);
+                }
+                this.persistProductImageSyncState();
+                return 0;
+            }
+
+            let updatedCount = 0;
+            for (let i = 0; i < idsToFetch.length; i += this.IMAGE_SYNC_BATCH_SIZE) {
+                const chunk = idsToFetch.slice(i, i + this.IMAGE_SYNC_BATCH_SIZE);
+                const payload = await apiSyncAdapter.pullProductImages(chunk);
+                const payloadById = new Map<string, ProductImagePayloadItem>(
+                    payload.filter(item => item?.id).map(item => [item.id, item])
+                );
+
+                for (const id of chunk) {
+                    const remote = payloadById.get(id);
+                    const manifestItem = manifestById.get(id);
+                    const localProduct = localById.get(id);
+                    if (!localProduct) continue;
+
+                    if (!remote) {
+                        if (manifestItem) {
+                            this.productImageHashes.set(id, manifestItem.hash);
+                        }
+                        continue;
+                    }
+
+                    const remoteImage = this.normalizeImage(remote.image);
+                    const remoteImages = this.normalizeImages(remote.images);
+                    const localImage = this.normalizeImage(localProduct.image);
+                    const localImages = this.normalizeImages(localProduct.images);
+
+                    const imageChanged = localImage !== remoteImage;
+                    const imagesChanged = !this.imageArraysEqual(localImages, remoteImages);
+
+                    if (imageChanged || imagesChanged) {
+                        const updatedProduct: Product = {
+                            ...localProduct,
+                            image: remoteImage || undefined,
+                            images: remoteImages,
+                            updatedAt: remote.updatedAt || localProduct.updatedAt
+                        };
+                        await db.saveDocument('products', updatedProduct);
+                        localById.set(id, updatedProduct);
+                        updatedCount++;
+                    }
+
+                    if (remote.hash) {
+                        this.productImageHashes.set(id, remote.hash);
+                    } else if (manifestItem) {
+                        this.productImageHashes.set(id, manifestItem.hash);
+                    }
+                }
+            }
+
+            for (const [id, item] of manifestById.entries()) {
+                this.productImageHashes.set(id, item.hash);
+            }
+            this.persistProductImageSyncState();
+
+            if (updatedCount > 0) {
+                console.log(`🖼️ Image sync updated ${updatedCount} products`);
+                window.dispatchEvent(new CustomEvent('productsUpdated'));
+            }
+
+            return updatedCount;
+        } finally {
+            this.imageSyncInProgress = false;
+        }
     }
 
     /**
@@ -127,20 +373,70 @@ class SyncManager {
     private async initializeMasterData() {
         const collections: SyncableCollection[] = ['internalSequences', 'products', 'customers', 'suppliers'];
 
+        // Detect stale local master snapshot (old browser cache / wrong profile) and
+        // recover from server-side source of truth.
+        try {
+            const localProducts = await db.get('products');
+            const localProductsCount = Array.isArray(localProducts) ? localProducts.length : 0;
+            const remoteProductsMeta = await apiSyncAdapter.getMetadata('products');
+            const remoteProductsCount = remoteProductsMeta?.itemCount || 0;
+
+            const hasSevereCatalogDrift =
+                remoteProductsCount > 0 &&
+                (localProductsCount <= 3 || localProductsCount < Math.floor(remoteProductsCount * 0.5));
+
+            if (hasSevereCatalogDrift) {
+                console.warn(
+                    `⚠️ Master Init: Severe local catalog drift detected (local=${localProductsCount}, remote=${remoteProductsCount}). ` +
+                    `Refreshing config and forcing full catalog pull...`
+                );
+                try {
+                    await this.pullConfig(true);
+                } catch (configError) {
+                    console.warn('⚠️ Master Init: Could not refresh config from server before catalog recovery:', configError);
+                }
+            }
+        } catch (driftError) {
+            console.warn('⚠️ Master Init: Drift detection failed, continuing with standard recovery.', driftError);
+        }
+
         for (const collection of collections) {
             const localData = await db.get(collection);
-            const isEmpty = !localData || (Array.isArray(localData) && localData.length === 0);
+            const localCount = Array.isArray(localData) ? localData.length : 0;
+            const isEmpty = localCount === 0;
 
             // Also check if it only contains defaults (for sequences)
             // If we have very few items, we might want to check server
-            const isMinimal = Array.isArray(localData) && localData.length <= 3;
+            const isMinimal = localCount <= 3;
 
-            if (isEmpty || isMinimal) {
-                console.log(`🔍 Master Init: Local ${collection} is empty/minimal. Checking server...`);
+            let remoteCount = 0;
+            try {
+                const metadata = await apiSyncAdapter.getMetadata(collection);
+                remoteCount = metadata?.itemCount || 0;
+            } catch {
+                // Ignore metadata failures here; fallback to previous logic.
+            }
+
+            const hasSevereDrift = remoteCount > 0 && localCount < Math.floor(remoteCount * 0.5);
+
+            if (isEmpty || isMinimal || hasSevereDrift) {
+                console.log(
+                    `🔍 Master Init: Local ${collection} requires recovery ` +
+                    `(local=${localCount}, remote=${remoteCount || 'unknown'}). Checking server...`
+                );
                 try {
-                    // Force pull to see if server has data
+                    // Reset cursor so delta endpoint returns full snapshot.
+                    this.syncVersions.set(collection, 0);
+                    localStorage.setItem(`sync_version_${collection}`, '0');
+
+                    const pulled = await this.pullCatalog(collection);
+                    if (pulled > 0) {
+                        continue;
+                    }
+
+                    // Fallback: direct full pull in case delta cursor path returned nothing.
                     const serverItems = await apiSyncAdapter.pull(collection);
-                    if (serverItems && serverItems.length > (localData?.length || 0)) {
+                    if (serverItems && serverItems.length > localCount) {
                         console.log(`📥 Master Init: Restoring ${serverItems.length} items from Server for ${collection}`);
                         await db.save(collection, serverItems);
 
@@ -238,10 +534,73 @@ class SyncManager {
             // Pull Delta from API
             const response = await apiSyncAdapter.pullDelta(collection, lastVersion || undefined);
             const { items, serverTime, isFullDownload, latestVersion } = response;
+            let metadataCache: any = undefined;
+
+            const getMetadataOnce = async () => {
+                if (metadataCache !== undefined) return metadataCache;
+                metadataCache = await apiSyncAdapter.getMetadata(collection);
+                return metadataCache;
+            };
 
             console.log(`📦 SyncManager: Received ${items.length} items for ${collection} (${isFullDownload ? 'Full' : 'Delta'})`);
 
             if (items.length === 0 && !isFullDownload) {
+                const localData = await db.get(collection);
+                const localCount = Array.isArray(localData) ? localData.length : 0;
+                const metadata = await getMetadataOnce();
+                const remoteCount = metadata?.itemCount || 0;
+                const remoteVersion = typeof metadata?.version === 'number'
+                    ? metadata.version
+                    : (typeof latestVersion === 'number' ? latestVersion : 0);
+                const hasCountDrift = remoteCount > localCount;
+                const hasLegacyVersionDrift = remoteVersion === 0 && remoteCount > 0 && lastVersion > 0;
+
+                // Self-heal: if server has more rows but delta says "no updates", force full pull.
+                if (hasCountDrift || hasLegacyVersionDrift) {
+                    console.warn(
+                        `⚠️ SyncManager: Drift detected for ${collection} (local=${localCount}, remote=${remoteCount}, localVersion=${lastVersion}, remoteVersion=${remoteVersion}). Forcing full pull...`
+                    );
+                    const fullItems = await apiSyncAdapter.pull(collection);
+
+                    if (Array.isArray(fullItems) && fullItems.length > 0) {
+                        const cleanItems = fullItems.map((item: any) => {
+                            const { _op, ...rest } = item;
+                            if (collection === 'internalSequences') {
+                                return this.repairSequenceData(rest);
+                            }
+                            return rest;
+                        });
+
+                        await db.save(collection, cleanItems);
+
+                        if (typeof remoteVersion === 'number') {
+                            this.syncVersions.set(collection, remoteVersion);
+                            localStorage.setItem(`sync_version_${collection}`, remoteVersion.toString());
+                        }
+
+                        if (serverTime) {
+                            this.syncTimestamps.set(collection, serverTime);
+                            localStorage.setItem(`sync_timestamp_${collection}`, serverTime);
+                        }
+
+                        if (collection === 'products') {
+                            try {
+                                await this.syncProductImages({ forceManifestCheck: true });
+                            } catch (error) {
+                                console.warn('⚠️ Image sync side-channel failed after drift recovery:', error);
+                            }
+                        }
+
+                        window.dispatchEvent(new CustomEvent(`${collection}Updated`));
+                        if (collection === 'internalSequences') {
+                            window.dispatchEvent(new CustomEvent('seriesUpdated'));
+                        }
+
+                        console.log(`✅ SyncManager: Drift recovery completed for ${collection} with ${cleanItems.length} items.`);
+                        return cleanItems.length;
+                    }
+                }
+
                 console.log(`ℹ️  SyncManager: No updates for ${collection}`);
                 if (serverTime) {
                     this.syncTimestamps.set(collection, serverTime);
@@ -323,6 +682,14 @@ class SyncManager {
             if (typeof newVersion === 'number') {
                 this.syncVersions.set(collection, newVersion);
                 localStorage.setItem(`sync_version_${collection}`, newVersion.toString());
+            }
+
+            if (collection === 'products') {
+                try {
+                    await this.syncProductImages();
+                } catch (error) {
+                    console.warn('⚠️ Image sync side-channel failed after products pull:', error);
+                }
             }
 
             console.log(`✅ SyncManager: Pulled ${items.length} items for ${collection}. New version: ${newVersion ?? 'unknown'}`);
@@ -476,14 +843,20 @@ class SyncManager {
 
         for (const collection of collections) {
             const localVersion = this.syncVersions.get(collection) || 0;
-            const hasNew = await apiSyncAdapter.hasNewData(collection, localVersion);
+            const metadata = await apiSyncAdapter.getMetadata(collection);
+            const remoteVersion = metadata?.version || 0;
+            const remoteCount = metadata?.itemCount || 0;
+            const hasNew = remoteVersion > localVersion;
 
             // CRITICAL: Also check if local collection is empty. 
             // This handles the case where remote version is 0 but server has data (Slave first pull).
             const localData = await db.get(collection);
-            const isEmpty = !localData || (Array.isArray(localData) && localData.length === 0);
+            const localCount = Array.isArray(localData) ? localData.length : 0;
+            const isEmpty = localCount === 0;
+            const hasCountDrift = remoteCount > localCount;
+            const hasLegacyVersionDrift = remoteVersion === 0 && remoteCount > 0 && localVersion > 0;
 
-            if (hasNew || (isEmpty && localVersion === 0)) {
+            if (hasNew || hasCountDrift || hasLegacyVersionDrift || (isEmpty && localVersion === 0)) {
                 updatesAvailable.push(collection);
             }
         }
@@ -617,7 +990,7 @@ class SyncManager {
 
             const localConfigJson = JSON.stringify(localConfig || {});
             const incomingConfigJson = JSON.stringify(config || {});
-            const changed = force || localConfigJson !== incomingConfigJson;
+            const changed = localConfigJson !== incomingConfigJson;
 
             if (!changed) {
                 if (typeof remoteVersion === 'number') {
@@ -719,6 +1092,10 @@ class SyncManager {
             }
         }, intervalMs);
 
+        if (!permissionService.isMasterTerminal()) {
+            this.startImageSync(this.IMAGE_SYNC_INTERVAL_MS);
+        }
+
         console.log(`⏰ Auto-sync started (${intervalMs / 1000}s interval)`);
     }
 
@@ -731,6 +1108,12 @@ class SyncManager {
             this.autoSyncInterval = null;
             console.log('⏹️  Auto-sync stopped');
         }
+        if (this.imageSyncInterval) {
+            clearInterval(this.imageSyncInterval);
+            this.imageSyncInterval = null;
+            console.log('⏹️  Image auto-sync stopped');
+        }
+        this.detachImageSyncReconnectHandler();
     }
 
     /**
