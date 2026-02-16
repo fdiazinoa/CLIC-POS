@@ -54,22 +54,34 @@ class ApiSyncAdapter {
     private circuitOpenTimeStamp: number = 0;
     private readonly MAX_CONSECUTIVE_FAILURES = 3;
     private readonly CIRCUIT_RESET_TIMEOUT = 30000; // 30 seconds
+    private readonly CIRCUIT_BREAKER_OPEN_ERROR = 'Circuit Breaker Open: Master unreachable';
+
+    private isCircuitBreakerOpenError(error: unknown): boolean {
+        const message = error instanceof Error ? error.message : String(error || '');
+        return message.includes(this.CIRCUIT_BREAKER_OPEN_ERROR);
+    }
+
+    isRecoverableConnectionError(error: unknown): boolean {
+        if (this.isCircuitBreakerOpenError(error)) return true;
+        if (!(error instanceof Error)) return false;
+        return error.name === 'AbortError' || error.message === 'Failed to fetch';
+    }
 
     /**
      * Helper: Fetch with Retry and Timeout
      */
     private async fetchWithRetry(url: string, options: RequestInit = {}, retries = 2, backoff = 500): Promise<Response> {
         // Circuit Breaker Check
-        if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
-            const timeSinceOpen = Date.now() - this.circuitOpenTimeStamp;
-            if (timeSinceOpen < this.CIRCUIT_RESET_TIMEOUT) {
-                console.warn('⚠️ Circuit Breaker OPEN. Rejecting request to avoid freeze.');
-                throw new Error('Circuit Breaker Open: Master unreachable');
-            } else {
-                // Reset circuit on timeout test
-                console.log('🔄 Circuit Breaker Reset: Retrying connection...');
-                this.consecutiveFailures = 0;
-            }
+            if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
+                const timeSinceOpen = Date.now() - this.circuitOpenTimeStamp;
+                if (timeSinceOpen < this.CIRCUIT_RESET_TIMEOUT) {
+                    console.warn('⚠️ Circuit Breaker OPEN. Rejecting request to avoid freeze.');
+                    throw new Error(this.CIRCUIT_BREAKER_OPEN_ERROR);
+                } else {
+                    // Reset circuit on timeout test
+                    console.log('🔄 Circuit Breaker Reset: Retrying connection...');
+                    this.consecutiveFailures = 0;
+                }
         }
 
         const controller = new AbortController();
@@ -173,12 +185,40 @@ class ApiSyncAdapter {
 
             const data = await response.json();
             this.authToken = data.token;
+            this.isOnline = true;
             console.log(`✅ Authenticated with Master terminal: ${this.config.terminalId}`);
-        } catch (error) {
-            console.error('❌ Authentication failed:', error);
+        } catch (error: unknown) {
+            if (this.isCircuitBreakerOpenError(error)) {
+                console.warn('⚠️ Authentication deferred: circuit breaker open, waiting before retry.');
+            } else {
+                console.error('❌ Authentication failed:', error);
+            }
             this.isOnline = false;
             throw error;
         }
+    }
+
+    /**
+     * Ensure operational push channels never fail silently.
+     * If adapter is marked offline but browser has network, force re-auth recovery.
+     */
+    private async ensurePushReady(): Promise<void> {
+        if (!this.config) {
+            throw new Error('Sync configuration missing in ApiSyncAdapter. Ensure SyncManager is initialized.');
+        }
+
+        if (!navigator.onLine) {
+            this.isOnline = false;
+            throw new Error('Browser offline');
+        }
+
+        if (!this.isOnline) {
+            console.warn('⚠️ ApiSyncAdapter: Recovering from offline state before push...');
+            this.authToken = null;
+        }
+
+        await this.ensureAuthenticated();
+        this.isOnline = true;
     }
 
     /**
@@ -577,10 +617,8 @@ class ApiSyncAdapter {
      * Push a single transaction to Master
      */
     async pushTransaction(transaction: any): Promise<void> {
-        if (!this.config || !this.isOnline) return;
-
         try {
-            await this.ensureAuthenticated();
+            await this.ensurePushReady();
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/transactions`, {
                 method: 'POST',
                 headers: {
@@ -601,6 +639,7 @@ class ApiSyncAdapter {
             console.log(`📤 ApiSyncAdapter: Pushed transaction ${transaction.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing transaction:', error);
+            this.isOnline = false;
             throw error;
         }
     }
@@ -609,10 +648,8 @@ class ApiSyncAdapter {
      * Push a single inventory movement to Master
      */
     async pushInventoryMovement(movement: any): Promise<void> {
-        if (!this.config || !this.isOnline) return;
-
         try {
-            await this.ensureAuthenticated();
+            await this.ensurePushReady();
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/inventory/movements`, {
                 method: 'POST',
                 headers: {
@@ -633,6 +670,7 @@ class ApiSyncAdapter {
             console.log(`📤 ApiSyncAdapter: Pushed inventory movement ${movement.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing inventory movement:', error);
+            this.isOnline = false;
             throw error;
         }
     }
@@ -641,10 +679,8 @@ class ApiSyncAdapter {
      * Push a single inventory count session to Master
      */
     async pushInventoryCount(countSession: any): Promise<void> {
-        if (!this.config || !this.isOnline) return;
-
         try {
-            await this.ensureAuthenticated();
+            await this.ensurePushReady();
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/inventory/counts`, {
                 method: 'POST',
                 headers: {
@@ -665,6 +701,7 @@ class ApiSyncAdapter {
             console.log(`📤 ApiSyncAdapter: Pushed inventory count ${countSession.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing inventory count:', error);
+            this.isOnline = false;
             throw error;
         }
     }
@@ -673,10 +710,8 @@ class ApiSyncAdapter {
      * Push a single cash movement to Master
      */
     async pushCashMovement(movement: any): Promise<void> {
-        if (!this.config || !this.isOnline) return;
-
         try {
-            await this.ensureAuthenticated();
+            await this.ensurePushReady();
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/cash/movements`, {
                 method: 'POST',
                 headers: {
@@ -697,6 +732,7 @@ class ApiSyncAdapter {
             console.log(`📤 ApiSyncAdapter: Pushed cash movement ${movement.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing cash movement:', error);
+            this.isOnline = false;
             throw error;
         }
     }
@@ -705,10 +741,8 @@ class ApiSyncAdapter {
      * Push a single Z-Report to Master
      */
     async pushZReport(report: any): Promise<void> {
-        if (!this.config || !this.isOnline) return;
-
         try {
-            await this.ensureAuthenticated();
+            await this.ensurePushReady();
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/z-reports`, {
                 method: 'POST',
                 headers: {
@@ -729,6 +763,7 @@ class ApiSyncAdapter {
             console.log(`📤 ApiSyncAdapter: Pushed Z-Report ${report.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing Z-Report:', error);
+            this.isOnline = false;
             throw error;
         }
     }

@@ -505,8 +505,12 @@ class SyncManager {
                             this.syncVersions.set(collection, metadata.version);
                         }
                     }
-                } catch (error) {
+                } catch (error: unknown) {
                     console.warn(`⚠️ Master Init: Could not restore ${collection} from server:`, error);
+                    if (apiSyncAdapter.isRecoverableConnectionError(error)) {
+                        console.warn('⚠️ Master Init: Connectivity issue detected. Pausing remaining recovery attempts until connection stabilizes.');
+                        break;
+                    }
                 }
             }
         }
