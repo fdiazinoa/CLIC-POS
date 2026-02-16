@@ -361,8 +361,19 @@ class ApiSyncAdapter {
 
             const data = await response.json();
 
+            const isDebugMode = () => {
+                try {
+                    return window.location.search.includes('debug=sync') ||
+                        localStorage.getItem('CLIC_POS_DEBUG_SYNC') === 'true';
+                } catch {
+                    return false;
+                }
+            };
+
             if (data.upToDate) {
-                console.log(`✅ ApiSyncAdapter: ${collection} is up to date (v${sinceVersion})`);
+                if (isDebugMode()) {
+                    console.log(`✅ ApiSyncAdapter: ${collection} is up to date (v${sinceVersion})`);
+                }
                 return [];
             }
 

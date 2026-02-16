@@ -39,6 +39,18 @@ class SyncManager {
     private readonly IMAGE_SYNC_BATCH_SIZE = 40;
 
     /**
+     * Helper: Check if debug mode for sync is enabled
+     */
+    private isDebugSync(): boolean {
+        try {
+            return window.location.search.includes('debug=sync') ||
+                localStorage.getItem('CLIC_POS_DEBUG_SYNC') === 'true';
+        } catch {
+            return false;
+        }
+    }
+
+    /**
      * Initialize sync manager
      */
     async initialize(config: BusinessConfig, terminalId: string) {
@@ -1068,7 +1080,9 @@ class SyncManager {
             const metadata = await apiSyncAdapter.getMetadata('config');
             const remoteVersion = metadata?.version;
 
-            console.log('⬇️ Pulling global configuration...');
+            if (this.isDebugSync()) {
+                console.log('⬇️ Pulling global configuration...');
+            }
             const config = await apiSyncAdapter.pullConfig();
             if (!config) return;
 

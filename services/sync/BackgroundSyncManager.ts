@@ -208,9 +208,6 @@ class BackgroundSyncManager {
         );
 
         if (pending.length === 0) {
-            if (collectionName === 'transactions') {
-                console.warn('ℹ️ BackgroundSyncManager: No pending transactions to push in current terminal view.');
-            }
             return;
         }
 
