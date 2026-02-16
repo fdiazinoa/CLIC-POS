@@ -92,6 +92,18 @@ interface POSInterfaceProps {
    rooms?: Room[]; // NEW: Room info for table disambiguation
 }
 
+const buildCartDigest = (items: CartItem[] = []): string =>
+   items
+      .map((item) =>
+         [
+            item.cartId || item.id || '',
+            Number(item.quantity || 0),
+            Number(item.price || 0),
+            (item.modifiers || []).join('|')
+         ].join(':')
+      )
+      .join('||');
+
 const POSInterface: React.FC<POSInterfaceProps> = ({
    config,
    currentUser,
@@ -127,6 +139,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    rooms = []
 }) => {
    const cartEndRef = useRef<HTMLDivElement>(null);
+   const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
    const [quickActionData, setQuickActionData] = useState<{ product: Product; x: number; y: number } | null>(null);
    const [successToast, setSuccessToast] = useState<string | null>(null);
 
@@ -136,6 +149,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return () => clearTimeout(timer);
       }
    }, [successToast]);
+
+   useEffect(() => () => {
+      if (ticketAutoSyncTimeoutRef.current) {
+         window.clearTimeout(ticketAutoSyncTimeoutRef.current);
+         ticketAutoSyncTimeoutRef.current = null;
+      }
+   }, []);
 
    const activeTerminal = (config.terminals || []).find(t => t.id === activeTerminalId) || (config.terminals || [])[0];
    const activeTerminalConfig = activeTerminal?.config;
@@ -377,6 +397,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
       }
    }, [activeTable, transactions, onUpdateCart, cart.length]);
+
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
    const [selectedProductForVariants, setSelectedProductForVariants] = useState<Product | null>(null);
    const [productForScale, setProductForScale] = useState<Product | null>(null);
@@ -906,16 +927,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             .map(cat => (typeof cat === 'string' ? cat.trim().toLowerCase() : ''))
             .filter(Boolean)
       );
+      const normalizedCategoryFilter = categoryFilter === 'ALL'
+         ? 'ALL'
+         : (typeof categoryFilter === 'string' ? categoryFilter.trim().toLowerCase() : '');
 
       const filtered = products.filter(p => {
          if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
          const isAvailableInWarehouse = defaultSalesWarehouseId ? p.activeInWarehouses?.includes(defaultSalesWarehouseId) ?? true : true;
          const productName = p.name || '';
          const matchSearch = productName.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
-         const matchCat = categoryFilter === 'ALL' || p.category === categoryFilter;
 
          // Category Scope Check
          const normalizedProductCategory = typeof p.category === 'string' ? p.category.trim().toLowerCase() : '';
+         const matchCat = normalizedCategoryFilter === 'ALL' || normalizedProductCategory === normalizedCategoryFilter;
          const matchAllowedCat = allowedCategorySet.size === 0 || allowedCategorySet.has(normalizedProductCategory);
 
          const isSellable = p.is_sellable !== false;
@@ -934,6 +958,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const categories = useMemo(() => {
       const allowedCats = activeTerminalConfig?.catalog?.allowedCategories || [];
+      const allowedDisplayCategories = Array.from(
+         new Set(
+            allowedCats
+               .map(cat => (typeof cat === 'string' ? cat.trim() : ''))
+               .filter(Boolean)
+         )
+      );
       const allowedCategorySet = new Set(
          allowedCats
             .map(cat => (typeof cat === 'string' ? cat.trim().toLowerCase() : ''))
@@ -948,10 +979,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return true;
       });
 
-      const cats = ['ALL', ...Array.from(new Set(availableProducts.map(p => p?.category).filter(Boolean))).sort()];
+      const availableCategoryMap = new Map<string, string>();
+      for (const product of availableProducts) {
+         const rawCategory = typeof product?.category === 'string' ? product.category.trim() : '';
+         const normalizedCategory = rawCategory.toLowerCase();
+         if (!rawCategory || availableCategoryMap.has(normalizedCategory)) continue;
+         availableCategoryMap.set(normalizedCategory, rawCategory);
+      }
+
+      const productCategories = Array.from(availableCategoryMap.values())
+         .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+
+      const scopedCategories = allowedDisplayCategories.length > 0
+         ? allowedDisplayCategories
+         : productCategories;
+
+      const cats = ['ALL', ...scopedCategories];
       console.log('[POS] Categories:', cats);
       return cats;
    }, [products, activeTerminalConfig]);
+
+   useEffect(() => {
+      if (categoryFilter !== 'ALL' && !categories.includes(categoryFilter)) {
+         setCategoryFilter('ALL');
+      }
+   }, [categories, categoryFilter]);
 
 
 
@@ -1014,6 +1066,62 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const reservationBalanceDue = Math.max(0, cartTotal - reservationAdvanceApplied);
    const amountDueNow = activeRecoveredReservation ? reservationBalanceDue : cartTotal;
    const isEditingRecoveredReservation = !!activeRecoveredReservation;
+
+   useEffect(() => {
+      const orderId = activeTable?.currentOrderId;
+      if (!orderId) return;
+      if (cart.length === 0) return;
+
+      const existing = parkedTickets.find(ticket => ticket.id === orderId);
+      const nextDigest = buildCartDigest(cart);
+      const existingDigest = buildCartDigest(existing?.items || []);
+      const sameCustomer = (existing?.customerId || '') === (selectedCustomer?.id || '');
+      const sameCustomerName = (existing?.customerName || '') === (selectedCustomer?.name || '');
+      const existingTotal = Number(existing?.total || 0);
+      const sameFinalTotal = Math.abs(existingTotal - cartTotal) < 0.01;
+
+      if (existingDigest === nextDigest && sameCustomer && sameCustomerName && sameFinalTotal) {
+         return;
+      }
+
+      const syncedTicket: ParkedTicket = {
+         id: orderId,
+         name: existing?.name || `Mesa: ${activeTable.nombre || activeTable.name || orderId}`,
+         items: [...cart],
+         total: cartTotal,
+         customerId: selectedCustomer?.id,
+         customerName: selectedCustomer?.name,
+         timestamp: existing?.timestamp || new Date().toISOString()
+      };
+
+      const nextTickets = [...parkedTickets.filter(ticket => ticket.id !== orderId), syncedTicket];
+
+      if (ticketAutoSyncTimeoutRef.current) {
+         window.clearTimeout(ticketAutoSyncTimeoutRef.current);
+      }
+
+      ticketAutoSyncTimeoutRef.current = window.setTimeout(() => {
+         onUpdateParkedTickets(nextTickets);
+         ticketAutoSyncTimeoutRef.current = null;
+      }, 120);
+
+      return () => {
+         if (ticketAutoSyncTimeoutRef.current) {
+            window.clearTimeout(ticketAutoSyncTimeoutRef.current);
+            ticketAutoSyncTimeoutRef.current = null;
+         }
+      };
+   }, [
+      activeTable?.currentOrderId,
+      activeTable?.nombre,
+      activeTable?.name,
+      cart,
+      cartTotal,
+      parkedTickets,
+      selectedCustomer?.id,
+      selectedCustomer?.name,
+      onUpdateParkedTickets
+   ]);
 
    const handleCreateReservation = async () => {
       if (cart.length === 0) {
@@ -1520,12 +1628,45 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setShowReservationModal(true);
    };
 
+   const releaseActiveEmptyTable = async (): Promise<boolean> => {
+      if (!activeTable || cart.length > 0) return false;
+
+      try {
+         const releaseRes = await fetch('/api/mesas/liberar', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tableId: activeTable.id })
+         });
+         const releaseData = await releaseRes.json().catch(() => null);
+
+         if (!releaseRes.ok || (releaseData && releaseData.success === false)) {
+            throw new Error(releaseData?.message || `HTTP ${releaseRes.status}`);
+         }
+
+         if (activeTable.currentOrderId) {
+            const remaining = parkedTickets.filter(p => p.id !== activeTable.currentOrderId);
+            onUpdateParkedTickets(remaining);
+         }
+
+         onUpdateCart([]);
+         onSelectCustomer(null);
+         setActiveRecoveredReservation(null);
+         if (onClearActiveTable) onClearActiveTable();
+         setSuccessToast('Mesa liberada (sin productos)');
+         return true;
+      } catch (error) {
+         console.error('Failed to auto-release empty table:', error);
+         return false;
+      }
+   };
+
    const handleParkCurrentTicket = async () => {
       if (cart.length === 0) return;
       const newParked: ParkedTicket = {
          id: activeTable?.currentOrderId || `P-${Date.now()}`,
          name: activeTable ? `Mesa: ${activeTable.name}` : (selectedCustomer ? selectedCustomer.name : `Ticket #${(Array.isArray(parkedTickets) ? parkedTickets : []).length + 1}`),
          items: [...cart],
+         total: cartTotal,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
          timestamp: new Date().toISOString()
@@ -1570,11 +1711,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const handleSendAndExit = async () => {
-      // 1. Park/Save the ticket first
-      await handleParkCurrentTicket();
+      // 1. If table is empty, auto-release to avoid ghost occupied tables.
+      const releasedEmptyTable = await releaseActiveEmptyTable();
 
-      // 2. Dispatch to kitchen if applicable
-      if (activeTerminalConfig?.operational?.usa_modulos_cocina && cart.length > 0) {
+      // 2. Otherwise park/save the ticket.
+      if (!releasedEmptyTable) {
+         await handleParkCurrentTicket();
+      }
+
+      // 3. Dispatch to kitchen if applicable
+      if (!releasedEmptyTable && activeTerminalConfig?.operational?.usa_modulos_cocina && cart.length > 0) {
          try {
             await handleDispatchCommand();
          } catch (e) {
@@ -1582,13 +1728,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
       }
 
-      // 3. Navigate back to map
+      // 4. Navigate back to map
       if (onOpenTableMap) onOpenTableMap();
    };
 
    const handleBackToMap = async () => {
-      // Ensure we park if there's something to park
-      if (cart.length > 0) {
+      const releasedEmptyTable = await releaseActiveEmptyTable();
+
+      // Ensure we park if there's something to park and no auto-release happened
+      if (!releasedEmptyTable && cart.length > 0) {
          await handleParkCurrentTicket();
       }
       // Always navigate, even if empty (handleParkCurrentTicket might skip nav if empty/no-table)
@@ -2092,7 +2240,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <div className="flex flex-col">
                               {(() => {
                                  const room = rooms?.find(r => r.id === activeTable.roomId);
-                                 return room ? <span className="text-[10px] text-gray-400 -mb-1 font-bold uppercase">{room.nombre || room.name}</span> : null;
+                                 return room ? <span className="text-[10px] text-gray-400 -mb-1 font-bold uppercase">{room.name || room.nombre}</span> : null;
                               })()}
                               <span>Mesa {activeTable.nombre || activeTable.name}</span>
                            </div>
@@ -2161,7 +2309,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     if (room) {
                                        return (
                                           <span className="text-[9px] text-gray-400 font-bold mb-0.5">
-                                             {room.nombre || room.name}
+                                             {room.name || room.nombre}
                                           </span>
                                        );
                                     }

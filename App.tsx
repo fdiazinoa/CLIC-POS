@@ -189,7 +189,7 @@ const AppContent: React.FC = () => {
     const isDefaultTerminal = terminalKey === 't1';
     const latestCloseTs = getLatestZCloseTimestamp(terminalId);
 
-    return transactions.filter(t => {
+    const pending = transactions.filter(t => {
       const belongsToTerminal = normalizeTerminalId(t.terminalId) === terminalKey || (!t.terminalId && isDefaultTerminal);
       if (!belongsToTerminal) return false;
       if (t.zReportId) return false;
@@ -201,6 +201,8 @@ const AppContent: React.FC = () => {
       if (!Number.isFinite(txTime)) return latestCloseTs <= 0;
       return latestCloseTs <= 0 || txTime > (latestCloseTs - DRIFT_TOLERANCE_MS);
     });
+
+    return pending.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
   };
 
   const getPendingCashMovementsForTerminal = (terminalId: string) => {
@@ -636,14 +638,20 @@ const AppContent: React.FC = () => {
               const terminalAllowedCategories = (pairedTerminal.config?.catalog?.allowedCategories || [])
                 .map((cat: any) => normalizeCategory(cat))
                 .filter(Boolean);
+              const matchedAllowedCategoriesCount = terminalAllowedCategories.filter(cat => sellableCategories.has(cat)).length;
+              const allowedCoverageRatio = terminalAllowedCategories.length > 0
+                ? matchedAllowedCategoriesCount / terminalAllowedCategories.length
+                : 1;
 
               const hasTinyCatalog = localCount > 0 && localCount <= 5;
-              const hasCategoryMismatch = terminalAllowedCategories.length >= 5 && sellableCategories.size <= 2;
+              const hasCategoryMismatch =
+                terminalAllowedCategories.length >= 2 &&
+                (matchedAllowedCategoriesCount === 0 || allowedCoverageRatio < 0.5);
 
               if (hasTinyCatalog || hasCategoryMismatch) {
                 console.warn(
                   `⚠️ Catalog drift detected on ${pairedTerminal.id}. ` +
-                  `localProducts=${localCount}, sellableCategories=${sellableCategories.size}, allowedCategories=${terminalAllowedCategories.length}. ` +
+                  `localProducts=${localCount}, sellableCategories=${sellableCategories.size}, allowedCategories=${terminalAllowedCategories.length}, matchedAllowed=${matchedAllowedCategoriesCount}. ` +
                   `Running forcePullAll...`
                 );
                 await syncManager.forcePullAll();
@@ -828,12 +836,13 @@ const AppContent: React.FC = () => {
     // Poll tables if in restaurant mode OR retail with tables enabled
     const usesTables = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.config?.operational?.usa_mesas;
 
-    if (config.vertical === 'RESTAURANT' || usesTables) {
+    // IMPORTANT: avoid overriding local edits while designing layout
+    if ((config.vertical === 'RESTAURANT' || usesTables) && currentView !== 'TABLE_DESIGNER') {
       fetchTables();
       const interval = setInterval(fetchTables, 10000); // Poll every 10s
       return () => clearInterval(interval);
     }
-  }, [config.vertical, config.terminals, deviceId]);
+  }, [config.vertical, config.terminals, deviceId, currentView]);
 
   useEffect(() => {
     // --- SYNC EVENT LISTENERS (For Slave Terminals) ---
@@ -886,6 +895,45 @@ const AppContent: React.FC = () => {
         authLevelService.init(incomingConfig, currentTerminal.id);
         terminalRouter.init(incomingConfig, currentTerminal.id, currentTerminal.config.deviceRole || null);
         await syncManager.initialize(incomingConfig, currentTerminal.id);
+
+        // If allowed categories changed but local catalog is stale/partial, force a products refresh.
+        const normalizeCategory = (value: any) =>
+          typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+        const terminalAllowedCategories = (currentTerminal.config?.catalog?.allowedCategories || [])
+          .map((cat: any) => normalizeCategory(cat))
+          .filter(Boolean);
+
+        if (terminalAllowedCategories.length >= 2) {
+          const localProducts = await db.get('products') as Product[];
+          const localCount = Array.isArray(localProducts) ? localProducts.length : 0;
+          const sellableCategories = new Set(
+            (localProducts || [])
+              .filter((p: any) => p && p.is_sellable !== false)
+              .map((p: any) => normalizeCategory(p.category))
+              .filter(Boolean)
+          );
+
+          const matchedAllowedCategoriesCount = terminalAllowedCategories
+            .filter(cat => sellableCategories.has(cat))
+            .length;
+          const allowedCoverageRatio = matchedAllowedCategoriesCount / terminalAllowedCategories.length;
+          const hasTinyCatalog = localCount > 0 && localCount <= 5;
+          const hasCategoryMismatch = matchedAllowedCategoriesCount === 0 || allowedCoverageRatio < 0.5;
+
+          if (hasTinyCatalog || hasCategoryMismatch) {
+            console.warn(
+              `⚠️ App: Runtime config drift detected on ${currentTerminal.id}. ` +
+              `localProducts=${localCount}, allowed=${terminalAllowedCategories.length}, matched=${matchedAllowedCategoriesCount}. ` +
+              `Forcing products pull...`
+            );
+            await syncManager.pullCatalog('products', true);
+            const refreshedProducts = await db.get('products') as Product[];
+            if (Array.isArray(refreshedProducts)) {
+              setProducts(refreshedProducts);
+            }
+          }
+        }
       } catch (error) {
         console.error('❌ Failed to apply synced config at runtime:', error);
       }
@@ -1229,17 +1277,115 @@ const AppContent: React.FC = () => {
     backgroundSyncManager.triggerSync().catch(console.error);
   };
 
+  const resolveRoomLabel = (room: Pick<Room, 'name' | 'nombre'>): string => {
+    const fromName = typeof room.name === 'string' ? room.name.trim() : '';
+    const fromNombre = typeof room.nombre === 'string' ? room.nombre.trim() : '';
+    return fromName || fromNombre || 'Sala';
+  };
+
+  const normalizeRoomForLayout = (room: Room): Room => {
+    const label = resolveRoomLabel(room);
+    return {
+      ...room,
+      name: label,
+      nombre: label
+    };
+  };
+
+  const resolveTableLabel = (table: Pick<Table, 'name' | 'nombre' | 'shape'>): string => {
+    const fromName = typeof table.name === 'string' ? table.name.trim() : '';
+    const fromNombre = typeof table.nombre === 'string' ? table.nombre.trim() : '';
+    const fallback = table.shape === 'OBSTACLE' ? 'Muro' : 'Mesa';
+    return fromName || fromNombre || fallback;
+  };
+
+  const normalizeTableForLayout = (table: Table): Table => {
+    const label = resolveTableLabel(table);
+    const isObstacle = table.shape === 'OBSTACLE';
+    return {
+      ...table,
+      nombre: label,
+      name: label,
+      width: table.width || 100,
+      height: isObstacle ? (table.height || 20) : (table.height || 100),
+      capacity: isObstacle ? (table.capacity || 0) : Math.max(1, table.capacity || 1),
+      consumo_minimo_mesa: isObstacle ? 0 : Math.max(0, Number(table.consumo_minimo_mesa || 0)),
+      comensales_minimos: isObstacle ? 0 : Math.max(1, Number(table.comensales_minimos || 1))
+    };
+  };
+
+  const syncFloorPlanToServer = async (roomsPayload: Room[], tablesPayload: Table[]) => {
+    const headers = { 'Content-Type': 'application/json' };
+    const normalizedRoomsPayload = roomsPayload.map(normalizeRoomForLayout);
+    const normalizedTablesPayload = tablesPayload.map(normalizeTableForLayout);
+
+    // Pull current server snapshot to compute deletions safely
+    const snapshotRes = await fetch('/api/mesas');
+    if (!snapshotRes.ok) {
+      throw new Error(`No se pudo leer estado actual de mesas (HTTP ${snapshotRes.status})`);
+    }
+    const snapshot = await snapshotRes.json();
+    const serverRooms: Room[] = Array.isArray(snapshot?.rooms) ? snapshot.rooms : [];
+    const serverTables: Table[] = Array.isArray(snapshot?.tables) ? snapshot.tables : [];
+
+    const nextRoomIds = new Set(normalizedRoomsPayload.map(r => r.id));
+    const nextTableIds = new Set(normalizedTablesPayload.map(t => t.id));
+
+    // Upsert rooms first
+    for (const roomPayload of normalizedRoomsPayload) {
+      const res = await fetch(`/api/rooms/${encodeURIComponent(roomPayload.id)}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(roomPayload)
+      });
+      if (!res.ok) {
+        throw new Error(`Error guardando sala ${roomPayload.id} (HTTP ${res.status})`);
+      }
+    }
+
+    // Upsert tables with normalized designer defaults
+    for (const tablePayload of normalizedTablesPayload) {
+      const res = await fetch(`/api/tables/${encodeURIComponent(tablePayload.id)}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(tablePayload)
+      });
+      if (!res.ok) {
+        throw new Error(`Error guardando mesa ${tablePayload.id} (HTTP ${res.status})`);
+      }
+    }
+
+    // Delete removed tables, then rooms
+    const removedTables = serverTables.filter(t => !nextTableIds.has(t.id));
+    for (const table of removedTables) {
+      const res = await fetch(`/api/tables/${encodeURIComponent(table.id)}`, { method: 'DELETE' });
+      if (!res.ok) {
+        throw new Error(`Error eliminando mesa ${table.id} (HTTP ${res.status})`);
+      }
+    }
+
+    const removedRooms = serverRooms.filter(r => !nextRoomIds.has(r.id));
+    for (const room of removedRooms) {
+      const res = await fetch(`/api/rooms/${encodeURIComponent(room.id)}`, { method: 'DELETE' });
+      if (!res.ok) {
+        throw new Error(`Error eliminando sala ${room.id} (HTTP ${res.status})`);
+      }
+    }
+  };
+
   const handleSaveFloorPlan = async (newRooms: Room[], newTables: Table[]) => {
     console.log('💾 Saving Floor Plan:', { rooms: newRooms.length, tables: newTables.length });
+    const normalizedRooms = newRooms.map(normalizeRoomForLayout);
+    const normalizedTablesInput = newTables.map(normalizeTableForLayout);
 
     // 1. Save Rooms (Overwrite is fine for config)
-    await db.save('rooms', newRooms);
-    setRooms(newRooms);
+    await db.save('rooms', normalizedRooms);
+    setRooms(normalizedRooms);
 
     // 2. Save Tables (Merge operational state AND Delete removed tables)
     // First, fetch all existing tables from DB to identify deletions
     const existingDbTables = await db.get('tables') as Table[] || [];
-    const newTableIds = new Set(newTables.map(t => t.id));
+    const newTableIds = new Set(normalizedTablesInput.map(t => t.id));
 
     // Identify tables to delete (present in DB but not in new layout)
     const tablesToDelete = existingDbTables.filter(t => !newTableIds.has(t.id));
@@ -1252,23 +1398,31 @@ const AppContent: React.FC = () => {
     }
 
     // Save Tables (Merge operational state)
-    const mergedTables = newTables.map(newT => {
-      const existing = tables.find(t => t.id === newT.id);
+    const mergedTables = normalizedTablesInput.map(newT => {
+      const existing = existingDbTables.find(t => t.id === newT.id) || tables.find(t => t.id === newT.id);
       return {
         ...newT,
         // Operational fields usually not present in newT if it came from Designer state only,
         // but Designer state initialized from 'tables' prop which has them.
         // However, if 'setTables' updates local state in Designer and loses keys, we restore them here.
         status: existing?.status || newT.status || 'FREE',
-        currentOrderId: existing?.currentOrderId || newT.currentOrderId,
-        currentOrderTotal: existing?.currentOrderTotal || newT.currentOrderTotal,
-        timeSeated: existing?.timeSeated || newT.timeSeated,
-        waiterName: existing?.waiterName || newT.waiterName
+        currentOrderId: existing?.currentOrderId ?? newT.currentOrderId,
+        currentOrderTotal: existing?.currentOrderTotal ?? newT.currentOrderTotal,
+        timeSeated: existing?.timeSeated ?? newT.timeSeated,
+        waiterName: existing?.waiterName ?? newT.waiterName
       };
     });
 
     await db.save('tables', mergedTables);
     setTables(mergedTables);
+    try {
+      await syncFloorPlanToServer(normalizedRooms, mergedTables);
+      await fetchTables();
+      console.log('✅ Floor Plan synced to API server.');
+    } catch (error: any) {
+      console.error('❌ Floor Plan API sync failed:', error);
+      alert(`Layout guardado localmente, pero falló guardado en servidor: ${error?.message || 'Error desconocido'}`);
+    }
     console.log('✅ Floor Plan saved to DB with robustness.');
     // Optional: Sync Trigger
     if (syncManager) {
@@ -1285,21 +1439,54 @@ const AppContent: React.FC = () => {
       console.log(`📊 Z-Report: Starting closure for terminal ${terminalId} (Device: ${deviceId})`);
 
       // 2. Identify pending operational data since the last Z of this terminal.
-      const terminalTransactions = getPendingTransactionsForTerminal(terminalId);
-      const terminalCashMovements = getPendingCashMovementsForTerminal(terminalId);
+      const terminalKey = normalizeTerminalId(terminalId);
+      const isDefaultTerminal = terminalKey === 't1';
+      const belongsToCurrentTerminal = (value?: string | null) =>
+        normalizeTerminalId(value) === terminalKey || (!value && isDefaultTerminal);
+
+      const pendingTransactions = getPendingTransactionsForTerminal(terminalId);
+      const pendingCashMovements = getPendingCashMovementsForTerminal(terminalId);
+
+      const reportTransactionIds = Array.isArray(reportData?.transactionIds)
+        ? new Set<string>(reportData.transactionIds.map((id: string) => String(id)))
+        : null;
+      const reportMovementIds = Array.isArray(reportData?.cashMovementIds)
+        ? new Set<string>(reportData.cashMovementIds.map((id: string) => String(id)))
+        : null;
+
+      const terminalTransactions = reportTransactionIds
+        ? transactions
+          .filter(t => reportTransactionIds.has(t.id))
+          .filter(t => belongsToCurrentTerminal(t.terminalId))
+          .filter(t => !t.zReportId)
+          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+        : pendingTransactions;
+
+      const terminalCashMovements = reportMovementIds
+        ? cashMovements
+          .filter(m => reportMovementIds.has(m.id))
+          .filter(m => belongsToCurrentTerminal(m.terminalId))
+        : pendingCashMovements;
 
       console.log(`🔒 Shift Segregation: Found ${terminalTransactions.length} txns and ${terminalCashMovements.length} cash movements for ${terminalId}`);
 
-      // 3. Totals and Stats (Prioritize Dashboard-confirmed values)
-      const totalsByMethod = reportData?.totalsByMethod || terminalTransactions.flatMap(t => t?.payments || []).reduce((acc: Record<string, number>, p) => {
+      // 3. Totals and Stats from the exact transaction set being archived.
+      const totalsByMethod = terminalTransactions.flatMap(t => t?.payments || []).reduce((acc: Record<string, number>, p) => {
         if (p && p.method) {
           acc[p.method] = (acc[p.method] || 0) + p.amount;
         }
         return acc;
       }, {});
 
-      const stats = reportData?.stats || calculateZReportStats(terminalTransactions);
-      const transactionCount = reportData?.transactionCount ?? terminalTransactions.length;
+      const stats = calculateZReportStats(terminalTransactions);
+      const transactionCount = terminalTransactions.length;
+      const openedAtCandidates = [
+        ...terminalTransactions.map(t => new Date(t.date).getTime()),
+        ...terminalCashMovements.map(m => new Date(m.timestamp).getTime())
+      ].filter((value) => Number.isFinite(value)) as number[];
+      const openedAt = openedAtCandidates.length > 0
+        ? new Date(Math.min(...openedAtCandidates)).toISOString()
+        : new Date().toISOString();
 
       // 4. Create and Save Z-Report
       let sequenceNumber = '';
@@ -1372,7 +1559,7 @@ const AppContent: React.FC = () => {
         id: zReportId,
         terminalId,
         sequenceNumber,
-        openedAt: terminalTransactions.length > 0 ? terminalTransactions[0].date : new Date().toISOString(),
+        openedAt,
         closedAt: new Date().toISOString(),
         closedByUserId: currentUser?.id || 'sys',
         closedByUserName: currentUser?.name || 'System',
@@ -1555,6 +1742,7 @@ const AppContent: React.FC = () => {
                 rooms={rooms}
                 currentRoomId={activeRoomId}
                 tables={tables}
+                parkedTickets={parkedTickets}
                 onTableClick={async (table) => {
                   console.log('Mesa seleccionada:', table.name);
                   setActiveTable(table);
@@ -1623,7 +1811,9 @@ const AppContent: React.FC = () => {
                   handleSaveFloorPlan(updatedRooms, tables);
                 }}
                 onUpdateRoom={(updatedRoom) => {
-                  const newRooms = rooms.map(r => r.id === updatedRoom.id ? updatedRoom : r);
+                  const normalizedName = (updatedRoom.name || updatedRoom.nombre || '').trim() || 'Sala';
+                  const normalizedRoom = { ...updatedRoom, name: normalizedName, nombre: normalizedName };
+                  const newRooms = rooms.map(r => r.id === normalizedRoom.id ? normalizedRoom : r);
                   setRooms(newRooms);
                   handleSaveFloorPlan(newRooms, tables);
                 }}

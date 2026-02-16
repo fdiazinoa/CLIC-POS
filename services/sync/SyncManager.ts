@@ -67,6 +67,18 @@ class SyncManager {
                 return null;
             }
         };
+        const normalizeLegacyMasterInput = (value: string): string => {
+            return value
+                .trim()
+                .replace(/^https?:\/\//i, '')
+                .replace(/\/.*$/, '');
+        };
+        const buildMasterUrlFromLegacyInput = (value: string): string => {
+            const normalized = normalizeLegacyMasterInput(value);
+            if (!normalized) return runtimeMasterUrl;
+            const hostWithPort = normalized.includes(':') ? normalized : `${normalized}:3001`;
+            return `${window.location.protocol}//${hostWithPort}`;
+        };
 
         const runtimeHost = window.location.hostname.toLowerCase();
         const savedHost = savedMasterUrl ? parseHostname(savedMasterUrl) : null;
@@ -92,14 +104,49 @@ class SyncManager {
             localStorage.setItem('CLIC_POS_MASTER_URL', runtimeMasterUrl);
         }
 
+        // Slave terminals: prefer explicit paired master IP over stale saved URL.
+        if (!this.isMaster) {
+            const legacyMasterIp = localStorage.getItem('pos_master_ip');
+            if (legacyMasterIp) {
+                const forcedSlaveMasterUrl = buildMasterUrlFromLegacyInput(legacyMasterIp);
+                const forcedHost = parseHostname(forcedSlaveMasterUrl);
+                const currentHost = savedMasterUrl ? parseHostname(savedMasterUrl) : null;
+                if (!currentHost || !forcedHost || currentHost !== forcedHost) {
+                    console.warn(
+                        `⚠️ SyncManager: SLAVE overriding stale master URL (${savedMasterUrl || 'none'}) with paired master (${forcedSlaveMasterUrl})`
+                    );
+                    savedMasterUrl = forcedSlaveMasterUrl;
+                    localStorage.setItem('CLIC_POS_MASTER_URL', forcedSlaveMasterUrl);
+                }
+            }
+        }
+
         // Fallback: Check for 'pos_master_ip' (set by TerminalBindingScreen)
         if (!savedMasterUrl) {
             const legacyIp = localStorage.getItem('pos_master_ip');
             if (legacyIp) {
-                // Assume standard port 3001 or infer from location if local
-                savedMasterUrl = `http://${legacyIp}:3001`;
+                savedMasterUrl = buildMasterUrlFromLegacyInput(legacyIp);
                 console.log(`ℹ️ SyncManager: Inferred Master URL from IP: ${savedMasterUrl}`);
             }
+        }
+
+        // Slave safety: never keep loopback master URL when running from a remote host.
+        if (!this.isMaster && savedMasterUrl) {
+            const effectiveSavedHost = parseHostname(savedMasterUrl);
+            const isEffectiveSavedLoopback = effectiveSavedHost === 'localhost' || effectiveSavedHost === '127.0.0.1';
+            if (isEffectiveSavedLoopback && !isRuntimeLoopback) {
+                console.warn(
+                    `⚠️ SyncManager: SLAVE replacing loopback master URL (${savedMasterUrl}) with runtime host (${runtimeMasterUrl})`
+                );
+                savedMasterUrl = runtimeMasterUrl;
+                localStorage.setItem('CLIC_POS_MASTER_URL', runtimeMasterUrl);
+            }
+        }
+
+        // Last resort on slave: use runtime host as master URL if nothing is configured.
+        if (!this.isMaster && !savedMasterUrl) {
+            savedMasterUrl = runtimeMasterUrl;
+            localStorage.setItem('CLIC_POS_MASTER_URL', runtimeMasterUrl);
         }
 
         this.syncConfig = terminal?.config.syncConfig || {
