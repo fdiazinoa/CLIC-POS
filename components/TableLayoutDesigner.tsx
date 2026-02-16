@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect, MouseEvent } from 'react';
+import React, { useState, useRef } from 'react';
 import {
-    Square, Circle, Move, Save, Trash2, Plus,
+    Square, Circle, Save, Trash2, Plus,
     Layout, Grid, Armchair, Ban, Settings
 } from 'lucide-react';
 import { Table, Room, TableShape } from '../types';
@@ -24,28 +24,47 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
     rooms, currentRoomId, tables, onSave, onUpdateTables, onCreateRoom, onChangeRoom, onUpdateRoom
 }) => {
     const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
-    const [isDragging, setIsDragging] = useState(false);
     const [showRoomSettings, setShowRoomSettings] = useState(false);
-    const dragOffset = useRef({ x: 0, y: 0 });
     const canvasRef = useRef<HTMLDivElement>(null);
+    const dragStateRef = useRef<{
+        tableId: string;
+        pointerId: number;
+        offsetX: number;
+        offsetY: number;
+    } | null>(null);
 
     // Snap to Grid function
     const snapToGrid = (val: number) => Math.round(val / GRID_SIZE) * GRID_SIZE;
+    const generateTableId = () => {
+        if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+            return crypto.randomUUID();
+        }
+        return `tbl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    };
+    const getRoomLabel = (room: Room) => room.name?.trim() || room.nombre?.trim() || 'Sala';
+    const getTableLabel = (table: Table) => table.name?.trim() || table.nombre?.trim() || (table.shape === 'OBSTACLE' ? 'Muro' : 'Mesa');
 
     // Add new table
     const handleAddTable = (shape: TableShape) => {
+        const isObstacle = shape === 'OBSTACLE';
+        const elementName = isObstacle
+            ? `Muro ${tables.filter(t => t.roomId === currentRoomId && t.shape === 'OBSTACLE').length + 1}`
+            : `Mesa ${tables.filter(t => t.roomId === currentRoomId && t.shape !== 'OBSTACLE').length + 1}`;
+
         const newTable: Table = {
-            id: crypto.randomUUID(),
+            id: generateTableId(),
             roomId: currentRoomId,
-            name: `Mesa ${tables.filter(t => t.roomId === currentRoomId).length + 1}`,
-            nombre: `Mesa ${tables.filter(t => t.roomId === currentRoomId).length + 1}`,
+            name: elementName,
+            nombre: elementName,
             posX: 100 + (tables.length * 10), // Offset slightly to see new ones
             posY: 100 + (tables.length * 10),
-            width: shape === 'OBSTACLE' ? 100 : 80,
-            height: shape === 'OBSTACLE' ? 20 : 80,
+            width: shape === 'OBSTACLE' ? 100 : 100,
+            height: shape === 'OBSTACLE' ? 20 : 100,
             shape,
             rotation: 0,
-            capacity: 4
+            capacity: 1,
+            consumo_minimo_mesa: 0,
+            comensales_minimos: 1
         };
         // Dedup: Ensure we don't just append if something weird happens, but this is a new ID.
         // The issue 'ghost tables' might be re-renders or hydration issues.
@@ -53,26 +72,25 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         setSelectedTableId(newTable.id);
     };
 
-    // Dragging Logic
-    const handleMouseDown = (e: MouseEvent, tableId: string) => {
+    // Pointer Dragging Logic (desktop + touch)
+    const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>, tableId: string) => {
         e.stopPropagation();
-        const table = tables.find(t => t.id === tableId);
-        if (!table) return;
+        const table = tables.find(t => t.id === tableId && t.roomId === currentRoomId);
+        if (!table || !canvasRef.current) return;
+
+        const canvasRect = canvasRef.current.getBoundingClientRect();
 
         setSelectedTableId(tableId);
-        setIsDragging(true);
+        dragStateRef.current = {
+            tableId,
+            pointerId: e.pointerId,
+            offsetX: e.clientX - canvasRect.left - table.posX,
+            offsetY: e.clientY - canvasRect.top - table.posY
+        };
 
-        // Calculate offset relative to the table's top-left
-        // e.clientX is global, we need table pos relative to canvas
-        // Actually easier: just track the diff between mouse and table corner
-        // But table.posX is relative to canvas.
-        // Let's rely on movementX/Y or simple start/current delta
-
-        // Better:
-        // startX, startY = mouse global
-        // initialTableX, initialTableY = table pos
-
-        // We'll attach global window listeners for drag to avoid losing focus
+        if (e.currentTarget.setPointerCapture) {
+            e.currentTarget.setPointerCapture(e.pointerId);
+        }
     };
 
     // Update Table Prop
@@ -85,45 +103,38 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
         setSelectedTableId(null);
     };
 
-    // Custom Drag Hook equivalent inside the component
-    useEffect(() => {
-        const handleGlobalMouseMove = (e: globalThis.MouseEvent) => {
-            if (!isDragging || !selectedTableId || !canvasRef.current) return;
+    const handleCanvasPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+        const dragState = dragStateRef.current;
+        if (!dragState || dragState.pointerId !== e.pointerId || !canvasRef.current) return;
 
-            const canvasRect = canvasRef.current.getBoundingClientRect();
-            const relativeX = e.clientX - canvasRect.left;
-            const relativeY = e.clientY - canvasRect.top;
+        e.preventDefault();
+        const canvasRect = canvasRef.current.getBoundingClientRect();
+        const draggedTable = tables.find(t => t.id === dragState.tableId);
+        if (!draggedTable) return;
 
-            // Center the table on the mouse cursor roughly (or use offset if we stored it)
-            // Simpler: Just snap the center or top-left to mouse
-            // Let's snap top-left for now but allow refinement
+        let newX = snapToGrid(e.clientX - canvasRect.left - dragState.offsetX);
+        let newY = snapToGrid(e.clientY - canvasRect.top - dragState.offsetY);
 
-            let newX = snapToGrid(relativeX - 40); // 40 is half width roughly
-            let newY = snapToGrid(relativeY - 40);
+        const maxX = Math.max(0, CANVAS_WIDTH - draggedTable.width);
+        const maxY = Math.max(0, CANVAS_HEIGHT - draggedTable.height);
 
-            // Boundaries
-            if (newX < 0) newX = 0;
-            if (newY < 0) newY = 0;
-            if (newX > CANVAS_WIDTH - 40) newX = CANVAS_WIDTH - 40;
-            if (newY > CANVAS_HEIGHT - 40) newY = CANVAS_HEIGHT - 40;
+        if (newX < 0) newX = 0;
+        if (newY < 0) newY = 0;
+        if (newX > maxX) newX = maxX;
+        if (newY > maxY) newY = maxY;
 
-            updateTable(selectedTableId, { posX: newX, posY: newY });
-        };
+        updateTable(dragState.tableId, { posX: newX, posY: newY });
+    };
 
-        const handleGlobalMouseUp = () => {
-            setIsDragging(false);
-        };
+    const handleCanvasPointerEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+        const dragState = dragStateRef.current;
+        if (!dragState || dragState.pointerId !== e.pointerId) return;
 
-        if (isDragging) {
-            window.addEventListener('mousemove', handleGlobalMouseMove);
-            window.addEventListener('mouseup', handleGlobalMouseUp);
+        dragStateRef.current = null;
+        if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+            e.currentTarget.releasePointerCapture(e.pointerId);
         }
-
-        return () => {
-            window.removeEventListener('mousemove', handleGlobalMouseMove);
-            window.removeEventListener('mouseup', handleGlobalMouseUp);
-        };
-    }, [isDragging, selectedTableId]);
+    };
 
     const selectedTable = tables.find(t => t.id === selectedTableId);
 
@@ -141,7 +152,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                 onClick={() => onChangeRoom(room.id)}
                                 className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all ${currentRoomId === room.id ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
                             >
-                                {room.name}
+                                {getRoomLabel(room)}
                             </button>
                         ))}
                         <button onClick={() => onCreateRoom?.("Nueva Sala")} className="px-3 py-1.5 text-xs font-bold text-blue-600 hover:bg-blue-50 rounded-md">
@@ -182,7 +193,10 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
 
                     <div
                         ref={canvasRef}
-                        className="bg-white shadow-2xl relative select-none overflow-hidden"
+                        onPointerMove={handleCanvasPointerMove}
+                        onPointerUp={handleCanvasPointerEnd}
+                        onPointerCancel={handleCanvasPointerEnd}
+                        className="bg-white shadow-2xl relative select-none overflow-hidden touch-none"
                         style={{
                             width: CANVAS_WIDTH,
                             height: CANVAS_HEIGHT,
@@ -198,7 +212,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                         {tables.filter(t => t.roomId === currentRoomId).map(table => (
                             <div
                                 key={table.id}
-                                onMouseDown={(e) => handleMouseDown(e, table.id)}
+                                onPointerDown={(e) => handlePointerDown(e, table.id)}
                                 className={`absolute cursor-move flex flex-col items-center justify-center transition-shadow group
                        ${selectedTableId === table.id ? 'ring-2 ring-blue-500 z-10 shadow-xl' : 'hover:ring-2 hover:ring-blue-300 z-0'}
                        ${table.shape === 'CIRCLE' ? 'rounded-full' : 'rounded-lg'}
@@ -216,7 +230,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                     <>
                                         <Armchair size={16} className="mb-0.5 opacity-30" />
                                         <span className="text-[10px] font-black leading-tight pointer-events-none whitespace-nowrap overflow-hidden text-ellipsis max-w-[90%] text-center">
-                                            {table.name}
+                                            {getTableLabel(table)}
                                         </span>
                                         <span className="text-[8px] text-slate-400 font-bold pointer-events-none">{table.capacity}p</span>
                                     </>
@@ -232,7 +246,7 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                     <div className="w-64 bg-white border-l border-slate-200 p-6 flex flex-col gap-6 animate-in slide-in-from-right duration-200">
                         <div>
                             <h3 className="font-bold text-slate-800 mb-1">Propiedades</h3>
-                            <p className="text-xs text-slate-500">Editando {selectedTable.name}</p>
+                            <p className="text-xs text-slate-500">Editando {getTableLabel(selectedTable)}</p>
                         </div>
 
                         <div className="space-y-4">
@@ -240,8 +254,8 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                 <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Nombre</label>
                                 <input
                                     type="text"
-                                    value={selectedTable.name}
-                                    onChange={e => updateTable(selectedTable.id, { name: e.target.value })}
+                                    value={getTableLabel(selectedTable)}
+                                    onChange={e => updateTable(selectedTable.id, { name: e.target.value, nombre: e.target.value })}
                                     className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-bold shadow-sm focus:border-blue-500 outline-none"
                                 />
                             </div>
@@ -250,9 +264,9 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                 <div>
                                     <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Capacidad (Pax)</label>
                                     <div className="flex items-center gap-2">
-                                        <button onClick={() => updateTable(selectedTable.id, { capacity: Math.max(1, (selectedTable.capacity || 2) - 1) })} className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 font-bold">-</button>
-                                        <div className="flex-1 text-center font-bold text-lg">{selectedTable.capacity}</div>
-                                        <button onClick={() => updateTable(selectedTable.id, { capacity: (selectedTable.capacity || 2) + 1 })} className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 font-bold">+</button>
+                                        <button onClick={() => updateTable(selectedTable.id, { capacity: Math.max(1, (selectedTable.capacity || 1) - 1) })} className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 font-bold">-</button>
+                                        <div className="flex-1 text-center font-bold text-lg">{selectedTable.capacity || 1}</div>
+                                        <button onClick={() => updateTable(selectedTable.id, { capacity: (selectedTable.capacity || 1) + 1 })} className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 font-bold">+</button>
                                     </div>
                                 </div>
                             )}
@@ -294,6 +308,34 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                 <div className="text-center text-xs font-mono text-slate-500">{selectedTable.rotation}°</div>
                             </div>
 
+                            {selectedTable.shape !== 'OBSTACLE' && (
+                                <>
+                                    <div>
+                                        <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Consumo Mínimo Mesa</label>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            step="1"
+                                            value={selectedTable.consumo_minimo_mesa ?? 0}
+                                            onChange={e => updateTable(selectedTable.id, { consumo_minimo_mesa: Math.max(0, parseFloat(e.target.value) || 0) })}
+                                            className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-bold shadow-sm"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Mínimo Comensales</label>
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            step="1"
+                                            value={selectedTable.comensales_minimos ?? 1}
+                                            onChange={e => updateTable(selectedTable.id, { comensales_minimos: Math.max(1, parseInt(e.target.value) || 1) })}
+                                            className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-bold shadow-sm"
+                                        />
+                                    </div>
+                                </>
+                            )}
+
                         </div>
 
                         <div className="mt-auto pt-6 border-t">
@@ -324,10 +366,10 @@ const TableLayoutDesigner: React.FC<TableLayoutDesignerProps> = ({
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nombre</label>
                                 <input
                                     type="text"
-                                    value={rooms.find(r => r.id === currentRoomId)?.name || ''}
+                                    value={getRoomLabel(rooms.find(r => r.id === currentRoomId) || { id: '', nombre: 'Sala' })}
                                     onChange={(e) => {
                                         const room = rooms.find(r => r.id === currentRoomId);
-                                        if (room && onUpdateRoom) onUpdateRoom({ ...room, name: e.target.value });
+                                        if (room && onUpdateRoom) onUpdateRoom({ ...room, name: e.target.value, nombre: e.target.value });
                                     }}
                                     className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500"
                                 />

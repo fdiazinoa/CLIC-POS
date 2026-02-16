@@ -775,7 +775,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                 <div className={`w-5 h-5 rounded-md flex items-center justify-center ${isVisible ? 'bg-emerald-500 text-white shadow-inner' : 'bg-gray-100'}`}>
                                                    {isVisible && <Check size={12} strokeWidth={4} />}
                                                 </div>
-                                                {room.nombre}
+                                                {room.name || room.nombre}
                                              </button>
                                           );
                                        })}

@@ -164,6 +164,8 @@ server.get('/api/mesas', (req, res) => {
         // Format for frontend (parse JSON 'data' field)
         const formattedRooms = rooms.map((r: any) => ({
             ...r,
+            name: (typeof r.name === 'string' && r.name.trim()) || (typeof r.nombre === 'string' && r.nombre.trim()) || 'Sala',
+            nombre: (typeof r.name === 'string' && r.name.trim()) || (typeof r.nombre === 'string' && r.nombre.trim()) || 'Sala',
             data: r.data ? JSON.parse(r.data) : {}
         }));
 
@@ -292,7 +294,9 @@ server.get('/api/tables', (req, res) => {
 
             // Calculate total from order items if available, or fallback to stored total
             const total = associatedOrder
-                ? associatedOrder.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0)
+                ? (typeof associatedOrder.total === 'number'
+                    ? associatedOrder.total
+                    : associatedOrder.items.reduce((sum: number, item: any) => sum + (item.price * item.quantity), 0))
                 : 0;
 
             return {
@@ -444,6 +448,8 @@ server.get('/api/:collection', (req, res) => {
 
             data = rooms.map((r: any) => ({
                 ...r,
+                name: (typeof r.name === 'string' && r.name.trim()) || (typeof r.nombre === 'string' && r.nombre.trim()) || 'Sala',
+                nombre: (typeof r.name === 'string' && r.name.trim()) || (typeof r.nombre === 'string' && r.nombre.trim()) || 'Sala',
                 data: r.data ? JSON.parse(r.data) : {}
             }));
         } catch (error) {
@@ -820,6 +826,8 @@ const ensureFloorPlanTables = () => {
                     roomId TEXT NOT NULL,
                     nombre TEXT NOT NULL,
                     status TEXT DEFAULT 'FREE',
+                    consumo_minimo_mesa REAL DEFAULT 0,
+                    comensales_minimos INTEGER DEFAULT 1,
                     data TEXT,
                     FOREIGN KEY (roomId) REFERENCES rooms(id)
                 );
@@ -886,6 +894,11 @@ const ensureFloorPlanTables = () => {
                 db.prepare("ALTER TABLE tables ADD COLUMN currentOrderTotal REAL DEFAULT 0").run();
                 db.prepare("ALTER TABLE tables ADD COLUMN timeSeated TEXT").run();
                 db.prepare("ALTER TABLE tables ADD COLUMN waiterName TEXT").run();
+            }
+            if (!tableCols.some(c => c.name === 'consumo_minimo_mesa')) {
+                console.log('📦 Migrating tables: Adding designer properties columns...');
+                db.prepare("ALTER TABLE tables ADD COLUMN consumo_minimo_mesa REAL DEFAULT 0").run();
+                db.prepare("ALTER TABLE tables ADD COLUMN comensales_minimos INTEGER DEFAULT 1").run();
             }
 
             // Ensure terminals_rooms_visibility

@@ -143,6 +143,8 @@ CREATE TABLE IF NOT EXISTS tables (
     nombre TEXT NOT NULL,
     data TEXT, -- JSON: x, y, width, height, rotation, shape, seats
     status TEXT DEFAULT 'FREE',
+    consumo_minimo_mesa REAL DEFAULT 0,
+    comensales_minimos INTEGER DEFAULT 1,
     FOREIGN KEY (roomId) REFERENCES rooms(id)
 );
 

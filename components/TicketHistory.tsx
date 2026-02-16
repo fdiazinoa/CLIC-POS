@@ -135,14 +135,20 @@ const SalesHistoryTable: React.FC<{
                return;
             }
 
-            const candidates = terminalTxs.filter((tx) => {
+            const getCandidates = (lowerBound: number | null) => terminalTxs.filter((tx) => {
                if (!pendingTxIds.has(tx.id)) return false;
                const txDate = toTimestamp(tx.date);
                if (!txDate || txDate > closedAt) return false;
-               const lowerBound = openedAt ?? previousClosedAt;
                if (lowerBound && txDate < lowerBound) return false;
                return true;
             });
+
+            let candidates = getCandidates(openedAt ?? previousClosedAt);
+
+            // Legacy rescue: if openedAt was saved too late, fall back to previous close boundary.
+            if (candidates.length < missingCount && openedAt) {
+               candidates = getCandidates(previousClosedAt);
+            }
 
             candidates
                .sort((a, b) => (toTimestamp(b.date) || 0) - (toTimestamp(a.date) || 0))

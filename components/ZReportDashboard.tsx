@@ -96,10 +96,19 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const activeTerminalConfig = activeTerminal?.config;
    const currentTerminalId = activeTerminal?.id || 'T1';
 
-   // FILTER: Solo procesar data de esta terminal
-   // Si no hay ID, o es 'T1' (default), intentamos mostrar lo que no tenga ID asignado para recuperación
-   const filteredTransactions = transactions.filter(t => t.terminalId === currentTerminalId || (!t.terminalId && currentTerminalId === 'T1'));
-   const filteredCashMovements = cashMovements.filter(m => m.terminalId === currentTerminalId || (!m.terminalId && currentTerminalId === 'T1'));
+   // FILTER: Solo data pendiente de esta terminal.
+   const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
+   const terminalKey = normalizeTerminalId(currentTerminalId);
+   const isDefaultTerminal = terminalKey === 't1';
+   const matchesCurrentTerminal = (value?: string | null) => normalizeTerminalId(value) === terminalKey;
+
+   const filteredTransactions = transactions.filter(t =>
+      (matchesCurrentTerminal(t.terminalId) || (!t.terminalId && isDefaultTerminal)) &&
+      !t.zReportId
+   );
+   const filteredCashMovements = cashMovements.filter(m =>
+      matchesCurrentTerminal(m.terminalId) || (!m.terminalId && isDefaultTerminal)
+   );
 
    const handleStartClosing = () => {
       // Check if at least one currency amount is entered
@@ -233,6 +242,8 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
 
             // Pass base currency cash counted for backwards compatibility, plus full report data
             const reportData = {
+               transactionIds: filteredTransactions.map(t => t.id),
+               cashMovementIds: filteredCashMovements.map(m => m.id),
                cashCountedByCurrency: cashCountedData,
                expectedCashByCurrency,
                cashDiscrepancyByCurrency,

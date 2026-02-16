@@ -922,6 +922,8 @@ export interface Table {
   shape: TableShape;
   rotation: number;
   capacity?: number;
+  consumo_minimo_mesa?: number;
+  comensales_minimos?: number;
   // Runtime State
   status?: 'FREE' | 'OCCUPIED' | 'RESERVED';
   currentOrderId?: string;
@@ -1283,6 +1285,7 @@ export interface ParkedTicket {
   id: string;
   name: string;
   items: CartItem[];
+  total?: number;
   customerId?: string;
   customerName?: string;
   timestamp: string;
