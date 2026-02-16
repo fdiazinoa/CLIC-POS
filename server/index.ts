@@ -11,6 +11,8 @@ import currencyRoutes from './routes/currencies.js';
 import maintenanceRoutes from './routes/maintenance.js'; // Restore missing import
 import dgiiRoutes from './routes/dgiiRoutes.js'; // Import new route
 import os from 'os';
+import { createServer } from 'http';
+import { initSocket } from './socket.js';
 
 import { db, getCollection, getSetting, saveSetting } from './db';
 
@@ -713,12 +715,15 @@ if (CLOUD_MODE) {
 } else {
     console.log('🚀 Starting in LOCAL MODE (HTTP)...');
 
-    const appInstance = server.listen(PORT, HOST, () => {
+    const httpServer = createServer(server);
+    initSocket(httpServer);
+
+    httpServer.listen(PORT, HOST, () => {
         console.log(`🚀 Local Server (HTTP) running on http://${HOST}:${PORT}`);
         console.log(`💡 For cloud deployment, set CLOUD_MODE=true in .env`);
     });
 
-    appInstance.on('error', (e: any) => {
+    httpServer.on('error', (e: any) => {
         if (e.code === 'EADDRINUSE') {
             console.error(`❌ Port ${PORT} is already in use.`);
         } else {

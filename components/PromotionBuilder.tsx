@@ -278,10 +278,10 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                               <div className="hidden md:flex items-center gap-6 mr-4">
                                  {(() => {
                                     // Calculate Stats on the Fly
-                                    const usageCount = transactions.filter(t => t.items.some(i => i.appliedPromotionId === promo.id)).length;
+                                    const usageCount = (transactions || []).filter(t => (t.items || []).some(i => i.appliedPromotionId === promo.id)).length;
 
-                                    const revenueGenerated = transactions.reduce((acc, t) => {
-                                       const promoItemsRevenue = t.items
+                                    const revenueGenerated = (transactions || []).reduce((acc, t) => {
+                                       const promoItemsRevenue = (t.items || [])
                                           .filter(i => i.appliedPromotionId === promo.id)
                                           .reduce((sum, i) => sum + (i.price * i.quantity), 0);
                                        return acc + promoItemsRevenue;

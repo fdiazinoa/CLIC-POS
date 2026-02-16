@@ -3,6 +3,7 @@ import { db, getCollection, getSetting, saveSetting } from '../db.js';
 import fs from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
+import { emitSyncEvent } from '../socket.js';
 
 const router = express.Router();
 
@@ -76,9 +77,20 @@ const getCurrentVersion = (collection: string): number => {
     return typeof metaVersion === 'number' ? metaVersion : 0;
 };
 
-const bumpVersion = (collection: string): number => {
+const bumpVersion = (collection: string, itemId?: string): number => {
     const next = getCurrentVersion(collection) + 1;
     saveSetting(getSyncVersionKey(collection), next);
+
+    // Aditive: Update 'version' column for master data if itemId provided
+    if (itemId && (collection === 'products' || collection === 'customers')) {
+        const table = resolveCollectionName(collection);
+        try {
+            db.prepare(`UPDATE ${table} SET version = version + 1 WHERE id = ?`).run(itemId);
+        } catch (e) {
+            console.warn(`[Sync] Could not update version for ${collection}:${itemId}`, e);
+        }
+    }
+
     return next;
 };
 
@@ -96,7 +108,7 @@ const ensureMetadata = (collection: string) => {
     return syncMetadata[collection];
 };
 
-const updateMetadata = (collection: string, version: number, fullSyncVersion?: number) => {
+const updateMetadata = (collection: string, version: number, fullSyncVersion?: number, requestOriginTerminalId?: string) => {
     const syncMetadata = getSetting('syncMetadata') || {};
     syncMetadata[collection] = {
         version,
@@ -105,6 +117,16 @@ const updateMetadata = (collection: string, version: number, fullSyncVersion?: n
         fullSyncVersion: fullSyncVersion ?? syncMetadata[collection]?.fullSyncVersion ?? 0
     };
     saveSetting('syncMetadata', syncMetadata);
+
+    // Aditive: Emit WebSocket event to notify clients for reactive sync
+    const timestamp = new Date().toISOString();
+    console.log(`[SERVER_WS_EMIT] ${timestamp} Notificando clientes: ${collection} (Origin: ${requestOriginTerminalId || 'Unknown'})`);
+
+    if (collection === 'products') {
+        emitSyncEvent('PRICE_CHANGED', { collection }, requestOriginTerminalId);
+    } else {
+        emitSyncEvent('CATALOG_UPDATED', { collection }, requestOriginTerminalId);
+    }
 };
 
 const normalizeProductImages = (product: any): { image: string | null; images: string[] } => {
@@ -624,6 +646,17 @@ router.post('/collections/:collection/push', async (req, res) => {
                             console.warn(`[Sync] Skipping ${collection} item without id`, rawItem);
                             continue;
                         }
+
+                        // Optimistic Locking Check
+                        if (collection === 'products' || collection === 'customers') {
+                            const current = db.prepare(`SELECT version FROM ${resolvedCollection} WHERE id = ?`).get(rawItem.id) as any;
+                            // If Slave version is behind Master, conflict.
+                            // Slave must pull before pushing their changes.
+                            if (current && rawItem.version !== undefined && rawItem.version < current.version) {
+                                throw new Error(`CONFLICT: Version mismatch for ${collection}:${rawItem.id}. Slave: ${rawItem.version}, Master: ${current.version}`);
+                            }
+                        }
+
                         const item = { ...rawItem };
                         const op = item._op === 'DELETE' || item.deletedAt || item.isActive === false ? 'DELETE' : 'UPSERT';
 
@@ -657,14 +690,14 @@ router.post('/collections/:collection/push', async (req, res) => {
                             }
                         }
 
-                        const version = bumpVersion(collection);
+                        const version = bumpVersion(collection, item.id);
                         const payload = op === 'DELETE'
                             ? JSON.stringify({ id: item.id, deletedAt: item.deletedAt || now })
                             : JSON.stringify(item);
                         insertChangeStmt.run(collection, item.id, version, op, payload, now);
                     }
 
-                    updateMetadata(collection, getCurrentVersion(collection));
+                    updateMetadata(collection, getCurrentVersion(collection), undefined, tokens[authToken]);
                 }
             } else {
                 // Settings-based collection (array)
@@ -672,7 +705,7 @@ router.post('/collections/:collection/push', async (req, res) => {
                     saveSetting(collection, items);
                     clearChangesForCollection(collection);
                     const newVersion = bumpVersion(collection);
-                    updateMetadata(collection, newVersion, newVersion);
+                    updateMetadata(collection, newVersion, newVersion, tokens[authToken]);
                 } else {
                     const existing = (getSetting(collection) || []) as any[];
                     const map = new Map(existing.map((i: any) => [i.id, i]));
@@ -694,27 +727,55 @@ router.post('/collections/:collection/push', async (req, res) => {
                     }
 
                     saveSetting(collection, Array.from(map.values()));
-                    updateMetadata(collection, getCurrentVersion(collection));
+                    updateMetadata(collection, getCurrentVersion(collection), undefined, tokens[authToken]);
                 }
             }
         })();
 
         res.json({ success: true, version: getCurrentVersion(collection), itemCount: (getCollection(collection) || []).length });
     } catch (error: any) {
-        console.error(`❌ Error pushing to ${collection}:`, error);
-        console.error(`❌ Error stack:`, error.stack);
-        console.error(`❌ Sample item causing error:`, items && items[0]);
-
-        // Emergency log to file for debugging
-        try {
-            const logPath = path.join(process.cwd(), 'server_error.log');
-            const logEntry = `\n[${new Date().toISOString()}] Error pushing to ${collection}:\n${error.message}\n${error.stack}\nSample Item: ${JSON.stringify(items && items[0])}\n`;
-            fs.appendFileSync(logPath, logEntry);
-        } catch (e) {
-            console.error('Failed to write to error log', e);
+        if (error.message && error.message.startsWith('CONFLICT:')) {
+            console.warn(`[Sync] Conflict detected for ${collection}: ${error.message}`);
+            return res.status(409).json({ success: false, message: error.message });
         }
 
+        console.error(`❌ Error pushing to ${collection}:`, error);
+        // ... rest of error log ...
         res.status(500).json({ success: false, message: error.message, details: error.stack });
+    }
+});
+
+/**
+ * GET /api/sync/wallet/verify/:customerId
+ * Real-time balance verification for sensitive payments (Strict Online Mode)
+ */
+router.get('/wallet/verify/:customerId', async (req, res) => {
+    const { customerId } = req.params;
+    try {
+        const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='customers'").get();
+
+        let data: any = null;
+        if (tableExists) {
+            const columns = db.prepare("PRAGMA table_info(customers)").all() as any[];
+            const hasDataColumn = columns.some(c => c.name === 'data');
+            const raw = db.prepare("SELECT * FROM customers WHERE id = ?").get(customerId) as any;
+            if (raw) {
+                data = hasDataColumn ? JSON.parse(raw.data) : raw;
+            }
+        } else {
+            const customers = getSetting('customers') || [];
+            data = customers.find((c: any) => c.id === customerId);
+        }
+
+        if (!data) return res.status(404).json({ success: false, message: 'Customer not found' });
+
+        res.json({
+            success: true,
+            balance: data.wallet?.balance || 0,
+            creditLimit: data.creditLimit || 0
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 
@@ -1432,6 +1493,22 @@ router.post('/inventory/movements', async (req, res) => {
                             new Date().toISOString(),
                             move.productId
                         );
+
+                        // audit: Record discrepancy if stock goes negative in Master
+                        if (newTotalStock < 0) {
+                            db.prepare(`
+                                INSERT INTO inventory_discrepancies (id, productId, warehouseId, terminalId, negativeAmount, timestamp)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                            `).run(
+                                `DISC_${move.id}`,
+                                move.productId,
+                                move.warehouseId,
+                                move.terminalId || 'UNKNOWN',
+                                newTotalStock,
+                                new Date().toISOString()
+                            );
+                            console.warn(`[Audit] Negative stock detected: Product ${move.productId} at ${move.warehouseId} is ${newTotalStock}`);
+                        }
                     }
 
 

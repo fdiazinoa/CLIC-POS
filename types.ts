@@ -111,7 +111,7 @@ export interface LocalFiscalBuffer {
 }
 
 // --- KARDEX TYPES ---
-export type LedgerConcept = 'COMPRA' | 'VENTA' | 'AJUSTE_ENTRADA' | 'AJUSTE_SALIDA' | 'TRASPASO_ENTRADA' | 'TRASPASO_SALIDA' | 'INICIAL' | 'DEVOLUCION';
+export type LedgerConcept = 'COMPRA' | 'VENTA' | 'AJUSTE_ENTRADA' | 'AJUSTE_SALIDA' | 'TRASPASO_ENTRADA' | 'TRASPASO_SALIDA' | 'INICIAL' | 'DEVOLUCION' | 'TRASPASO_AJUSTE_DIFERENCIA';
 
 export interface InventoryCountItem {
   productId: string;

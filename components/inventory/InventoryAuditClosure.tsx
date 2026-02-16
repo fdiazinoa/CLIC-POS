@@ -161,7 +161,8 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
       else if (physicalQty < base.systemQty) status = 'FALTANTE';
       else if (physicalQty > base.systemQty) status = 'SOBRANTE';
 
-      const discrepancyValue = diffQty === undefined ? 0 : Math.abs(diffQty * base.avgCost);
+      const rowAvgCost = Math.max(0, base.avgCost);
+      const discrepancyValue = diffQty === undefined ? 0 : Math.abs(diffQty * rowAvgCost);
 
       rows.push({
         productId: base.productId,
@@ -188,7 +189,7 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
         physicalQty: Number(item.countedQty || 0),
         diffQty,
         avgCost,
-        discrepancyValue: Math.abs(diffQty * avgCost),
+        discrepancyValue: Math.abs(diffQty * Math.max(0, avgCost)),
         status: diffQty < 0 ? 'FALTANTE' : diffQty > 0 ? 'SOBRANTE' : 'OK'
       });
     }
@@ -511,31 +512,41 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
                             <div className="font-bold text-gray-800 text-xs sm:text-sm">{row.productName}</div>
                             <div className="text-[10px] text-gray-400">{row.category || 'Sin categoría'}</div>
                           </td>
-                          <td className="py-3 px-2 text-right font-mono text-xs text-gray-600">{row.systemQty}</td>
+                          <td className="py-3 px-2 text-right font-mono text-xs text-gray-600">
+                            {row.systemQty}
+                            {row.systemQty < 0 && (
+                              <div className="text-[9px] text-amber-600 font-black uppercase tracking-tighter">Negativo</div>
+                            )}
+                          </td>
                           <td className="py-3 px-2 text-right font-mono text-xs text-gray-700">
                             {row.physicalQty === undefined ? '--' : row.physicalQty}
                           </td>
                           <td className={`py-3 px-2 text-right font-bold text-xs ${row.status === 'FALTANTE'
-                              ? 'text-red-700'
-                              : row.status === 'SOBRANTE'
-                                ? 'text-blue-700'
-                                : row.status === 'SIN_CONTAR'
-                                  ? 'text-gray-400'
-                                  : 'text-emerald-700'
+                            ? 'text-red-700'
+                            : row.status === 'SOBRANTE'
+                              ? 'text-blue-700'
+                              : row.status === 'SIN_CONTAR'
+                                ? 'text-gray-400'
+                                : 'text-emerald-700'
                             }`}>
                             {row.diffQty === undefined ? '--' : row.diffQty > 0 ? `+${row.diffQty}` : row.diffQty}
+                            {row.systemQty < 0 && row.diffQty !== undefined && row.diffQty > 0 && (
+                              <div className="text-[8px] text-blue-500 font-black leading-none mt-0.5 uppercase tracking-tighter">
+                                Incl. {Math.abs(row.systemQty)} p/ nivelar
+                              </div>
+                            )}
                           </td>
                           <td className="py-3 px-2 text-right font-bold text-xs text-gray-700">
                             {row.diffQty === undefined || row.diffQty === 0 ? '--' : `$${row.discrepancyValue.toFixed(2)}`}
                           </td>
                           <td className="py-3 px-4 text-center">
                             <span className={`inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${row.status === 'FALTANTE'
-                                ? 'bg-red-100 text-red-700 border-red-200'
-                                : row.status === 'SOBRANTE'
-                                  ? 'bg-blue-100 text-blue-700 border-blue-200'
-                                  : row.status === 'SIN_CONTAR'
-                                    ? 'bg-gray-100 text-gray-600 border-gray-200'
-                                    : 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                              ? 'bg-red-100 text-red-700 border-red-200'
+                              : row.status === 'SOBRANTE'
+                                ? 'bg-blue-100 text-blue-700 border-blue-200'
+                                : row.status === 'SIN_CONTAR'
+                                  ? 'bg-gray-100 text-gray-600 border-gray-200'
+                                  : 'bg-emerald-100 text-emerald-700 border-emerald-200'
                               }`}>
                               {row.status === 'SIN_CONTAR' ? 'SIN CONTAR' : row.status}
                             </span>

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem, Transaction, Customer } from '../types';
 import { printTicket } from '../utils/printer';
+import { networkSyncService } from '../services/sync/NetworkSyncService';
 
 interface PaymentModalProps {
    total: number;
@@ -85,6 +86,21 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    const [shouldClearInput, setShouldClearInput] = useState(true);
    const [isFinalizing, setIsFinalizing] = useState(false);
    const [finalizeError, setFinalizeError] = useState<string | null>(null);
+   const [isOnline, setIsOnline] = useState(networkSyncService.getStatus().isOnline);
+   const [isVerifyingWallet, setIsVerifyingWallet] = useState(false);
+   const [verifiedBalance, setVerifiedBalance] = useState<number | null>(null);
+
+   useEffect(() => {
+      const unsubscribe = networkSyncService.subscribe(status => {
+         setIsOnline(status.isOnline);
+      });
+      return unsubscribe;
+   }, []);
+
+   // Effect to reset verified balance when customer or method changes
+   useEffect(() => {
+      setVerifiedBalance(null);
+   }, [customer?.id, activeMethodKey]);
 
    const currencies = config?.currencies || [];
    const baseCurrency = currencies.find(c => c.isBase) || { code: 'DOP', symbol: 'RD$', rate: 1 };
@@ -180,9 +196,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    };
 
    const handleAddPayment = (amountOverride?: number) => {
-      if (!activePaymentMethod) return;
       const valInSelectedCurrency = amountOverride !== undefined ? amountOverride : parseFloat(inputAmount);
       if (!valInSelectedCurrency || valInSelectedCurrency <= 0) return;
+
+      // Strict Online Check: Credit and Wallet require connection
+      if (!isOnline && (activePaymentMethod.type === 'CREDIT' || activePaymentMethod.type === 'WALLET')) {
+         setFinalizeError(`El pago con ${activePaymentMethod.label} requiere conexión con la Terminal Master.`);
+         return;
+      }
 
       const amountInBase = valInSelectedCurrency * selectedCurrency.rate;
 
@@ -224,6 +245,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                setFinalizeError('Seleccione un método de pago.');
                return;
             }
+
+            // Strict Online Check: Credit and Wallet require connection during finalization too
+            if (!isOnline && (activePaymentMethod.type === 'CREDIT' || activePaymentMethod.type === 'WALLET')) {
+               setFinalizeError(`El pago con ${activePaymentMethod.label} requiere conexión con la Terminal Master.`);
+               setIsFinalizing(false);
+               return;
+            }
+
             const autoPayment: PaymentEntry = {
                id: Math.random().toString(36).substr(2, 9),
                method: activePaymentMethod.type,
@@ -238,6 +267,16 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             };
             paymentsToConfirm = [...payments, autoPayment];
             setPayments(paymentsToConfirm);
+         }
+
+         // Final safety check: ensure no CREDIT or WALLET payments are sent while offline
+         if (!isOnline) {
+            const blockedPayment = paymentsToConfirm.find(p => p.method === 'CREDIT' || p.method === 'WALLET');
+            if (blockedPayment) {
+               setFinalizeError(`El pago con ${blockedPayment.methodLabel} requiere conexión con la Terminal Master.`);
+               setIsFinalizing(false);
+               return;
+            }
          }
 
          let slowProcessTimer: number | undefined;

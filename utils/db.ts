@@ -928,6 +928,15 @@ export const db = {
     const qtyIn = qty > 0 ? qty : 0;
     const qtyOut = qty < 0 ? Math.abs(qty) : 0;
 
+    // 0. Fallback cost for audit adjustments/discrepancies if none provided
+    // This prevents audit adjustments from diluting inventory value with $0 cost.
+    let finalMovementCost = movementCost;
+    if ((concept === 'AJUSTE_ENTRADA' || concept === 'AJUSTE_SALIDA' || concept === 'TRASPASO_AJUSTE_DIFERENCIA') && !finalMovementCost) {
+      const products = await dbAdapter.getCollection<Product>('products') || [];
+      const product = products.find(p => p.id === productId);
+      finalMovementCost = product?.cost || 0;
+    }
+
     const newEntry: InventoryLedgerEntry = {
       id: `LEG-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
       productId: productId,
@@ -937,7 +946,7 @@ export const db = {
       createdAt: movementTimestamp,
       qtyIn: qtyIn,
       qtyOut: qtyOut,
-      unitCost: movementCost || 0,
+      unitCost: finalMovementCost || 0,
       balanceQty: 0, // Will be recalculated
       balanceAvgCost: 0, // Will be recalculated
       terminalId: terminalId || 'LOCAL',
@@ -978,6 +987,7 @@ export const db = {
     effectiveDate?: string
   }[]): Promise<InventoryLedgerEntry[]> => {
     const newEntries: InventoryLedgerEntry[] = [];
+    const products = await dbAdapter.getCollection<Product>('products') || [];
 
     for (const move of movements) {
       await assertInventoryMovementUnlocked(move.warehouseId, move.effectiveDate);
@@ -985,6 +995,13 @@ export const db = {
       const movementTimestamp = toValidMovementIso(move.effectiveDate);
       const qtyIn = move.qty > 0 ? move.qty : 0;
       const qtyOut = move.qty < 0 ? Math.abs(move.qty) : 0;
+
+      // Fallback for bulk audit movements
+      let finalMovementCost = move.movementCost;
+      if ((move.concept === 'AJUSTE_ENTRADA' || move.concept === 'AJUSTE_SALIDA' || move.concept === 'TRASPASO_AJUSTE_DIFERENCIA') && !finalMovementCost) {
+        const prod = products.find(p => p.id === move.productId);
+        finalMovementCost = prod?.cost || 0;
+      }
 
       const newEntry: InventoryLedgerEntry = {
         id: `LEG-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
@@ -995,7 +1012,7 @@ export const db = {
         createdAt: movementTimestamp,
         qtyIn: qtyIn,
         qtyOut: qtyOut,
-        unitCost: move.movementCost || 0,
+        unitCost: finalMovementCost || 0,
         balanceQty: 0,
         balanceAvgCost: 0,
         terminalId: move.terminalId || 'LOCAL',
@@ -1071,10 +1088,21 @@ export const db = {
     for (const entry of productEntries) {
       currentBalance += (entry.qtyIn - entry.qtyOut);
 
-      // Basic Avg Cost calculation
+      // Robust Weighted Average Cost (WAC) calculation
       if (entry.qtyIn > 0) {
-        const totalValue = (currentBalance - entry.qtyIn) * currentAvgCost + (entry.qtyIn * entry.unitCost);
-        currentAvgCost = currentBalance > 0 ? totalValue / currentBalance : entry.unitCost;
+        const prevBalance = currentBalance - entry.qtyIn;
+        const inCost = entry.unitCost;
+
+        if (prevBalance <= 0) {
+          // If previous stock was negative or zero, we restart valuation from this intake
+          // to prevent negative baseline values from corrupting the cost.
+          currentAvgCost = inCost;
+        } else {
+          // Standard WAC formula: (Previous Value + New Intake Value) / New Total Quantity
+          const prevValue = prevBalance * currentAvgCost;
+          const newValue = entry.qtyIn * inCost;
+          currentAvgCost = (prevValue + newValue) / currentBalance;
+        }
       }
 
       // PERSIST: Update the entry with calculated balance

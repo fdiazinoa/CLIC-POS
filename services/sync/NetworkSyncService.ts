@@ -147,6 +147,10 @@ class NetworkSyncService {
         }
     }
 
+    public getStatus(): SyncStatus {
+        return { ...this.status };
+    }
+
     public subscribe(listener: (status: SyncStatus) => void) {
         this.listeners.push(listener);
         listener(this.status);

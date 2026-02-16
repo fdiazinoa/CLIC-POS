@@ -438,8 +438,8 @@ export const getInventorySnapshotAtDate = (
 export const calculateRFMData = (customers: Customer[], transactions: Transaction[]) => {
     const now = new Date().getTime();
 
-    return customers.map(customer => {
-        const customerTxs = transactions.filter(tx => tx.customerId === customer.id && tx.status !== 'REFUNDED');
+    return (customers || []).map(customer => {
+        const customerTxs = (transactions || []).filter(tx => tx.customerId === customer.id && tx.status !== 'REFUNDED');
 
         if (customerTxs.length === 0) return null;
 
@@ -494,9 +494,9 @@ export const getLeadTimePerformance = (purchaseOrders: PurchaseOrder[], receptio
 export const getABCRanking = (products: Product[], transactions: Transaction[]) => {
     const productSales: Record<string, { name: string; total: number; qty: number }> = {};
 
-    transactions.forEach(tx => {
+    (transactions || []).forEach(tx => {
         if (tx.status === 'REFUNDED') return;
-        tx.items.forEach(item => {
+        (tx.items || []).forEach(item => {
             if (!productSales[item.id]) {
                 productSales[item.id] = { name: item.name, total: 0, qty: 0 };
             }
@@ -538,7 +538,7 @@ export const getSalesByHour = (transactions: Transaction[]) => {
         count: 0
     }));
 
-    transactions.forEach(tx => {
+    (transactions || []).forEach(tx => {
         if (tx.status === 'REFUNDED') return;
         const date = new Date(tx.date);
         const hour = date.getHours();
@@ -591,7 +591,7 @@ export const getSuppliersIntelligence = (purchaseOrders: PurchaseOrder[], suppli
         leadTimes: number[];
     }> = {};
 
-    purchaseOrders.forEach(po => {
+    (purchaseOrders || []).forEach(po => {
         const supplier = (suppliers || []).find(s => s.id === po.supplierId);
         const sId = po.supplierId || 'unknown';
 
@@ -633,8 +633,8 @@ export const getItemPriceIntelligence = (purchaseOrders: PurchaseOrder[], suppli
     const itemHistory: Record<string, { name: string; prices: { date: string; cost: number; supplier: string }[] }> = {};
 
     // Collect all unique items and their price history
-    purchaseOrders.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).forEach(po => {
-        const supplier = suppliers.find(s => s.id === po.supplierId);
+    (purchaseOrders || []).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).forEach(po => {
+        const supplier = (suppliers || []).find(s => s.id === po.supplierId);
         const resolvedName = supplier?.name || po.supplierName || 'Desconocido';
 
         (po.items || []).forEach(item => {
@@ -678,21 +678,21 @@ export const getDiscrepancyReport = (purchaseOrders: PurchaseOrder[], receptions
 
     // Create a map of receptions for fast lookup
     const receptionMap: Record<string, Reception[]> = {};
-    receptions.forEach(r => {
+    (receptions || []).forEach(r => {
         if (!receptionMap[r.purchaseOrderId]) receptionMap[r.purchaseOrderId] = [];
         receptionMap[r.purchaseOrderId].push(r);
     });
 
-    purchaseOrders.forEach(po => {
+    (purchaseOrders || []).forEach(po => {
         const poReceptions = receptionMap[po.id] || [];
-        const supplier = suppliers.find(s => s.id === po.supplierId);
+        const supplier = (suppliers || []).find(s => s.id === po.supplierId);
         const resolvedSupplierName = supplier?.name || po.supplierName || 'Desconocido';
 
         (po.items || []).forEach(item => {
             // Reconstruct history
             // Sum all receipts for this specific product in this PO
             const totalRecibidoReal = poReceptions.reduce((acc, r) => {
-                const rItem = r.items.find(ri => ri.productId === item.productId && ri.variantSku === item.variantSku);
+                const rItem = (r.items || []).find(ri => ri.productId === item.productId && ri.variantSku === item.variantSku);
                 return acc + (rItem?.quantityReceived || 0);
             }, 0);
 

@@ -25,7 +25,31 @@ db.exec(`
     );
     CREATE INDEX IF NOT EXISTS idx_sync_changes_collection_version
     ON sync_changes(collection, version);
+
+    CREATE TABLE IF NOT EXISTS inventory_discrepancies (
+        id TEXT PRIMARY KEY,
+        productId TEXT,
+        warehouseId TEXT,
+        terminalId TEXT,
+        negativeAmount REAL,
+        timestamp TEXT
+    );
+
+    -- Optimistic Locking columns
+    -- Try/Catch is not possible in .exec(), so we use a safe approach or separate statements
+    -- For better-sqlite3, we can just run these separately and ignore errors if column exists
 `);
+
+try {
+    db.exec(`ALTER TABLE products ADD COLUMN version INTEGER DEFAULT 0`);
+} catch (e) {
+    // Column already exists
+}
+try {
+    db.exec(`ALTER TABLE customers ADD COLUMN version INTEGER DEFAULT 0`);
+} catch (e) {
+    // Column already exists
+}
 
 /**
  * Helper to get a collection (mimics lowdb .get().value())
