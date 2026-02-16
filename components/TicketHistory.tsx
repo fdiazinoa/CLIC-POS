@@ -550,7 +550,23 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       const allTransactions = [...transactions, ...historyTransactions];
       const uniqueMap = new Map();
       allTransactions.forEach(t => uniqueMap.set(t.id, t));
-      let data = Array.from(uniqueMap.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()); // Newest first
+
+      const isValidTicketRecord = (tx: any): boolean => {
+         const rawId = typeof tx?.id === 'string' ? tx.id.trim() : '';
+         const displayId = typeof tx?.displayId === 'string' ? tx.displayId.trim() : '';
+         const documentType = typeof tx?.documentType === 'string' ? tx.documentType.trim().toUpperCase() : '';
+
+         const hasDisplayId = displayId.length > 0;
+         const isSalesDocument = documentType === 'TICKET' || documentType === 'REFUND';
+         const isOpenTableOrder = rawId.startsWith('ORD-') && !hasDisplayId && !documentType;
+
+         if (isOpenTableOrder) return false;
+         return isSalesDocument || hasDisplayId;
+      };
+
+      let data = Array.from(uniqueMap.values())
+         .filter(isValidTicketRecord)
+         .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()); // Newest first
 
       // 1. Apply Search Term / Predictive Tag
       const lowerTerm = searchTerm.toLowerCase().trim();

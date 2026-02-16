@@ -211,15 +211,36 @@ class SyncManager {
             this.detachImageSyncReconnectHandler();
         }
 
-        // If Master, try to restore data from server if local is empty (HTTPS switch scenario)
+        // If Master, try to refresh config from server only if local is totally missing 
+        // or during specific recovery scenarios (like HTTPS switch).
+        // WARNING: Avoid forcing pullConfig(true) unconditionally here as it triggers App.tsx re-init loops.
         if (this.isMaster) {
             try {
-                await this.pullConfig(true);
+                const localConfig = await db.get('config');
+                const hasValidLocalConfig = localConfig && !Array.isArray(localConfig) && Object.keys(localConfig).length > 0;
+
+                if (!hasValidLocalConfig) {
+                    console.log('🔄 SyncManager: Local Master config missing. Refreshing from server...');
+                    await this.pullConfig(true);
+                }
             } catch (configError) {
                 console.warn('⚠️ SyncManager: Master config refresh failed during init:', configError);
             }
             await this.initializeMasterData();
         }
+
+        // Subscribe to connection restoration to relaunch recovery immediately
+        apiSyncAdapter.setOnConnectionRestored(async () => {
+            console.log('🔄 SyncManager: Connection restored, re-triggering recovery/sync...');
+            if (this.isMaster) {
+                await this.initializeMasterData();
+            } else {
+                const updates = await this.checkForUpdates();
+                if (updates.length > 0) {
+                    await this.syncAllCatalogs();
+                }
+            }
+        });
 
         console.log('🔄 SyncManager initialized');
     }
@@ -1051,8 +1072,17 @@ class SyncManager {
             const config = await apiSyncAdapter.pullConfig();
             if (!config) return;
 
-            const localConfigJson = JSON.stringify(localConfig || {});
-            const incomingConfigJson = JSON.stringify(config || {});
+            const sanitize = (c: any) => {
+                if (!c || typeof c !== 'object') return {};
+                const { id, _db_initialized, config_metadata, _id, ...rest } = c;
+                return rest;
+            };
+
+            const localSanitized = sanitize(localConfig);
+            const incomingSanitized = sanitize(config);
+
+            const localConfigJson = JSON.stringify(localSanitized);
+            const incomingConfigJson = JSON.stringify(incomingSanitized);
             const changed = localConfigJson !== incomingConfigJson;
 
             if (!changed) {

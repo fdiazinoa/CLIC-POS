@@ -131,6 +131,7 @@ const AppContent: React.FC = () => {
   const [initialConnError, setInitialConnError] = useState<string | null>(null);
   const [failedMasterIp, setFailedMasterIp] = useState<string>('');
   const initLoadStartedRef = useRef(false);
+  const forceSyncHandledRef = useRef(false);
 
   // Helper: Get current terminal configuration
   const getCurrentTerminal = React.useCallback(() => {
@@ -368,6 +369,121 @@ const AppContent: React.FC = () => {
       setCurrentView('VISOR');
     }
   }, []);
+
+  useEffect(() => {
+    if (!isDataLoaded || forceSyncHandledRef.current) return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('force_sync_tickets') !== '1') return;
+
+    forceSyncHandledRef.current = true;
+
+    const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
+    const normalizeFolio = (value?: string | null) => (value || '').trim().toUpperCase();
+    const parseFolio = (value?: string | null): { prefix: string; seq: number } | null => {
+      const normalized = normalizeFolio(value);
+      const match = normalized.match(/^([A-Z]+)(\d+)$/);
+      if (!match) return null;
+      return { prefix: match[1], seq: Number(match[2]) };
+    };
+
+    const cleanupForceParams = () => {
+      [
+        'force_sync_tickets',
+        'terminal',
+        'folio_from',
+        'folio_to',
+        'folios'
+      ].forEach((key) => params.delete(key));
+      const nextSearch = params.toString();
+      const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash || ''}`;
+      window.history.replaceState({}, '', nextUrl);
+    };
+
+    const run = async () => {
+      try {
+        const terminalFilter = normalizeTerminalId(params.get('terminal'));
+        const foliosParam = params.get('folios');
+        const fromFolio = parseFolio(params.get('folio_from'));
+        const toFolio = parseFolio(params.get('folio_to'));
+
+        const explicitFolios = (foliosParam || '')
+          .split(',')
+          .map((item) => normalizeFolio(item))
+          .filter(Boolean);
+        const explicitSet = new Set(explicitFolios);
+
+        const hasRange =
+          !!fromFolio &&
+          !!toFolio &&
+          fromFolio.prefix === toFolio.prefix &&
+          fromFolio.seq <= toFolio.seq;
+
+        const allTransactions = await db.get('transactions') as Transaction[] || [];
+        if (!Array.isArray(allTransactions) || allTransactions.length === 0) {
+          alert('No hay transacciones locales para forzar sincronizacion.');
+          return;
+        }
+
+        let matched = 0;
+        let marked = 0;
+
+        const updatedTransactions = allTransactions.map((tx: any) => {
+          const txTerminal = normalizeTerminalId(tx?.terminalId);
+          if (terminalFilter && txTerminal !== terminalFilter) return tx;
+
+          const displayId = normalizeFolio(tx?.displayId);
+          let shouldMatch = false;
+
+          if (explicitSet.size > 0 && explicitSet.has(displayId)) {
+            shouldMatch = true;
+          } else if (hasRange && displayId) {
+            const parsed = parseFolio(displayId);
+            if (parsed && parsed.prefix === fromFolio!.prefix && parsed.seq >= fromFolio!.seq && parsed.seq <= toFolio!.seq) {
+              shouldMatch = true;
+            }
+          }
+
+          if (!shouldMatch) return tx;
+
+          matched++;
+          const alreadyPending = tx.syncStatus === 'PENDING' && tx._forceSyncReplay === true;
+          if (alreadyPending) return tx;
+
+          marked++;
+          return {
+            ...tx,
+            syncStatus: 'PENDING',
+            syncError: 'Forced sync link replay',
+            _forceSyncReplay: true
+          };
+        });
+
+        if (matched === 0) {
+          alert('No se encontraron tickets locales que coincidan con el link forzado.');
+          return;
+        }
+
+        if (marked > 0) {
+          await db.save('transactions', updatedTransactions as any);
+        }
+
+        await backgroundSyncManager.triggerSync();
+
+        alert(`Forzado aplicado: ${matched} ticket(s) coinciden, ${marked} marcado(s) para reenvio.`);
+      } catch (error: any) {
+        console.error('Forced ticket sync failed:', error);
+        alert(`Error en forzado de tickets: ${error?.message || 'Error desconocido'}`);
+      } finally {
+        cleanupForceParams();
+      }
+    };
+
+    run().catch((error) => {
+      console.error('Forced ticket sync bootstrap failed:', error);
+      cleanupForceParams();
+    });
+  }, [isDataLoaded]);
 
   const handleViewChange = (view: ViewState, data?: any) => {
     console.log(`🚀 View Change: ${currentView} -> ${view}`, data);
@@ -673,7 +789,10 @@ const AppContent: React.FC = () => {
               // CRITICAL: db.get returns an array from IndexedDB. We must unwrap config.
               let syncedConfig = dbConfig;
               if (Array.isArray(dbConfig)) {
-                syncedConfig = dbConfig.find((c: any) => c.id !== '_db_initialized' && c.id !== 'config_metadata') || dbConfig[0];
+                // CRITICAL: Seeking 'current' config and skipping meta-documents
+                syncedConfig = dbConfig.find((c: any) => c.id === 'current') ||
+                  dbConfig.find((c: any) => c.id !== '_db_initialized' && c.id !== 'config_metadata') ||
+                  dbConfig[0];
               }
 
               if (syncedConfig && syncedConfig.terminals) {
@@ -883,6 +1002,23 @@ const AppContent: React.FC = () => {
     const handleConfigUpdated = async (event: Event) => {
       const incomingConfig = (event as CustomEvent<BusinessConfig>)?.detail;
       if (!incomingConfig || Array.isArray(incomingConfig) || !incomingConfig.terminals) return;
+
+      // Detect if we actually need a full sync re-init
+      const sanitize = (c: any) => {
+        if (!c || typeof c !== 'object') return {};
+        const { id, _db_initialized, config_metadata, _id, ...rest } = c;
+        return rest;
+      };
+
+      const oldConfigJson = JSON.stringify(sanitize(config));
+      const newConfigJson = JSON.stringify(sanitize(incomingConfig));
+      const hasSubstantialChanges = oldConfigJson !== newConfigJson;
+
+      if (!hasSubstantialChanges) {
+        console.log('🔔 App: configUpdated received but no structural changes detected. Skipping re-init.');
+        setConfig(incomingConfig);
+        return;
+      }
 
       console.log('🔔 App: configUpdated received. Applying synchronized config...');
       setConfig(incomingConfig);

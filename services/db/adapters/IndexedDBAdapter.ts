@@ -142,6 +142,14 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         return `${DB_NAME}__fallback__${collectionName}`;
     }
 
+    private isFallbackOnlyCollection(collectionName: string): boolean {
+        return collectionName === 'transactions' || collectionName === 'transactionHistory';
+    }
+
+    private reconcileFlagKey(collectionName: string): string {
+        return `${DB_NAME}__reconciled__${collectionName}__v1`;
+    }
+
     private readFallbackCollection(collectionName: string): any[] {
         try {
             const raw = localStorage.getItem(this.fallbackKey(collectionName));
@@ -157,6 +165,21 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         localStorage.setItem(this.fallbackKey(collectionName), JSON.stringify(Array.isArray(docs) ? docs : []));
     }
 
+    private readStoreCollection(collectionName: string): Promise<any[]> {
+        return new Promise((resolve, reject) => {
+            if (!this.hasStore(collectionName)) return resolve([]);
+            try {
+                const transaction = this.db!.transaction(collectionName, 'readonly');
+                const store = transaction.objectStore(collectionName);
+                const request = store.getAll();
+                request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+                request.onerror = () => reject(request.error);
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+
     private toStoredDocuments(collectionName: string, data: any): any[] {
         if (collectionName === 'config' && data && !Array.isArray(data)) {
             return [{ ...data, id: (data as any).id || 'current' }];
@@ -170,8 +193,10 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     private fromStoredDocuments(collectionName: string, docs: any[]): any {
         if (collectionName === 'config') {
             if (!docs.length) return {};
-            const current = docs.find((doc: any) => doc?.id === 'current');
-            return current || docs[0] || {};
+            // CRITICAL: Filter out metadata and seek 'current'
+            const realDocs = docs.filter((doc: any) => doc?.id !== '_db_initialized' && doc?.id !== 'config_metadata');
+            const current = realDocs.find((doc: any) => doc?.id === 'current');
+            return current || realDocs[0] || {};
         }
         if (collectionName === 'globalSequenceCounter') {
             const row = docs.find((doc: any) => doc?.id === 'value');
@@ -240,10 +265,38 @@ export class IndexedDBAdapter implements DatabaseAdapter {
 
         return new Promise((resolve, reject) => {
             try {
-                // Use localStorage for heavy collections to avoid IndexedDB lock contention from sync/pruning
-                if (collectionName === 'transactions' || collectionName === 'transactionHistory') {
-                    const docs = this.readFallbackCollection(collectionName);
-                    return resolve(this.fromStoredDocuments(collectionName, docs));
+                // Use localStorage fallback for heavy collections to avoid IndexedDB lock contention.
+                // Self-heal: if fallback is empty but IndexedDB has rows from legacy writes, recover them.
+                if (this.isFallbackOnlyCollection(collectionName)) {
+                    const fallbackDocs = this.readFallbackCollection(collectionName);
+                    const hasStore = this.hasStore(collectionName);
+                    const reconcileDone = localStorage.getItem(this.reconcileFlagKey(collectionName)) === '1';
+
+                    if (!hasStore || reconcileDone) {
+                        return resolve(this.fromStoredDocuments(collectionName, fallbackDocs));
+                    }
+
+                    this.readStoreCollection(collectionName)
+                        .then((storeDocs) => {
+                            try {
+                                // One-shot reconciliation: choose the most complete source.
+                                if (storeDocs.length > fallbackDocs.length) {
+                                    this.writeFallbackCollection(collectionName, storeDocs);
+                                    console.warn(`[IndexedDBAdapter] Reconciled ${collectionName}: promoted ${storeDocs.length} rows from IndexedDB store over fallback ${fallbackDocs.length}.`);
+                                    resolve(this.fromStoredDocuments(collectionName, storeDocs));
+                                    return;
+                                }
+                            } finally {
+                                localStorage.setItem(this.reconcileFlagKey(collectionName), '1');
+                            }
+                            resolve(this.fromStoredDocuments(collectionName, fallbackDocs));
+                        })
+                        .catch((error) => {
+                            console.warn(`[IndexedDBAdapter] Could not reconcile ${collectionName} from IndexedDB store:`, error);
+                            localStorage.setItem(this.reconcileFlagKey(collectionName), '1');
+                            resolve(this.fromStoredDocuments(collectionName, fallbackDocs));
+                        });
+                    return;
                 }
 
                 if (!this.hasStore(collectionName)) {
@@ -273,6 +326,11 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         const docs = this.toStoredDocuments(collectionName, data);
 
         return new Promise((resolve, reject) => {
+            if (this.isFallbackOnlyCollection(collectionName)) {
+                this.writeFallbackCollection(collectionName, docs);
+                return resolve();
+            }
+
             if (!this.hasStore(collectionName)) {
                 this.writeFallbackCollection(collectionName, docs);
                 return resolve();
@@ -302,7 +360,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
 
         return new Promise((resolve, reject) => {
             // Use localStorage for heavy collections to match getCollection behavior and avoid lock contention
-            if (collectionName === 'transactions' || collectionName === 'transactionHistory') {
+            if (this.isFallbackOnlyCollection(collectionName)) {
                 try {
                     this.upsertFallbackDocument(collectionName, doc);
                     return resolve();
@@ -347,6 +405,12 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
 
         return new Promise((resolve, reject) => {
+            if (this.isFallbackOnlyCollection(collectionName)) {
+                const docs = this.readFallbackCollection(collectionName);
+                const match = docs.find((doc: any) => doc?.id === id) || null;
+                return resolve(match);
+            }
+
             if (!this.hasStore(collectionName)) {
                 const docs = this.readFallbackCollection(collectionName);
                 const match = docs.find((doc: any) => doc?.id === id) || null;
@@ -366,6 +430,12 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
 
         return new Promise((resolve, reject) => {
+            if (this.isFallbackOnlyCollection(collectionName)) {
+                const docs = this.readFallbackCollection(collectionName).filter((doc: any) => doc?.id !== id);
+                this.writeFallbackCollection(collectionName, docs);
+                return resolve();
+            }
+
             if (!this.hasStore(collectionName)) {
                 const docs = this.readFallbackCollection(collectionName).filter((doc: any) => doc?.id !== id);
                 this.writeFallbackCollection(collectionName, docs);

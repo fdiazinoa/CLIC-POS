@@ -43,7 +43,22 @@ const resolveCollectionName = (collection: string) => collectionAliasMap[collect
 
 const getCollectionForSync = (collection: string): any[] => {
     const resolved = resolveCollectionName(collection);
-    return getCollection(resolved);
+    const data = getCollection(resolved);
+
+    if (collection !== 'transactions' || !Array.isArray(data)) {
+        return data;
+    }
+
+    // Do not sync table-open placeholder rows (ORD-*) as sales tickets.
+    // These rows are operational state for restaurant tables, not fiscal documents.
+    return data.filter((txn: any) => {
+        const id = typeof txn?.id === 'string' ? txn.id.trim() : '';
+        const displayId = typeof txn?.displayId === 'string' ? txn.displayId.trim() : '';
+        const documentType = typeof txn?.documentType === 'string' ? txn.documentType.trim().toUpperCase() : '';
+
+        if (id.startsWith('ORD-') && !displayId && !documentType) return false;
+        return true;
+    });
 };
 
 const getItemCount = (collection: string): number => {
@@ -141,6 +156,61 @@ const insertChangeStmt = db.prepare(`
 const clearChangesForCollection = (collection: string) => {
     db.prepare("DELETE FROM sync_changes WHERE collection = ?").run(collection);
 };
+
+const pruneOrphanOpenOrdersFromTransactions = () => {
+    try {
+        const txTableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='transactions'").get();
+        const tablesTableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='tables'").get();
+        if (!txTableExists || !tablesTableExists) return;
+
+        const countRow = db.prepare(`
+            SELECT COUNT(*) AS count
+            FROM transactions t
+            WHERE t.id LIKE 'ORD-%'
+              AND COALESCE(t.status, '') = 'ABIERTA'
+              AND COALESCE(t.total, 0) = 0
+              AND COALESCE(t.displayId, '') = ''
+              AND COALESCE(t.documentType, '') = ''
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM tables tb
+                  WHERE tb.currentOrderId = t.id
+              )
+        `).get() as any;
+
+        const toDelete = Number(countRow?.count || 0);
+        if (toDelete <= 0) return;
+
+        db.prepare(`
+            DELETE FROM transactions
+            WHERE id IN (
+                SELECT t.id
+                FROM transactions t
+                WHERE t.id LIKE 'ORD-%'
+                  AND COALESCE(t.status, '') = 'ABIERTA'
+                  AND COALESCE(t.total, 0) = 0
+                  AND COALESCE(t.displayId, '') = ''
+                  AND COALESCE(t.documentType, '') = ''
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM tables tb
+                      WHERE tb.currentOrderId = t.id
+                  )
+            )
+        `).run();
+
+        // Force clients to refresh transactions snapshot after cleanup.
+        clearChangesForCollection('transactions');
+        const newVersion = bumpVersion('transactions');
+        updateMetadata('transactions', newVersion, newVersion);
+
+        console.warn(`[Sync] Pruned ${toDelete} orphan ORD-* rows from transactions.`);
+    } catch (error) {
+        console.warn('[Sync] Failed to prune orphan ORD-* transactions:', error);
+    }
+};
+
+pruneOrphanOpenOrdersFromTransactions();
 
 /**
  * GET /api/sync/ping
@@ -702,15 +772,91 @@ router.post('/transactions', async (req, res) => {
         }
 
         let addedCount = 0;
+        let conflictResolvedCount = 0;
         const now = new Date().toISOString();
         db.transaction(() => {
             const stmt = db.prepare(`INSERT OR IGNORE INTO transactions (id, globalSequence, displayId, documentType, seriesId, seriesNumber, date, items, total, payments, userId, userName, terminalId, status, customerId, customerName, customerSnapshot, taxAmount, netAmount, discountAmount, isTaxIncluded, ncf, ncfType, relatedTransactions, originalTransactionId, refundReason, affectedInvoiceNumber, affectedNCF, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            const byIdStmt = db.prepare(`SELECT id, displayId, terminalId FROM transactions WHERE id = ?`);
+            const byDisplayIdStmt = db.prepare(`SELECT id, displayId, terminalId FROM transactions WHERE displayId = ?`);
+
+            const insertTxn = (txn: any) =>
+                stmt.run(
+                    txn.id,
+                    txn.globalSequence,
+                    txn.displayId,
+                    txn.documentType,
+                    txn.seriesId,
+                    txn.seriesNumber,
+                    txn.date,
+                    JSON.stringify(txn.items),
+                    txn.total,
+                    JSON.stringify(txn.payments),
+                    txn.userId,
+                    txn.userName,
+                    txn.terminalId,
+                    txn.status,
+                    txn.customerId,
+                    txn.customerName,
+                    JSON.stringify(txn.customerSnapshot),
+                    txn.taxAmount,
+                    txn.netAmount,
+                    txn.discountAmount,
+                    txn.isTaxIncluded ? 1 : 0,
+                    txn.ncf,
+                    txn.ncfType,
+                    JSON.stringify(txn.relatedTransactions),
+                    txn.originalTransactionId,
+                    txn.refundReason,
+                    txn.affectedInvoiceNumber,
+                    txn.affectedNCF,
+                    txn.syncStatus,
+                    txn.syncError
+                );
+
             for (const txn of items) {
-                const result = stmt.run(txn.id, txn.globalSequence, txn.displayId, txn.documentType, txn.seriesId, txn.seriesNumber, txn.date, JSON.stringify(txn.items), txn.total, JSON.stringify(txn.payments), txn.userId, txn.userName, txn.terminalId, txn.status, txn.customerId, txn.customerName, JSON.stringify(txn.customerSnapshot), txn.taxAmount, txn.netAmount, txn.discountAmount, txn.isTaxIncluded ? 1 : 0, txn.ncf, txn.ncfType, JSON.stringify(txn.relatedTransactions), txn.originalTransactionId, txn.refundReason, txn.affectedInvoiceNumber, txn.affectedNCF, txn.syncStatus, txn.syncError);
+                const result = insertTxn(txn);
                 if (result.changes > 0) {
                     addedCount++;
                     const version = bumpVersion('transactions');
                     insertChangeStmt.run('transactions', txn.id, version, 'UPSERT', JSON.stringify(txn), now);
+                    continue;
+                }
+
+                // Conflict handling path:
+                // 1) If same id + same displayId already exists, it's a replay, ignore safely.
+                // 2) If displayId exists with different id, upsert into existing displayId row.
+                // 3) If id collision with different displayId, synthesize deterministic id and insert.
+                const existingById = byIdStmt.get(txn.id) as any;
+                if (existingById && existingById.displayId === txn.displayId) {
+                    continue;
+                }
+
+                const existingByDisplayId = txn.displayId ? (byDisplayIdStmt.get(txn.displayId) as any) : null;
+                if (existingByDisplayId?.id) {
+                    const mergedTxn = { ...txn, id: existingByDisplayId.id };
+                    const updateResult = insertTxn(mergedTxn);
+                    if (updateResult.changes > 0) {
+                        conflictResolvedCount++;
+                        const version = bumpVersion('transactions');
+                        insertChangeStmt.run('transactions', mergedTxn.id, version, 'UPSERT', JSON.stringify(mergedTxn), now);
+                    }
+                    continue;
+                }
+
+                const baseId = typeof txn.id === 'string' && txn.id.trim().length > 0 ? txn.id : 'TXN-CONFLICT';
+                const terminalIdPart = typeof txn.terminalId === 'string' && txn.terminalId.trim().length > 0 ? txn.terminalId.trim() : 'UNKNOWN';
+                const displayIdPart = typeof txn.displayId === 'string' && txn.displayId.trim().length > 0 ? txn.displayId.trim() : `${Date.now()}`;
+                const fallbackId = `${baseId}__${terminalIdPart}__${displayIdPart}`;
+                const fallbackTxn = { ...txn, id: fallbackId };
+                const fallbackResult = insertTxn(fallbackTxn);
+
+                if (fallbackResult.changes > 0) {
+                    conflictResolvedCount++;
+                    const version = bumpVersion('transactions');
+                    insertChangeStmt.run('transactions', fallbackTxn.id, version, 'UPSERT', JSON.stringify(fallbackTxn), now);
+                    console.warn(`[Sync] Transaction ID conflict resolved with fallback id: original=${txn.id}, fallback=${fallbackTxn.id}, displayId=${txn.displayId}`);
+                } else {
+                    console.warn(`[Sync] Transaction ignored after conflict handling: id=${txn.id}, displayId=${txn.displayId}, terminalId=${txn.terminalId}`);
                 }
             }
 
@@ -725,6 +871,7 @@ router.post('/transactions', async (req, res) => {
         res.json({
             success: true,
             addedCount,
+            conflictResolvedCount,
             totalCount: (getCollection('transactions')).length,
             inventoryUpdates: 0
         });

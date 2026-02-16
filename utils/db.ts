@@ -280,7 +280,16 @@ export const db = {
 
         // --- CONFIG PATCHING (Always run if config exists) ---
         if (existingConfig && (Array.isArray(existingConfig) ? existingConfig.length > 0 : Object.keys(existingConfig).length > 0)) {
-          const currentConfig = (Array.isArray(existingConfig) ? existingConfig[0] : existingConfig) as any as BusinessConfig;
+          // Robustly identify the real configuration document
+          let currentConfig: BusinessConfig;
+          if (Array.isArray(existingConfig)) {
+            currentConfig = (existingConfig.find((c: any) => c.id === 'current') ||
+              existingConfig.find((c: any) => c.id !== '_db_initialized' && c.id !== 'config_metadata') ||
+              existingConfig[0]) as any as BusinessConfig;
+          } else {
+            currentConfig = existingConfig as any as BusinessConfig;
+          }
+
           let wasPatched = false;
           const seedConfig = SEED_DATA.config;
 

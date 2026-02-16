@@ -35,6 +35,7 @@ class BackgroundSyncManager {
 
         // Recover interrupted sync states from previous crashes/reloads.
         await this.recoverStuckSyncItems();
+        await this.recoverCompletedTransactionsForReplay();
 
         // Initial count of pending items
         await this.updatePendingCount();
@@ -67,7 +68,10 @@ class BackgroundSyncManager {
     private shouldSyncItem(collectionName: string, item: any): boolean {
         if (permissionService.isMasterTerminal()) return true;
 
-        const currentTerminalId = permissionService.getTerminalId();
+        const normalizeTerminalId = (value: any) =>
+            typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+        const currentTerminalId = normalizeTerminalId(permissionService.getTerminalId());
         if (!currentTerminalId) return true;
 
         const terminalScopedCollections = new Set([
@@ -80,7 +84,10 @@ class BackgroundSyncManager {
         if (!terminalScopedCollections.has(collectionName)) return true;
         if (!item || !item.terminalId) return false;
 
-        return item.terminalId === currentTerminalId;
+        const itemTerminalId = normalizeTerminalId(item.terminalId);
+        if (!itemTerminalId) return false;
+
+        return itemTerminalId === currentTerminalId;
     }
 
     /**
@@ -171,6 +178,7 @@ class BackgroundSyncManager {
         id: string,
         syncStatus?: SyncStatus,
         syncError?: string,
+        _forceSyncReplay?: boolean,
         createdAt?: string,
         timestamp?: string,
         date?: string,
@@ -185,14 +193,26 @@ class BackgroundSyncManager {
         if (!Array.isArray(data)) return;
 
         // Filter pending items and sort by date (FIFO)
+        const isSyncPending = (item: T): boolean => {
+            const status = item.syncStatus;
+            if (status === 'PENDING' || status === 'ERROR' || status === 'SYNCING') return true;
+            // Legacy safeguard: older transactions may not have syncStatus set.
+            if (collectionName === 'transactions' && (status === undefined || status === null || (item as any).syncStatus === '')) {
+                return true;
+            }
+            return false;
+        };
         const pending = data.filter(item =>
-            this.shouldSyncItem(collectionName, item) &&
-            (item.syncStatus === 'PENDING' ||
-                item.syncStatus === 'ERROR' ||
-                item.syncStatus === 'SYNCING')
+            (this.shouldSyncItem(collectionName, item) || (collectionName === 'transactions' && item._forceSyncReplay === true)) &&
+            isSyncPending(item)
         );
 
-        if (pending.length === 0) return;
+        if (pending.length === 0) {
+            if (collectionName === 'transactions') {
+                console.warn('ℹ️ BackgroundSyncManager: No pending transactions to push in current terminal view.');
+            }
+            return;
+        }
 
         console.log(`🔄 BackgroundSyncManager: Processing ${pending.length} pending items in ${collectionName}`);
 
@@ -215,6 +235,9 @@ class BackgroundSyncManager {
                 // Mark as completed
                 item.syncStatus = 'COMPLETED';
                 item.syncError = undefined;
+                if (item._forceSyncReplay) {
+                    item._forceSyncReplay = false;
+                }
                 await db.saveDocument(collectionName as any, item as any);
             } catch (error: any) {
                 console.error(`❌ BackgroundSyncManager: Failed to sync ${collectionName} item ${item.id}:`, error);
@@ -303,6 +326,60 @@ class BackgroundSyncManager {
             } catch (error) {
                 console.warn(`⚠️ Failed recovering stuck sync items in ${colName}:`, error);
             }
+        }
+    }
+
+    /**
+     * One-time safeguard for terminals affected by silent push drops.
+     * Re-queue recent COMPLETED transactions on slave nodes; duplicates are ignored on Master.
+     */
+    private async recoverCompletedTransactionsForReplay() {
+        if (permissionService.isMasterTerminal()) return;
+
+        const terminalId = permissionService.getTerminalId();
+        if (!terminalId) return;
+
+        const flagKey = `sync_replay_completed_transactions_v2_${terminalId}`;
+        if (localStorage.getItem(flagKey) === '1') return;
+
+        try {
+            const transactions = await db.get('transactions') as any[];
+            if (!Array.isArray(transactions) || transactions.length === 0) {
+                localStorage.setItem(flagKey, '1');
+                return;
+            }
+
+            const cutoffMs = Date.now() - (72 * 60 * 60 * 1000); // 72h lookback
+            let changed = 0;
+
+            for (const txn of transactions) {
+                const txnDate = this.resolveItemDate(txn);
+                if (!txnDate || txnDate.getTime() < cutoffMs) continue;
+
+                const hasLegacyMissingStatus = txn?.syncStatus === undefined || txn?.syncStatus === null || txn?.syncStatus === '';
+                const shouldReplayCompleted = txn?.syncStatus === 'COMPLETED';
+
+                // v2 broadened recovery:
+                // - COMPLETED items can be replayed once (for silent push bugs).
+                // - Missing status gets normalized to PENDING.
+                if (hasLegacyMissingStatus || shouldReplayCompleted) {
+                    txn.syncStatus = 'PENDING';
+                    txn._forceSyncReplay = true;
+                    if (!txn.syncError) {
+                        txn.syncError = 'Recovered by replay safeguard v2';
+                    }
+                    changed++;
+                }
+            }
+
+            if (changed > 0) {
+                await db.save('transactions', transactions);
+                console.warn(`♻️ BackgroundSyncManager: Re-queued ${changed} recent completed transactions for replay.`);
+            }
+        } catch (error) {
+            console.warn('⚠️ BackgroundSyncManager: Failed replay recovery for completed transactions:', error);
+        } finally {
+            localStorage.setItem(flagKey, '1');
         }
     }
 

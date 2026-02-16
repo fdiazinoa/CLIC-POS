@@ -55,6 +55,7 @@ class ApiSyncAdapter {
     private readonly MAX_CONSECUTIVE_FAILURES = 3;
     private readonly CIRCUIT_RESET_TIMEOUT = 30000; // 30 seconds
     private readonly CIRCUIT_BREAKER_OPEN_ERROR = 'Circuit Breaker Open: Master unreachable';
+    private onConnectionRestored: (() => void) | null = null;
 
     private isCircuitBreakerOpenError(error: unknown): boolean {
         const message = error instanceof Error ? error.message : String(error || '');
@@ -71,17 +72,20 @@ class ApiSyncAdapter {
      * Helper: Fetch with Retry and Timeout
      */
     private async fetchWithRetry(url: string, options: RequestInit = {}, retries = 2, backoff = 500): Promise<Response> {
+        // Add jitter to backoff (±20% randomness)
+        const jitter = backoff * 0.2;
+        const effectiveBackoff = backoff + (Math.random() * jitter * 2 - jitter);
         // Circuit Breaker Check
-            if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
-                const timeSinceOpen = Date.now() - this.circuitOpenTimeStamp;
-                if (timeSinceOpen < this.CIRCUIT_RESET_TIMEOUT) {
-                    console.warn('⚠️ Circuit Breaker OPEN. Rejecting request to avoid freeze.');
-                    throw new Error(this.CIRCUIT_BREAKER_OPEN_ERROR);
-                } else {
-                    // Reset circuit on timeout test
-                    console.log('🔄 Circuit Breaker Reset: Retrying connection...');
-                    this.consecutiveFailures = 0;
-                }
+        if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
+            const timeSinceOpen = Date.now() - this.circuitOpenTimeStamp;
+            if (timeSinceOpen < this.CIRCUIT_RESET_TIMEOUT) {
+                console.warn('⚠️ Circuit Breaker OPEN. Rejecting request to avoid freeze.');
+                throw new Error(this.CIRCUIT_BREAKER_OPEN_ERROR);
+            } else {
+                // Reset circuit on timeout test
+                console.log('🔄 Circuit Breaker Reset: Retrying connection...');
+                this.consecutiveFailures = 0;
+            }
         }
 
         const controller = new AbortController();
@@ -93,7 +97,13 @@ class ApiSyncAdapter {
 
             // Success resets the breaker
             if (response.ok) {
+                const wasBreakerOpen = this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES;
                 this.consecutiveFailures = 0;
+
+                if (wasBreakerOpen && this.onConnectionRestored) {
+                    console.log('📶 ApiSyncAdapter: Connection restored, notifying listeners.');
+                    this.onConnectionRestored();
+                }
             }
 
             // If 401 Unauthorized, clear token and potentially re-auth
@@ -106,8 +116,8 @@ class ApiSyncAdapter {
 
             // If 503 Service Unavailable or 504 Gateway Timeout, retry
             if ((response.status === 503 || response.status === 504) && retries > 0) {
-                console.warn(`⚠️ Request failed with ${response.status}, retrying in ${backoff}ms...`);
-                await new Promise(r => setTimeout(r, backoff));
+                console.warn(`⚠️ Request failed with ${response.status}, retrying in ${Math.round(effectiveBackoff)}ms...`);
+                await new Promise(r => setTimeout(r, effectiveBackoff));
                 return this.fetchWithRetry(url, options, retries - 1, backoff * 2);
             }
 
@@ -128,8 +138,8 @@ class ApiSyncAdapter {
             }
 
             if ((isConnectionError || isTimeout) && retries > 0 && this.consecutiveFailures < this.MAX_CONSECUTIVE_FAILURES) {
-                console.warn(`⚠️ Connection error (${error.message}), retrying in ${backoff}ms...`);
-                await new Promise(r => setTimeout(r, backoff));
+                console.warn(`⚠️ Connection error (${error.message}), retrying in ${Math.round(effectiveBackoff)}ms...`);
+                await new Promise(r => setTimeout(r, effectiveBackoff));
                 return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5);
             }
 
@@ -245,6 +255,13 @@ class ApiSyncAdapter {
             console.log('📡 Network connection lost');
             this.isOnline = false;
         });
+    }
+
+    /**
+     * Set callback for connection restoration (circuit breaker reset)
+     */
+    setOnConnectionRestored(callback: () => void): void {
+        this.onConnectionRestored = callback;
     }
 
     /**
