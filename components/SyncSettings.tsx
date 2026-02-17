@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { RefreshCw, CheckCircle2, AlertCircle, Clock, UploadCloud, DownloadCloud, Database, Server, ArrowRight, ShieldCheck, X, Wifi, WifiOff, Globe, Monitor, Laptop } from 'lucide-react';
+import { RefreshCw, CheckCircle2, AlertCircle, Clock, UploadCloud, DownloadCloud, Database, Server, ArrowRight, ShieldCheck, X, Wifi, WifiOff, Globe, Monitor, Laptop, Search, Filter, RotateCcw, Code } from 'lucide-react';
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
 import { BusinessConfig } from '../types';
@@ -21,6 +21,12 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const [isTestingConnection, setIsTestingConnection] = useState(false);
     const [connectedTerminals, setConnectedTerminals] = useState<any[]>([]);
     const [activeTab, setActiveTab] = useState<'MONITOR' | 'TERMINALS' | 'CONFIG' | 'HELP'>('MONITOR');
+    const [searchTerm, setSearchTerm] = useState('');
+    const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'ERROR'>('ALL');
+    const [terminalFilter, setTerminalFilter] = useState('ALL');
+    const [auditData, setAuditData] = useState<any[]>([]);
+    const [selectedJson, setSelectedJson] = useState<any>(null);
+    const [isRefreshingAudit, setIsRefreshingAudit] = useState(false);
 
     const loadStatus = async () => {
         try {
@@ -60,6 +66,61 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     });
 
                 setConnectedTerminals(mergedTerminals);
+            }
+
+            // Load Audit Data for Data Monitor
+            if (activeTab === 'MONITOR') {
+                const [txns, reservations, movements, zReports] = await Promise.all([
+                    db.get('transactions'),
+                    db.get('reservations'),
+                    db.get('inventoryLedger'),
+                    db.get('zReports')
+                ]);
+
+                const formattedTxns = (txns as any[] || []).map(t => ({
+                    id: t.displayId || t.id,
+                    terminalId: t.terminalId || '-',
+                    type: 'VENTA',
+                    date: t.date || t.createdAt,
+                    status: t.cloudSyncStatus || 'PENDING',
+                    error: t.cloudSyncError,
+                    raw: t
+                }));
+
+                const formattedRes = (reservations as any[] || []).map(r => ({
+                    id: r.code || r.id,
+                    terminalId: r.terminalId || '-',
+                    type: 'RESERVA',
+                    date: r.createdAt,
+                    status: r.cloudSyncStatus || 'PENDING',
+                    error: r.cloudSyncError,
+                    raw: r
+                }));
+
+                const formattedMovs = (movements as any[] || []).map(m => ({
+                    id: m.documentRef || m.id,
+                    terminalId: m.terminalId || '-',
+                    type: 'INVENTARIO',
+                    date: m.createdAt || m.timestamp,
+                    status: m.cloudSyncStatus || 'PENDING',
+                    error: m.cloudSyncError,
+                    raw: m
+                }));
+
+                const formattedZs = (zReports as any[] || []).map(z => ({
+                    id: z.sequenceNumber || z.id,
+                    terminalId: z.terminalId || '-',
+                    type: 'CIERRE_Z',
+                    date: z.closedAt,
+                    status: z.cloudSyncStatus || 'PENDING',
+                    error: z.cloudSyncError,
+                    raw: z
+                }));
+
+                const combined = [...formattedTxns, ...formattedRes, ...formattedMovs, ...formattedZs]
+                    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+                setAuditData(combined);
             }
         } catch (error) {
             console.error('Error loading sync status:', error);
@@ -429,72 +490,152 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
 
                         {activeTab === 'MONITOR' && (
                             <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-300">
-                                {/* Detailed Table */}
+                                {/* Filter Bar */}
+                                <div className="flex flex-wrap items-center gap-4 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+                                    <div className="flex-1 min-w-[200px] relative">
+                                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                                        <input
+                                            type="text"
+                                            placeholder="Buscar por ID o NCF..."
+                                            value={searchTerm}
+                                            onChange={(e) => setSearchTerm(e.target.value)}
+                                            className="w-full pl-10 pr-4 py-2 bg-gray-50 border-none rounded-xl text-sm focus:ring-2 focus:ring-blue-500 transition-all font-medium"
+                                        />
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <Filter size={16} className="text-gray-400" />
+                                        <select
+                                            value={statusFilter}
+                                            onChange={(e) => setStatusFilter(e.target.value as any)}
+                                            className="bg-gray-50 border-none rounded-xl text-sm py-2 px-4 focus:ring-2 focus:ring-blue-500 font-bold text-gray-600"
+                                        >
+                                            <option value="ALL">Todos los Estados</option>
+                                            <option value="PENDING">Pendientes ☁️</option>
+                                            <option value="ERROR">Errores ❌</option>
+                                        </select>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <Monitor size={16} className="text-gray-400" />
+                                        <select
+                                            value={terminalFilter}
+                                            onChange={(e) => setTerminalFilter(e.target.value)}
+                                            className="bg-gray-50 border-none rounded-xl text-sm py-2 px-4 focus:ring-2 focus:ring-blue-500 font-bold text-gray-600"
+                                        >
+                                            <option value="ALL">Todas las Terminales</option>
+                                            {connectedTerminals.map(t => (
+                                                <option key={t.terminalId} value={t.terminalId}>{t.terminalId}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <button
+                                        onClick={() => loadStatus()}
+                                        className="p-2 hover:bg-gray-100 rounded-xl text-blue-600 transition-all"
+                                        title="Refrescar lista"
+                                    >
+                                        <RotateCcw size={20} className={isRefreshingAudit ? 'animate-spin' : ''} />
+                                    </button>
+                                </div>
+
+                                {/* Audit Table */}
                                 <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
-                                    <table className="w-full">
+                                    <table className="w-full border-collapse">
                                         <thead className="bg-gray-50 border-b border-gray-100">
                                             <tr>
-                                                <th className="text-left py-4 px-6 text-xs font-bold text-gray-400 uppercase">Colección de Datos</th>
-                                                <th className="text-center py-4 px-6 text-xs font-bold text-gray-400 uppercase">Registros Locales</th>
-                                                <th className="text-center py-4 px-6 text-xs font-bold text-gray-400 uppercase">Versión Local</th>
-                                                <th className="text-center py-4 px-6 text-xs font-bold text-gray-400 uppercase">Versión Remota</th>
-                                                <th className="text-right py-4 px-6 text-xs font-bold text-gray-400 uppercase">Estado</th>
+                                                <th className="text-left py-4 px-6 text-xs font-bold text-gray-400 uppercase">Documento</th>
+                                                <th className="text-center py-4 px-6 text-xs font-bold text-gray-400 uppercase">Terminal</th>
+                                                <th className="text-center py-4 px-6 text-xs font-bold text-gray-400 uppercase">Tipo</th>
+                                                <th className="text-center py-4 px-6 text-xs font-bold text-gray-400 uppercase">Fecha Local</th>
+                                                <th className="text-center py-4 px-6 text-xs font-bold text-gray-400 uppercase">Estado Nube</th>
+                                                <th className="text-right py-4 px-6 text-xs font-bold text-gray-400 uppercase">Acciones</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-50">
-                                            {status.map((s) => (
-                                                <tr key={s.collection} className="hover:bg-gray-50/50 transition-colors">
-                                                    <td className="py-4 px-6">
-                                                        <div className="font-bold text-gray-700">{getCollectionLabel(s.collection)}</div>
-                                                        <div className="text-xs text-gray-400 font-mono mt-1">{s.collection}</div>
-                                                    </td>
-                                                    <td className="py-4 px-6 text-center font-mono font-bold text-gray-600">
-                                                        {s.itemCount?.toLocaleString() || '-'}
-                                                    </td>
-                                                    <td className="py-4 px-6 text-center">
-                                                        <span className="px-2 py-1 rounded bg-gray-100 text-gray-500 text-xs font-mono font-bold">
-                                                            v{s.localVersion}
-                                                        </span>
-                                                    </td>
-                                                    <td className="py-4 px-6 text-center">
-                                                        {s.remoteVersion ? (
-                                                            <span className={`px-2 py-1 rounded text-xs font-mono font-bold ${s.remoteVersion > s.localVersion
-                                                                ? 'bg-yellow-100 text-yellow-700'
-                                                                : 'bg-green-100 text-green-700'
-                                                                }`}>
-                                                                v{s.remoteVersion}
-                                                            </span>
-                                                        ) : (
-                                                            <span className="text-gray-300">-</span>
-                                                        )}
-                                                    </td>
-                                                    <td className="py-4 px-6 text-right">
-                                                        <div className="flex items-center justify-end gap-2">
-                                                            {s.status === 'SYNCED' ? (
-                                                                <>
-                                                                    <span className="text-xs font-bold text-emerald-600">Sincronizado</span>
-                                                                    <CheckCircle2 size={18} className="text-emerald-500" />
-                                                                </>
-                                                            ) : s.status === 'PENDING' ? (
-                                                                <>
-                                                                    <span className="text-xs font-bold text-yellow-600">Actualización Disp.</span>
-                                                                    <Clock size={18} className="text-yellow-500" />
-                                                                </>
-                                                            ) : (
-                                                                <>
-                                                                    <span className="text-xs font-bold text-red-600">Error</span>
-                                                                    <AlertCircle size={18} className="text-red-500" />
-                                                                </>
+                                            {auditData
+                                                .filter(item => {
+                                                    const matchesSearch = item.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                                                        (item.raw?.ncf || '').toLowerCase().includes(searchTerm.toLowerCase());
+                                                    const matchesStatus = statusFilter === 'ALL' || item.status === statusFilter;
+                                                    const matchesTerminal = terminalFilter === 'ALL' || item.terminalId === terminalFilter;
+                                                    return matchesSearch && matchesStatus && matchesTerminal;
+                                                })
+                                                .map((item) => (
+                                                    <tr key={item.raw.id} className="hover:bg-gray-50/50 transition-colors group">
+                                                        <td className="py-4 px-6">
+                                                            <div className="font-bold text-gray-700 font-mono text-sm">{item.id}</div>
+                                                            {item.raw?.ncf && (
+                                                                <div className="text-[10px] text-blue-600 font-bold mt-0.5">{item.raw.ncf}</div>
                                                             )}
-                                                        </div>
-                                                        {s.lastSyncedAt && (
-                                                            <div className="text-[10px] text-gray-400 mt-1">
-                                                                {new Date(s.lastSyncedAt).toLocaleTimeString()}
+                                                        </td>
+                                                        <td className="py-4 px-6 text-center">
+                                                            <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-100 text-gray-600 font-bold text-xs">
+                                                                <Monitor size={12} /> {item.terminalId}
                                                             </div>
-                                                        )}
+                                                        </td>
+                                                        <td className="py-4 px-6 text-center">
+                                                            <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${item.type === 'VENTA' ? 'bg-emerald-100 text-emerald-700' :
+                                                                item.type === 'RESERVA' ? 'bg-amber-100 text-amber-700' :
+                                                                    item.type === 'INVENTARIO' ? 'bg-blue-100 text-blue-700' :
+                                                                        'bg-purple-100 text-purple-700'
+                                                                }`}>
+                                                                {item.type}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-4 px-6 text-center">
+                                                            <div className="text-xs text-gray-600 font-medium">
+                                                                {new Date(item.date).toLocaleDateString()}
+                                                            </div>
+                                                            <div className="text-[10px] text-gray-400">
+                                                                {new Date(item.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-4 px-6 text-center">
+                                                            <div className="flex items-center justify-center gap-2">
+                                                                {item.status === 'SYNCED' ? (
+                                                                    <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase">
+                                                                        <CheckCircle2 size={12} /> Sincronizado
+                                                                    </span>
+                                                                ) : item.status === 'ERROR' ? (
+                                                                    <span
+                                                                        className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-red-100 text-red-700 text-[10px] font-black uppercase cursor-help"
+                                                                        title={item.error || 'Error desconocido'}
+                                                                    >
+                                                                        <AlertCircle size={12} /> Error
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-gray-100 text-gray-500 text-[10px] font-black uppercase">
+                                                                        <Clock size={12} /> Pendiente
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-4 px-6 text-right">
+                                                            <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                <button
+                                                                    onClick={() => setSelectedJson(item.raw)}
+                                                                    className="p-2 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-all"
+                                                                    title="Ver JSON"
+                                                                >
+                                                                    <Code size={16} />
+                                                                </button>
+                                                                {item.status === 'ERROR' && (
+                                                                    <button
+                                                                        className="p-2 hover:bg-gray-100 rounded-lg text-red-400 hover:text-red-600 transition-all"
+                                                                        title="Reintentar envío"
+                                                                    >
+                                                                        <RotateCcw size={16} />
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            {auditData.length === 0 && (
+                                                <tr>
+                                                    <td colSpan={6} className="py-12 text-center text-gray-400 italic">
+                                                        No se encontraron documentos procesados.
                                                     </td>
                                                 </tr>
-                                            ))}
+                                            )}
                                         </tbody>
                                     </table>
                                 </div>
@@ -668,6 +809,36 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     </div>
                 </div>
             </div>
+
+            {/* JSON Modal */}
+            {selectedJson && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6 animate-in fade-in duration-200">
+                    <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+                        <div className="px-8 py-6 border-b flex justify-between items-center bg-gray-50">
+                            <div>
+                                <h3 className="text-xl font-black text-gray-800">Detalles del Documento</h3>
+                                <p className="text-xs text-gray-500 mt-1">Audit Data: {selectedJson.displayId || selectedJson.id || selectedJson.code}</p>
+                            </div>
+                            <button onClick={() => setSelectedJson(null)} className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-400"><X /></button>
+                        </div>
+                        <div className="p-8">
+                            <div className="bg-slate-900 rounded-2xl p-6 overflow-auto max-h-[500px]">
+                                <pre className="text-emerald-400 font-mono text-sm leading-relaxed">
+                                    {JSON.stringify(selectedJson, null, 2)}
+                                </pre>
+                            </div>
+                            <div className="mt-8">
+                                <button
+                                    onClick={() => setSelectedJson(null)}
+                                    className="w-full py-4 bg-slate-900 text-white font-black rounded-2xl active:scale-95 transition-all shadow-lg shadow-slate-200"
+                                >
+                                    Cerrar Vista Técnica
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

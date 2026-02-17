@@ -16,6 +16,7 @@ import {
     TrendingDown,
     Printer
 } from 'lucide-react';
+import ProfessionalAccountStatement from './ProfessionalAccountStatement';
 
 interface CustomerStatementViewProps {
     customer: Customer;
@@ -199,116 +200,12 @@ const CustomerStatementView: React.FC<CustomerStatementViewProps> = ({
                             </div>
                         </div>
                     ) : (
-                        <div className="space-y-4">
-                            {detailedData.map(tx => {
-                                const isExpanded = expandedInvoices.has(tx.id);
-                                const txAllocations = allocationsByTx[tx.id] || [];
-                                const creditIssued = Math.max(0, (tx.balanceDueAtSale || tx.total));
-
-                                const allocationsSum = txAllocations.reduce((sum, a) => sum + a.amount, 0);
-                                const currentBalance = Math.min(
-                                    tx.pendingBalance || 0,
-                                    Math.max(0, creditIssued - allocationsSum)
-                                );
-
-                                return (
-                                    <div key={tx.id} className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-all">
-                                        <div
-                                            onClick={() => toggleInvoice(tx.id)}
-                                            className={`p-5 flex items-center justify-between cursor-pointer transition-colors ${isExpanded ? 'bg-slate-50' : 'hover:bg-slate-50/50'}`}
-                                        >
-                                            <div className="flex items-center gap-5">
-                                                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-colors ${currentBalance === 0 ? 'bg-emerald-50 text-emerald-500' : 'bg-blue-50 text-blue-500'}`}>
-                                                    {isExpanded ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
-                                                </div>
-                                                <div>
-                                                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">#{tx.displayId || tx.id.slice(-8).toUpperCase()}</p>
-                                                    <div className="flex items-center gap-3">
-                                                        <span className="text-sm font-black text-slate-800">{new Date(tx.date).toLocaleDateString()}</span>
-                                                        <span className="text-xs font-bold text-slate-400">•</span>
-                                                        <span className="text-xs font-bold text-slate-400 font-mono">{tx.ncf || 'Consumo'}</span>
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            <div className="flex items-center gap-12">
-                                                <div className="text-right">
-                                                    <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Total</p>
-                                                    <p className="text-sm font-bold text-slate-700">{config.currencySymbol}{tx.total.toFixed(2)}</p>
-                                                </div>
-                                                <div className="text-right pr-4">
-                                                    <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Saldo</p>
-                                                    <p className={`text-lg font-black ${currentBalance > 0 ? 'text-blue-600' : 'text-emerald-500'}`}>
-                                                        {config.currencySymbol}{currentBalance.toFixed(2)}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {isExpanded && (
-                                            <div className="p-6 pt-0 border-t border-slate-100 bg-white animate-in slide-in-from-top-2 duration-300">
-                                                <div className="max-w-2xl ml-14 space-y-3 pt-6">
-
-                                                    {/* Original Transaction */}
-                                                    <div className="flex items-center justify-between p-4 rounded-2xl bg-slate-50/80 border border-slate-100 group">
-                                                        <div className="flex items-center gap-4">
-                                                            <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center shadow-sm">
-                                                                <Plus size={14} strokeWidth={3} />
-                                                            </div>
-                                                            <div>
-                                                                <p className="text-xs font-black text-slate-800 uppercase tracking-tighter">Factura Original {tx.displayId || tx.id.slice(-8).toUpperCase()}</p>
-                                                                <p className="text-[10px] font-bold text-slate-400">{new Date(tx.date).toLocaleString()}</p>
-                                                            </div>
-                                                        </div>
-                                                        <span className="text-sm font-black text-slate-600">+{config.currencySymbol}{tx.total.toFixed(2)}</span>
-                                                    </div>
-
-                                                    {/* Payments/Allocations */}
-                                                    {txAllocations.length > 0 ? (
-                                                        txAllocations.map(alloc => (
-                                                            <div key={alloc.id} className="flex items-center justify-between p-4 rounded-2xl bg-emerald-50 border border-emerald-100 group">
-                                                                <div className="flex items-center gap-4">
-                                                                    <div className="w-8 h-8 bg-emerald-500 text-white rounded-full flex items-center justify-center shadow-sm">
-                                                                        <Minus size={14} strokeWidth={3} />
-                                                                    </div>
-                                                                    <div>
-                                                                        <p className="text-xs font-black text-emerald-800 uppercase tracking-tighter">
-                                                                            Abono / Recibo #{alloc.collectionDisplayId || 'PENDIENTE'}
-                                                                        </p>
-                                                                        <p className="text-[10px] font-bold text-emerald-500">
-                                                                            {alloc.collectionDate ? new Date(alloc.collectionDate).toLocaleString() : 'Fecha desconocida'}
-                                                                        </p>
-                                                                    </div>
-                                                                </div>
-                                                                <span className="text-sm font-black text-emerald-600">
-                                                                    -{config.currencySymbol}{Math.abs(alloc.amount).toFixed(2)}
-                                                                </span>
-                                                            </div>
-                                                        ))
-                                                    ) : (
-                                                        tx.status !== 'COMPLETED' && (
-                                                            <div className="px-4 py-2 text-[10px] font-bold text-slate-400 italic">No registra pagos aplicados</div>
-                                                        )
-                                                    )}
-
-                                                    {/* Result */}
-                                                    <div className="flex items-center justify-between p-5 mt-2 rounded-2xl bg-slate-900 text-white shadow-xl shadow-slate-200">
-                                                        <div className="flex items-center gap-4">
-                                                            <div className="p-2 bg-white/10 text-white rounded-xl">
-                                                                <Equal size={14} strokeWidth={3} />
-                                                            </div>
-                                                            <span className="text-xs font-black uppercase tracking-widest opacity-60">Saldo Actual</span>
-                                                        </div>
-                                                        <span className="text-lg font-black">{config.currencySymbol}{(tx.pendingBalance || 0).toFixed(2)}</span>
-                                                    </div>
-
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </div>
+                        <ProfessionalAccountStatement
+                            customer={customer}
+                            transactions={transactions}
+                            collections={collections}
+                            config={config}
+                        />
                     )}
                 </div>
 

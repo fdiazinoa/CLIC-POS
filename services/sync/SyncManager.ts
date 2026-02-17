@@ -806,6 +806,12 @@ class SyncManager {
                             if (collection === 'internalSequences') {
                                 return this.repairSequenceData(rest);
                             }
+
+                            // Master as Proxy logic: Default cloudSyncStatus to PENDING for audited documents if missing
+                            if (['transactions', 'reservations', 'inventoryLedger', 'zReports'].includes(collection)) {
+                                if (!rest.cloudSyncStatus) rest.cloudSyncStatus = 'PENDING';
+                            }
+
                             return rest;
                         });
 
@@ -860,6 +866,12 @@ class SyncManager {
                     if (collection === 'internalSequences') {
                         return this.repairSequenceData(rest);
                     }
+
+                    // Master as Proxy logic: Default cloudSyncStatus to PENDING for audited documents if missing
+                    if (['transactions', 'reservations', 'inventoryLedger', 'zReports'].includes(collection)) {
+                        if (!rest.cloudSyncStatus) rest.cloudSyncStatus = 'PENDING';
+                    }
+
                     return rest;
                 });
                 await db.save(collection, cleanItems);
@@ -874,7 +886,13 @@ class SyncManager {
                         await db.deleteDocument(collection, item.id);
                     } else {
                         // Add repair logic for internalSequences
-                        const finalItem = collection === 'internalSequences' ? this.repairSequenceData(cleanItem) : cleanItem;
+                        let finalItem = collection === 'internalSequences' ? this.repairSequenceData(cleanItem) : cleanItem;
+
+                        // Master as Proxy logic: Default cloudSyncStatus to PENDING for audited documents if missing
+                        if (['transactions', 'reservations', 'inventoryLedger', 'zReports'].includes(collection)) {
+                            if (!finalItem.cloudSyncStatus) finalItem.cloudSyncStatus = 'PENDING';
+                        }
+
                         await db.saveDocument(collection, finalItem);
                         // console.log(`[LOCAL_UPDATE] ${new Date().toISOString()} Registro actualizado en IndexedDB: ${finalItem.id}`);
                     }

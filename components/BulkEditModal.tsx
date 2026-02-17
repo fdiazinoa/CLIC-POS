@@ -7,6 +7,7 @@ import {
    LayoutGrid, RefreshCw, DollarSign, Hash
 } from 'lucide-react';
 import { BusinessConfig, Warehouse, Season, ProductGroup, Product } from '../types';
+import { UNITS } from '../utils/units';
 
 interface BulkEditModalProps {
    config: BusinessConfig;
@@ -53,7 +54,9 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
    const [classification, setClassification] = useState({
       categoryId: '',
       seasonId: '',
-      groupId: ''
+      groupId: '',
+      measurementUnit: '',
+      purchaseUnit: ''
    });
 
    const handleToggleWarehouse = (whId: string) => {
@@ -258,6 +261,33 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                               >
                                  <option value="">-- Sin Cambios --</option>
                                  {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                              </select>
+                           </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                           <div>
+                              <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-3 ml-1">Unidad de Venta</label>
+                              <select
+                                 value={classification.measurementUnit}
+                                 disabled={isSaving}
+                                 onChange={(e) => setClassification({ ...classification, measurementUnit: e.target.value })}
+                                 className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl font-bold text-slate-800 focus:bg-white focus:border-blue-200 outline-none transition-all disabled:opacity-50"
+                              >
+                                 <option value="">-- Sin Cambios --</option>
+                                 {Object.values(UNITS).map(u => <option key={u.code} value={u.code}>{u.name} ({u.code})</option>)}
+                              </select>
+                           </div>
+                           <div>
+                              <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-3 ml-1">Unidad de Compra</label>
+                              <select
+                                 value={classification.purchaseUnit}
+                                 disabled={isSaving}
+                                 onChange={(e) => setClassification({ ...classification, purchaseUnit: e.target.value })}
+                                 className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl font-bold text-slate-800 focus:bg-white focus:border-blue-200 outline-none transition-all disabled:opacity-50"
+                              >
+                                 <option value="">-- Sin Cambios --</option>
+                                 {Object.values(UNITS).map(u => <option key={u.code} value={u.code}>{u.name} ({u.code})</option>)}
                               </select>
                            </div>
                         </div>

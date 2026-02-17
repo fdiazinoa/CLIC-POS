@@ -17,6 +17,7 @@ export type SubVertical = typeof SubVertical[keyof typeof SubVertical];
 // --- SYNC CONFIGURATION TYPES ---
 export type SyncMode = 'MASTER' | 'SLAVE';
 export type SyncStatus = 'PENDING' | 'SYNCING' | 'COMPLETED' | 'ERROR';
+export type CloudSyncStatus = 'PENDING' | 'SYNCED' | 'ERROR';
 
 export interface SyncConfig {
   mode: SyncMode;
@@ -141,6 +142,9 @@ export interface InventoryCountSession {
   createdByName?: string;
   systemSnapshot?: InventoryCountSnapshotItem[];
   items: InventoryCountItem[];
+  cloudSyncStatus?: CloudSyncStatus;
+  cloudSyncError?: string;
+  cloudSyncedAt?: string;
 }
 
 export interface InventorySnapshotItem {
@@ -189,6 +193,10 @@ export interface InventoryAuditLog {
   createdBy?: string;
   createdByName?: string;
   reason?: string;
+  details?: string;
+  cloudSyncStatus?: CloudSyncStatus;
+  cloudSyncError?: string;
+  cloudSyncedAt?: string;
 }
 
 export interface InventoryLedgerEntry {
@@ -210,6 +218,9 @@ export interface InventoryLedgerEntry {
   variantName?: string; // NEW: Human readable variant detail (e.g. "Talla 40")
   trackingId?: string; // NEW: Assigned lot/serial ID
   trackingCode?: string; // NEW: Assigned lot/serial code
+  cloudSyncStatus?: CloudSyncStatus;
+  cloudSyncError?: string;
+  cloudSyncedAt?: string;
 }
 
 // --- WATCHLIST & BI TYPES ---
@@ -1036,6 +1047,10 @@ export interface Transaction {
   ncfType?: NCFType;
   affectedNCF?: string;             // NCF de la factura afectada (para Notas de Crédito B04)
   affectedInvoiceNumber?: string;   // No. de factura afectada (displayId para búsquedas)
+  observations?: string;
+  cloudSyncStatus?: CloudSyncStatus;
+  cloudSyncError?: string;
+  cloudSyncedAt?: string;
   reservationId?: string;
   reservationCode?: string;
   priorAdvancePaid?: number;
@@ -1300,6 +1315,10 @@ export interface Reception {
   syncStatus?: SyncStatus;
   syncError?: string;
   updatedAt?: string;
+  parkedAt?: string;
+  cloudSyncStatus?: CloudSyncStatus;
+  cloudSyncError?: string;
+  cloudSyncedAt?: string;
 }
 
 export interface ParkedTicket {
@@ -1338,6 +1357,9 @@ export interface Reservation {
   invoicedAt?: string;
   invoicedTransactionId?: string;
   expiredAt?: string;
+  cloudSyncStatus?: CloudSyncStatus;
+  cloudSyncError?: string;
+  cloudSyncedAt?: string;
 }
 
 export interface PaymentEntry {

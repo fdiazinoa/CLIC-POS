@@ -1,4 +1,4 @@
-import { Transaction, BusinessConfig } from '../types';
+import { Transaction, BusinessConfig, Reservation } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
 
 export const printTicket = async (transaction: Transaction, config: BusinessConfig) => {
@@ -402,5 +402,151 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
         printWindow.document.close();
     } else {
         alert('Por favor, permita las ventanas emergentes para imprimir el ticket.');
+    }
+};
+
+export const printReservation = async (reservation: Reservation, config: BusinessConfig) => {
+    const { companyInfo, currencySymbol, receiptConfig } = config;
+    const dateStr = new Date(reservation.createdAt).toLocaleDateString();
+    const timeStr = new Date(reservation.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const deliveryStr = reservation.deliveryDate ? new Date(reservation.deliveryDate).toLocaleDateString() : 'No especificada';
+    const expiryStr = new Date(reservation.expiryDate).toLocaleDateString();
+
+    const receiptHtml = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Reserva #${reservation.code}</title>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+            <style>
+                @page { size: 80mm auto; margin: 0; }
+                body {
+                    font-family: 'Courier New', Courier, monospace;
+                    width: 72mm;
+                    margin: 0 auto;
+                    padding: 4mm;
+                    font-size: 14px;
+                    line-height: 1.2;
+                    color: #000;
+                    background: #fff;
+                }
+                .text-center { text-align: center; }
+                .text-right { text-align: right; }
+                .font-bold { font-weight: 700; }
+                .font-black { font-weight: 900; }
+                .company-name { font-size: 18px; font-weight: 900; margin-bottom: 2px; text-transform: uppercase; }
+                .company-info { font-size: 12px; }
+                .divider { border-top: 1px dashed #000; margin: 8px 0; }
+                .doc-title { font-size: 16px; font-weight: 900; text-transform: uppercase; margin-bottom: 5px; }
+                .meta-row { font-size: 12px; }
+                .items-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
+                .items-table td { padding: 4px 0; vertical-align: top; }
+                .item-name { font-weight: 700; display: block; }
+                .item-meta { font-size: 12px; display: block; }
+                .totals-section { margin-top: 10px; }
+                .total-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+                .total-final { font-size: 18px; font-weight: 900; border-top: 2px solid #000; padding-top: 5px; }
+                #qrcode { width: 100px; height: 100px; margin: 10px auto; }
+            </style>
+        </head>
+        <body>
+            <div class="text-center">
+                <div class="company-name">${companyInfo.name}</div>
+                <div class="company-info">
+                    <div>RNC: ${companyInfo.rnc}</div>
+                    <div>${companyInfo.address}</div>
+                    <div>TEL: ${companyInfo.phone}</div>
+                </div>
+            </div>
+
+            <div class="divider"></div>
+            
+            <div class="text-center">
+                <div class="doc-title">NOTA DE RESERVA</div>
+                <div class="font-bold">Código: ${reservation.code}</div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="meta-row">
+                <div><strong>Cliente:</strong> ${reservation.customerName}</div>
+                <div><strong>Fecha Doc:</strong> ${dateStr} ${timeStr}</div>
+                <div><strong>Fecha Entrega:</strong> ${deliveryStr}</div>
+                <div><strong>Vence:</strong> ${expiryStr}</div>
+            </div>
+
+            <div class="divider"></div>
+
+            <table class="items-table">
+                <tbody>
+                    ${reservation.items.map(item => `
+                        <tr>
+                            <td style="width: 70%;">
+                                <span class="item-name">${item.name}</span>
+                                <span class="item-meta">${item.quantity} x ${currencySymbol}${item.price.toFixed(2)}</span>
+                            </td>
+                            <td class="text-right font-bold">
+                                ${currencySymbol}${(item.price * item.quantity).toFixed(2)}
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+
+            <div class="divider"></div>
+
+            <div class="totals-section">
+                <div class="total-row">
+                    <span>TOTAL RESERVA</span>
+                    <span>${currencySymbol}${reservation.total.toFixed(2)}</span>
+                </div>
+                <div class="total-row">
+                    <span>ABONO RECIBIDO</span>
+                    <span>${currencySymbol}${reservation.balancePaid.toFixed(2)}</span>
+                </div>
+                <div class="total-row total-final">
+                    <span>SALDO PENDIENTE</span>
+                    <span>${currencySymbol}${(reservation.total - reservation.balancePaid).toFixed(2)}</span>
+                </div>
+            </div>
+
+            <div class="text-center" style="margin-top: 20px;">
+                <div id="qrcode"></div>
+                <div style="font-size: 10px; font-weight: bold; margin-top: 5px;">ESTE DOCUMENTO SE USA PARA RECUPERAR SU RESERVA</div>
+            </div>
+
+            <div class="text-center" style="margin-top: 15px; font-size: 11px;">
+                ${receiptConfig?.footerMessage || '¡Gracias por su preferencia!'}
+            </div>
+
+            <script>
+                window.onload = function() {
+                    new QRCode(document.getElementById("qrcode"), {
+                        text: "${reservation.qrPayload}",
+                        width: 100,
+                        height: 100
+                    });
+                    setTimeout(() => { window.print(); }, 500);
+                }
+            </script>
+        </body>
+        </html>
+    `;
+
+    const silentHtml = receiptHtml.replace(/<script>[\s\S]*?window\.onload[\s\S]*?<\/script>/, '');
+    const printedSilently = await PrintRouterService.routeAndPrintHtml({
+        config,
+        html: silentHtml,
+        role: 'TICKET',
+        jobType: 'TICKET',
+        referenceId: reservation.id,
+    });
+
+    if (printedSilently) return;
+
+    const printWindow = window.open('', '_blank', 'width=400,height=600');
+    if (printWindow) {
+        printWindow.document.write(receiptHtml);
+        printWindow.document.close();
     }
 };

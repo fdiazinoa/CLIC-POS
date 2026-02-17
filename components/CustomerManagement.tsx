@@ -25,6 +25,7 @@ interface CustomerManagementProps {
    currentUser: User;
    terminalId: string;
    collections: Collection[];
+   onUpdateCollections: (collections: Collection[]) => void;
 }
 
 const CustomerManagement: React.FC<CustomerManagementProps> = ({
@@ -37,7 +38,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    onClose,
    currentUser,
    terminalId,
-   collections
+   collections,
+   onUpdateCollections
 }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
@@ -1603,8 +1605,12 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                      if (refreshed) {
                         onUpdateCustomer(refreshed);
                      }
+
+                     // Refresh Collections
+                     const freshCollections = await db.get('collections') as Collection[];
+                     onUpdateCollections(freshCollections || []);
                   } catch (error) {
-                     console.error('Failed to refresh customer after collection:', error);
+                     console.error('Failed to refresh customer/collections after collection:', error);
                   } finally {
                      setIsAbonoModalOpen(false);
                   }

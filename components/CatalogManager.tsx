@@ -310,6 +310,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          }
 
          if (changes.classification?.categoryId) newP.category = changes.classification.categoryId;
+         if (changes.classification?.measurementUnit) newP.measurementUnit = changes.classification.measurementUnit;
+         if (changes.classification?.purchaseUnit) newP.purchaseUnit = changes.classification.purchaseUnit;
 
          newP.updatedAt = new Date().toISOString();
          return newP;

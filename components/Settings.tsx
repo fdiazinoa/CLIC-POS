@@ -25,7 +25,8 @@ import {
   ProductStock,
   InventoryCountSession,
   CashMovement,
-  ZReport
+  ZReport,
+  Collection
 } from '../types';
 
 // Component Imports
@@ -66,6 +67,8 @@ interface SettingsProps {
   warehouses: Warehouse[];
   suppliers?: Supplier[];
   customers?: Customer[];
+  collections?: Collection[];
+  onUpdateCollections?: (collections: Collection[]) => void;
   purchaseOrders?: PurchaseOrder[];
   receptions?: Reception[];
   parkedTickets?: any[];
@@ -422,7 +425,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
             config={props.config}
             currentUser={props.currentUser || props.users[0] || { id: 'sys', name: 'System', pin: '0000', role: 'admin' }}
             terminalId={props.terminalId || 'T1'}
-            collections={[]}
+            collections={props.collections || []}
+            onUpdateCollections={(cols) => props.onUpdateCollections?.(cols)}
             onAddCustomer={(customer) => {
               const updated = [...(props.customers || []), customer];
               props.onUpdateCustomers?.(updated);

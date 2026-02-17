@@ -2343,6 +2343,8 @@ const AppContent: React.FC = () => {
             internalSequences={internalSequences}
             suppliers={suppliers}
             customers={customers}
+            collections={collections}
+            onUpdateCollections={setCollections}
             purchaseOrders={purchaseOrders}
             receptions={receptions}
             parkedTickets={parkedTickets}
@@ -2416,6 +2418,8 @@ const AppContent: React.FC = () => {
             onUpdateProducts={async (p) => { setProducts(p); await db.save('products', p); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
             onUpdateCustomers={async (c) => { setCustomers(c); await db.save('customers', c); }}
+            collections={collections}
+            onUpdateCollections={setCollections}
             onRepairLegacyReceivables={handleRepairLegacyReceivables}
             onAdjustStock={async (adjustments) => {
               const pairedTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
@@ -2469,6 +2473,9 @@ const AppContent: React.FC = () => {
               setCustomers(updated);
               await db.save('customers', updated);
               syncManager.broadcastChange('customers', c, 'UPDATE').catch(console.error);
+            }}
+            onUpdateCollections={(cols) => {
+              setCollections(cols);
             }}
             onDeleteCustomer={async (id) => {
               const updated = customers.filter(cust => cust.id !== id);
