@@ -14,6 +14,8 @@ interface AccountReceivableModalProps {
     terminalId: string;
     config: BusinessConfig;
     onSuccess: () => void;
+    initialAmount?: number;
+    initialInvoices?: string[];
 }
 
 const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
@@ -25,13 +27,24 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
     currentUser,
     terminalId,
     config,
-    onSuccess
+    onSuccess,
+    initialAmount,
+    initialInvoices
 }) => {
-    const [amount, setAmount] = useState<string>('');
+    const [amount, setAmount] = useState<string>(initialAmount ? initialAmount.toString() : '');
     const [method, setMethod] = useState<CollectionMethod>('CASH');
     const [reference, setReference] = useState('');
     const [notes, setNotes] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
+
+    // Initial Selection State
+    const [selectedInvoices, setSelectedInvoices] = useState<Set<string>>(
+        initialInvoices ? new Set(initialInvoices) : new Set()
+    );
+
+    // If initialInvoices are provided, we should respect them.
+    // If not, we might default to auto-allocation which is handled by the suggestFIFO logic later,
+    // but the manual toggle state needs to be initialized.
 
     const CREDIT_METHOD_MARKERS = useMemo(() => new Set(['CREDIT', 'CREDITO', 'PENDIENTE']), []);
 
@@ -123,8 +136,14 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
 
     const allocationResult = useMemo(() => {
         const numAmount = parseFloat(amount) || 0;
-        return suggestFIFOAllocation(numAmount, unpaidInvoices);
-    }, [amount, unpaidInvoices]);
+
+        // Filter invoices if selection is active
+        const eligibleInvoices = selectedInvoices.size > 0
+            ? unpaidInvoices.filter(inv => selectedInvoices.has(inv.id))
+            : unpaidInvoices;
+
+        return suggestFIFOAllocation(numAmount, eligibleInvoices);
+    }, [amount, unpaidInvoices, selectedInvoices]);
     const enteredAmount = parseFloat(amount) || 0;
 
     const generateCollectionDisplayId = async (): Promise<{

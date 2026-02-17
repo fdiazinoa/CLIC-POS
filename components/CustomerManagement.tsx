@@ -12,6 +12,7 @@ import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType
 import { dgiiService, DGIIResponse } from '../services/dgii/DGIIValidationService';
 import { printTicket } from '../utils/printer';
 import AccountReceivableModal from './AccountReceivableModal';
+import CreditAccountDashboard from './CreditAccountDashboard';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -44,6 +45,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    const [activeProfileTab, setActiveProfileTab] = useState<'HISTORY' | 'WALLET' | 'LOYALTY' | 'CREDIT'>('HISTORY');
    const [editModalTab, setEditModalTab] = useState<'GENERAL' | 'ADDRESSES'>('GENERAL');
    const [isAbonoModalOpen, setIsAbonoModalOpen] = useState(false);
+   const [abonoInitialAmount, setAbonoInitialAmount] = useState<number | undefined>(undefined);
+   const [abonoInitialInvoices, setAbonoInitialInvoices] = useState<string[] | undefined>(undefined);
 
    // Filter State
    const [filterTag, setFilterTag] = useState<string>('ALL');
@@ -877,34 +880,34 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                        (() => {
                                           const effectivePending = getEffectivePendingBalance(tx);
                                           return (
-                                       <div
-                                          key={tx.id}
-                                          onClick={() => setSelectedTransactionId(tx.id)}
-                                          className="bg-white p-4 rounded-xl border border-gray-100 flex items-center justify-between hover:shadow-md transition-all cursor-pointer group"
-                                       >
-                                          <div className="flex items-center gap-4">
-                                             <div className="p-2 bg-gray-50 rounded-lg text-gray-400 group-hover:bg-blue-50 group-hover:text-blue-600 transition-colors">
-                                                <ShoppingBag size={20} />
+                                             <div
+                                                key={tx.id}
+                                                onClick={() => setSelectedTransactionId(tx.id)}
+                                                className="bg-white p-4 rounded-xl border border-gray-100 flex items-center justify-between hover:shadow-md transition-all cursor-pointer group"
+                                             >
+                                                <div className="flex items-center gap-4">
+                                                   <div className="p-2 bg-gray-50 rounded-lg text-gray-400 group-hover:bg-blue-50 group-hover:text-blue-600 transition-colors">
+                                                      <ShoppingBag size={20} />
+                                                   </div>
+                                                   <div>
+                                                      <p className="font-bold text-gray-800 text-sm">Compra #{tx.displayId || tx.id.slice(-8).toUpperCase()}</p>
+                                                      <p className="text-xs text-gray-400">{new Date(tx.date).toLocaleDateString()} • {tx.items.length} items</p>
+                                                   </div>
+                                                </div>
+                                                <div className="text-right">
+                                                   <p className="font-bold text-gray-800">{config.currencySymbol}{tx.total.toFixed(2)}</p>
+                                                   <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${tx.status === 'REFUNDED' ? 'bg-red-50 text-red-600' :
+                                                      tx.status === 'PARTIAL_REFUND' ? 'bg-orange-50 text-orange-600' :
+                                                         effectivePending > 0 ? 'bg-amber-50 text-amber-600' :
+                                                            'bg-green-50 text-green-600'
+                                                      }`}>
+                                                      {tx.status === 'REFUNDED' ? 'ANULADO' :
+                                                         tx.status === 'PARTIAL_REFUND' ? 'PARCIAL' :
+                                                            effectivePending > 0 ? 'PENDIENTE' :
+                                                               'PAGADO'}
+                                                   </span>
+                                                </div>
                                              </div>
-                                             <div>
-                                                <p className="font-bold text-gray-800 text-sm">Compra #{tx.displayId || tx.id.slice(-8).toUpperCase()}</p>
-                                                <p className="text-xs text-gray-400">{new Date(tx.date).toLocaleDateString()} • {tx.items.length} items</p>
-                                             </div>
-                                          </div>
-                                          <div className="text-right">
-                                             <p className="font-bold text-gray-800">{config.currencySymbol}{tx.total.toFixed(2)}</p>
-                                             <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${tx.status === 'REFUNDED' ? 'bg-red-50 text-red-600' :
-                                                tx.status === 'PARTIAL_REFUND' ? 'bg-orange-50 text-orange-600' :
-                                                   effectivePending > 0 ? 'bg-amber-50 text-amber-600' :
-                                                      'bg-green-50 text-green-600'
-                                                }`}>
-                                                {tx.status === 'REFUNDED' ? 'ANULADO' :
-                                                   tx.status === 'PARTIAL_REFUND' ? 'PARCIAL' :
-                                                      effectivePending > 0 ? 'PENDIENTE' :
-                                                         'PAGADO'}
-                                             </span>
-                                          </div>
-                                       </div>
                                           );
                                        })()
                                     ))
@@ -1074,78 +1077,19 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                               </div>
                            )}
 
-                           {activeProfileTab === 'CREDIT' && (
-                              <div className="space-y-6">
-                                 <div className="bg-white rounded-2xl p-6 border border-gray-200">
-                                    <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                                       <CreditCard size={18} className="text-blue-600" /> Cuenta de Crédito
-                                    </h3>
-                                    <div className="flex justify-between items-center mb-6 p-4 bg-red-50 rounded-xl border border-red-100">
-                                       <span className="text-red-600 text-sm font-bold">Deuda Pendiente</span>
-                                       <span className="text-2xl font-black text-red-600">{config.currencySymbol}{selectedCustomer.currentDebt?.toLocaleString() || '0.00'}</span>
-                                    </div>
-
-                                    <div className="mb-6 space-y-3">
-                                       <div className="flex justify-between items-center mb-2">
-                                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">Facturas Pendientes</h4>
-                                          <button
-                                             onClick={() => setIsAbonoModalOpen(true)}
-                                             className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg shadow-blue-200"
-                                          >
-                                             Registrar Abono
-                                          </button>
-                                       </div>
-                                       {(() => {
-                                          const unpaid = customerTransactions
-                                             .map(tx => ({ ...tx, pendingBalance: getEffectivePendingBalance(tx) }))
-                                             .filter(tx => (tx.pendingBalance || 0) > 0);
-                                          if (unpaid.length === 0) return <p className="text-xs text-gray-400 italic">No hay facturas pendientes de cobro.</p>;
-
-                                          return unpaid.map(inv => {
-                                             const dueDate = inv.dueDate ? new Date(inv.dueDate) : new Date(inv.date);
-                                             const diffDays = Math.ceil((new Date().getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
-                                             const isLate = diffDays > 0;
-
-                                             return (
-                                                <div key={inv.id} className="p-3 bg-gray-50 rounded-xl border border-gray-100 flex justify-between items-center">
-                                                   <div>
-                                                      <p className="text-[11px] font-black text-gray-800">#{inv.displayId}</p>
-                                                      <p className="text-[10px] text-gray-400">Vence: {dueDate.toLocaleDateString()}</p>
-                                                      {isLate && (
-                                                         <span className={`text-[9px] font-bold ${diffDays > 15 ? 'text-red-600' : 'text-orange-600'}`}>
-                                                            {diffDays} días de atraso
-                                                         </span>
-                                                      )}
-                                                   </div>
-                                                   <div className="text-right">
-                                                      <p className="text-sm font-black text-gray-900">{config.currencySymbol}{(inv.pendingBalance || 0).toLocaleString()}</p>
-                                                      <p className="text-[9px] text-gray-400 uppercase font-bold">Saldo</p>
-                                                   </div>
-                                                </div>
-                                             );
-                                          });
-                                       })()}
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-4 text-xs text-gray-500 mb-6">
-                                       <div>
-                                          <p className="font-bold mb-1">Límite de Crédito</p>
-                                          <p>{config.currencySymbol}{selectedCustomer.creditLimit?.toLocaleString() || '0.00'}</p>
-                                       </div>
-                                       <div>
-                                          <p className="font-bold mb-1">Disponible</p>
-                                          <p className="text-green-600 font-bold">
-                                             {config.currencySymbol}{((selectedCustomer.creditLimit || 0) - (selectedCustomer.currentDebt || 0)).toLocaleString()}
-                                          </p>
-                                       </div>
-                                    </div>
-                                    <button
-                                       onClick={() => setIsAbonoModalOpen(true)}
-                                       className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold shadow-md hover:bg-blue-700 active:scale-95 transition-all flex items-center justify-center gap-2"
-                                    >
-                                       Registrar Abono
-                                    </button>
-                                 </div>
+                           {activeProfileTab === 'CREDIT' && selectedCustomer && (
+                              <div className="h-full p-6">
+                                 <CreditAccountDashboard
+                                    customer={selectedCustomer}
+                                    transactions={customerTransactions}
+                                    config={config}
+                                    collections={collections}
+                                    onRecordPayment={(amount, invoiceIds) => {
+                                       setAbonoInitialAmount(amount);
+                                       setAbonoInitialInvoices(invoiceIds);
+                                       setIsAbonoModalOpen(true);
+                                    }}
+                                 />
                               </div>
                            )}
                         </div>
@@ -1648,6 +1592,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                currentUser={currentUser}
                terminalId={terminalId}
                config={config}
+               initialAmount={abonoInitialAmount}
+               initialInvoices={abonoInitialInvoices}
                onSuccess={async () => {
                   await loadCustomerTransactions(selectedCustomer.id);
                   try {
