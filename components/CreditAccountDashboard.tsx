@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { Customer, Transaction, BusinessConfig, Collection } from '../types';
-import { DollarSign, AlertTriangle, CheckCircle, CreditCard, Calendar, AlertCircle } from 'lucide-react';
+import { DollarSign, AlertTriangle, CheckCircle, CreditCard, Calendar, AlertCircle, FileText, History } from 'lucide-react';
+import CustomerStatementView from './CustomerStatementView';
 
 interface CreditAccountDashboardProps {
     customer: Customer;
@@ -18,6 +19,8 @@ const CreditAccountDashboard: React.FC<CreditAccountDashboardProps> = ({
     onRecordPayment
 }) => {
     const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<string>>(new Set());
+    const [statementOpen, setStatementOpen] = useState(false);
+    const [statementType, setStatementType] = useState<'SUMMARY' | 'DETAILED'>('SUMMARY');
 
     const CREDIT_METHOD_MARKERS = useMemo(() => new Set(['CREDIT', 'CREDITO', 'PENDIENTE']), []);
 
@@ -79,8 +82,13 @@ const CreditAccountDashboard: React.FC<CreditAccountDashboardProps> = ({
         const allocated = allocationsByTransactionId.get(tx.id) || 0;
         const inferredPending = Math.max(0, parseFloat((creditIssued - allocated).toFixed(2)));
 
+        // PRIORITIZE DYNAMIC CALCULATION:
+        // If we have an explicit pending balance from the DB, we trust it acts as a "ceiling".
+        // However, if our local calculation (creditIssued - allocated) is LOWER, it means we have
+        // local payments that the DB record might not reflect yet.
+        // So we take the minimum of the two to ensure the UI updates immediately.
         if (hasExplicitPending && explicitPending > 0) {
-            return parseFloat(explicitPending.toFixed(2));
+            return Math.min(explicitPending, inferredPending);
         }
 
         if (creditIssued > 0) {
@@ -193,24 +201,47 @@ const CreditAccountDashboard: React.FC<CreditAccountDashboardProps> = ({
                         <h3 className="text-sm font-black text-gray-700 uppercase tracking-wide">Facturas Pendientes ({unpaidInvoices.length})</h3>
                     </div>
 
-                    {/* 3. ACCIÓN PRINCIPAL (Moved to header/corner) */}
-                    <button
-                        onClick={() => onRecordPayment(selectedTotal > 0 ? selectedTotal : (unpaidInvoices.length > 0 ? unpaidInvoices[0].pendingBalance! : 0), Array.from(selectedInvoiceIds))} // Default to full selected amount or first invoice if none
-                        disabled={unpaidInvoices.length === 0}
-                        className={`
-                     px-6 py-2 rounded-xl font-bold text-sm transition-all shadow-md flex items-center gap-2
-                     ${selectedInvoiceIds.size > 0
-                                ? 'bg-blue-600 text-white hover:bg-blue-700 active:scale-95 shadow-blue-200'
-                                : 'bg-white text-blue-600 border border-blue-200 hover:bg-blue-50'
+                    <div className="flex gap-3">
+                        <button
+                            onClick={() => {
+                                setStatementType('SUMMARY');
+                                setStatementOpen(true);
+                            }}
+                            className="px-4 py-2 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold text-xs hover:bg-slate-50 flex items-center gap-2 transition-all shadow-sm"
+                        >
+                            <FileText size={14} className="text-blue-500" />
+                            Estado Resumido
+                        </button>
+
+                        <button
+                            onClick={() => {
+                                setStatementType('DETAILED');
+                                setStatementOpen(true);
+                            }}
+                            className="px-4 py-2 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold text-xs hover:bg-slate-50 flex items-center gap-2 transition-all shadow-sm"
+                        >
+                            <History size={14} className="text-purple-500" />
+                            Detalle Movimientos
+                        </button>
+
+                        <button
+                            onClick={() => onRecordPayment(selectedTotal > 0 ? selectedTotal : (unpaidInvoices.length > 0 ? unpaidInvoices[0].pendingBalance! : 0), Array.from(selectedInvoiceIds))} // Default to full selected amount or first invoice if none
+                            disabled={unpaidInvoices.length === 0}
+                            className={`
+                         px-6 py-2 rounded-xl font-bold text-sm transition-all shadow-md flex items-center gap-2
+                         ${selectedInvoiceIds.size > 0
+                                    ? 'bg-blue-600 text-white hover:bg-blue-700 active:scale-95 shadow-blue-200'
+                                    : 'bg-white text-blue-600 border border-blue-200 hover:bg-blue-50'
+                                }
+                      `}
+                        >
+                            <DollarSign size={16} />
+                            {selectedInvoiceIds.size > 0
+                                ? `Cobrar Seleccionados (${config.currencySymbol}${selectedTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
+                                : "Cobrar"
                             }
-                  `}
-                    >
-                        <DollarSign size={16} />
-                        {selectedInvoiceIds.size > 0
-                            ? `Cobrar Seleccionados (${config.currencySymbol}${selectedTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
-                            : "Cobrar"
-                        }
-                    </button>
+                        </button>
+                    </div>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-0">
@@ -297,6 +328,17 @@ const CreditAccountDashboard: React.FC<CreditAccountDashboardProps> = ({
                     )}
                 </div>
             </div>
+
+            {statementOpen && (
+                <CustomerStatementView
+                    customer={customer}
+                    transactions={transactions}
+                    collections={collections}
+                    config={config}
+                    initialType={statementType}
+                    onClose={() => setStatementOpen(false)}
+                />
+            )}
         </div>
     );
 };
