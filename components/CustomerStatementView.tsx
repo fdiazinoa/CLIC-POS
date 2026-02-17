@@ -266,17 +266,23 @@ const CustomerStatementView: React.FC<CustomerStatementViewProps> = ({
                                                     {/* Payments/Allocations */}
                                                     {txAllocations.length > 0 ? (
                                                         txAllocations.map(alloc => (
-                                                            <div key={alloc.id} className="flex items-center justify-between p-4 rounded-2xl bg-emerald-50/30 border border-emerald-100/50 group">
+                                                            <div key={alloc.id} className="flex items-center justify-between p-4 rounded-2xl bg-emerald-50 border border-emerald-100 group">
                                                                 <div className="flex items-center gap-4">
                                                                     <div className="w-8 h-8 bg-emerald-500 text-white rounded-full flex items-center justify-center shadow-sm">
                                                                         <Minus size={14} strokeWidth={3} />
                                                                     </div>
                                                                     <div>
-                                                                        <p className="text-xs font-black text-emerald-700 uppercase tracking-tighter">Abono / Recibo #{alloc.collectionDisplayId}</p>
-                                                                        <p className="text-[10px] font-bold text-emerald-400">{new Date(alloc.collectionDate).toLocaleString()}</p>
+                                                                        <p className="text-xs font-black text-emerald-800 uppercase tracking-tighter">
+                                                                            Abono / Recibo #{alloc.collectionDisplayId || 'PENDIENTE'}
+                                                                        </p>
+                                                                        <p className="text-[10px] font-bold text-emerald-500">
+                                                                            {alloc.collectionDate ? new Date(alloc.collectionDate).toLocaleString() : 'Fecha desconocida'}
+                                                                        </p>
                                                                     </div>
                                                                 </div>
-                                                                <span className="text-sm font-black text-emerald-600">-{config.currencySymbol}{alloc.amount.toFixed(2)}</span>
+                                                                <span className="text-sm font-black text-emerald-600">
+                                                                    -{config.currencySymbol}{Math.abs(alloc.amount).toFixed(2)}
+                                                                </span>
                                                             </div>
                                                         ))
                                                     ) : (
