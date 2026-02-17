@@ -1,0 +1,255 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import { X, DollarSign, Check, AlertCircle, Printer, Save, Banknote, CreditCard, ArrowRightLeft, FileText } from 'lucide-react';
+import { Customer, Transaction, BusinessConfig, Collection, CollectionMethod, User } from '../types';
+import { suggestFIFOAllocation, DelinquentInvoice } from '../hooks/useCreditControl';
+import { db } from '../utils/db';
+
+interface AccountReceivableModalProps {
+    isOpen: boolean;
+    onClose: () => void;
+    customer: Customer;
+    transactions: Transaction[];
+    currentUser: User;
+    terminalId: string;
+    config: BusinessConfig;
+    onSuccess: () => void;
+}
+
+const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
+    isOpen,
+    onClose,
+    customer,
+    transactions,
+    currentUser,
+    terminalId,
+    config,
+    onSuccess
+}) => {
+    const [amount, setAmount] = useState<string>('');
+    const [method, setMethod] = useState<CollectionMethod>('CASH');
+    const [reference, setReference] = useState('');
+    const [notes, setNotes] = useState('');
+    const [isProcessing, setIsProcessing] = useState(false);
+
+    const unpaidInvoices = useMemo(() => {
+        return transactions
+            .filter(tx => tx.customerId === customer.id && (tx.pendingBalance || 0) > 0)
+            .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()) as DelinquentInvoice[];
+    }, [transactions, customer.id]);
+
+    const totalOwed = unpaidInvoices.reduce((sum, inv) => sum + (inv.pendingBalance || 0), 0);
+
+    const allocationResult = useMemo(() => {
+        const numAmount = parseFloat(amount) || 0;
+        return suggestFIFOAllocation(numAmount, unpaidInvoices);
+    }, [amount, unpaidInvoices]);
+
+    const handleProcessPayment = async () => {
+        const numAmount = parseFloat(amount) || 0;
+        if (numAmount <= 0) return;
+        if (numAmount > totalOwed + 0.01) {
+            alert('El monto no puede exceder la deuda total.');
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            const collectionId = `RC-${Date.now()}`;
+            const displayId = `RC-${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`;
+
+            const newCollection: Collection = {
+                id: collectionId,
+                displayId: displayId,
+                customerId: customer.id,
+                customerName: customer.name,
+                date: new Date().toISOString(),
+                totalAmount: numAmount,
+                method,
+                reference,
+                userId: currentUser.id,
+                userName: currentUser.name,
+                terminalId,
+                notes,
+                allocations: allocationResult.allocations.map(a => ({
+                    id: `AL-${Date.now()}-${Math.random()}`,
+                    collectionId: collectionId,
+                    transactionId: a.transactionId,
+                    amount: a.amount,
+                    timestamp: new Date().toISOString()
+                })),
+                syncStatus: 'PENDING'
+            };
+
+            // 1. Save Collection
+            await db.saveDocument('collections', newCollection);
+
+            // 2. Update affected transactions
+            for (const alloc of allocationResult.allocations) {
+                const tx = transactions.find(t => t.id === alloc.transactionId);
+                if (tx) {
+                    const updatedTx = {
+                        ...tx,
+                        pendingBalance: Math.max(0, parseFloat(((tx.pendingBalance || 0) - alloc.amount).toFixed(2))),
+                        updatedAt: new Date().toISOString(),
+                        syncStatus: 'PENDING'
+                    };
+                    await db.saveDocument('transactions', updatedTx);
+                }
+            }
+
+            // 3. Update customer currentDebt
+            const updatedCustomer = {
+                ...customer,
+                currentDebt: Math.max(0, parseFloat(((customer.currentDebt || 0) - numAmount).toFixed(2))),
+                updatedAt: new Date().toISOString()
+            };
+            await db.saveDocument('customers', updatedCustomer);
+
+            alert('Abono registrado correctamente.');
+            onSuccess();
+            onClose();
+        } catch (error) {
+            console.error('Error saving collection:', error);
+            alert('Error al registrar el abono.');
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
+                {/* Header */}
+                <div className="bg-gradient-to-r from-blue-700 to-indigo-800 p-6 text-white flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 bg-white/10 rounded-xl">
+                            <DollarSign size={24} />
+                        </div>
+                        <div>
+                            <h3 className="text-xl font-black uppercase tracking-tight">Registrar Abono</h3>
+                            <p className="text-blue-100 text-xs font-bold">{customer.name}</p>
+                        </div>
+                    </div>
+                    <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors"><X size={24} /></button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        {/* Summary & Input */}
+                        <div className="space-y-6">
+                            <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Deuda Total</p>
+                                <p className="text-3xl font-black text-gray-900">{config.currencySymbol}{totalOwed.toLocaleString()}</p>
+                            </div>
+
+                            <div className="space-y-4">
+                                <label className="block">
+                                    <span className="text-xs font-black text-gray-500 uppercase tracking-widest ml-1">Monto a Recibir</span>
+                                    <input
+                                        type="number"
+                                        value={amount}
+                                        onChange={(e) => setAmount(e.target.value)}
+                                        className="w-full mt-2 p-4 bg-gray-100 rounded-2xl text-2xl font-black text-gray-800 focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all outline-none"
+                                        placeholder="0.00"
+                                    />
+                                </label>
+
+                                <div className="grid grid-cols-2 gap-3">
+                                    {(['CASH', 'TRANSFER', 'CARD', 'CHECK'] as CollectionMethod[]).map(m => (
+                                        <button
+                                            key={m}
+                                            onClick={() => setMethod(m)}
+                                            className={`p-3 rounded-xl border-2 flex flex-col items-center gap-1 transition-all ${method === m ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-100 text-gray-400 hover:bg-gray-50'}`}
+                                        >
+                                            {m === 'CASH' && <Banknote size={20} />}
+                                            {m === 'CARD' && <CreditCard size={20} />}
+                                            {m === 'TRANSFER' && <ArrowRightLeft size={20} />}
+                                            {m === 'CHECK' && <FileText size={20} />}
+                                            <span className="text-[9px] font-black uppercase tracking-widest">{m === 'CASH' ? 'Efectivo' : m === 'CARD' ? 'Tarjeta' : m === 'TRANSFER' ? 'Transferencia' : 'Cheque'}</span>
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <input
+                                    type="text"
+                                    value={reference}
+                                    onChange={(e) => setReference(e.target.value)}
+                                    placeholder="Referencia / No. Operación"
+                                    className="w-full p-4 bg-gray-50 rounded-xl text-sm font-bold border border-gray-100 outline-none focus:border-blue-500"
+                                />
+
+                                <textarea
+                                    value={notes}
+                                    onChange={(e) => setNotes(e.target.value)}
+                                    placeholder="Notas adicionales..."
+                                    className="w-full p-4 bg-gray-50 rounded-xl text-sm font-bold border border-gray-100 outline-none focus:border-blue-500 h-24 resize-none"
+                                />
+                            </div>
+                        </div>
+
+                        {/* Distribution Preview */}
+                        <div>
+                            <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Distribución FIFO (Liquidador)</h4>
+                            <div className="space-y-3">
+                                {allocationResult.allocations.map(alloc => (
+                                    <div key={alloc.transactionId} className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100 flex justify-between items-center animate-in slide-in-from-right-2">
+                                        <div>
+                                            <p className="text-[10px] font-black text-blue-900">#{alloc.displayId}</p>
+                                            <p className="text-[10px] text-blue-600 font-bold">Acreditado</p>
+                                        </div>
+                                        <p className="text-lg font-black text-blue-900">+{config.currencySymbol}{alloc.amount.toFixed(2)}</p>
+                                    </div>
+                                ))}
+                                {parseFloat(amount) > 0 && allocationResult.allocations.length === 0 && (
+                                    <p className="text-xs text-amber-600 font-bold p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-center gap-2">
+                                        <AlertCircle size={16} /> No se encontraron facturas para liquidar.
+                                    </p>
+                                )}
+                                {allocationResult.remaining > 0 && (
+                                    <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex justify-between items-center">
+                                        <p className="text-[10px] font-black text-emerald-900 uppercase">Sobrante (A favor)</p>
+                                        <p className="text-lg font-black text-emerald-900">{config.currencySymbol}{allocationResult.remaining.toFixed(2)}</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Footer */}
+                <div className="p-6 bg-gray-50 border-t border-gray-100 flex gap-4">
+                    <button onClick={onClose} className="flex-1 py-4 text-gray-500 font-black uppercase text-sm hover:bg-gray-100 rounded-2xl transition-all">Cancelar</button>
+                    <button
+                        onClick={handleProcessPayment}
+                        disabled={isProcessing || parseFloat(amount) <= 0}
+                        className="flex-[2] py-4 bg-indigo-600 text-white font-black uppercase text-sm rounded-2xl hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 disabled:bg-gray-200 disabled:shadow-none flex items-center justify-center gap-2"
+                    >
+                        {isProcessing ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                        Confirmar y Generar Recibo
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default AccountReceivableModal;
+
+const Loader2 = ({ size, className }: { size: number, className?: string }) => (
+    <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={className}
+    >
+        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+    </svg>
+);

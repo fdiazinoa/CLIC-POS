@@ -6,11 +6,12 @@ import {
    TrendingUp, TrendingDown, AlertCircle, CreditCard, History, Check,
    MessageCircle, Star, Tag, ChevronRight, ShoppingBag,
    Globe, Calendar, Map, Navigation, CheckSquare, Clock, Landmark, ShieldCheck, Zap, Gift,
-   Loader2, AlertOctagon, Printer, DollarSign, Banknote, QrCode
+   Loader2, AlertOctagon, Printer, DollarSign, Banknote, QrCode, ArrowRightLeft
 } from 'lucide-react';
-import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType, Wallet, LoyaltyCard, Transaction } from '../types';
+import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType, Wallet, LoyaltyCard, Transaction, User, Collection } from '../types';
 import { dgiiService, DGIIResponse } from '../services/dgii/DGIIValidationService';
 import { printTicket } from '../utils/printer';
+import AccountReceivableModal from './AccountReceivableModal';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -20,6 +21,9 @@ interface CustomerManagementProps {
    onDeleteCustomer: (id: string) => void;
    onSelect?: (customer: Customer) => void; // Prop para modo selección
    onClose: () => void;
+   currentUser: User;
+   terminalId: string;
+   collections: Collection[];
 }
 
 const CustomerManagement: React.FC<CustomerManagementProps> = ({
@@ -29,13 +33,17 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    onUpdateCustomer,
    onDeleteCustomer,
    onSelect,
-   onClose
+   onClose,
+   currentUser,
+   terminalId,
+   collections
 }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
    const [isEditModalOpen, setIsEditModalOpen] = useState(false);
    const [activeProfileTab, setActiveProfileTab] = useState<'HISTORY' | 'WALLET' | 'LOYALTY'>('HISTORY');
    const [editModalTab, setEditModalTab] = useState<'GENERAL' | 'ADDRESSES'>('GENERAL');
+   const [isAbonoModalOpen, setIsAbonoModalOpen] = useState(false);
 
    // Filter State
    const [filterTag, setFilterTag] = useState<string>('ALL');
@@ -763,11 +771,13 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                              <p className="font-bold text-gray-800">{config.currencySymbol}{tx.total.toFixed(2)}</p>
                                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${tx.status === 'REFUNDED' ? 'bg-red-50 text-red-600' :
                                                 tx.status === 'PARTIAL_REFUND' ? 'bg-orange-50 text-orange-600' :
-                                                   'bg-green-50 text-green-600'
+                                                   (tx.pendingBalance || 0) > 0 ? 'bg-amber-50 text-amber-600' :
+                                                      'bg-green-50 text-green-600'
                                                 }`}>
                                                 {tx.status === 'REFUNDED' ? 'ANULADO' :
                                                    tx.status === 'PARTIAL_REFUND' ? 'PARCIAL' :
-                                                      'PAGADO'}
+                                                      (tx.pendingBalance || 0) > 0 ? 'PENDIENTE' :
+                                                         'PAGADO'}
                                              </span>
                                           </div>
                                        </div>
@@ -837,6 +847,48 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                        <span className="text-red-600 text-sm font-bold">Deuda Pendiente</span>
                                        <span className="text-2xl font-black text-red-600">{config.currencySymbol}{selectedCustomer.currentDebt?.toLocaleString() || '0.00'}</span>
                                     </div>
+
+                                    {/* UNPAID INVOICES LIST (CxC) */}
+                                    <div className="mb-6 space-y-3">
+                                       <div className="flex justify-between items-center mb-2">
+                                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">Facturas Pendientes</h4>
+                                          <button
+                                             onClick={() => setIsAbonoModalOpen(true)}
+                                             className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg shadow-blue-200"
+                                          >
+                                             Registrar Abono
+                                          </button>
+                                       </div>
+                                       {(() => {
+                                          const unpaid = customerTransactions.filter(tx => (tx.pendingBalance || 0) > 0);
+                                          if (unpaid.length === 0) return <p className="text-xs text-gray-400 italic">No hay facturas pendientes de cobro.</p>;
+
+                                          return unpaid.map(inv => {
+                                             const dueDate = inv.dueDate ? new Date(inv.dueDate) : new Date(inv.date);
+                                             const diffDays = Math.ceil((new Date().getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
+                                             const isLate = diffDays > 0;
+
+                                             return (
+                                                <div key={inv.id} className="p-3 bg-gray-50 rounded-xl border border-gray-100 flex justify-between items-center">
+                                                   <div>
+                                                      <p className="text-[11px] font-black text-gray-800">#{inv.displayId}</p>
+                                                      <p className="text-[10px] text-gray-400">Vence: {dueDate.toLocaleDateString()}</p>
+                                                      {isLate && (
+                                                         <span className={`text-[9px] font-bold ${diffDays > 15 ? 'text-red-600' : 'text-orange-600'}`}>
+                                                            {diffDays} días de atraso
+                                                         </span>
+                                                      )}
+                                                   </div>
+                                                   <div className="text-right">
+                                                      <p className="text-sm font-black text-gray-900">{config.currencySymbol}{(inv.pendingBalance || 0).toLocaleString()}</p>
+                                                      <p className="text-[9px] text-gray-400 uppercase font-bold">Saldo</p>
+                                                   </div>
+                                                </div>
+                                             );
+                                          });
+                                       })()}
+                                    </div>
+
                                     <div className="grid grid-cols-2 gap-4 text-xs text-gray-500 mb-6">
                                        <div>
                                           <p className="font-bold mb-1">Límite de Crédito</p>
@@ -864,16 +916,47 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                     <h3 className="text-5xl font-black mb-1">{selectedCustomer.loyaltyPoints || 0}</h3>
                                     <p className="text-purple-200 font-bold uppercase tracking-widest text-sm mb-6">Puntos Disponibles</p>
 
-                                    <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 max-w-sm mx-auto border border-white/20">
-                                       <div className="flex justify-between text-xs font-bold mb-2">
-                                          <span>Nivel Actual: {selectedCustomer.tier || 'BRONZE'}</span>
-                                          <span>Siguiente: PLATINUM</span>
-                                       </div>
-                                       <div className="w-full bg-black/20 h-3 rounded-full overflow-hidden">
-                                          <div className="bg-yellow-400 h-full shadow-[0_0_10px_rgba(250,204,21,0.5)]" style={{ width: '65%' }}></div>
-                                       </div>
-                                       <p className="text-xs mt-2 text-purple-200">Faltan 450 puntos para subir de nivel.</p>
-                                    </div>
+                                    {(() => {
+                                       const loyaltyTiers = config.loyalty?.tiers || [
+                                          { id: 'bronze', name: 'BRONZE', minPoints: 0, color: 'text-orange-600' },
+                                          { id: 'silver', name: 'SILVER', minPoints: 500, color: 'text-gray-400' },
+                                          { id: 'gold', name: 'GOLD', minPoints: 1500, color: 'text-yellow-500' },
+                                          { id: 'platinum', name: 'PLATINUM', minPoints: 3000, color: 'text-purple-600' }
+                                       ];
+
+                                       const currentPoints = selectedCustomer.loyaltyPoints || 0;
+                                       const currentTier = [...loyaltyTiers].reverse().find(t => currentPoints >= t.minPoints) || loyaltyTiers[0];
+                                       const nextTier = loyaltyTiers.find(t => t.minPoints > currentPoints);
+
+                                       const pointsForNext = nextTier ? nextTier.minPoints - currentPoints : 0;
+                                       const progressPercent = nextTier
+                                          ? Math.min(100, Math.max(0, ((currentPoints - currentTier.minPoints) / (nextTier.minPoints - currentTier.minPoints)) * 100))
+                                          : 100;
+
+                                       return (
+                                          <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 max-w-sm mx-auto border border-white/20">
+                                             <div className="flex justify-between text-xs font-bold mb-2">
+                                                <span>Nivel Actual: {currentTier.name}</span>
+                                                {nextTier && <span>Siguiente: {nextTier.name}</span>}
+                                             </div>
+                                             <div className="w-full bg-black/20 h-3 rounded-full overflow-hidden">
+                                                <div
+                                                   className="bg-yellow-400 h-full shadow-[0_0_10px_rgba(250,204,21,0.5)] transition-all duration-1000"
+                                                   style={{ width: `${progressPercent}%` }}
+                                                ></div>
+                                             </div>
+                                             {nextTier ? (
+                                                <p className="text-xs mt-2 text-purple-200">
+                                                   Faltan {pointsForNext} puntos para subir de nivel.
+                                                </p>
+                                             ) : (
+                                                <p className="text-xs mt-2 text-yellow-300 font-bold">
+                                                   ¡Nivel máximo alcanzado!
+                                                </p>
+                                             )}
+                                          </div>
+                                       );
+                                    })()}
                                  </div>
 
                                  {/* LOYALTY CARD SECTION */}
@@ -1421,6 +1504,21 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             );
          })()}
 
+         {selectedCustomer && isAbonoModalOpen && (
+            <AccountReceivableModal
+               isOpen={isAbonoModalOpen}
+               onClose={() => setIsAbonoModalOpen(false)}
+               customer={selectedCustomer}
+               transactions={customerTransactions}
+               currentUser={currentUser}
+               terminalId={terminalId}
+               config={config}
+               onSuccess={() => {
+                  // Refresh transactions or customer debt if needed
+                  setIsAbonoModalOpen(false);
+               }}
+            />
+         )}
       </div >
    );
 };

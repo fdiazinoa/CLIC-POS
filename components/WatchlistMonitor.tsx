@@ -1,8 +1,8 @@
 
 import React, { useState, useMemo } from 'react';
-import { 
-  LayoutGrid, Activity, Calendar, TrendingUp, AlertTriangle, 
-  MoreVertical, ArrowRightLeft, Tag, BookOpen, Clock, 
+import {
+  LayoutGrid, Activity, Calendar, TrendingUp, AlertTriangle,
+  MoreVertical, ArrowRightLeft, Tag, BookOpen, Clock,
   Filter, Plus, Trash2, Box, ChevronRight, PieChart,
   ShoppingBag, HelpCircle, ShieldAlert, PackagePlus
 } from 'lucide-react';
@@ -21,9 +21,9 @@ interface WatchlistMonitorProps {
   onOpenPromo: (product: Product) => void;
 }
 
-const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({ 
-  products, transactions, watchlists, config, warehouses, 
-  onUpdateWatchlists, onOpenKardex, onOpenPromo 
+const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
+  products, transactions, watchlists, config, warehouses,
+  onUpdateWatchlists, onOpenKardex, onOpenPromo
 }) => {
   const [selectedListId, setSelectedListId] = useState<string>(watchlists[0]?.id || '');
   const [storeFilter, setStoreFilter] = useState<string>('ALL');
@@ -46,8 +46,8 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
       if (!product) return null;
 
       // Filter transactions for this specific product
-      const productTxns = transactions.filter(t => t.items.some(i => i.id === pid));
-      
+      const productTxns = (transactions || []).filter(t => t.items?.some(i => i.id === pid));
+
       // Calculate Last Sale
       const sortedTxns = [...productTxns].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       const lastSale = sortedTxns[0] ? sortedTxns[0].date : null;
@@ -67,10 +67,10 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
         const item = t.items.find(i => i.id === pid);
         return sum + (item?.quantity || 0);
       }, 0);
-      const currentStock = storeFilter === 'ALL' 
+      const currentStock = storeFilter === 'ALL'
         ? Object.values(product.stockBalances || {}).reduce((a: number, b: number) => a + b, 0)
         : product.stockBalances?.[storeFilter] || 0;
-      
+
       const sellThrough = totalSoldAllTime > 0 ? (totalSoldAllTime / (totalSoldAllTime + currentStock)) * 100 : 0;
 
       // Calculate Weeks of Supply
@@ -115,8 +115,8 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
 
   const handleSaveAlerts = (newSettings: WatchlistAlertSettings, updatedProductIds?: string[]) => {
     if (!selectedList) return;
-    const updated = watchlists.map(w => w.id === selectedList.id ? { 
-      ...w, 
+    const updated = watchlists.map(w => w.id === selectedList.id ? {
+      ...w,
       alertSettings: newSettings,
       productIds: updatedProductIds || w.productIds
     } : w);
@@ -128,7 +128,7 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
     if (!selectedList) return;
     const currentIds = new Set(selectedList.productIds);
     ids.forEach(id => currentIds.add(id));
-    
+
     const updated = watchlists.map(w => w.id === selectedList.id ? { ...w, productIds: Array.from(currentIds) } : w);
     onUpdateWatchlists(updated);
     setShowAddProductsModal(false);
@@ -159,7 +159,7 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
 
   return (
     <div className="flex h-full bg-slate-50 animate-in fade-in slide-in-from-right-10 duration-300">
-      
+
       {/* SIDEBAR: WATCHLISTS SELECTOR */}
       <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0 shadow-sm z-10">
         <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/30">
@@ -167,7 +167,7 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
             <h2 className="text-xl font-black text-slate-800">Monitores</h2>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Inteligencia Retail</p>
           </div>
-          <button 
+          <button
             onClick={() => setIsAddingList(true)}
             className="p-2 bg-blue-600 text-white rounded-xl shadow-lg hover:bg-blue-700 transition-all active:scale-95"
           >
@@ -178,9 +178,9 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
           {isAddingList && (
             <div className="p-3 bg-blue-50 rounded-2xl border-2 border-blue-200 mb-4 animate-in zoom-in-95">
-              <input 
+              <input
                 autoFocus
-                type="text" 
+                type="text"
                 value={newListName}
                 onChange={e => setNewListName(e.target.value)}
                 placeholder="Nombre de la lista..."
@@ -194,14 +194,13 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
           )}
 
           {watchlists.map(wl => (
-            <div 
+            <div
               key={wl.id}
               onClick={() => setSelectedListId(wl.id)}
-              className={`group p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between ${
-                selectedListId === wl.id 
-                  ? 'bg-white border-blue-500 shadow-md ring-4 ring-blue-50' 
+              className={`group p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between ${selectedListId === wl.id
+                  ? 'bg-white border-blue-500 shadow-md ring-4 ring-blue-50'
                   : 'bg-white border-transparent hover:border-slate-200'
-              }`}
+                }`}
             >
               <div className="flex items-center gap-3">
                 <div className={`w-3 h-3 rounded-full ${wl.color || 'bg-slate-400'} ${selectedListId === wl.id ? 'animate-pulse' : ''}`} />
@@ -210,7 +209,7 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
                   <p className="text-[10px] text-slate-400 font-bold uppercase">{wl.productIds.length} artículos</p>
                 </div>
               </div>
-              <button 
+              <button
                 onClick={(e) => { e.stopPropagation(); handleDeleteList(wl.id); }}
                 className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-red-500 transition-all"
               >
@@ -221,16 +220,16 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
         </div>
 
         <div className="p-4 bg-slate-50 border-t border-slate-100">
-           <div className="flex items-center gap-2 text-slate-400 text-[10px] font-bold uppercase tracking-tighter">
-              <HelpCircle size={12} />
-              <span>Ayuda: BI Analytics v1.2</span>
-           </div>
+          <div className="flex items-center gap-2 text-slate-400 text-[10px] font-bold uppercase tracking-tighter">
+            <HelpCircle size={12} />
+            <span>Ayuda: BI Analytics v1.2</span>
+          </div>
         </div>
       </aside>
 
       {/* MAIN PANEL */}
       <main className="flex-1 flex flex-col min-w-0">
-        
+
         {/* Header con Filtros */}
         <header className="bg-white px-8 py-5 border-b border-slate-200 flex justify-between items-center shrink-0">
           <div>
@@ -239,7 +238,7 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
             </h2>
             <div className="flex items-center gap-2 mt-1">
               <span className="text-xs text-slate-400 font-medium">Filtro Contextual:</span>
-              <select 
+              <select
                 value={storeFilter}
                 onChange={e => setStoreFilter(e.target.value)}
                 className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded-lg border-none outline-none cursor-pointer"
@@ -251,29 +250,29 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
           </div>
 
           <div className="flex gap-3">
-             {selectedList && (
-               <button 
-                  onClick={() => setShowAddProductsModal(true)}
-                  className="flex items-center gap-2 px-5 py-3 bg-blue-600 text-white rounded-2xl font-bold text-sm shadow-xl hover:bg-blue-700 transition-all active:scale-95"
-               >
-                  <PackagePlus size={18} /> Añadir Artículos
-               </button>
-             )}
-             <div className="text-right px-6 border-x border-slate-100 hidden md:block">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Valor Monitoreado</p>
-                <p className="text-xl font-black text-slate-800">
-                  {config.currencySymbol}{kpiData.reduce((acc: number, curr) => {
-                    const p = products.find(x => x.id === curr.productId);
-                    return acc + (curr.currentStock * (p?.cost || 0));
-                  }, 0).toLocaleString()}
-                </p>
-             </div>
-             <button 
-                onClick={() => setShowConfigModal(true)}
-                className="flex items-center gap-2 px-5 py-3 bg-slate-900 text-white rounded-2xl font-bold text-sm shadow-xl hover:bg-black transition-all active:scale-95"
-             >
-                <Filter size={18} /> Ajustes & Alertas
-             </button>
+            {selectedList && (
+              <button
+                onClick={() => setShowAddProductsModal(true)}
+                className="flex items-center gap-2 px-5 py-3 bg-blue-600 text-white rounded-2xl font-bold text-sm shadow-xl hover:bg-blue-700 transition-all active:scale-95"
+              >
+                <PackagePlus size={18} /> Añadir Artículos
+              </button>
+            )}
+            <div className="text-right px-6 border-x border-slate-100 hidden md:block">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Valor Monitoreado</p>
+              <p className="text-xl font-black text-slate-800">
+                {config.currencySymbol}{kpiData.reduce((acc: number, curr) => {
+                  const p = products.find(x => x.id === curr.productId);
+                  return acc + (curr.currentStock * (p?.cost || 0));
+                }, 0).toLocaleString()}
+              </p>
+            </div>
+            <button
+              onClick={() => setShowConfigModal(true)}
+              className="flex items-center gap-2 px-5 py-3 bg-slate-900 text-white rounded-2xl font-bold text-sm shadow-xl hover:bg-black transition-all active:scale-95"
+            >
+              <Filter size={18} /> Ajustes & Alertas
+            </button>
           </div>
         </header>
 
@@ -360,21 +359,21 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
                           </td>
                           <td className="p-5">
                             <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button 
+                              <button
                                 onClick={() => onOpenKardex(product)}
                                 className="p-2 hover:bg-white hover:text-blue-600 rounded-lg border border-transparent hover:border-slate-200 transition-all"
                                 title="Ver Movimientos"
                               >
                                 <BookOpen size={16} />
                               </button>
-                              <button 
+                              <button
                                 onClick={() => onOpenPromo(product)}
                                 className="p-2 hover:bg-white hover:text-purple-600 rounded-lg border border-transparent hover:border-slate-200 transition-all"
                                 title="Crear Oferta"
                               >
                                 <Tag size={16} />
                               </button>
-                              <button 
+                              <button
                                 className="p-2 hover:bg-white hover:text-slate-900 rounded-lg border border-transparent hover:border-slate-200 transition-all"
                                 title="Traspaso Sugerido"
                               >
@@ -395,23 +394,23 @@ const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
 
       {/* MODAL DE CONFIGURACIÓN DE ALERTAS */}
       {showConfigModal && selectedList && (
-         <WatchlistAlertModal 
-            watchlist={selectedList}
-            products={products}
-            onClose={() => setShowConfigModal(false)}
-            onSave={handleSaveAlerts}
-         />
+        <WatchlistAlertModal
+          watchlist={selectedList}
+          products={products}
+          onClose={() => setShowConfigModal(false)}
+          onSave={handleSaveAlerts}
+        />
       )}
 
       {/* MODAL DE AÑADIR ARTÍCULOS */}
       {showAddProductsModal && selectedList && (
-         <WatchlistAddProductsModal 
-            products={products}
-            config={config}
-            selectedProductIds={selectedList.productIds}
-            onClose={() => setShowAddProductsModal(false)}
-            onConfirm={handleAddItems}
-         />
+        <WatchlistAddProductsModal
+          products={products}
+          config={config}
+          selectedProductIds={selectedList.productIds}
+          onClose={() => setShowAddProductsModal(false)}
+          onConfirm={handleAddItems}
+        />
       )}
 
     </div>

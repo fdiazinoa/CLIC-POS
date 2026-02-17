@@ -375,6 +375,7 @@ export const FOOD_PRODUCTS: Product[] = [
 export const AVAILABLE_PERMISSIONS = [
   // --- POS CORE ---
   { key: 'SALE', label: 'Realizar Ventas', description: 'Acceso a pantalla de cobro', category: 'SALES' },
+  { key: 'POS_PAY_CREDIT', label: 'Cobrar a Crédito (Pendiente)', description: 'Permite finalizar ventas con el método de pago a crédito', category: 'SALES' },
   { key: 'POS_DISCOUNT', label: 'Aplicar Descuentos', description: 'Descuentos manuales en ítems o total', category: 'SALES' },
   { key: 'POS_PRICE_OVERRIDE', label: 'Modificar Precios', description: 'Cambiar precio unitario de productos', category: 'SALES' },
   { key: 'POS_VOID_ITEM', label: 'Anular Ítem', description: 'Eliminar productos del carrito', category: 'SALES' },
@@ -540,6 +541,7 @@ export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
     taxes: INITIAL_TAXES,
     themeColor: 'blue',
     features: { stockTracking: true },
+    ux: DEFAULT_TERMINAL_CONFIG.ux,
     companyInfo: { name: 'CLIC POS DEMO', rnc: '131-12345-1', phone: '809-555-POS1', address: 'Av. Principal #1, Santo Domingo' },
     currencies: [{ code: 'DOP', name: 'Peso Dominicano', symbol: 'RD$', rate: 1, isEnabled: true, isBase: true }],
     paymentMethods: [
@@ -558,6 +560,20 @@ export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
       { id: 't4', config: { ...DEFAULT_TERMINAL_CONFIG, isPrimaryNode: false, currentDeviceId: undefined } }
     ],
     availablePrinters: [],
-    scales: []
+    scales: [],
+    loyalty: {
+      isEnabled: true,
+      earnRate: 0.1,
+      redeemRate: 1.0,
+      minRedemptionPoints: 10,
+      expirationMonths: 12,
+      excludedCategories: [],
+      tiers: [
+        { id: 'bronze', name: 'BRONZE', minPoints: 0, color: 'text-orange-600', icon: 'Award' },
+        { id: 'silver', name: 'SILVER', minPoints: 500, color: 'text-gray-400', icon: 'Award' },
+        { id: 'gold', name: 'GOLD', minPoints: 1500, color: 'text-yellow-500', icon: 'Award' },
+        { id: 'platinum', name: 'PLATINUM', minPoints: 3000, color: 'text-purple-600', icon: 'Award' }
+      ]
+    }
   };
 };

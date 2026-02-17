@@ -22,25 +22,32 @@ const PriceCheckerLayout: React.FC<PriceCheckerLayoutProps> = ({
     onEscapeHatch
 }) => {
     const [pressTimer, setPressTimer] = useState<number | null>(null);
-    const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+    const [isActive, setIsActive] = useState<boolean>(false);
 
     // Monitor fullscreen state
+    // Monitor fullscreen state (Optional sync)
     useEffect(() => {
         const handleFullscreenChange = () => {
-            setIsFullscreen(!!document.fullscreenElement);
+            // Only sync if we are ALREADY active. 
+            // If user manually exits fullscreen (Esc), we might want to stay active or reset?
+            // Current behavior: If they exit full screen, we let them stay active. 
+            // We only care about ensuring it STARTS.
         };
 
         document.addEventListener('fullscreenchange', handleFullscreenChange);
         return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
     }, []);
 
-    const enterFullscreen = async () => {
+    const handleStart = async () => {
         try {
             if (document.documentElement.requestFullscreen) {
                 await document.documentElement.requestFullscreen();
             }
         } catch (err) {
-            console.warn('⚠️ Could not enter fullscreen:', err);
+            console.warn('⚠️ Could not enter fullscreen (ignoring):', err);
+        } finally {
+            // Always activate UI, even if fullscreen fails
+            setIsActive(true);
         }
     };
 
@@ -59,10 +66,11 @@ const PriceCheckerLayout: React.FC<PriceCheckerLayoutProps> = ({
         }
     };
 
-    if (!isFullscreen) {
+    if (!isActive) {
         return (
             <div
-                onClick={enterFullscreen}
+                onClick={handleStart}
+                onTouchEnd={handleStart}
                 style={{
                     width: '100vw',
                     height: '100vh',

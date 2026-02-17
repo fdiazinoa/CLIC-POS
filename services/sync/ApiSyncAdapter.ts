@@ -62,6 +62,34 @@ class ApiSyncAdapter {
         return message.includes(this.CIRCUIT_BREAKER_OPEN_ERROR);
     }
 
+    private onConnectionLostCallback: (() => void) | null = null;
+
+    setOnConnectionLost(callback: () => void) {
+        this.onConnectionLostCallback = callback;
+    }
+
+    updateMasterUrl(newUrl: string) {
+        if (this.config) {
+            console.log(`🔄 ApiSyncAdapter: Updating Master URL to ${newUrl}`);
+            this.config.masterUrl = newUrl;
+            this.resetCircuitBreaker();
+        }
+    }
+
+    resetCircuitBreaker() {
+        this.consecutiveFailures = 0;
+        this.circuitOpenTimeStamp = 0;
+        this.isOnline = true;
+        console.log('🔄 ApiSyncAdapter: Circuit Breaker manually RESET.');
+    }
+
+    /**
+     * Public alias for resetCircuitBreaker to match expected interface
+     */
+    public resetCircuit() {
+        this.resetCircuitBreaker();
+    }
+
     isRecoverableConnectionError(error: unknown): boolean {
         if (this.isCircuitBreakerOpenError(error)) return true;
         if (!(error instanceof Error)) return false;
@@ -134,6 +162,11 @@ class ApiSyncAdapter {
                 if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
                     this.circuitOpenTimeStamp = Date.now();
                     console.error('🚨 Circuit Breaker TRIPPED: Too many connection failures.');
+
+                    // Notify listeners about connection loss to trigger auto-discovery
+                    if (this.onConnectionLostCallback) {
+                        this.onConnectionLostCallback();
+                    }
                 }
             }
 
@@ -175,9 +208,8 @@ class ApiSyncAdapter {
      * Authenticate with the Master terminal
      */
     async authenticate(): Promise<void> {
-        if (!this.config) {
-            throw new Error('ApiSyncAdapter not initialized');
-        }
+        this.ensureConfig();
+        if (!this.config) throw new Error('ApiSyncAdapter not initialized'); // Should be caught by ensureConfig
 
         try {
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/auth`, {
@@ -190,7 +222,20 @@ class ApiSyncAdapter {
             });
 
             if (!response.ok) {
-                throw new Error(`Authentication failed at ${this.config.masterUrl}/api/sync/auth: ${response.status} ${response.statusText}`);
+                let errorMessage = `Authentication failed: ${response.status} ${response.statusText}`;
+                try {
+                    const errorData = await response.json();
+                    errorMessage += ` - ${errorData.message} (${errorData.code})`;
+
+                    // Critical: If device mismatch, we should probably warn the user or clear local state
+                    if (errorData.code === 'DEVICE_MISMATCH') {
+                        console.error('🛑 CRITICAL: DEVICE MISMATCH. This terminal ID is bound to another device.');
+                        // TODO: Triggers UI event for re-binding
+                    }
+                } catch (e) {
+                    // Ignore json parse error
+                }
+                throw new Error(errorMessage);
             }
 
             const data = await response.json();
@@ -213,9 +258,7 @@ class ApiSyncAdapter {
      * If adapter is marked offline but browser has network, force re-auth recovery.
      */
     private async ensurePushReady(): Promise<void> {
-        if (!this.config) {
-            throw new Error('Sync configuration missing in ApiSyncAdapter. Ensure SyncManager is initialized.');
-        }
+        this.ensureConfig();
 
         if (!navigator.onLine) {
             this.isOnline = false;
@@ -229,6 +272,30 @@ class ApiSyncAdapter {
 
         await this.ensureAuthenticated();
         this.isOnline = true;
+    }
+
+    /**
+     * Lazy Load Configuration
+     * Attempts to reconstruct config from localStorage if missing.
+     */
+    private ensureConfig() {
+        if (this.config) return;
+
+        const masterUrl = localStorage.getItem('CLIC_POS_MASTER_URL');
+        const terminalId = localStorage.getItem('CLIC_POS_TERMINAL_ID'); // Ensure this is saved else where
+
+        if (masterUrl && terminalId) {
+            console.warn('⚠️ ApiSyncAdapter: Config missing. Lazy loading from localStorage.');
+            this.config = {
+                masterUrl,
+                terminalId,
+                autoRetry: true,
+                retryDelayMs: 5000
+            };
+        } else {
+            console.error('❌ ApiSyncAdapter: Critical - Cannot lazy load config. Missing masterUrl or terminalId.');
+            throw new Error('Sync configuration missing in ApiSyncAdapter. Ensure SyncManager is initialized.');
+        }
     }
 
     /**

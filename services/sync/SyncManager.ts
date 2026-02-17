@@ -8,6 +8,8 @@
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 import { apiSyncAdapter, ProductImageManifestItem, ProductImagePayloadItem } from './ApiSyncAdapter';
+import { NetworkScanner } from './NetworkScanner';
+import { v4 as uuidv4 } from 'uuid';
 import { permissionService } from './PermissionService';
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig } from '../../types';
@@ -39,6 +41,8 @@ class SyncManager {
     private readonly IMAGE_SYNC_INTERVAL_MS = 180000;
     private readonly IMAGE_SYNC_BATCH_SIZE = 40;
 
+    public isInitialized: boolean = false;
+
     /**
      * Helper: Check if debug mode for sync is enabled
      */
@@ -55,8 +59,12 @@ class SyncManager {
      * Initialize sync manager
      */
     async initialize(config: BusinessConfig, terminalId: string) {
+        // Ensure a device token exists for this browser instance
+        this.ensureDeviceToken();
+
         // Detect Network Mode
         // NOTE: We allow SyncManager even in network mode for Master to manage terminals
+
         /*
         if (dbAdapter.adapterType === 'network') {
             console.log("🛑 SyncManager disabled: Application is running in full Network Mode (No local DB).");
@@ -266,6 +274,93 @@ class SyncManager {
         }
 
         console.log('🔄 SyncManager initialized');
+
+        // Subscribe to connection loss to trigger auto-discovery
+        if (!this.isMaster) {
+            apiSyncAdapter.setOnConnectionLost(() => {
+                console.warn('📡 SyncManager: Connection lost. Initiating Auto-Discovery...');
+                this.startRecoveryProcess();
+            });
+            apiSyncAdapter.setOnConnectionLost(() => {
+                console.warn('📡 SyncManager: Connection lost. Initiating Auto-Discovery...');
+                this.startRecoveryProcess();
+            });
+        }
+
+        this.isInitialized = true;
+    }
+
+    private ensureDeviceToken() {
+        let token = localStorage.getItem('CLIC_POS_DEVICE_TOKEN');
+        if (!token) {
+            token = `dev_${uuidv4()}`;
+            localStorage.setItem('CLIC_POS_DEVICE_TOKEN', token);
+            console.log('🔑 SyncManager: Generated new Device Token:', token);
+        }
+    }
+
+    private isRecoveringConnection = false;
+
+    /**
+     * AUTO-DISCOVERY: Recover connection by scanning local network
+     */
+    private async startRecoveryProcess() {
+        if (this.isRecoveringConnection || this.isMaster) return;
+        this.isRecoveringConnection = true;
+
+        // Notify UI
+        window.dispatchEvent(new CustomEvent('sync:reconnecting', { detail: { status: 'searching' } }));
+
+        const savedMasterUrl = localStorage.getItem('CLIC_POS_MASTER_URL');
+        const currentIp = savedMasterUrl ? new URL(savedMasterUrl).hostname : null;
+
+        console.log(`🕵️‍♂️ Auto-Discovery: Starting scan. Last successful IP: ${currentIp}`);
+
+        // Delegate scanning to NetworkScanner
+        const foundUrl = await NetworkScanner.findMaster(currentIp || undefined);
+
+        if (foundUrl) {
+            console.log(`🎉 Auto-Discovery: MASTER FOUND at ${foundUrl}`);
+            this.finalizeRecovery(foundUrl);
+        } else {
+            console.warn('❌ Auto-Discovery: Could not find Master. Waiting for manual retry.');
+            window.dispatchEvent(new CustomEvent('sync:reconnecting', { detail: { status: 'failed' } }));
+            this.isRecoveringConnection = false;
+        }
+    }
+
+    private finalizeRecovery(url: string) {
+        localStorage.setItem('CLIC_POS_MASTER_URL', url);
+
+        // Legacy support
+        try {
+            const urlObj = new URL(url);
+            localStorage.setItem('pos_master_ip', urlObj.hostname);
+        } catch (e) {
+            // Ignore
+        }
+
+        if (this.syncConfig) {
+            this.syncConfig.masterUrl = url;
+        }
+
+        // Critical: Reset Adapter & Circuit Breaker
+        apiSyncAdapter.updateMasterUrl(url);
+        apiSyncAdapter.resetCircuit();
+
+        // Notify UI
+        window.dispatchEvent(new CustomEvent('sync:reconnecting', { detail: { status: 'connected', url } }));
+
+        // Resume Sync
+        this.isRecoveringConnection = false;
+
+        // Force immediate sync
+        setTimeout(() => {
+            console.log('🔄 SyncManager: Triggering immediate post-recovery sync.');
+            this.checkForUpdates().then((updates) => {
+                if (updates.length > 0) this.syncAllCatalogs();
+            });
+        }, 1000);
     }
 
     private loadProductImageSyncState() {
@@ -632,6 +727,8 @@ class SyncManager {
     private isInternalPulling: boolean = false; // MUTE DURING PULL
     private lastSyncTime: number = 0;
     private readonly MIN_SYNC_INTERVAL_MS = 5000; // 5 seconds debounce
+    private watchdogTimer: any = null;
+    private readonly WATCHDOG_TIMEOUT_MS = 45000; // 45 seconds max sync time
 
     getIsInternalSyncing() {
         return this.isInternalSyncing;
@@ -653,15 +750,25 @@ class SyncManager {
             return 0;
         }
 
-        this.isInternalSyncing = true;
-        this.isInternalPulling = true; // LOCK LOCAL PUSH TRIGGERS
-        this.lastSyncTime = now;
-
-        const lastVersion = force ? 0 : (this.syncVersions.get(collection) || 0);
-        // const timestamp = new Date().toISOString();
-        // console.log(`[PULL_INICIO] ${timestamp} Descargando colección: ${collection} (LastVersion: ${lastVersion})`);
-
+        // Start critical section
         try {
+            this.isInternalSyncing = true;
+            this.isInternalPulling = true; // LOCK LOCAL PUSH TRIGGERS
+            this.lastSyncTime = now;
+
+            // Watchdog: If sync hangs for > 45s, perform hard reset of locks
+            if (this.watchdogTimer) clearTimeout(this.watchdogTimer);
+            this.watchdogTimer = setTimeout(() => {
+                if (this.isInternalPulling) {
+                    console.warn(`🚨 SyncManager: Watchdog detected Stuck Lock on ${collection}. Forcing release.`);
+                    this.isInternalPulling = false;
+                    this.isInternalSyncing = false;
+                }
+            }, this.WATCHDOG_TIMEOUT_MS);
+
+            const lastVersion = force ? 0 : (this.syncVersions.get(collection) || 0);
+            // const timestamp = new Date().toISOString();
+            // console.log(`[PULL_INICIO] ${timestamp} Descargando colección: ${collection} (LastVersion: ${lastVersion})`);
             // Pull Delta from API
             const response = await apiSyncAdapter.pullDelta(collection, lastVersion || undefined);
             const { items, serverTime, isFullDownload, latestVersion } = response;
@@ -837,6 +944,10 @@ class SyncManager {
             console.error(`❌ SyncManager: Error pulling ${collection}:`, error);
             throw error;
         } finally {
+            if (this.watchdogTimer) {
+                clearTimeout(this.watchdogTimer);
+                this.watchdogTimer = null;
+            }
             this.isInternalSyncing = false;
             this.isInternalPulling = false; // RELEASE LOCK
         }

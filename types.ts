@@ -594,6 +594,14 @@ export interface ScaleLabelConfig {
 
 
 
+export interface LoyaltyTier {
+  id: string;
+  name: string;
+  minPoints: number;
+  color: string;
+  icon?: string;
+}
+
 export interface LoyaltyConfig {
   isEnabled: boolean;
   earnRate: number; // Points per 1 unit of currency (e.g., 0.1 for 1 point per $10)
@@ -601,6 +609,7 @@ export interface LoyaltyConfig {
   minRedemptionPoints: number;
   expirationMonths: number;
   excludedCategories: string[];
+  tiers?: LoyaltyTier[];
 }
 
 
@@ -676,6 +685,13 @@ export interface BusinessConfig {
       minimumAdvancePercent: number;
     };
   };
+  ux: {
+    theme: 'LIGHT' | 'DARK';
+    gridDensity: 'COMFORTABLE' | 'COMPACT';
+    showProductImages: boolean;
+    quickKeysLayout: 'A' | 'B';
+    viewMode: 'VISUAL' | 'RETAIL';
+  };
 }
 
 export interface RoleDefinition {
@@ -734,6 +750,7 @@ export interface Customer {
   currentDebt?: number;
   tier?: string;
   createdAt?: string;
+  updatedAt?: string;
   totalSpent?: number;
   lastVisit?: string;
   tags?: string[];
@@ -935,18 +952,18 @@ export interface Table {
 
 /**
  * Cart Item
- * 
+ *
  * IMPORTANT - PRICE SNAPSHOT PROTECTION:
  * When a product is added to cart, its `price` field becomes a SNAPSHOT
  * and is FROZEN for the duration of that sale. Subsequent catalog updates
  * (price changes, bulk updates, etc.) WILL NOT affect items already in cart.
- * 
+ *
  * This prevents the following scenario:
  * - Customer adds item @ $2.50
  * - Admin changes price to $3.00 on master terminal
  * - Catalog syncs to slave
  * - Customer would suddenly owe $3.00 instead of $2.50
- * 
+ *
  * With snapshot protection:
  * - Price at time of adding to cart is preserved
  * - Customer pays what they saw when they added item
@@ -1023,6 +1040,10 @@ export interface Transaction {
   reservationCode?: string;
   priorAdvancePaid?: number;
   balanceDueAtSale?: number;
+
+  // Accounts Receivable (CxC)
+  dueDate?: string;         // ISO Date
+  pendingBalance?: number;  // Amount still owed on this transaction
 
   // Relationships
   relatedTransactions?: string[];   // Related transaction IDs
@@ -1308,6 +1329,8 @@ export interface Reservation {
   deliveryDate?: string;
   notes?: string;
   terminalId?: string;
+  zReportId?: string;
+  zReportSequence?: string;
   createdById?: string;
   createdByName?: string;
   createdAt: string;
@@ -1478,6 +1501,8 @@ export interface Coupon {
 export type Permission =
   | 'ALL'
   | 'CAN_REFUND'
+  | 'POS_CREDIT_OVERRIDE'
+  | 'POS_PAY_CREDIT'
   // --- POS CORE ---
   | 'SALE'
   | 'POS_VOID_ITEM'
@@ -1598,6 +1623,8 @@ export interface ZReportStats {
   returnsCount: number;
   returnsTotal: number;
   discountsTotal: number; // New: Total discounts given
+  advancementsTotal: number; // New: Total gift card / wallet deposits (Liabilities)
+  collectionsTotal: number; // New: Total CXC Collections (Abonos)
 }
 
 export type ZReportModule = 'FINANCIAL' | 'PAYMENTS' | 'CASH_DETAILS' | 'KPIS' | 'AUDIT';
@@ -1643,6 +1670,36 @@ export type AnalyticsCategory =
   | 'OPERATIONS'
   | 'CATALOG'
   | 'HR';
+
+// --- ACCOUNTS RECEIVABLE (CxC) & COLLECTIONS ---
+export type CollectionMethod = 'CASH' | 'CARD' | 'TRANSFER' | 'CHECK' | 'WALLET';
+
+export interface CollectionAllocation {
+  id: string;
+  collectionId: string;
+  transactionId: string;
+  amount: number;
+  timestamp: string;
+}
+
+export interface Collection {
+  id: string;
+  displayId: string; // RC-000001
+  customerId: string;
+  customerName: string;
+  date: string;
+  totalAmount: number;
+  method: CollectionMethod;
+  reference?: string;
+  userId: string;
+  userName: string;
+  terminalId: string;
+  allocations: CollectionAllocation[];
+  notes?: string;
+  syncStatus?: SyncStatus;
+  zReportId?: string;
+  zReportSequence?: string;
+}
 
 export interface ReportField {
   key: string;

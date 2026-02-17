@@ -718,9 +718,32 @@ if (CLOUD_MODE) {
     const httpServer = createServer(server);
     initSocket(httpServer);
 
-    httpServer.listen(PORT, HOST, () => {
-        console.log(`🚀 Local Server (HTTP) running on http://${HOST}:${PORT}`);
-        console.log(`💡 For cloud deployment, set CLOUD_MODE=true in .env`);
+    httpServer.listen(PORT, '0.0.0.0', () => {
+        const interfaces = os.networkInterfaces();
+        let lanIp = 'UNKNOWN';
+
+        // Detect LAN IP
+        for (const k in interfaces) {
+            for (const k2 in interfaces[k]!) {
+                const address = interfaces[k]![k2];
+                if (address.family === 'IPv4' && !address.internal) {
+                    lanIp = address.address;
+                    break;
+                }
+            }
+            if (lanIp !== 'UNKNOWN') break;
+        }
+
+        console.log('\n');
+        console.log('╔════════════════════════════════════════════════════════════╗');
+        console.log('║               🚀 CLIC-POS MASTER SERVER READY              ║');
+        console.log('╠════════════════════════════════════════════════════════════╣');
+        console.log(`║  🔌 Port:         ${PORT}                                     ║`);
+        console.log(`║  🖥️  Local Access: http://localhost:${PORT}                    ║`);
+        console.log(`║  🌐 Network Access: http://${lanIp}:${PORT}                 ║`);
+        console.log('╚════════════════════════════════════════════════════════════╝');
+        console.log('\n');
+        console.log(`💡 Slaves should connect to: http://${lanIp}:${PORT}`);
     });
 
     httpServer.on('error', (e: any) => {

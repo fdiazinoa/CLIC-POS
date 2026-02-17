@@ -241,6 +241,23 @@ router.get('/ping', (req, res) => {
     res.json({ success: true, message: 'pong', serverTime: new Date().toISOString() });
 });
 
+router.get('/identify', (req, res) => {
+    try {
+        const config = db.prepare("SELECT value FROM config WHERE key = 'business_config'").get() as any;
+        const businessConfig = config ? JSON.parse(config.value) : {};
+
+        res.json({
+            status: 'online',
+            app: 'CLIC-POS',
+            role: 'MASTER',
+            storeId: businessConfig.storeId || 'UNKNOWN',
+            serverTime: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(500).json({ status: 'error', message: 'Internal Server Error' });
+    }
+});
+
 /**
  * POST /api/sync/auth
  */
@@ -253,6 +270,21 @@ router.post('/auth', (req, res) => {
     }
 
     console.log(`[Sync] Terminal authentication: ${terminalId} from ${ip}`);
+
+    // Security: Validate Device Token (Prevent Hijacking)
+    if (!deviceToken) {
+        return res.status(403).json({ success: false, message: 'Device token required', code: 'MISSING_TOKEN' });
+    }
+
+    const existing = db.prepare("SELECT deviceToken FROM connected_terminals WHERE terminalId = ?").get(terminalId) as any;
+    if (existing && existing.deviceToken && existing.deviceToken !== deviceToken) {
+        console.warn(`⚠️ [Sync] Token mismatch for ${terminalId}. Expected: ${existing.deviceToken.substring(0, 6)}..., Received: ${deviceToken.substring(0, 6)}...`);
+        return res.status(403).json({
+            success: false,
+            message: 'Este Terminal ID ya está vinculado a otro dispositivo. Por favor desvincule el anterior.',
+            code: 'DEVICE_MISMATCH'
+        });
+    }
 
     const token = `sync_${terminalId}_${Date.now()}`;
 

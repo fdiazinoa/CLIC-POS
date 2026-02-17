@@ -111,7 +111,9 @@ class TransactionService {
             reservationId: data.reservationId,
             reservationCode: data.reservationCode,
             priorAdvancePaid: data.priorAdvancePaid,
-            balanceDueAtSale: data.balanceDueAtSale
+            balanceDueAtSale: data.balanceDueAtSale,
+            pendingBalance: data.pendingBalance,
+            dueDate: data.dueDate
         };
 
         // Save only the new document to avoid full-collection rewrites that can block checkout.

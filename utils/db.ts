@@ -188,7 +188,8 @@ const SEED_DATA = {
   offline_inventory_count_conflicts: [] as any[],
   offline_print_queue: [] as any[],
   rooms: [] as any[],
-  tables: [] as any[]
+  tables: [] as any[],
+  collections: [] as any[]
 };
 
 export const db = {
@@ -232,7 +233,8 @@ export const db = {
         'zReports',
         'productStocks',
         'reservations',
-        'inventoryCommitments'
+        'inventoryCommitments',
+        'collections'
       ].includes(key);
 
     const isDeferredHeavyCollection = (key: string) =>

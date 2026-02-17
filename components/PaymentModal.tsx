@@ -5,7 +5,7 @@ import {
    Trash2, Plus, Wallet, Printer, Mail, ShieldAlert,
    Repeat, ArrowRightLeft, DollarSign, Zap, Smartphone
 } from 'lucide-react';
-import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem, Transaction, Customer } from '../types';
+import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem, Transaction, Customer, User, Permission, RoleDefinition } from '../types';
 import { printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
 
@@ -18,6 +18,11 @@ interface PaymentModalProps {
    onConfirm: (payments: PaymentEntry[]) => Promise<Transaction | null>;
    themeColor: string;
    customer?: Customer | null;
+   isDelinquent?: boolean;
+   users: User[];
+   isMaster?: boolean;
+   currentUser?: User | null;
+   roles?: RoleDefinition[];
 }
 
 type ResolvedPaymentMethod = {
@@ -77,7 +82,9 @@ const getDefaultLabelByType = (type: PaymentMethod): string => {
    }
 };
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, currencySymbol, config, onClose, onConfirm, themeColor, customer }) => {
+import SupervisorAuthModal from './SupervisorAuthModal';
+
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles }) => {
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');
@@ -89,6 +96,17 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    const [isOnline, setIsOnline] = useState(networkSyncService.getStatus().isOnline);
    const [isVerifyingWallet, setIsVerifyingWallet] = useState(false);
    const [verifiedBalance, setVerifiedBalance] = useState<number | null>(null);
+   const [showSupervisorModal, setShowSupervisorModal] = useState(false);
+   const [isOverrideActive, setIsOverrideActive] = useState(false);
+
+   const userPermissions = useMemo(() => {
+      if (!currentUser) return [];
+      const rolesSource = roles || config?.roles || [];
+      const role = rolesSource.find(r => r.id === currentUser.roleId || r.id === currentUser.role);
+      return role?.permissions || [];
+   }, [currentUser, config?.roles, roles]);
+
+   const hasPermission = (perm: Permission) => userPermissions.includes('ALL') || userPermissions.includes(perm);
 
    useEffect(() => {
       const unsubscribe = networkSyncService.subscribe(status => {
@@ -199,8 +217,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       const valInSelectedCurrency = amountOverride !== undefined ? amountOverride : parseFloat(inputAmount);
       if (!valInSelectedCurrency || valInSelectedCurrency <= 0) return;
 
-      // Strict Online Check: Credit and Wallet require connection
-      if (!isOnline && (activePaymentMethod.type === 'CREDIT' || activePaymentMethod.type === 'WALLET')) {
+      // Permission Check: Credit requires POS_PAY_CREDIT
+      if (activePaymentMethod.type === 'CREDIT' && !hasPermission('POS_PAY_CREDIT')) {
+         setFinalizeError(`No tiene permisos para realizar ventas a crédito.`);
+         return;
+      }
+
+      // Strict Online Check: Credit and Wallet require connection (unless Master)
+      if (!isOnline && !isMaster && (activePaymentMethod.type === 'CREDIT' || activePaymentMethod.type === 'WALLET')) {
          setFinalizeError(`El pago con ${activePaymentMethod.label} requiere conexión con la Terminal Master.`);
          return;
       }
@@ -246,8 +270,15 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                return;
             }
 
-            // Strict Online Check: Credit and Wallet require connection during finalization too
-            if (!isOnline && (activePaymentMethod.type === 'CREDIT' || activePaymentMethod.type === 'WALLET')) {
+            // Permission Check: Credit requires POS_PAY_CREDIT during auto-finalize too
+            if (activePaymentMethod.type === 'CREDIT' && !hasPermission('POS_PAY_CREDIT')) {
+               setFinalizeError(`No tiene permisos para realizar ventas a crédito.`);
+               setIsFinalizing(false);
+               return;
+            }
+
+            // Strict Online Check: Credit and Wallet require connection during finalization too (unless Master)
+            if (!isOnline && !isMaster && (activePaymentMethod.type === 'CREDIT' || activePaymentMethod.type === 'WALLET')) {
                setFinalizeError(`El pago con ${activePaymentMethod.label} requiere conexión con la Terminal Master.`);
                setIsFinalizing(false);
                return;
@@ -269,8 +300,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             setPayments(paymentsToConfirm);
          }
 
-         // Final safety check: ensure no CREDIT or WALLET payments are sent while offline
-         if (!isOnline) {
+         // Final safety check: ensure no CREDIT or WALLET payments are sent while offline (unless Master)
+         if (!isOnline && !isMaster) {
             const blockedPayment = paymentsToConfirm.find(p => p.method === 'CREDIT' || p.method === 'WALLET');
             if (blockedPayment) {
                setFinalizeError(`El pago con ${blockedPayment.methodLabel} requiere conexión con la Terminal Master.`);
@@ -554,17 +585,39 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             <div className="flex-1 flex flex-col bg-white overflow-y-auto">
                {/* Payment Methods */}
                <div className="flex p-3 md:p-4 gap-3 md:gap-4 overflow-x-auto no-scrollbar shrink-0">
-                  {configuredMethods.map(method => (
-                     <button
-                        key={method.key}
-                        onClick={() => setActiveMethodKey(method.key)}
-                        className={`flex-1 min-w-[80px] md:min-w-[100px] py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center gap-1 md:gap-2 transition-all ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} bg-gray-50 shadow-sm` : 'border-transparent text-gray-400 hover:bg-gray-50'}`}
-                     >
-                        <method.Icon size={24} className="md:w-8 md:h-8" />
-                        <span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{method.label}</span>
-                     </button>
-                  ))}
+                  {configuredMethods.map(method => {
+                     const isDisabled = method.type === 'CREDIT' && isDelinquent && !isOverrideActive;
+                     return (
+                        <button
+                           key={method.key}
+                           disabled={isDisabled}
+                           onClick={() => setActiveMethodKey(method.key)}
+                           className={`flex-1 min-w-[80px] md:min-w-[100px] py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center gap-1 md:gap-2 transition-all ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} bg-gray-50 shadow-sm` : 'border-transparent text-gray-400 hover:bg-gray-50'} ${isDisabled ? 'opacity-50 cursor-not-allowed bg-red-50' : ''}`}
+                        >
+                           <method.Icon size={24} className="md:w-8 md:h-8" />
+                           <span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{method.label}</span>
+                           {method.type === 'CREDIT' && isDelinquent && !isOverrideActive && (
+                              <span className="text-[7px] text-red-600 font-bold">BLOQUEADO</span>
+                           )}
+                        </button>
+                     );
+                  })}
                </div>
+
+               {isDelinquent && !isOverrideActive && (
+                  <div className="mx-4 mb-4 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between">
+                     <div className="flex items-center gap-2 text-red-700 text-[10px] md:text-xs font-bold">
+                        <ShieldAlert size={16} />
+                        <span>CLIENTE EN MORA - CRÉDITO RESTRINGIDO</span>
+                     </div>
+                     <button
+                        onClick={() => setShowSupervisorModal(true)}
+                        className="px-3 py-1 bg-red-600 text-white rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-red-700 transition-colors"
+                     >
+                        Override
+                     </button>
+                  </div>
+               )}
 
                {/* Amount Input */}
                <div className="px-4 md:px-8 mt-1 shrink-0">
@@ -630,6 +683,19 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                </div>
             </div>
          </div>
+
+         {showSupervisorModal && (
+            <SupervisorAuthModal
+               isOpen={showSupervisorModal}
+               onClose={() => setShowSupervisorModal(false)}
+               onSuccess={() => {
+                  setIsOverrideActive(true);
+                  setShowSupervisorModal(false);
+               }}
+               users={users}
+               requiredPermission="POS_CREDIT_OVERRIDE"
+            />
+         )}
       </div>
    );
 };

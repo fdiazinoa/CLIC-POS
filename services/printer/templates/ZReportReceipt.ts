@@ -78,8 +78,16 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
       ${!hiddenModules.includes('FINANCIAL') ? `
       <div class="bold">RESUMEN FINANCIERO</div>
       <div class="row">
-        <span>Ventas Totales:</span>
-        <span class="bold">${formatCurrency(Object.values(report.totalsByMethod).reduce((a, b) => a + b, 0), report.baseCurrency)}</span>
+        <span>Ventas Netas:</span>
+        <span class="bold">${formatCurrency(Object.values(report.totalsByMethod).reduce((a, b) => a + b, 0) - (report.stats?.advancementsTotal || 0), report.baseCurrency)}</span>
+      </div>
+      <div class="row">
+        <span>Recaud. Anticipos:</span>
+        <span>${formatCurrency(report.stats?.advancementsTotal || 0, report.baseCurrency)}</span>
+      </div>
+      <div class="row total-row">
+        <span>TOTAL REBROCADO:</span>
+        <span>${formatCurrency(Object.values(report.totalsByMethod).reduce((a, b) => a + b, 0), report.baseCurrency)}</span>
       </div>
       <div class="row">
         <span>Transacciones:</span>
@@ -146,6 +154,10 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
         <div class="row">
           <span>Descuentos:</span>
           <span>${formatCurrency(report.stats.discountsTotal || 0, report.baseCurrency)}</span>
+        </div>
+        <div class="row">
+          <span>Recaud. Anticipos:</span>
+          <span class="bold">${formatCurrency(report.stats.advancementsTotal || 0, report.baseCurrency)}</span>
         </div>
       ` : ''}
 

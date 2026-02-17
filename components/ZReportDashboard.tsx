@@ -4,7 +4,7 @@ import {
    ArrowLeft, Receipt, CheckCircle, Banknote, Calendar,
    AlertTriangle, Lock, RefreshCw, Printer, Mail, Loader2
 } from 'lucide-react';
-import { Transaction, BusinessConfig, CashMovement, User, RoleDefinition } from '../types';
+import { Transaction, BusinessConfig, CashMovement, User, RoleDefinition, Collection } from '../types';
 import { sendZReportEmail } from '../utils/email';
 import ZReportHistory from './ZReportHistory';
 import { calculateZReportStats } from '../utils/analytics';
@@ -20,6 +20,7 @@ interface ZReportDashboardProps {
    onClose: () => void;
    onConfirmClose: (cashCounted: number, notes: string, reportData?: any) => Promise<void> | void;
    terminalId?: string;
+   collections: Collection[];
 }
 
 // --- HELPER: Slide To Action Button ---
@@ -67,7 +68,7 @@ const SlideButton: React.FC<{ onComplete: () => void; label: string; colorClass:
    );
 };
 
-const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashMovements, config, userName, currentUser, roles, onClose, onConfirmClose, terminalId }) => {
+const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashMovements, config, userName, currentUser, roles, onClose, onConfirmClose, terminalId, collections }) => {
    const [cashCountedByCurrency, setCashCountedByCurrency] = useState<Record<string, string>>({});
    const [notes, setNotes] = useState('');
 
@@ -109,6 +110,9 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const filteredCashMovements = cashMovements.filter(m =>
       matchesCurrentTerminal(m.terminalId) || (!m.terminalId && isDefaultTerminal)
    );
+   const filteredCollections = collections.filter(c =>
+      matchesCurrentTerminal(c.terminalId) || (!c.terminalId && isDefaultTerminal)
+   );
 
    const handleStartClosing = () => {
       // Check if at least one currency amount is entered
@@ -142,7 +146,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                   cashCounted: cashCountedByCurrency,
                   cashDiscrepancy: cashDiscrepancyByCurrency,
                   transactionCount: filteredTransactions.length,
-                  stats: calculateZReportStats(filteredTransactions)
+                  stats: calculateZReportStats(filteredTransactions, filteredCollections)
                };
 
                // Calculate totals by method
@@ -191,7 +195,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                   }
                });
             });
-            const finalStats = calculateZReportStats(filteredTransactions);
+            const finalStats = calculateZReportStats(filteredTransactions, filteredCollections);
             const finalTxCount = filteredTransactions.length;
 
             // Step 2: Emails
@@ -253,7 +257,8 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                expectedCash: expectedCashInDrawer,
                totalsByMethod: finalTotalsByMethod,
                stats: finalStats,
-               transactionCount: finalTxCount
+               transactionCount: finalTxCount,
+               collectionIds: filteredCollections.map(c => c.id)
             };
 
             Promise.resolve(onConfirmClose(parseFloat(cashCountedByCurrency[baseCurrencyCode]) || 0, notes, reportData))
@@ -337,7 +342,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const cashDiscrepancy = cashDiscrepancyByCurrency[baseCurrencyCode] || 0;
 
    // Calculate Stats for Preview
-   const stats = calculateZReportStats(filteredTransactions);
+   const stats = calculateZReportStats(filteredTransactions, filteredCollections);
 
 
    if (showHistory) {
@@ -443,11 +448,18 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                         <p className="text-lg font-black text-gray-800">{stats.peakHour}</p>
                      </div>
                      <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
-                        <p className="text-[10px] text-gray-400 uppercase font-bold mb-1 tracking-wider">Prod. Estrella</p>
                         <p className="text-sm font-bold text-gray-800 truncate" title={stats.topProduct?.name || 'N/A'}>
                            {stats.topProduct?.name || 'N/A'}
                         </p>
                         <p className="text-[10px] text-gray-500">{stats.topProduct?.quantity || 0} unidades</p>
+                     </div>
+                     <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100/50">
+                        <p className="text-[10px] text-blue-400 uppercase font-bold mb-1 tracking-wider">Anticipos / Gift Cards</p>
+                        <p className="text-lg font-black text-blue-700">{baseCurrency?.symbol}{stats.advancementsTotal.toFixed(2)}</p>
+                     </div>
+                     <div className="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100/50">
+                        <p className="text-[10px] text-indigo-400 uppercase font-bold mb-1 tracking-wider">Cobros CxC (Recibos)</p>
+                        <p className="text-lg font-black text-indigo-700">{baseCurrency?.symbol}{stats.collectionsTotal.toFixed(2)}</p>
                      </div>
                   </div>
                </div>

@@ -55,6 +55,7 @@ import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import SupervisorAuthModal from './SupervisorAuthModal';
 
 import VirtualKeyboard from './VirtualKeyboard';
+import { useCreditControl } from '../hooks/useCreditControl';
 // Hooks removed: Managed globally in App.tsx
 
 interface POSInterfaceProps {
@@ -140,6 +141,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 }) => {
    const cartEndRef = useRef<HTMLDivElement>(null);
    const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
+   const isMaster = useMemo(() => {
+      const terminal = config.terminals?.find(t => t.id === activeTerminalId);
+      return terminal?.config?.isPrimaryNode === true;
+   }, [config.terminals, activeTerminalId]);
    const [quickActionData, setQuickActionData] = useState<{ product: Product; x: number; y: number } | null>(null);
    const [successToast, setSuccessToast] = useState<string | null>(null);
 
@@ -457,6 +462,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       roles,
       onUpdateConfig
    });
+
+   // Credit Control (CxC)
+   const { isDelinquent, totalPastDue, unpaidInvoices } = useCreditControl(selectedCustomer, transactions);
 
    const reloadCommitments = useCallback(async () => {
       const commitments = await db.get('inventoryCommitments') as any[] || [];
@@ -1390,6 +1398,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         ncfType: fiscalStatus.type,
                         taxAmount: isTaxIncluded ? saleTotal * 0.18 : 0,
                         netAmount: isTaxIncluded ? saleTotal / 1.18 : saleTotal,
+                        pendingBalance: payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0) || undefined,
+                        dueDate: payments.some(p => p.method === 'CREDIT') ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined,
                         customerSnapshot: selectedCustomer ? {
                            name: selectedCustomer.name,
                            taxId: selectedCustomer.taxId
@@ -1434,6 +1444,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ? (grossLineTotal - discountAmount - taxAmount)
                   : (grossLineTotal - discountAmount);
 
+               const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
+               const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
+               const creditAmount = payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0);
+
                const txn = await withTimeout(transactionService.createTransaction({
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
                   seriesId: hasReturns
@@ -1449,6 +1463,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   status: 'COMPLETED',
                   customerId: selectedCustomer?.id,
                   customerName: selectedCustomer?.name,
+                  pendingBalance: creditAmount > 0 ? creditAmount : undefined,
+                  dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined, // Default 30 days
                   ncf: finalNcf,
                   ncfType: fiscalStatus.type,
                   taxAmount: taxAmount,
@@ -1467,7 +1483,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   reservationId: activeRecoveredReservation?.id,
                   reservationCode: activeRecoveredReservation?.code,
                   priorAdvancePaid: reservationAdvance > 0 ? reservationAdvance : undefined,
-                  balanceDueAtSale: activeRecoveredReservation ? reservationBalanceDue : undefined
+                  balanceDueAtSale: activeRecoveredReservation ? reservationBalanceDue : undefined,
+                  walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
+                  walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined
                }), 25000, 'TIMEOUT_CREATE_TRANSACTION');
 
                // Ensure seriesId is preserved (Backend might not return it in the root object)
@@ -2077,7 +2095,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         >
                            {uxConfig.showProductImages && (
                               <div className="aspect-square bg-gray-50 dark:bg-slate-800 rounded-[1.5rem] mb-4 overflow-hidden relative">
-                                 {product.image ? <img src={product.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
+                                 {product.image ? <img src={product.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
 
                                  {/* BADGES DE TIPO DE ARTÍCULO */}
                                  {isWeighted && (
@@ -2436,6 +2454,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               )}
                               {selectedCustomer.isTemporary && (
                                  <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold">TEMP</span>
+                              )}
+                              {isDelinquent && (
+                                 <span className="text-[9px] bg-red-600 text-white px-1.5 py-0.5 rounded font-black animate-pulse shadow-lg shadow-red-200">
+                                    DEUDA VENCIDA / CRÉDITO BLOQUEADO
+                                 </span>
                               )}
                            </div>
                         </div>
@@ -3016,7 +3039,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          {/* Modals & Overlays */}
-         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={selectedCustomer} />}
+         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={selectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr) => { addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}

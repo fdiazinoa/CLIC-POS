@@ -168,6 +168,7 @@ const SalesHistoryTable: React.FC<{
    const getStatusBadge = (tx: Transaction) => {
       if (tx.status === 'REFUNDED') return <span className="px-2 py-0.5 bg-red-100 text-red-600 rounded-full text-[10px] font-bold">ANULADO</span>;
       if (tx.status === 'PARTIAL_REFUND') return <span className="px-2 py-0.5 bg-orange-100 text-orange-600 rounded-full text-[10px] font-bold">PARTIAL</span>;
+      if ((tx.pendingBalance || 0) > 0) return <span className="px-2 py-0.5 bg-amber-100 text-amber-600 rounded-full text-[10px] font-bold">PENDIENTE</span>;
       return <span className="px-2 py-0.5 bg-green-100 text-green-600 rounded-full text-[10px] font-bold">COMPLETADO</span>;
    };
 
@@ -347,9 +348,11 @@ const TicketDetailDrawer: React.FC<{
                      </div>
                      <div className="text-right">
                         <p className="text-[10px] font-bold text-gray-400 uppercase">Estado</p>
-                        <div className="mt-1">
+                        <div className="mt-1 flex items-center gap-2">
                            {tx.status === 'REFUNDED' ? (
                               <span className="bg-red-100 text-red-600 px-3 py-1 rounded-full text-xs font-black italic">ANULADO</span>
+                           ) : (tx.pendingBalance || 0) > 0 ? (
+                              <span className="bg-amber-100 text-amber-600 px-3 py-1 rounded-full text-xs font-black">PENDIENTE</span>
                            ) : (
                               <span className="bg-green-100 text-green-600 px-3 py-1 rounded-full text-xs font-black">PAGADO</span>
                            )}

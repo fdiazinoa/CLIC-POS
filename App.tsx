@@ -26,7 +26,8 @@ import {
   LedgerConcept,
   DocumentSeries,
   Room,
-  Table
+  Table,
+  Collection
 } from './types';
 import {
   DEFAULT_ROLES,
@@ -132,6 +133,18 @@ const AppContent: React.FC = () => {
   const [failedMasterIp, setFailedMasterIp] = useState<string>('');
   const initLoadStartedRef = useRef(false);
   const forceSyncHandledRef = useRef(false);
+  const [reconnectionStatus, setReconnectionStatus] = useState<'idle' | 'searching' | 'connected' | 'failed'>('idle');
+
+  useEffect(() => {
+    const handleReconnection = (e: CustomEvent) => {
+      setReconnectionStatus(e.detail.status);
+      if (e.detail.status === 'connected') {
+        setTimeout(() => setReconnectionStatus('idle'), 3000);
+      }
+    };
+    window.addEventListener('sync:reconnecting', handleReconnection as any);
+    return () => window.removeEventListener('sync:reconnecting', handleReconnection as any);
+  }, []);
 
   // Helper: Get current terminal configuration
   const getCurrentTerminal = React.useCallback(() => {
@@ -143,6 +156,47 @@ const AppContent: React.FC = () => {
     const terminal = getCurrentTerminal();
     return terminal?.config?.deviceRole?.role || DeviceRole.STANDARD_POS;
   }, [getCurrentTerminal]);
+
+  // --- RECONNECTION BANNER ---
+  const renderReconnectionBanner = () => {
+    if (reconnectionStatus === 'idle') return null;
+
+    const bannerStyle: React.CSSProperties = {
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      zIndex: 9999,
+      padding: '8px',
+      textAlign: 'center',
+      fontWeight: 'bold',
+      boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+    };
+
+    if (reconnectionStatus === 'searching') {
+      return (
+        <div style={{ ...bannerStyle, backgroundColor: '#f59e0b', color: '#fff' }}>
+          📡 Buscando servidor Maestro en la red local... (Auto-recuperación)
+        </div>
+      );
+    }
+
+    if (reconnectionStatus === 'connected') {
+      return (
+        <div style={{ ...bannerStyle, backgroundColor: '#10b981', color: '#fff' }}>
+          ✅ Conexión recuperada exitosamente.
+        </div>
+      );
+    }
+
+    if (reconnectionStatus === 'failed') {
+      return (
+        <div style={{ ...bannerStyle, backgroundColor: '#ef4444', color: '#fff' }}>
+          ❌ No se pudo encontrar el servidor Maestro. Por favor revise su conexión.
+        </div>
+      );
+    }
+  };
 
   // --- DATA STORES ---
   const [users, setUsers] = useState<User[]>([]);
@@ -162,6 +216,7 @@ const AppContent: React.FC = () => {
   const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [tables, setTables] = useState<Table[]>([]);
+  const [collections, setCollections] = useState<Collection[]>([]);
   const [activeRoomId, setActiveRoomId] = useState<string>('');
   const [activeRoomId2, setActiveRoomId2] = useState<string>(''); // For backward compatibility if needed
   const [supplierProductPrices, setSupplierProductPrices] = useState<any[]>([]);
@@ -662,9 +717,21 @@ const AppContent: React.FC = () => {
             // but ALWAYS load active transactions to ensure Monitor X / Finance Dashboard accuracy.
             try {
               console.log('📦 Loading active transactions for session...');
-              const activeTxns = await db.get('transactions') as Transaction[];
+              console.log('📦 Loading active transactions for session...');
+              let activeTxns = await db.get('transactions') as Transaction[];
+
+              // --- SELF-HEAL: Commented out to prevent regression ---
+              /*
+              if (Array.isArray(activeTxns)) {
+                // ... (Healing logic disabled)
+              }
+              */
+              // ------------------------------------------------
+
               if (Array.isArray(activeTxns) && activeTxns.length > 0) {
                 setTransactions(activeTxns.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+              } else {
+                setTransactions([]);
               }
 
               const txHistory = await db.get('transactionHistory') as Transaction[];
@@ -687,6 +754,7 @@ const AppContent: React.FC = () => {
           });
 
           setUsers(data.users || []);
+          setRoles(data.roles || DEFAULT_ROLES);
           setCustomers(data.customers || []);
           setTransactions(data.transactions || []);
           setProducts(data.products || []);
@@ -702,6 +770,7 @@ const AppContent: React.FC = () => {
           setProductStocks(data.productStocks || []);
           setRooms(data.rooms || []);
           setTables(data.tables || []);
+          setCollections(data.collections || []);
           if (data.rooms && data.rooms.length > 0) setActiveRoomId(data.rooms[0].id);
           setSupplierProductPrices(data.supplierProductPrices || []);
 
@@ -779,10 +848,11 @@ const AppContent: React.FC = () => {
             // Master Re-hydration Step: This ensures state is always up to date with DB 
             // after any async drift fixes or sync initializations.
             try {
-              const [dbConfig, dbProducts, dbUsers, dbSequences] = await Promise.all([
+              const [dbConfig, dbProducts, dbUsers, dbRoles, dbSequences] = await Promise.all([
                 db.get('config') as Promise<any>,
                 db.get('products') as Promise<Product[]>,
                 db.get('users') as Promise<User[]>,
+                db.get('roles') as Promise<RoleDefinition[]>,
                 db.get('internalSequences') as Promise<any[]>
               ]);
 
@@ -804,6 +874,7 @@ const AppContent: React.FC = () => {
                 setProducts(dbProducts);
               }
               if (Array.isArray(dbUsers)) setUsers(dbUsers);
+              if (Array.isArray(dbRoles)) setRoles(dbRoles);
               if (Array.isArray(dbSequences)) setInternalSequences(dbSequences);
             } catch (rehydrationError) {
               console.warn('⚠️ Post-init rehydration failed:', rehydrationError);
@@ -977,7 +1048,7 @@ const AppContent: React.FC = () => {
         case 'customers': setCustomers(freshData as Customer[]); break;
         case 'suppliers': setSuppliers(freshData as Supplier[]); break;
         case 'internalSequences': /* No state for this, used directly from DB */ break;
-        case 'transactions': setTransactions(freshData as Transaction[]); break;
+        case 'transactions': setTransactions(Array.isArray(freshData) ? freshData as Transaction[] : []); break;
         case 'cashMovements': setCashMovements(freshData as CashMovement[]); break;
         case 'zReports': setZReports(freshData as ZReport[]); break;
         case 'productStocks':
@@ -1307,7 +1378,59 @@ const AppContent: React.FC = () => {
 
     // Save transaction locally (Optimized: Append only)
     const newTransactions = [...transactions, txn];
+    // --- SELF-HEAL: Fix broken credit transactions (Missing pendingBalance) ---
+    const healCreditTransactions = async (allTransactions: Transaction[]) => {
+      try {
+        const brokenTxs = allTransactions.filter(tx =>
+          tx.payments?.some((p: any) => ['CREDIT', 'CREDITO', 'PENDIENTE'].includes(p.method?.toUpperCase())) &&
+          (!tx.pendingBalance || tx.pendingBalance <= 0) &&
+          tx.status !== 'REFUNDED'
+        );
+
+        if (brokenTxs.length > 0) {
+          console.warn(`🚑 Found ${brokenTxs.length} broken credit transactions. Attempting repair...`);
+          let healedCount = 0;
+
+          for (const tx of brokenTxs) {
+            const creditAmount = tx.payments
+              .filter((p: any) => ['CREDIT', 'CREDITO', 'PENDIENTE'].includes(p.method?.toUpperCase()))
+              .reduce((sum: number, p: any) => sum + (p.amount || 0), 0);
+
+            if (creditAmount > 0) {
+              const updatedTx = {
+                ...tx,
+                pendingBalance: creditAmount,
+                balanceDueAtSale: creditAmount,
+                dueDate: tx.dueDate || new Date(new Date(tx.date).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+              };
+              await db.save('transactions', updatedTx);
+
+              // Also fix customer debt
+              if (tx.customerId) {
+                const customer = customers.find(c => c.id === tx.customerId);
+                if (customer) {
+                  const newDebt = (customer.currentDebt || 0) + creditAmount;
+                  await db.save('customers', { ...customer, currentDebt: newDebt, updatedAt: new Date().toISOString() });
+                }
+              }
+              healedCount++;
+            }
+          }
+          if (healedCount > 0) {
+            console.log(`✅ Automatically healed ${healedCount} credit transactions.`);
+            // Force reload to reflect changes
+            window.location.reload();
+          }
+        }
+      } catch (err) {
+        console.error("Failed to heal credit transactions", err);
+      }
+    };
+
+    healCreditTransactions(newTransactions);
+
     setTransactions(newTransactions);
+    // setFilteredTransactions(newTransactions); // Assuming this is meant to be here if filtered transactions are used
     await db.saveDocument('transactions', txn);
 
     // Trigger background sync
@@ -1391,6 +1514,27 @@ const AppContent: React.FC = () => {
         }
 
         console.log(`✅ Sequence ${seriesId} incremented to ${updatedSequences[seriesIndex].nextNumber}`);
+      }
+    }
+
+    // --- CRITICAL: Update Customer Debt for Credit Transactions (CxC) ---
+    if (txn.pendingBalance && txn.pendingBalance > 0 && txn.customerId) {
+      console.log(`💰 Increasing debt for customer ${txn.customerId} by ${txn.pendingBalance}`);
+      const customerIndex = customers.findIndex(c => c.id === txn.customerId);
+      if (customerIndex !== -1) {
+        const updatedCustomers = [...customers];
+        const customer = updatedCustomers[customerIndex];
+        const newDebt = (customer.currentDebt || 0) + txn.pendingBalance;
+
+        updatedCustomers[customerIndex] = {
+          ...customer,
+          currentDebt: parseFloat(newDebt.toFixed(2)),
+          updatedAt: new Date().toISOString()
+        };
+
+        setCustomers(updatedCustomers);
+        await db.saveDocument('customers', updatedCustomers[customerIndex]);
+        console.log(`✅ Customer debt updated: ${customer.name} -> ${updatedCustomers[customerIndex].currentDebt}`);
       }
     }
   };
@@ -1589,6 +1733,9 @@ const AppContent: React.FC = () => {
       const reportMovementIds = Array.isArray(reportData?.cashMovementIds)
         ? new Set<string>(reportData.cashMovementIds.map((id: string) => String(id)))
         : null;
+      const reportCollectionIds = Array.isArray(reportData?.collectionIds)
+        ? new Set<string>(reportData.collectionIds.map((id: string) => String(id)))
+        : null;
 
       const terminalTransactions = reportTransactionIds
         ? transactions
@@ -1604,6 +1751,12 @@ const AppContent: React.FC = () => {
           .filter(m => belongsToCurrentTerminal(m.terminalId))
         : pendingCashMovements;
 
+      const terminalCollections = reportCollectionIds
+        ? collections
+          .filter(c => reportCollectionIds.has(c.id))
+          .filter(c => belongsToCurrentTerminal(c.terminalId))
+        : collections.filter(c => belongsToCurrentTerminal(c.terminalId) && !c.zReportId);
+
       console.log(`🔒 Shift Segregation: Found ${terminalTransactions.length} txns and ${terminalCashMovements.length} cash movements for ${terminalId}`);
 
       // 3. Totals and Stats from the exact transaction set being archived.
@@ -1614,7 +1767,7 @@ const AppContent: React.FC = () => {
         return acc;
       }, {});
 
-      const stats = calculateZReportStats(terminalTransactions);
+      const stats = calculateZReportStats(terminalTransactions, terminalCollections);
       const transactionCount = terminalTransactions.length;
       const openedAtCandidates = [
         ...terminalTransactions.map(t => new Date(t.date).getTime()),
@@ -1716,7 +1869,16 @@ const AppContent: React.FC = () => {
       console.log("💾 Saving Z-Report:", newZReport);
       await db.saveDocument('zReports', newZReport);
       setZReports(prev => [...prev, newZReport].sort((a, b) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime()));
-      await syncManager.pushZReport(newZReport);
+
+      if (syncManager.isInitialized) {
+        try {
+          await syncManager.pushZReport(newZReport);
+        } catch (e) {
+          console.warn('⚠️ [App.tsx] Z-Report push failed (queued):', e);
+        }
+      } else {
+        console.warn('⏳ [App.tsx] SyncManager not ready. Z-Report queued locally.');
+      }
 
       // 5. Build lookup set for IDs that were actually closed to prevent data loss
       const closedTxnIds = new Set(terminalTransactions.map(t => t.id));
@@ -1741,12 +1903,15 @@ const AppContent: React.FC = () => {
 
       setTransactions(remainingTransactions);
       setCashMovements(remainingCashMovements);
+      const remainingCollections = collections.filter(c => !terminalCollections.some(tc => tc.id === c.id));
+      setCollections(remainingCollections);
 
       // Note: We don't strictly need db.save('transactions', ...) anymore because we deleted them one by one, 
       // but we keep it for other non-terminal-specific items if they existed (unlikely here).
       // Actually, save() as "Replace" is now robust via NetworkAdapter fix.
       await db.save('transactions', remainingTransactions);
       await db.save('cashMovements', remainingCashMovements);
+      await db.save('collections', remainingCollections);
 
       // 8. Global Reset (bounded wait to avoid UI freeze)
       console.log(`⚙️ Sending Global Reset for Terminal ${terminalId} to Master...`);
@@ -2138,6 +2303,9 @@ const AppContent: React.FC = () => {
           <CustomerManagement
             customers={customers}
             config={config}
+            collections={collections}
+            currentUser={currentUser!}
+            terminalId={(config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1'}
             onAddCustomer={async (c) => {
               const updated = [...customers, c];
               setCustomers(updated);
@@ -2300,6 +2468,7 @@ const AppContent: React.FC = () => {
             <ZReportDashboard
               transactions={terminalTransactions}
               cashMovements={terminalMovements}
+              collections={collections}
               config={config}
               userName={currentUser?.name || ''}
               currentUser={currentUser}

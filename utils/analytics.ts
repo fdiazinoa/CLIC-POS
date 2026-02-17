@@ -1,7 +1,7 @@
-import { Transaction, ZReportStats } from '../types';
+import { Transaction, ZReportStats, Collection } from '../types';
 
-export const calculateZReportStats = (transactions: Transaction[]): ZReportStats => {
-    if (!transactions || transactions.length === 0) {
+export const calculateZReportStats = (transactions: Transaction[], collections: Collection[] = []): ZReportStats => {
+    if ((!transactions || transactions.length === 0) && (!collections || collections.length === 0)) {
         return {
             averageTicket: 0,
             itemsPerSale: 0,
@@ -9,7 +9,9 @@ export const calculateZReportStats = (transactions: Transaction[]): ZReportStats
             topProduct: null,
             returnsCount: 0,
             returnsTotal: 0,
-            discountsTotal: 0
+            discountsTotal: 0,
+            advancementsTotal: 0,
+            collectionsTotal: 0
         };
     }
 
@@ -75,6 +77,12 @@ export const calculateZReportStats = (transactions: Transaction[]): ZReportStats
     // 6. Discounts
     const discountsTotal = sales.reduce((acc, t) => acc + (t.discountAmount || 0), 0);
 
+    // 7. Advancements (Gift Cards / Wallet Deposits)
+    const advancementsTotal = sales.reduce((acc, t) => acc + (t.walletDepositAmount || 0), 0);
+
+    // 8. Collections (CxC Payments)
+    const collectionsTotal = collections.reduce((acc, c) => acc + c.totalAmount, 0);
+
     return {
         averageTicket,
         itemsPerSale,
@@ -82,6 +90,8 @@ export const calculateZReportStats = (transactions: Transaction[]): ZReportStats
         topProduct,
         returnsCount,
         returnsTotal,
-        discountsTotal
+        discountsTotal,
+        advancementsTotal,
+        collectionsTotal
     };
 };
