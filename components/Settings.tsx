@@ -79,6 +79,15 @@ interface SettingsProps {
   onUpdateProducts: (products: Product[]) => void;
   onUpdateWarehouses: (warehouses: Warehouse[]) => void;
   onUpdateCustomers?: (customers: Customer[]) => void;
+  onRepairLegacyReceivables?: () => Promise<{
+    scannedTransactions: number;
+    repairedTransactions: number;
+    recalculatedCustomers: number;
+    customersWithDebtChanges: number;
+    totalPendingBefore: number;
+    totalPendingAfter: number;
+    transactionIds: string[];
+  }>;
   onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
   onOpenZReport: () => void;
   onOpenSupplyChain: () => void;
@@ -94,8 +103,19 @@ interface SettingsProps {
 
 type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS';
 
+type ReceivableRepairSummary = {
+  scannedTransactions: number;
+  repairedTransactions: number;
+  recalculatedCustomers: number;
+  customersWithDebtChanges: number;
+  totalPendingBefore: number;
+  totalPendingAfter: number;
+  transactionIds: string[];
+};
+
 const Settings: React.FC<SettingsProps> = (props) => {
   const [currentView, setCurrentView] = useState<SettingsView>(props.initialView || 'HOME');
+  const [isRepairingReceivables, setIsRepairingReceivables] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<AnalyticsCategory | null>(null);
   const [ledgerEntries, setLedgerEntries] = useState<InventoryLedgerEntry[]>([]);
   const [attendanceLogs, setAttendanceLogs] = useState<AttendanceLog[]>([]);
@@ -122,6 +142,49 @@ const Settings: React.FC<SettingsProps> = (props) => {
     // Admin always has access? Or explicit 'ALL' permission?
     if (userRole.permissions.includes('ALL')) return true;
     return userRole.permissions.includes(permission as any);
+  };
+
+  const handleRepairLegacyReceivables = async () => {
+    if (!props.onRepairLegacyReceivables) {
+      alert('La herramienta de reparación no está disponible en esta terminal.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Esto recalculará saldos pendientes CxC y deudas por cliente usando las facturas guardadas.\n\n¿Desea continuar?'
+    );
+    if (!confirmed) return;
+
+    setIsRepairingReceivables(true);
+    try {
+      const result: ReceivableRepairSummary = await props.onRepairLegacyReceivables();
+      if (result.scannedTransactions === 0) {
+        alert(
+          'No se encontraron facturas para revisar en transactions/transactionHistory.\n\n' +
+          'No se aplicaron cambios.'
+        );
+        return;
+      }
+
+      const repairedList = result.transactionIds.length > 0
+        ? `\nTickets reparados: ${result.transactionIds.join(', ')}`
+        : '';
+
+      alert(
+        `Reparación CxC completada.\n\n` +
+        `Facturas revisadas: ${result.scannedTransactions}\n` +
+        `Facturas reparadas: ${result.repairedTransactions}\n` +
+        `Clientes ajustados: ${result.customersWithDebtChanges}\n` +
+        `Pendiente antes: ${props.config.currencySymbol}${result.totalPendingBefore.toLocaleString()}\n` +
+        `Pendiente después: ${props.config.currencySymbol}${result.totalPendingAfter.toLocaleString()}` +
+        repairedList
+      );
+    } catch (error) {
+      console.error('Receivable repair failed:', error);
+      alert('No se pudo completar la reparación de CxC. Revise consola e intente nuevamente.');
+    } finally {
+      setIsRepairingReceivables(false);
+    }
   };
 
   const renderContent = () => {
@@ -357,6 +420,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
           <CustomerManagement
             customers={props.customers || []}
             config={props.config}
+            currentUser={props.currentUser || props.users[0] || { id: 'sys', name: 'System', pin: '0000', role: 'admin' }}
+            terminalId={props.terminalId || 'T1'}
+            collections={[]}
             onAddCustomer={(customer) => {
               const updated = [...(props.customers || []), customer];
               props.onUpdateCustomers?.(updated);
@@ -669,6 +735,14 @@ const Settings: React.FC<SettingsProps> = (props) => {
               <section>
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Sistema y Auditoría</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <SettingsCard
+                    icon={ListChecks}
+                    label={isRepairingReceivables ? "Reparando CxC..." : "Recalcular Deudas CxC"}
+                    description={isRepairingReceivables ? "Procesando facturas legacy..." : "Repara pendientes legacy y ajusta deuda por cliente"}
+                    color="bg-amber-600"
+                    onClick={handleRepairLegacyReceivables}
+                    locked={!hasPermission('SETTINGS_ACCESS') || isRepairingReceivables}
+                  />
                   <SettingsCard icon={RefreshCw} label="Sincronización" description="Estado de Red y Réplicas" color="bg-indigo-600" onClick={() => setCurrentView('SYNC')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ShieldAlert} label="Seguridad y Datos" description="Backups y Modo Kiosco" color="bg-red-600" onClick={() => setCurrentView('SECURITY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={History} label="Traza de Auditoría" description="Logs de Operaciones" color="bg-orange-500" onClick={() => setCurrentView('LOGS')} locked={!hasPermission('AUDIT_LOG_VIEW')} />

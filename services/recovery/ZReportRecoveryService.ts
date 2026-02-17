@@ -129,7 +129,9 @@ export class ZReportRecoveryService {
                         topProduct: null,
                         returnsCount: 0,
                         returnsTotal: 0,
-                        discountsTotal: 0
+                        discountsTotal: 0,
+                        advancementsTotal: 0,
+                        collectionsTotal: 0
                     },
                     syncStatus: 'PENDING'
                 };

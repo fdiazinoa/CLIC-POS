@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
    ArrowLeft, Users, UserPlus, Search, Phone, Mail, MapPin,
    Edit2, Trash2, Save, X, FileText, Award, Wallet as WalletIcon,
@@ -41,7 +41,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    const [searchTerm, setSearchTerm] = useState('');
    const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
    const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-   const [activeProfileTab, setActiveProfileTab] = useState<'HISTORY' | 'WALLET' | 'LOYALTY'>('HISTORY');
+   const [activeProfileTab, setActiveProfileTab] = useState<'HISTORY' | 'WALLET' | 'LOYALTY' | 'CREDIT'>('HISTORY');
    const [editModalTab, setEditModalTab] = useState<'GENERAL' | 'ADDRESSES'>('GENERAL');
    const [isAbonoModalOpen, setIsAbonoModalOpen] = useState(false);
 
@@ -72,11 +72,85 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
    const [customerTransactions, setCustomerTransactions] = useState<Transaction[]>([]);
 
+   const CREDIT_METHOD_MARKERS = useMemo(() => new Set(['CREDIT', 'CREDITO', 'PENDIENTE']), []);
+
+   const normalizeMethod = (value: unknown): string => {
+      if (typeof value !== 'string') return '';
+      return value
+         .normalize('NFD')
+         .replace(/[\u0300-\u036f]/g, '')
+         .trim()
+         .toUpperCase();
+   };
+
+   const toPositiveNumber = (value: unknown): number => {
+      const num = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(num) || num <= 0) return 0;
+      return num;
+   };
+
    const isRNC = (term: string) => /^\d{9,11}$/.test(term);
 
    const selectedCustomer = useMemo(() =>
       customers.find(c => c.id === selectedCustomerId),
       [customers, selectedCustomerId]);
+
+   const allocationsByTransactionId = useMemo(() => {
+      const map = new globalThis.Map<string, number>();
+      const selectedId = selectedCustomer?.id;
+      if (!selectedId) return map;
+
+      for (const collection of collections || []) {
+         if (collection?.customerId !== selectedId) continue;
+         const allocations = Array.isArray(collection.allocations) ? collection.allocations : [];
+         for (const alloc of allocations) {
+            const txId = alloc?.transactionId;
+            if (!txId) continue;
+            const current = map.get(txId) || 0;
+            map.set(txId, parseFloat((current + toPositiveNumber(alloc.amount)).toFixed(2)));
+         }
+      }
+      return map;
+   }, [collections, selectedCustomer?.id]);
+
+   const getEffectivePendingBalance = useCallback((tx: Transaction): number => {
+      if (tx.status === 'REFUNDED') return 0;
+
+      const explicitPendingRaw = tx.pendingBalance;
+      const hasExplicitPending = typeof explicitPendingRaw === 'number' && Number.isFinite(explicitPendingRaw);
+      const explicitPending = hasExplicitPending ? Math.max(0, explicitPendingRaw) : 0;
+
+      const paymentEntries = Array.isArray(tx.payments) ? tx.payments : [];
+      const creditFromPayments = paymentEntries.reduce((sum: number, payment: any) => {
+         const markers = [
+            normalizeMethod(payment?.method),
+            normalizeMethod(payment?.methodLabel),
+            normalizeMethod(payment?.methodId),
+            normalizeMethod(payment?.type)
+         ];
+         const isCredit = markers.some(marker => CREDIT_METHOD_MARKERS.has(marker));
+         if (!isCredit) return sum;
+         return sum + toPositiveNumber(payment?.amount);
+      }, 0);
+
+      const creditIssued = Math.max(
+         creditFromPayments,
+         toPositiveNumber(tx.balanceDueAtSale)
+      );
+
+      const allocated = allocationsByTransactionId.get(tx.id) || 0;
+      const inferredPending = Math.max(0, parseFloat((creditIssued - allocated).toFixed(2)));
+
+      if (hasExplicitPending && explicitPending > 0) {
+         return parseFloat(explicitPending.toFixed(2));
+      }
+
+      if (creditIssued > 0) {
+         return inferredPending;
+      }
+
+      return hasExplicitPending ? parseFloat(explicitPending.toFixed(2)) : 0;
+   }, [allocationsByTransactionId, CREDIT_METHOD_MARKERS]);
 
    const filteredCustomers = useMemo(() => {
       // If we have a remote result and search term matches its RNC, include it or prioritize it?
@@ -278,30 +352,76 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       }
    };
 
-   // --- LOAD CUSTOMER TRANSACTIONS ---
-   useEffect(() => {
-      const loadCustomerTransactions = async () => {
-         if (!selectedCustomer) {
-            setCustomerTransactions([]);
-            return;
+   const loadCustomerTransactions = useCallback(async (customerId?: string | null) => {
+      const effectiveCustomerId = customerId || selectedCustomer?.id;
+      if (!effectiveCustomerId) {
+         setCustomerTransactions([]);
+         return;
+      }
+
+      try {
+         const { db } = await import('../utils/db');
+         const [activeTransactions, historyTransactions] = await Promise.all([
+            db.get('transactions') as Promise<Transaction[]>,
+            db.get('transactionHistory') as Promise<Transaction[]>
+         ]);
+
+         const mergedMap = new globalThis.Map<string, Transaction>();
+         const merged = [
+            ...(Array.isArray(activeTransactions) ? activeTransactions : []),
+            ...(Array.isArray(historyTransactions) ? historyTransactions : [])
+         ];
+
+         const toPending = (value: unknown) => {
+            const num = typeof value === 'number' ? value : Number(value);
+            return Number.isFinite(num) && num > 0 ? num : 0;
+         };
+
+         const toTimestamp = (value?: string) => {
+            const ts = value ? new Date(value).getTime() : NaN;
+            return Number.isFinite(ts) ? ts : 0;
+         };
+
+         for (const tx of merged) {
+            if (!tx?.id) continue;
+            const existing = mergedMap.get(tx.id);
+            if (!existing) {
+               mergedMap.set(tx.id, tx);
+               continue;
+            }
+
+            const existingPending = toPending(existing.pendingBalance);
+            const nextPending = toPending(tx.pendingBalance);
+
+            if (nextPending > existingPending) {
+               mergedMap.set(tx.id, tx);
+               continue;
+            }
+
+            if (nextPending === existingPending) {
+               const existingTs = Math.max(toTimestamp((existing as any).updatedAt), toTimestamp(existing.date));
+               const nextTs = Math.max(toTimestamp((tx as any).updatedAt), toTimestamp(tx.date));
+               if (nextTs >= existingTs) {
+                  mergedMap.set(tx.id, tx);
+               }
+            }
          }
 
-         try {
-            const { db } = await import('../utils/db');
-            const allTransactions = await db.get('transactions') as Transaction[];
-            if (allTransactions && Array.isArray(allTransactions)) {
-               // Filter transactions for this customer
-               const customerTxs = allTransactions.filter(tx =>
-                  tx.customerId === selectedCustomer.id
-               ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-               setCustomerTransactions(customerTxs);
-            }
-         } catch (e) {
-            console.error("Failed to load customer transactions:", e);
-         }
-      };
+         const customerTxs = Array.from(mergedMap.values())
+            .filter(tx => tx.customerId === effectiveCustomerId)
+            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+         setCustomerTransactions(customerTxs);
+      } catch (e) {
+         console.error("Failed to load customer transactions:", e);
+         setCustomerTransactions([]);
+      }
+   }, [selectedCustomer?.id]);
+
+   // --- LOAD CUSTOMER TRANSACTIONS ---
+   useEffect(() => {
       loadCustomerTransactions();
-   }, [selectedCustomer]);
+   }, [loadCustomerTransactions]);
 
    // --- ADDRESS LOGIC ---
    const handleCreateWallet = () => {
@@ -733,8 +853,9 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                         <div className="flex gap-6 border-b border-gray-200 mb-6">
                            {[
                               { id: 'HISTORY', label: 'Historial', icon: History },
-                              { id: 'WALLET', label: 'Billetera & Crédito', icon: WalletIcon },
+                              { id: 'WALLET', label: 'Billetera', icon: WalletIcon },
                               { id: 'LOYALTY', label: 'Lealtad', icon: Star },
+                              { id: 'CREDIT', label: 'Crédito', icon: CreditCard },
                            ].map(tab => (
                               <button
                                  key={tab.id}
@@ -753,6 +874,9 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                               <div className="space-y-3">
                                  {customerTransactions.length > 0 ? (
                                     customerTransactions.map((tx) => (
+                                       (() => {
+                                          const effectivePending = getEffectivePendingBalance(tx);
+                                          return (
                                        <div
                                           key={tx.id}
                                           onClick={() => setSelectedTransactionId(tx.id)}
@@ -771,16 +895,18 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                              <p className="font-bold text-gray-800">{config.currencySymbol}{tx.total.toFixed(2)}</p>
                                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${tx.status === 'REFUNDED' ? 'bg-red-50 text-red-600' :
                                                 tx.status === 'PARTIAL_REFUND' ? 'bg-orange-50 text-orange-600' :
-                                                   (tx.pendingBalance || 0) > 0 ? 'bg-amber-50 text-amber-600' :
+                                                   effectivePending > 0 ? 'bg-amber-50 text-amber-600' :
                                                       'bg-green-50 text-green-600'
                                                 }`}>
                                                 {tx.status === 'REFUNDED' ? 'ANULADO' :
                                                    tx.status === 'PARTIAL_REFUND' ? 'PARCIAL' :
-                                                      (tx.pendingBalance || 0) > 0 ? 'PENDIENTE' :
+                                                      effectivePending > 0 ? 'PENDIENTE' :
                                                          'PAGADO'}
                                              </span>
                                           </div>
                                        </div>
+                                          );
+                                       })()
                                     ))
                                  ) : (
                                     <div className="text-center py-8 text-gray-400 border-2 border-dashed border-gray-100 rounded-xl">
@@ -838,73 +964,6 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                     </div>
                                  </div>
 
-                                 {/* CREDIT ACCOUNT SECTION */}
-                                 <div className="bg-white rounded-2xl p-6 border border-gray-200">
-                                    <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                                       <CreditCard size={18} className="text-blue-600" /> Cuenta de Crédito
-                                    </h3>
-                                    <div className="flex justify-between items-center mb-6 p-4 bg-red-50 rounded-xl border border-red-100">
-                                       <span className="text-red-600 text-sm font-bold">Deuda Pendiente</span>
-                                       <span className="text-2xl font-black text-red-600">{config.currencySymbol}{selectedCustomer.currentDebt?.toLocaleString() || '0.00'}</span>
-                                    </div>
-
-                                    {/* UNPAID INVOICES LIST (CxC) */}
-                                    <div className="mb-6 space-y-3">
-                                       <div className="flex justify-between items-center mb-2">
-                                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">Facturas Pendientes</h4>
-                                          <button
-                                             onClick={() => setIsAbonoModalOpen(true)}
-                                             className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg shadow-blue-200"
-                                          >
-                                             Registrar Abono
-                                          </button>
-                                       </div>
-                                       {(() => {
-                                          const unpaid = customerTransactions.filter(tx => (tx.pendingBalance || 0) > 0);
-                                          if (unpaid.length === 0) return <p className="text-xs text-gray-400 italic">No hay facturas pendientes de cobro.</p>;
-
-                                          return unpaid.map(inv => {
-                                             const dueDate = inv.dueDate ? new Date(inv.dueDate) : new Date(inv.date);
-                                             const diffDays = Math.ceil((new Date().getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
-                                             const isLate = diffDays > 0;
-
-                                             return (
-                                                <div key={inv.id} className="p-3 bg-gray-50 rounded-xl border border-gray-100 flex justify-between items-center">
-                                                   <div>
-                                                      <p className="text-[11px] font-black text-gray-800">#{inv.displayId}</p>
-                                                      <p className="text-[10px] text-gray-400">Vence: {dueDate.toLocaleDateString()}</p>
-                                                      {isLate && (
-                                                         <span className={`text-[9px] font-bold ${diffDays > 15 ? 'text-red-600' : 'text-orange-600'}`}>
-                                                            {diffDays} días de atraso
-                                                         </span>
-                                                      )}
-                                                   </div>
-                                                   <div className="text-right">
-                                                      <p className="text-sm font-black text-gray-900">{config.currencySymbol}{(inv.pendingBalance || 0).toLocaleString()}</p>
-                                                      <p className="text-[9px] text-gray-400 uppercase font-bold">Saldo</p>
-                                                   </div>
-                                                </div>
-                                             );
-                                          });
-                                       })()}
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-4 text-xs text-gray-500 mb-6">
-                                       <div>
-                                          <p className="font-bold mb-1">Límite de Crédito</p>
-                                          <p>{config.currencySymbol}{selectedCustomer.creditLimit?.toLocaleString() || '0.00'}</p>
-                                       </div>
-                                       <div>
-                                          <p className="font-bold mb-1">Disponible</p>
-                                          <p className="text-green-600 font-bold">
-                                             {config.currencySymbol}{((selectedCustomer.creditLimit || 0) - (selectedCustomer.currentDebt || 0)).toLocaleString()}
-                                          </p>
-                                       </div>
-                                    </div>
-                                    <button className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold shadow-md hover:bg-blue-700 active:scale-95 transition-all flex items-center justify-center gap-2">
-                                       Registrar Abono
-                                    </button>
-                                 </div>
                               </div>
                            )}
 
@@ -1011,6 +1070,81 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                           </div>
                                        )}
                                     </div>
+                                 </div>
+                              </div>
+                           )}
+
+                           {activeProfileTab === 'CREDIT' && (
+                              <div className="space-y-6">
+                                 <div className="bg-white rounded-2xl p-6 border border-gray-200">
+                                    <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                                       <CreditCard size={18} className="text-blue-600" /> Cuenta de Crédito
+                                    </h3>
+                                    <div className="flex justify-between items-center mb-6 p-4 bg-red-50 rounded-xl border border-red-100">
+                                       <span className="text-red-600 text-sm font-bold">Deuda Pendiente</span>
+                                       <span className="text-2xl font-black text-red-600">{config.currencySymbol}{selectedCustomer.currentDebt?.toLocaleString() || '0.00'}</span>
+                                    </div>
+
+                                    <div className="mb-6 space-y-3">
+                                       <div className="flex justify-between items-center mb-2">
+                                          <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">Facturas Pendientes</h4>
+                                          <button
+                                             onClick={() => setIsAbonoModalOpen(true)}
+                                             className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg shadow-blue-200"
+                                          >
+                                             Registrar Abono
+                                          </button>
+                                       </div>
+                                       {(() => {
+                                          const unpaid = customerTransactions
+                                             .map(tx => ({ ...tx, pendingBalance: getEffectivePendingBalance(tx) }))
+                                             .filter(tx => (tx.pendingBalance || 0) > 0);
+                                          if (unpaid.length === 0) return <p className="text-xs text-gray-400 italic">No hay facturas pendientes de cobro.</p>;
+
+                                          return unpaid.map(inv => {
+                                             const dueDate = inv.dueDate ? new Date(inv.dueDate) : new Date(inv.date);
+                                             const diffDays = Math.ceil((new Date().getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
+                                             const isLate = diffDays > 0;
+
+                                             return (
+                                                <div key={inv.id} className="p-3 bg-gray-50 rounded-xl border border-gray-100 flex justify-between items-center">
+                                                   <div>
+                                                      <p className="text-[11px] font-black text-gray-800">#{inv.displayId}</p>
+                                                      <p className="text-[10px] text-gray-400">Vence: {dueDate.toLocaleDateString()}</p>
+                                                      {isLate && (
+                                                         <span className={`text-[9px] font-bold ${diffDays > 15 ? 'text-red-600' : 'text-orange-600'}`}>
+                                                            {diffDays} días de atraso
+                                                         </span>
+                                                      )}
+                                                   </div>
+                                                   <div className="text-right">
+                                                      <p className="text-sm font-black text-gray-900">{config.currencySymbol}{(inv.pendingBalance || 0).toLocaleString()}</p>
+                                                      <p className="text-[9px] text-gray-400 uppercase font-bold">Saldo</p>
+                                                   </div>
+                                                </div>
+                                             );
+                                          });
+                                       })()}
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-4 text-xs text-gray-500 mb-6">
+                                       <div>
+                                          <p className="font-bold mb-1">Límite de Crédito</p>
+                                          <p>{config.currencySymbol}{selectedCustomer.creditLimit?.toLocaleString() || '0.00'}</p>
+                                       </div>
+                                       <div>
+                                          <p className="font-bold mb-1">Disponible</p>
+                                          <p className="text-green-600 font-bold">
+                                             {config.currencySymbol}{((selectedCustomer.creditLimit || 0) - (selectedCustomer.currentDebt || 0)).toLocaleString()}
+                                          </p>
+                                       </div>
+                                    </div>
+                                    <button
+                                       onClick={() => setIsAbonoModalOpen(true)}
+                                       className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold shadow-md hover:bg-blue-700 active:scale-95 transition-all flex items-center justify-center gap-2"
+                                    >
+                                       Registrar Abono
+                                    </button>
                                  </div>
                               </div>
                            )}
@@ -1510,12 +1644,24 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                onClose={() => setIsAbonoModalOpen(false)}
                customer={selectedCustomer}
                transactions={customerTransactions}
+               collections={collections}
                currentUser={currentUser}
                terminalId={terminalId}
                config={config}
-               onSuccess={() => {
-                  // Refresh transactions or customer debt if needed
-                  setIsAbonoModalOpen(false);
+               onSuccess={async () => {
+                  await loadCustomerTransactions(selectedCustomer.id);
+                  try {
+                     const { db } = await import('../utils/db');
+                     const freshCustomers = await db.get('customers') as Customer[];
+                     const refreshed = (freshCustomers || []).find(c => c.id === selectedCustomer.id);
+                     if (refreshed) {
+                        onUpdateCustomer(refreshed);
+                     }
+                  } catch (error) {
+                     console.error('Failed to refresh customer after collection:', error);
+                  } finally {
+                     setIsAbonoModalOpen(false);
+                  }
                }}
             />
          )}

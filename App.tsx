@@ -104,6 +104,33 @@ import { printLabelsFromTemplate } from './utils/labelPrinter';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
 
+type ReceivableRepairSummary = {
+  scannedTransactions: number;
+  repairedTransactions: number;
+  recalculatedCustomers: number;
+  customersWithDebtChanges: number;
+  totalPendingBefore: number;
+  totalPendingAfter: number;
+  transactionIds: string[];
+};
+
+const CREDIT_PAYMENT_METHODS = new Set(['CREDIT', 'CREDITO', 'PENDIENTE']);
+
+const normalizePaymentMethod = (method: unknown): string => {
+  if (typeof method !== 'string') return '';
+  return method
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
+};
+
+const toPositiveNumber = (value: unknown): number => {
+  const num = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(num) || num <= 0) return 0;
+  return num;
+};
+
 const App: React.FC = () => {
   return (
     <ThemeProvider>
@@ -1367,6 +1394,179 @@ const AppContent: React.FC = () => {
     await db.save('parkedTickets', tickets); // Uses 'settings' table logic or collection
   };
 
+  const handleRepairLegacyReceivables = useCallback(async (): Promise<ReceivableRepairSummary> => {
+    const now = new Date().toISOString();
+    const [persistedTransactions, persistedTransactionHistory, persistedCustomers] = await Promise.all([
+      db.get('transactions') as Promise<Transaction[] | null>,
+      db.get('transactionHistory') as Promise<Transaction[] | null>,
+      db.get('customers') as Promise<Customer[] | null>
+    ]);
+
+    const activeTransactions = Array.isArray(persistedTransactions) ? persistedTransactions : transactions;
+    const historyTransactions = Array.isArray(persistedTransactionHistory) ? persistedTransactionHistory : [];
+    const sourceCustomers = Array.isArray(persistedCustomers) ? persistedCustomers : customers;
+
+    if (activeTransactions.length === 0 && historyTransactions.length === 0) {
+      return {
+        scannedTransactions: 0,
+        repairedTransactions: 0,
+        recalculatedCustomers: 0,
+        customersWithDebtChanges: 0,
+        totalPendingBefore: 0,
+        totalPendingAfter: 0,
+        transactionIds: []
+      };
+    }
+
+    const inferPendingBalance = (tx: Transaction): number => {
+      const paymentEntries = Array.isArray(tx.payments) ? tx.payments : [];
+      const creditFromPayments = paymentEntries.reduce((sum: number, payment: any) => {
+        const candidates = [
+          normalizePaymentMethod(payment?.method),
+          normalizePaymentMethod(payment?.methodLabel),
+          normalizePaymentMethod(payment?.methodId),
+          normalizePaymentMethod(payment?.type)
+        ];
+        const hasCreditMarker = candidates.some(marker => CREDIT_PAYMENT_METHODS.has(marker));
+        if (!hasCreditMarker) return sum;
+        return sum + toPositiveNumber(payment?.amount);
+      }, 0);
+
+      if (creditFromPayments > 0) return parseFloat(creditFromPayments.toFixed(2));
+
+      const balanceDue = toPositiveNumber(tx.balanceDueAtSale);
+      if (balanceDue > 0) return parseFloat(balanceDue.toFixed(2));
+
+      return 0;
+    };
+
+    const repairTransactions = (items: Transaction[]) => {
+      const repairedIds: string[] = [];
+      const updatedItems = items.map((tx) => {
+        if (tx.status === 'REFUNDED') return tx;
+
+        const currentPending = toPositiveNumber(tx.pendingBalance);
+        if (currentPending > 0) return tx;
+
+        const inferredPending = inferPendingBalance(tx);
+        if (inferredPending <= 0) return tx;
+
+        repairedIds.push(tx.id);
+        return {
+          ...tx,
+          pendingBalance: inferredPending,
+          balanceDueAtSale: toPositiveNumber(tx.balanceDueAtSale) > 0 ? tx.balanceDueAtSale : inferredPending,
+          dueDate: tx.dueDate || new Date(new Date(tx.date).getTime() + (30 * 24 * 60 * 60 * 1000)).toISOString(),
+          syncStatus: 'PENDING' as const
+        };
+      });
+
+      return { repairedIds, updatedItems };
+    };
+
+    const activeRepair = repairTransactions(activeTransactions);
+    const historyRepair = repairTransactions(historyTransactions);
+
+    const repairedTransactions = activeRepair.updatedItems;
+    const repairedHistoryTransactions = historyRepair.updatedItems;
+    const repairedIdSet = new Set([...activeRepair.repairedIds, ...historyRepair.repairedIds]);
+    const repairedIds = Array.from(repairedIdSet);
+
+    const combinedBefore = [...activeTransactions, ...historyTransactions];
+    const combinedAfter = [...repairedTransactions, ...repairedHistoryTransactions];
+
+    const totalPendingBefore = parseFloat(combinedBefore
+      .reduce((sum, tx) => sum + toPositiveNumber(tx.pendingBalance), 0)
+      .toFixed(2));
+    const totalPendingAfter = parseFloat(combinedAfter
+      .reduce((sum, tx) => sum + toPositiveNumber(tx.pendingBalance), 0)
+      .toFixed(2));
+
+    if (activeRepair.repairedIds.length > 0) {
+      const activeSet = new Set(activeRepair.repairedIds);
+      for (const tx of repairedTransactions) {
+        if (!activeSet.has(tx.id)) continue;
+        await db.saveDocument('transactions', tx);
+      }
+    }
+
+    if (historyRepair.repairedIds.length > 0) {
+      const historySet = new Set(historyRepair.repairedIds);
+      for (const tx of repairedHistoryTransactions) {
+        if (!historySet.has(tx.id)) continue;
+        await db.saveDocument('transactionHistory', tx);
+      }
+    }
+
+    const dedupedForDebt = new Map<string, Transaction>();
+    for (const tx of combinedAfter) {
+      if (!tx?.id) continue;
+      const existing = dedupedForDebt.get(tx.id);
+      if (!existing) {
+        dedupedForDebt.set(tx.id, tx);
+        continue;
+      }
+
+      const existingPending = toPositiveNumber(existing.pendingBalance);
+      const nextPending = toPositiveNumber(tx.pendingBalance);
+      if (nextPending > existingPending) {
+        dedupedForDebt.set(tx.id, tx);
+      }
+    }
+
+    const effectiveReceivables = Array.from(dedupedForDebt.values());
+
+    const debtByCustomer = new Map<string, number>();
+    for (const tx of effectiveReceivables) {
+      if (tx.status === 'REFUNDED') continue;
+      if (!tx.customerId) continue;
+      const pending = toPositiveNumber(tx.pendingBalance);
+      if (pending <= 0) continue;
+      const previous = debtByCustomer.get(tx.customerId) || 0;
+      debtByCustomer.set(tx.customerId, parseFloat((previous + pending).toFixed(2)));
+    }
+
+    let changedCustomers = 0;
+    const recalculatedCustomers = sourceCustomers.map((customer) => {
+      const recalculatedDebt = parseFloat(((debtByCustomer.get(customer.id) || 0)).toFixed(2));
+      const currentDebt = parseFloat((toPositiveNumber(customer.currentDebt)).toFixed(2));
+      if (Math.abs(currentDebt - recalculatedDebt) < 0.01) return customer;
+
+      changedCustomers++;
+      return {
+        ...customer,
+        currentDebt: recalculatedDebt,
+        updatedAt: now
+      };
+    });
+
+    if (changedCustomers > 0) {
+      for (const customer of recalculatedCustomers) {
+        const persistedDebt = parseFloat((toPositiveNumber((sourceCustomers.find(c => c.id === customer.id)?.currentDebt))).toFixed(2));
+        const nextDebt = parseFloat((toPositiveNumber(customer.currentDebt)).toFixed(2));
+        if (Math.abs(persistedDebt - nextDebt) < 0.01) continue;
+        await db.saveDocument('customers', customer);
+      }
+    }
+
+    setTransactions(repairedTransactions);
+    if (changedCustomers > 0) {
+      setCustomers(recalculatedCustomers);
+    }
+
+    backgroundSyncManager.triggerSync().catch(console.error);
+
+    return {
+      scannedTransactions: combinedAfter.length,
+      repairedTransactions: repairedIds.length,
+      recalculatedCustomers: recalculatedCustomers.length,
+      customersWithDebtChanges: changedCustomers,
+      totalPendingBefore,
+      totalPendingAfter,
+      transactionIds: repairedIds
+    };
+  }, [customers, transactions]);
+
   const handleTransactionComplete = async (txn: Transaction) => {
     // Get current terminal ID before persisting.
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
@@ -1378,56 +1578,6 @@ const AppContent: React.FC = () => {
 
     // Save transaction locally (Optimized: Append only)
     const newTransactions = [...transactions, txn];
-    // --- SELF-HEAL: Fix broken credit transactions (Missing pendingBalance) ---
-    const healCreditTransactions = async (allTransactions: Transaction[]) => {
-      try {
-        const brokenTxs = allTransactions.filter(tx =>
-          tx.payments?.some((p: any) => ['CREDIT', 'CREDITO', 'PENDIENTE'].includes(p.method?.toUpperCase())) &&
-          (!tx.pendingBalance || tx.pendingBalance <= 0) &&
-          tx.status !== 'REFUNDED'
-        );
-
-        if (brokenTxs.length > 0) {
-          console.warn(`🚑 Found ${brokenTxs.length} broken credit transactions. Attempting repair...`);
-          let healedCount = 0;
-
-          for (const tx of brokenTxs) {
-            const creditAmount = tx.payments
-              .filter((p: any) => ['CREDIT', 'CREDITO', 'PENDIENTE'].includes(p.method?.toUpperCase()))
-              .reduce((sum: number, p: any) => sum + (p.amount || 0), 0);
-
-            if (creditAmount > 0) {
-              const updatedTx = {
-                ...tx,
-                pendingBalance: creditAmount,
-                balanceDueAtSale: creditAmount,
-                dueDate: tx.dueDate || new Date(new Date(tx.date).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
-              };
-              await db.save('transactions', updatedTx);
-
-              // Also fix customer debt
-              if (tx.customerId) {
-                const customer = customers.find(c => c.id === tx.customerId);
-                if (customer) {
-                  const newDebt = (customer.currentDebt || 0) + creditAmount;
-                  await db.save('customers', { ...customer, currentDebt: newDebt, updatedAt: new Date().toISOString() });
-                }
-              }
-              healedCount++;
-            }
-          }
-          if (healedCount > 0) {
-            console.log(`✅ Automatically healed ${healedCount} credit transactions.`);
-            // Force reload to reflect changes
-            window.location.reload();
-          }
-        }
-      } catch (err) {
-        console.error("Failed to heal credit transactions", err);
-      }
-    };
-
-    healCreditTransactions(newTransactions);
 
     setTransactions(newTransactions);
     // setFilteredTransactions(newTransactions); // Assuming this is meant to be here if filtered transactions are used
@@ -2204,6 +2354,7 @@ const AppContent: React.FC = () => {
             onUpdateProducts={async (p) => { setProducts(p); /* db.save('products', p) removed for efficiency */ syncManager.broadcastChange('products', null, 'UPDATE').catch(console.error); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
             onUpdateCustomers={async (c) => { setCustomers(c); await db.save('customers', c); }}
+            onRepairLegacyReceivables={handleRepairLegacyReceivables}
             onAdjustStock={async (adjustments) => {
               const pairedTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
               const terminalId = pairedTerminal?.id || 'LOCAL';
@@ -2265,6 +2416,7 @@ const AppContent: React.FC = () => {
             onUpdateProducts={async (p) => { setProducts(p); await db.save('products', p); }}
             onUpdateWarehouses={async (w) => { setWarehouses(w); await db.save('warehouses', w); }}
             onUpdateCustomers={async (c) => { setCustomers(c); await db.save('customers', c); }}
+            onRepairLegacyReceivables={handleRepairLegacyReceivables}
             onAdjustStock={async (adjustments) => {
               const pairedTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
               const terminalId = pairedTerminal?.id || 'LOCAL';

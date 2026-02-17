@@ -1685,6 +1685,8 @@ export interface CollectionAllocation {
 export interface Collection {
   id: string;
   displayId: string; // RC-000001
+  seriesId?: string;
+  seriesNumber?: number;
   customerId: string;
   customerName: string;
   date: string;

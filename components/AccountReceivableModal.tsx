@@ -9,6 +9,7 @@ interface AccountReceivableModalProps {
     onClose: () => void;
     customer: Customer;
     transactions: Transaction[];
+    collections: Collection[];
     currentUser: User;
     terminalId: string;
     config: BusinessConfig;
@@ -20,6 +21,7 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
     onClose,
     customer,
     transactions,
+    collections,
     currentUser,
     terminalId,
     config,
@@ -31,18 +33,143 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
     const [notes, setNotes] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
 
+    const CREDIT_METHOD_MARKERS = useMemo(() => new Set(['CREDIT', 'CREDITO', 'PENDIENTE']), []);
+
+    const normalizeMethod = (value: unknown): string => {
+        if (typeof value !== 'string') return '';
+        return value
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .trim()
+            .toUpperCase();
+    };
+
+    const toPositiveNumber = (value: unknown): number => {
+        const num = typeof value === 'number' ? value : Number(value);
+        if (!Number.isFinite(num) || num <= 0) return 0;
+        return num;
+    };
+
+    const allocationsByTransactionId = useMemo(() => {
+        const map = new globalThis.Map<string, number>();
+        for (const collection of collections || []) {
+            if (collection?.customerId !== customer.id) continue;
+            const allocations = Array.isArray(collection.allocations) ? collection.allocations : [];
+            for (const alloc of allocations) {
+                const txId = alloc?.transactionId;
+                if (!txId) continue;
+                const current = map.get(txId) || 0;
+                map.set(txId, parseFloat((current + toPositiveNumber(alloc.amount)).toFixed(2)));
+            }
+        }
+        return map;
+    }, [collections, customer.id]);
+
+    const getEffectivePendingBalance = (tx: Transaction): number => {
+        if (tx.status === 'REFUNDED') return 0;
+
+        const explicitPendingRaw = tx.pendingBalance;
+        const hasExplicitPending = typeof explicitPendingRaw === 'number' && Number.isFinite(explicitPendingRaw);
+        const explicitPending = hasExplicitPending ? Math.max(0, explicitPendingRaw) : 0;
+
+        const paymentEntries = Array.isArray(tx.payments) ? tx.payments : [];
+        const creditFromPayments = paymentEntries.reduce((sum: number, payment: any) => {
+            const markers = [
+                normalizeMethod(payment?.method),
+                normalizeMethod(payment?.methodLabel),
+                normalizeMethod(payment?.methodId),
+                normalizeMethod(payment?.type)
+            ];
+            const isCredit = markers.some(marker => CREDIT_METHOD_MARKERS.has(marker));
+            if (!isCredit) return sum;
+            return sum + toPositiveNumber(payment?.amount);
+        }, 0);
+
+        const creditIssued = Math.max(
+            creditFromPayments,
+            toPositiveNumber(tx.balanceDueAtSale)
+        );
+
+        const allocated = allocationsByTransactionId.get(tx.id) || 0;
+        const inferredPending = Math.max(0, parseFloat((creditIssued - allocated).toFixed(2)));
+
+        if (hasExplicitPending && explicitPending > 0) {
+            return parseFloat(explicitPending.toFixed(2));
+        }
+
+        if (creditIssued > 0) {
+            return inferredPending;
+        }
+
+        return hasExplicitPending ? parseFloat(explicitPending.toFixed(2)) : 0;
+    };
+
     const unpaidInvoices = useMemo(() => {
         return transactions
-            .filter(tx => tx.customerId === customer.id && (tx.pendingBalance || 0) > 0)
+            .filter(tx => tx.customerId === customer.id)
+            .map(tx => ({ ...tx, pendingBalance: getEffectivePendingBalance(tx) }))
+            .filter(tx => (tx.pendingBalance || 0) > 0)
             .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()) as DelinquentInvoice[];
-    }, [transactions, customer.id]);
+    }, [transactions, customer.id, collections]);
 
     const totalOwed = unpaidInvoices.reduce((sum, inv) => sum + (inv.pendingBalance || 0), 0);
+    const pendingByTxId = useMemo(() => {
+        const map = new globalThis.Map<string, number>();
+        for (const inv of unpaidInvoices) {
+            map.set(inv.id, toPositiveNumber(inv.pendingBalance));
+        }
+        return map;
+    }, [unpaidInvoices]);
 
     const allocationResult = useMemo(() => {
         const numAmount = parseFloat(amount) || 0;
         return suggestFIFOAllocation(numAmount, unpaidInvoices);
     }, [amount, unpaidInvoices]);
+    const enteredAmount = parseFloat(amount) || 0;
+
+    const generateCollectionDisplayId = async (): Promise<{
+        displayId: string;
+        seriesId: string;
+        seriesNumber: number;
+    }> => {
+        const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
+        const activeTerminal = (config.terminals || []).find(
+            t => normalizeTerminalId(t.id) === normalizeTerminalId(terminalId)
+        );
+        const assignedSeriesId = activeTerminal?.config?.documentAssignments?.['PAYMENT_IN'];
+
+        if (!assignedSeriesId) {
+            throw new Error('No hay secuencia vinculada para "Cobro Recibido". Configurela en Terminales > Serie / Documentos.');
+        }
+
+        const sequences = await db.get('internalSequences') as any[] || [];
+        const sequenceIndex = sequences.findIndex((s: any) => s.id === assignedSeriesId);
+        if (sequenceIndex < 0) {
+            throw new Error(`La secuencia vinculada (${assignedSeriesId}) no existe en Document Center.`);
+        }
+
+        const sequence = sequences[sequenceIndex];
+        const seriesNumber = Number(sequence?.nextNumber || 1);
+        const padding = Number(sequence?.padding || 6);
+        const prefix = String(sequence?.prefix || '').trim();
+        if (!prefix) {
+            throw new Error(`La secuencia ${assignedSeriesId} no tiene prefijo configurado.`);
+        }
+
+        const displayId = `${prefix}${seriesNumber.toString().padStart(padding, '0')}`;
+        const updatedSequence = { ...sequence, nextNumber: seriesNumber + 1 };
+        sequences[sequenceIndex] = updatedSequence;
+        await db.save('internalSequences', sequences);
+
+        try {
+            const { syncManager } = await import('../services/sync/SyncManager');
+            await syncManager.broadcastChange('internalSequences', updatedSequence, 'UPDATE');
+        } catch (syncError) {
+            console.warn('Failed to sync collection sequence update:', syncError);
+        }
+
+        return { displayId, seriesId: assignedSeriesId, seriesNumber };
+    };
 
     const handleProcessPayment = async () => {
         const numAmount = parseFloat(amount) || 0;
@@ -55,11 +182,13 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
         setIsProcessing(true);
         try {
             const collectionId = `RC-${Date.now()}`;
-            const displayId = `RC-${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`;
+            const { displayId, seriesId, seriesNumber } = await generateCollectionDisplayId();
 
             const newCollection: Collection = {
                 id: collectionId,
                 displayId: displayId,
+                seriesId,
+                seriesNumber,
                 customerId: customer.id,
                 customerName: customer.name,
                 date: new Date().toISOString(),
@@ -84,16 +213,30 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
             await db.saveDocument('collections', newCollection);
 
             // 2. Update affected transactions
+            const [activeTransactions, historyTransactions] = await Promise.all([
+                db.get('transactions') as Promise<Transaction[]>,
+                db.get('transactionHistory') as Promise<Transaction[]>
+            ]);
+            const activeIds = new Set((activeTransactions || []).map(tx => tx.id));
+            const historyIds = new Set((historyTransactions || []).map(tx => tx.id));
+
             for (const alloc of allocationResult.allocations) {
                 const tx = transactions.find(t => t.id === alloc.transactionId);
                 if (tx) {
+                    const currentPending = pendingByTxId.get(tx.id) || 0;
                     const updatedTx = {
                         ...tx,
-                        pendingBalance: Math.max(0, parseFloat(((tx.pendingBalance || 0) - alloc.amount).toFixed(2))),
+                        pendingBalance: Math.max(0, parseFloat((currentPending - alloc.amount).toFixed(2))),
                         updatedAt: new Date().toISOString(),
-                        syncStatus: 'PENDING'
+                        syncStatus: 'PENDING' as const
                     };
-                    await db.saveDocument('transactions', updatedTx);
+
+                    if (activeIds.has(tx.id)) {
+                        await db.saveDocument('transactions', updatedTx);
+                    }
+                    if (historyIds.has(tx.id)) {
+                        await db.saveDocument('transactionHistory', updatedTx);
+                    }
                 }
             }
 
@@ -110,7 +253,8 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
             onClose();
         } catch (error) {
             console.error('Error saving collection:', error);
-            alert('Error al registrar el abono.');
+            const msg = error instanceof Error ? error.message : 'Error al registrar el abono.';
+            alert(msg);
         } finally {
             setIsProcessing(false);
         }
@@ -193,7 +337,23 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
                         <div>
                             <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Distribución FIFO (Liquidador)</h4>
                             <div className="space-y-3">
-                                {allocationResult.allocations.map(alloc => (
+                                {enteredAmount <= 0 && unpaidInvoices.length > 0 && (
+                                    <p className="text-xs text-gray-500 font-bold p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                                        Ingrese un monto para previsualizar la distribución. Facturas pendientes:
+                                    </p>
+                                )}
+
+                                {enteredAmount <= 0 && unpaidInvoices.map(inv => (
+                                    <div key={`pending-${inv.id}`} className="p-4 bg-gray-50 rounded-2xl border border-gray-100 flex justify-between items-center">
+                                        <div>
+                                            <p className="text-[10px] font-black text-gray-900">#{inv.displayId || inv.id.slice(-8).toUpperCase()}</p>
+                                            <p className="text-[10px] text-gray-500 font-bold">Pendiente</p>
+                                        </div>
+                                        <p className="text-lg font-black text-gray-900">{config.currencySymbol}{(inv.pendingBalance || 0).toFixed(2)}</p>
+                                    </div>
+                                ))}
+
+                                {enteredAmount > 0 && allocationResult.allocations.map(alloc => (
                                     <div key={alloc.transactionId} className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100 flex justify-between items-center animate-in slide-in-from-right-2">
                                         <div>
                                             <p className="text-[10px] font-black text-blue-900">#{alloc.displayId}</p>
@@ -202,7 +362,8 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
                                         <p className="text-lg font-black text-blue-900">+{config.currencySymbol}{alloc.amount.toFixed(2)}</p>
                                     </div>
                                 ))}
-                                {parseFloat(amount) > 0 && allocationResult.allocations.length === 0 && (
+
+                                {enteredAmount > 0 && allocationResult.allocations.length === 0 && (
                                     <p className="text-xs text-amber-600 font-bold p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-center gap-2">
                                         <AlertCircle size={16} /> No se encontraron facturas para liquidar.
                                     </p>
