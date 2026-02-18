@@ -9,6 +9,8 @@ export const calculateZReportStats = (transactions: Transaction[], collections: 
             topProduct: null,
             returnsCount: 0,
             returnsTotal: 0,
+            grossSales: 0,
+            netSales: 0,
             discountsTotal: 0,
             advancementsTotal: 0,
             collectionsTotal: 0
@@ -16,8 +18,20 @@ export const calculateZReportStats = (transactions: Transaction[], collections: 
     }
 
     // Filter valid sales (completed) vs refunds
-    const sales = transactions.filter(t => t.status === 'COMPLETED');
-    const refunds = transactions.filter(t => t.status === 'REFUNDED' || t.status === 'PARTIAL_REFUND');
+    // Requirement: totalDevoluciones should be specifically documentType === 'REFUND' or ncfType === 'B04'
+    const refunds = transactions.filter(t =>
+        t.documentType === 'REFUND' ||
+        t.ncfType === 'B04'
+    );
+
+    // Sales: Everything that is not a refund document and not explicitly voided.
+    // If a normal sale (B01) was marked 'REFUNDED', it still counts towards Gross Sales 
+    // because the B04 document will subtract it in the Devoluciones section.
+    const sales = transactions.filter(t =>
+        t.documentType !== 'REFUND' &&
+        t.ncfType !== 'B04' &&
+        t.documentType !== 'VOID'
+    );
 
     // 1. Average Ticket
     const totalSalesAmount = sales.reduce((acc, t) => acc + t.total, 0);
@@ -74,13 +88,17 @@ export const calculateZReportStats = (transactions: Transaction[], collections: 
     const returnsCount = refunds.length;
     const returnsTotal = refunds.reduce((acc, t) => acc + Math.abs(t.total), 0);
 
-    // 6. Discounts
+    // 6. Gross & Net Sales
+    const grossSales = totalSalesAmount;
+    const netSales = grossSales - returnsTotal;
+
+    // 7. Discounts
     const discountsTotal = sales.reduce((acc, t) => acc + (t.discountAmount || 0), 0);
 
-    // 7. Advancements (Gift Cards / Wallet Deposits)
-    const advancementsTotal = sales.reduce((acc, t) => acc + (t.walletDepositAmount || 0), 0);
+    // 8. Advancements (Gift Cards / Wallet Deposits)
+    const advancementsTotal = transactions.reduce((acc, t) => acc + (t.walletDepositAmount || 0), 0);
 
-    // 8. Collections (CxC Payments)
+    // 9. Collections (CxC Payments)
     const collectionsTotal = collections.reduce((acc, c) => acc + c.totalAmount, 0);
 
     return {
@@ -90,6 +108,8 @@ export const calculateZReportStats = (transactions: Transaction[], collections: 
         topProduct,
         returnsCount,
         returnsTotal,
+        grossSales,
+        netSales,
         discountsTotal,
         advancementsTotal,
         collectionsTotal

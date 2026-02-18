@@ -78,8 +78,17 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
       ${!hiddenModules.includes('FINANCIAL') ? `
       <div class="bold">RESUMEN FINANCIERO</div>
       <div class="row">
+        <span>Ventas Brutas:</span>
+        <span>${formatCurrency(report.stats?.grossSales || 0, report.baseCurrency)}</span>
+      </div>
+      <div class="row">
+        <span>Devoluciones/NC:</span>
+        <span>- ${formatCurrency(report.stats?.returnsTotal || 0, report.baseCurrency)}</span>
+      </div>
+      <div class="divider" style="margin: 2px 0; border-top: 0.5px solid #ccc;"></div>
+      <div class="row">
         <span>Ventas Netas:</span>
-        <span class="bold">${formatCurrency(Object.values(report.totalsByMethod).reduce((a, b) => a + b, 0) - (report.stats?.advancementsTotal || 0), report.baseCurrency)}</span>
+        <span class="bold">${formatCurrency(report.stats?.netSales || 0, report.baseCurrency)}</span>
       </div>
       <div class="row">
         <span>Recaud. Anticipos:</span>

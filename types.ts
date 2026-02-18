@@ -1645,6 +1645,8 @@ export interface ZReportStats {
   } | null;
   returnsCount: number;
   returnsTotal: number;
+  grossSales: number; // New: Ventas Brutas
+  netSales: number; // New: Ventas Netas
   discountsTotal: number; // New: Total discounts given
   advancementsTotal: number; // New: Total gift card / wallet deposits (Liabilities)
   collectionsTotal: number; // New: Total CXC Collections (Abonos)
