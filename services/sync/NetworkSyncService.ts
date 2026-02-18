@@ -45,7 +45,7 @@ class NetworkSyncService {
         this.token = localStorage.getItem('CLIC_POS_SYNC_TOKEN');
     }
 
-    public init() {
+    public async init() {
         if (!ENABLE_NETWORK_SYNC) {
             console.warn('🛑 NetworkSyncService disabled (set VITE_ENABLE_NETWORK_SYNC=true to enable).');
             return;
@@ -68,6 +68,16 @@ class NetworkSyncService {
             dbAdapter.saveCollection('syncMetadata', {} as any).catch(console.error);
             // Update last known IP
             localStorage.setItem('last_sync_master_ip', masterIp);
+        }
+
+        // Check for Users locally
+        const users = await dbAdapter.getCollection('users') as any[];
+        if (!users || users.length === 0) {
+            console.warn('⚠️ No users found locally. Triggering Fast Bootstrap Sync...');
+            this.fastSyncCoreData().catch(err => {
+                console.error('❌ Fast Bootstrap Failed:', err);
+                // Allow normal sync loop to retry
+            });
         }
 
         this.startSyncLoop();
@@ -174,6 +184,38 @@ class NetworkSyncService {
         this.syncInterval = setInterval(() => this.sync(), 30000);
     }
 
+    public async fastSyncCoreData(): Promise<void> {
+        console.log('🚀 [AUTH_SYNC] Starting Fast Bootstrap Sync...');
+
+        if (!this.token) {
+            await this.authenticate();
+        }
+
+        if (!this.token) {
+            throw new Error(' Authentication failed during bootstrap.');
+        }
+
+        // 1. Users (CRITICAL)
+        console.log('🔄 [AUTH_SYNC] Downloading users...');
+        await this.pullCollection('users');
+        const users = await dbAdapter.getCollection('users') as any[];
+        console.log(`✅ [AUTH_SYNC] Users received: ${users?.length || 0}`);
+
+        if (!users || users.length === 0) {
+            throw new Error('Received 0 users from Master. Check device pairing.');
+        }
+
+        // 2. Roles
+        console.log('🔄 [AUTH_SYNC] Downloading roles...');
+        await this.pullCollection('roles');
+
+        // 3. Terminals (for identification)
+        console.log('🔄 [AUTH_SYNC] Downloading terminals...');
+        await this.pullCollection('connectedTerminals');
+
+        console.log('✨ [AUTH_SYNC] Bootstrap Complete.');
+    }
+
     public async sync() {
         if (!ENABLE_NETWORK_SYNC) return;
         if (dbAdapter.adapterType === 'network') return;
@@ -196,15 +238,21 @@ class NetworkSyncService {
             await this.pushPendingTransactions();
             await this.pushPendingInventory();
 
-            // 3. Pull Data (Downstream) - CRITICAL: Pull users and config FIRST for authentication
+            // 3. Pull Data (Downstream)
+            // Core Auth
             await this.pullCollection('config');
             await this.pullCollection('users');
             await this.pullCollection('roles');
+            await this.pullCollection('connectedTerminals');
+
+            // Core Business
             await this.pullCollection('warehouses');
             await this.pullCollection('products');
             await this.pullCollection('productStocks'); // Sync Detailed Stocks
             await this.pullCollection('customers');
             await this.pullCollection('suppliers');
+
+            // Core Ops
             await this.pullCollection('internalSequences');
             await this.pullCollection('fiscalRanges');
             await this.pullCollection('fiscalAllocations');
@@ -212,14 +260,12 @@ class NetworkSyncService {
             await this.pullCollection('inventoryLedger'); // Sync Kardex
             await this.pullCollection('purchaseOrders');  // Sync Orders
             await this.pullCollection('transfers');       // Sync Stock Transfers
-            await this.pullCollection('transfers');       // Sync Stock Transfers
             await this.pullCollection('receptions');      // Sync Purchase Receptions
             await this.pullCollection('inventoryCounts'); // Sync Audit Sessions
             await this.pullCollection('inventorySnapshots');     // Sync Hard Locks
             await this.pullCollection('inventoryAuditLogs');     // Sync Audit Logs
 
             // 4. Push Other Pending Collections
-            await this.pushCollection('transfers');
             await this.pushCollection('transfers');
             await this.pushCollection('receptions');
             await this.pushCollection('inventoryCounts');

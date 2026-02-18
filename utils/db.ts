@@ -3,7 +3,7 @@ import {
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, PurchaseOrderItem, Supplier, Watchlist,
   NCFType, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
-  Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment
+  Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment, PaymentMethodDefinition
 } from '../types';
 import {
   MOCK_USERS, RETAIL_PRODUCTS, FOOD_PRODUCTS,
@@ -189,7 +189,8 @@ const SEED_DATA = {
   offline_print_queue: [] as any[],
   rooms: [] as any[],
   tables: [] as any[],
-  collections: [] as any[]
+  collections: [] as any[],
+  paymentMethods: [] as PaymentMethodDefinition[]
 };
 
 export const db = {
@@ -959,9 +960,7 @@ export const db = {
       syncStatus: 'PENDING'
     };
 
-    const ledger = await dbAdapter.getCollection<InventoryLedgerEntry>('inventoryLedger') || [];
-    const newLedger = [...ledger, newEntry];
-    await dbAdapter.saveCollection('inventoryLedger', newLedger);
+    await dbAdapter.saveDocument('inventoryLedger', newEntry);
 
     // 2. Recalculate everything for this product/warehouse
     await db.recalculateProductStock(productId, warehouseId);

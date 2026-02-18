@@ -1,3 +1,5 @@
+import { Product } from '../../types';
+
 /**
  * API Sync Adapter
  * 
@@ -1174,6 +1176,66 @@ class ApiSyncAdapter {
      */
     clearAuth(): void {
         this.authToken = null;
+    }
+    /**
+     * Fetch lightweight product image manifest
+     */
+    async fetchImageManifest(currentVersion: number): Promise<{ version: number; items: ProductImageManifestItem[]; upToDate: boolean }> {
+        if (!this.config || !this.isOnline) return { version: currentVersion, items: [], upToDate: true };
+
+        try {
+            await this.ensureAuthenticated();
+            const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/images/manifest?v=${currentVersion}`, {
+                headers: { 'X-Sync-Token': this.authToken || '' }
+            });
+
+            if (response.status === 304) {
+                return { version: currentVersion, items: [], upToDate: true };
+            }
+
+            if (!response.ok) {
+                throw new Error(`Fetch image manifest failed: ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            return {
+                version: data.version,
+                items: data.items || [],
+                upToDate: false
+            };
+        } catch (error) {
+            console.error('❌ ApiSyncAdapter: Error fetching image manifest:', error);
+            return { version: currentVersion, items: [], upToDate: true };
+        }
+    }
+
+    /**
+     * Pull batch of product images
+     */
+    async pullImages(ids: string[]): Promise<ProductImagePayloadItem[]> {
+        if (!this.config || !this.isOnline || ids.length === 0) return [];
+
+        try {
+            await this.ensureAuthenticated();
+            const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/images/batch`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Token': this.authToken || ''
+                },
+                body: JSON.stringify({ ids })
+            });
+
+            if (!response.ok) {
+                throw new Error(`Pull images failed: ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            return data.items || [];
+        } catch (error) {
+            console.error('❌ ApiSyncAdapter: Error pulling images:', error);
+            return [];
+        }
     }
 }
 

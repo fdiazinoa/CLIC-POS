@@ -470,7 +470,7 @@ server.get('/api/:collection', (req, res) => {
             res.json(result);
         } else {
             // Singleton: Return directly
-            res.json(result);
+            res.json(data);
         }
     } catch (error: any) {
         console.error(`Error processing /api/${collection}:`, error);
@@ -491,6 +491,57 @@ server.get('/api/:collection/:id', (req, res) => {
     else res.status(404).json({ error: 'Not found' });
 });
 
+// --- Sync Helpers (Extracted) ---
+const getSyncVersionKey = (collection: string) => `sync_version_${collection}`;
+
+const getCurrentVersion = (collection: string): number => {
+    const v = getSetting(getSyncVersionKey(collection));
+    if (typeof v === 'number') return v;
+    return 0;
+};
+
+const bumpVersion = (collection: string, itemId?: string): number => {
+    const next = getCurrentVersion(collection) + 1;
+    saveSetting(getSyncVersionKey(collection), next);
+
+    // Aditive update for tables with version column
+    if (itemId && (collection === 'products' || collection === 'customers')) {
+        const dbName = mapCollectionName(collection);
+        try {
+            const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(dbName);
+            if (tableExists) {
+                db.prepare(`UPDATE ${dbName} SET version = version + 1 WHERE id = ?`).run(itemId);
+            }
+        } catch (e) {
+            console.warn(`[Sync] Could not update version col for ${collection}:${itemId}`, e);
+        }
+    }
+    return next;
+};
+
+const logChange = (collection: string, itemId: string, op: 'UPSERT' | 'DELETE', payload: any) => {
+    const version = bumpVersion(collection, itemId);
+    try {
+        db.prepare(`
+            INSERT INTO sync_changes (collection, itemId, version, op, payload, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `).run(collection, itemId, version, op, JSON.stringify(payload), new Date().toISOString());
+
+        // Update Metadata
+        const syncMetadata = getSetting('syncMetadata') || {};
+        syncMetadata[collection] = {
+            version,
+            lastUpdated: new Date().toISOString(),
+            itemCount: 0, // We don't recalculate count on every write for perf
+            fullSyncVersion: syncMetadata[collection]?.fullSyncVersion || 0
+        };
+        saveSetting('syncMetadata', syncMetadata);
+
+    } catch (e) {
+        console.error(`❌ Failed to log sync change for ${collection}:${itemId}`, e);
+    }
+};
+
 // Generic POST (Create)
 server.post('/api/:collection', (req, res) => {
     const { collection } = req.params;
@@ -510,8 +561,6 @@ server.post('/api/:collection', (req, res) => {
             const placeholders = colNames.map(() => '?').join(',');
 
             const values = colNames.map(col => {
-                // Hybrid logic: If the column is 'data', we stringify the whole item.
-                // This creates a catch-all backup while populating structured columns.
                 if (col === 'data') {
                     return JSON.stringify(item);
                 }
@@ -523,18 +572,17 @@ server.post('/api/:collection', (req, res) => {
 
             db.prepare(`INSERT INTO ${dbName} (${colNames.join(',')}) VALUES (${placeholders})`).run(...values);
         } else {
-            // Fallback to settings for non-table collections
             const current = getSetting(dbName);
             if (Array.isArray(current)) {
                 current.push(item);
                 saveSetting(dbName, current);
             } else {
-                // If it's not an array, it's a singleton (like config)
-                // We should probably replace it or return error. 
-                // Given the context, replacing it is safer for "save" operations.
                 saveSetting(dbName, item);
             }
         }
+
+        // SYNC LOGGING
+        logChange(collection, item.id, 'UPSERT', item);
 
         res.status(201).json(item);
     } catch (error: any) {
@@ -557,6 +605,10 @@ server.put('/api/:collection', (req, res) => {
         }
 
         saveSetting(dbName, data);
+
+        // SYNC LOGGING (Singleton uses 'singleton' as ID)
+        logChange(collection, 'singleton', 'UPSERT', data);
+
         res.json(data);
     } catch (error: any) {
         console.error(`❌ Error updating setting ${dbName}:`, error);
@@ -589,7 +641,7 @@ server.put('/api/:collection/:id', (req, res) => {
             const result = db.prepare(`UPDATE ${dbName} SET ${sets} WHERE id = ?`).run(...values, id);
 
             if (result.changes === 0) {
-                // Item not found, perform INSERT (Upsert behavior)
+                // Upsert behavior
                 const allCols = db.prepare(`PRAGMA table_info(${dbName})`).all() as any[];
                 const allColNames = allCols.map(c => c.name);
                 const placeholders = allColNames.map(() => '?').join(',');
@@ -611,11 +663,13 @@ server.put('/api/:collection/:id', (req, res) => {
                 current[index] = { ...current[index], ...item };
                 saveSetting(dbName, current);
             } else {
-                // Upsert for settings-based collections
                 current.push(item);
                 saveSetting(dbName, current);
             }
         }
+
+        // SYNC LOGGING
+        logChange(collection, id, 'UPSERT', item);
 
         res.json(item);
     } catch (error: any) {
@@ -639,6 +693,9 @@ server.delete('/api/:collection/:id', (req, res) => {
             const filtered = current.filter((i: any) => i.id !== id);
             saveSetting(dbName, filtered);
         }
+
+        // SYNC LOGGING
+        logChange(collection, id, 'DELETE', { deletedAt: new Date().toISOString() });
 
         res.json({ success: true });
     } catch (error: any) {

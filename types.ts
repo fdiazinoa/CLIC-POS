@@ -112,7 +112,7 @@ export interface LocalFiscalBuffer {
 }
 
 // --- KARDEX TYPES ---
-export type LedgerConcept = 'COMPRA' | 'VENTA' | 'AJUSTE_ENTRADA' | 'AJUSTE_SALIDA' | 'TRASPASO_ENTRADA' | 'TRASPASO_SALIDA' | 'INICIAL' | 'DEVOLUCION' | 'TRASPASO_AJUSTE_DIFERENCIA';
+export type LedgerConcept = 'COMPRA' | 'VENTA' | 'AJUSTE_ENTRADA' | 'AJUSTE_SALIDA' | 'TRASPASO_ENTRADA' | 'TRASPASO_SALIDA' | 'INICIAL' | 'DEVOLUCION' | 'DEVOLUCIÓN_VENTA' | 'TRASPASO_AJUSTE_DIFERENCIA';
 
 export interface InventoryCountItem {
   productId: string;
@@ -1109,7 +1109,8 @@ export type ViewState =
   // Kitchen Display views
   | 'KITCHEN_ORDERS'
   // Customer Visor views
-  | 'VISOR';
+  | 'VISOR'
+  | 'TERMINAL_PAIRING'; // Added for boot flow refactor
 
 export interface TariffPriceOverride {
   productId: string;

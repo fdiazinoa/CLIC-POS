@@ -52,7 +52,7 @@ import BarcodeScannerModal from './BarcodeScannerModal';
 import { visorSync } from '../utils/visorSync';
 import ProductQuickActions from './ProductQuickActions';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
-import ActionButtonsGrid from './ActionButtonsGrid';
+import ActionGrid from './ActionGrid';
 import SupervisorAuthModal from './SupervisorAuthModal';
 import VirtualKeyboard from './VirtualKeyboard';
 import SafetyGateModal from './SafetyGateModal';
@@ -2230,19 +2230,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
             )}
 
-            {/* --- Novedad: Barra de Acciones Horizontal (High Density Mode) --- */}
+            {/* --- Novedad: ActionGrid (Rediseño Adaptativo) --- */}
             {activeTerminalConfig?.operational?.expandTicket && !isMobile && (
-               <div className="bg-white border-t border-gray-200 p-3 shrink-0 shadow-[0_-4px_20px_rgba(0,0,0,0.03)] z-10 transition-all animate-in slide-in-from-bottom-2">
-                  <ActionButtonsGrid
-                     variant="HORIZONTAL"
-                     onAction={handleGridAction}
-                     showLabels={true}
-                     parkedCount={parkedTickets.length}
-                     isReturnMode={isReturnMode}
-                     config={config}
-                     isMobile={isMobile}
-                  />
-               </div>
+               <ActionGrid
+                  orientation="horizontal"
+                  onAction={handleGridAction}
+                  parkedTicketsCount={parkedTickets.length}
+                  isReturnMode={isReturnMode}
+                  config={config}
+                  hasCartItems={cart.length > 0}
+                  globalDiscountValue={globalDiscount.value}
+               />
             )}
          </div >
 
@@ -2703,15 +2701,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </button>
                         </div>
 
-                        {/* LEFT: ACTIONS */}
                         <div className="flex-1 w-full min-w-0 pr-4">
-                           <ActionButtonsGrid
-                              mode="SUPERMARKET"
+                           <ActionGrid
+                              orientation="horizontal"
                               onAction={handleGridAction}
                               config={config}
-                              isMobile={isMobile}
-                              parkedCount={parkedTickets.length}
+                              parkedTicketsCount={parkedTickets.length}
                               isReturnMode={isReturnMode}
+                              hasCartItems={cart.length > 0}
+                              globalDiscountValue={globalDiscount.value}
                            />
                         </div>
 
@@ -2752,17 +2750,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </div>
                         ) : (
                            <>
-                              {/* --- BOTONES DE ACCIÓN (POS) --- */}
+                              {/* --- BOTONES DE ACCIÓN (ActionGrid Adaptativo) --- */}
                               {!activeTerminalConfig?.operational?.expandTicket && (
                                  <div className="animate-in fade-in duration-300">
-                                    <ActionButtonsGrid
-                                       variant="GRID"
+                                    <ActionGrid
+                                       orientation="vertical"
                                        onAction={handleGridAction}
-                                       showLabels={true}
-                                       parkedCount={parkedTickets.length}
-                                       isReturnMode={isReturnMode}
                                        config={config}
-                                       isMobile={isMobile}
+                                       parkedTicketsCount={parkedTickets.length}
+                                       isReturnMode={isReturnMode}
+                                       hasCartItems={cart.length > 0}
+                                       globalDiscountValue={globalDiscount.value}
                                     />
                                  </div>
                               )}

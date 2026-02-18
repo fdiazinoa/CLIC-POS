@@ -14,7 +14,7 @@ import { permissionService } from './PermissionService';
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig } from '../../types';
 
-export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices';
+export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods';
 
 interface SyncStatus {
     collection: string;
@@ -290,6 +290,36 @@ class SyncManager {
         this.isInitialized = true;
     }
 
+    public async fastSyncCoreData(): Promise<void> {
+        console.log('🚀 [AUTH_SYNC] Starting Fast Bootstrap Sync...');
+
+        // Ensure valid token (Master doesn't need this flow usually, but good for consistency)
+        this.ensureDeviceToken();
+
+        // 1. Users (CRITICAL)
+        console.log('🔄 [AUTH_SYNC] Downloading users...');
+        await this.pullCatalog('users', true); // Force pull
+        const users = await db.get('users');
+        console.log(`✅ [AUTH_SYNC] Users received: ${Array.isArray(users) ? users.length : 0}`);
+
+        if (!Array.isArray(users) || users.length === 0) {
+            // Check if we got an error that suggests pairing issue?
+            // For now just throw to trigger UI error
+            throw new Error('Received 0 users from Master. Check device pairing.');
+        }
+
+        // 2. Roles
+        console.log('🔄 [AUTH_SYNC] Downloading roles...');
+        await this.pullCatalog('roles', true);
+
+        // 3. Terminals (for identification)
+        console.log('🔄 [AUTH_SYNC] Downloading terminals...');
+        // SyncManager uses 'config' for terminals usually, but let's see if we can pull 'config'
+        await this.pullConfig(true);
+
+        console.log('✨ [AUTH_SYNC] Bootstrap Complete.');
+    }
+
     private ensureDeviceToken() {
         let token = localStorage.getItem('CLIC_POS_DEVICE_TOKEN');
         if (!token) {
@@ -394,22 +424,8 @@ class SyncManager {
         localStorage.setItem('sync_version_product_images', this.lastProductImageManifestVersion.toString());
     }
 
-    private normalizeImage(image: any): string | null {
-        return typeof image === 'string' && image.trim().length > 0 ? image : null;
-    }
 
-    private normalizeImages(images: any): string[] {
-        if (!Array.isArray(images)) return [];
-        return images.filter(img => typeof img === 'string' && img.trim().length > 0);
-    }
 
-    private hasAnyImage(product: Pick<Product, 'image' | 'images'>): boolean {
-        return !!this.normalizeImage(product.image) || this.normalizeImages(product.images).length > 0;
-    }
-
-    private imageArraysEqual(a: string[], b: string[]): boolean {
-        return a.length === b.length && a.every((value, idx) => value === b[idx]);
-    }
 
     private attachImageSyncReconnectHandler() {
         if (this.imageSyncOnlineHandler) return;
@@ -454,7 +470,7 @@ class SyncManager {
             if (!Array.isArray(localProducts) || localProducts.length === 0) return 0;
 
             const localById = new Map(localProducts.filter(p => p?.id).map(p => [p.id, p]));
-            const manifestResult = await apiSyncAdapter.pullProductImageManifest(
+            const manifestResult = await apiSyncAdapter.fetchImageManifest(
                 options?.forceManifestCheck ? undefined : this.lastProductImageManifestVersion
             );
 
@@ -502,7 +518,7 @@ class SyncManager {
             let updatedCount = 0;
             for (let i = 0; i < idsToFetch.length; i += this.IMAGE_SYNC_BATCH_SIZE) {
                 const chunk = idsToFetch.slice(i, i + this.IMAGE_SYNC_BATCH_SIZE);
-                const payload = await apiSyncAdapter.pullProductImages(chunk);
+                const payload = await apiSyncAdapter.pullImages(chunk);
                 const payloadById = new Map<string, ProductImagePayloadItem>(
                     payload.filter(item => item?.id).map(item => [item.id, item])
                 );
@@ -564,6 +580,25 @@ class SyncManager {
         }
     }
 
+    private normalizeImage(image: any): string | null {
+        return typeof image === 'string' && image.trim().length > 0 ? image : null;
+    }
+
+    private normalizeImages(images: any): string[] {
+        if (!Array.isArray(images)) return [];
+        return images.filter(img => typeof img === 'string' && img.trim().length > 0);
+    }
+
+    private hasAnyImage(product: Pick<Product, 'image' | 'images'>): boolean {
+        return !!this.normalizeImage(product.image) || this.normalizeImages(product.images).length > 0;
+    }
+
+    private imageArraysEqual(a: string[], b: string[]): boolean {
+        return a.length === b.length && a.every((value, idx) => value === b[idx]);
+    }
+
+
+
     private lastRecoveryTime: Map<string, number> = new Map();
 
     /**
@@ -571,7 +606,7 @@ class SyncManager {
      * This handles the case where Master storage is wiped (e.g. new origin) but Server has data.
      */
     private async initializeMasterData() {
-        const collections: SyncableCollection[] = ['internalSequences', 'products', 'customers', 'suppliers'];
+        const collections: SyncableCollection[] = ['internalSequences', 'fiscalRanges', 'products', 'customers', 'suppliers', 'paymentMethods'];
 
         // Detect stale local master snapshot...
         // ... (skipping severe drift catalog check for brevity in this specific patch as requested focus is on the loop) ...
@@ -650,7 +685,7 @@ class SyncManager {
      * For API mode, we track versions locally
      */
     private async loadSyncVersions() {
-        const collections: (SyncableCollection | 'config')[] = ['products', 'customers', 'suppliers', 'users', 'roles', 'internalSequences', 'config'];
+        const collections: (SyncableCollection | 'config')[] = ['products', 'customers', 'suppliers', 'users', 'roles', 'internalSequences', 'fiscalRanges', 'config'];
 
         for (const collection of collections) {
             // Load timestamp from localStorage
@@ -987,6 +1022,8 @@ class SyncManager {
             'users',
             'roles',
             'internalSequences',
+            'fiscalRanges',
+            'paymentMethods',
             'productStocks',
             ...(isMaster || permissionService.shouldShowGlobalSales() ? ['inventoryLedger' as SyncableCollection] : []),
             ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection] : []),
@@ -1151,6 +1188,7 @@ class SyncManager {
             'users',
             'roles',
             'internalSequences',
+            'fiscalRanges',
             'productStocks',
             'transfers',
             'receptions',
@@ -1229,6 +1267,7 @@ class SyncManager {
             { id: 'users', label: 'Operadores de Sistema' },
             { id: 'roles', label: 'Roles y Permisos' },
             { id: 'internalSequences', label: 'Secuencias de Documentos' },
+            { id: 'fiscalRanges', label: 'Rangos Fiscales DGII' },
         ];
 
         if (permissionService.isMasterTerminal()) {
@@ -1608,7 +1647,7 @@ class SyncManager {
 
             // 5. Update local sync versions and FORCE Pull critical catalogs (especially sequences)
             // This ensures document numbering continues correctly
-            const collections: SyncableCollection[] = ['products', 'customers', 'suppliers', 'internalSequences'];
+            const collections: SyncableCollection[] = ['products', 'customers', 'suppliers', 'internalSequences', 'fiscalRanges'];
             for (const col of collections) {
                 const metadata = await apiSyncAdapter.getMetadata(col);
                 if (metadata) {

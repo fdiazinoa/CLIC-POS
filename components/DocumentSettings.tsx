@@ -1,4 +1,5 @@
 
+// Document Center, no se visualizan los documentos ni los NCF creado
 import React, { useState, useMemo, useEffect } from 'react';
 import { BusinessConfig, DocumentSeries, FiscalRangeDGII, Transaction } from '../types';
 import {
@@ -51,10 +52,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
 
       window.addEventListener('seriesUpdated', handleSeriesUpdate);
       window.addEventListener('internalSequencesUpdated', handleSeriesUpdate);
+      window.addEventListener('fiscalRangesUpdated', handleSeriesUpdate);
 
       return () => {
          window.removeEventListener('seriesUpdated', handleSeriesUpdate);
          window.removeEventListener('internalSequencesUpdated', handleSeriesUpdate);
+         window.removeEventListener('fiscalRangesUpdated', handleSeriesUpdate);
       };
    }, []);
 
@@ -142,6 +145,10 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
       const updated = [...fiscalRanges, range];
       setFiscalRanges(updated);
       await db.save('fiscalRanges', updated);
+
+      // Push to SyncManager (Persistent/Manual Sync)
+      await syncManager.pushCatalog('fiscalRanges');
+
       setIsAddingRange(false);
    };
 
@@ -149,6 +156,9 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
       const updated = fiscalRanges.map(r => r.id === id ? { ...r, isActive: !r.isActive } : r);
       setFiscalRanges(updated);
       await db.save('fiscalRanges', updated);
+
+      // Push to SyncManager (Persistent/Manual Sync)
+      await syncManager.pushCatalog('fiscalRanges');
    };
 
    return (

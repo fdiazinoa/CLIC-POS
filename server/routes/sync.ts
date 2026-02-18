@@ -243,8 +243,7 @@ router.get('/ping', (req, res) => {
 
 router.get('/identify', (req, res) => {
     try {
-        const config = db.prepare("SELECT value FROM config WHERE key = 'business_config'").get() as any;
-        const businessConfig = config ? JSON.parse(config.value) : {};
+        const businessConfig = getSetting('businessConfig') || {};
 
         res.json({
             status: 'online',
@@ -253,7 +252,8 @@ router.get('/identify', (req, res) => {
             storeId: businessConfig.storeId || 'UNKNOWN',
             serverTime: new Date().toISOString()
         });
-    } catch (error) {
+    } catch (error: any) {
+        console.error('Error in /identify:', error);
         res.status(500).json({ status: 'error', message: 'Internal Server Error' });
     }
 });
@@ -278,12 +278,8 @@ router.post('/auth', (req, res) => {
 
     const existing = db.prepare("SELECT deviceToken FROM connected_terminals WHERE terminalId = ?").get(terminalId) as any;
     if (existing && existing.deviceToken && existing.deviceToken !== deviceToken) {
-        console.warn(`⚠️ [Sync] Token mismatch for ${terminalId}. Expected: ${existing.deviceToken.substring(0, 6)}..., Received: ${deviceToken.substring(0, 6)}...`);
-        return res.status(403).json({
-            success: false,
-            message: 'Este Terminal ID ya está vinculado a otro dispositivo. Por favor desvincule el anterior.',
-            code: 'DEVICE_MISMATCH'
-        });
+        console.warn(`⚠️ [Sync] Token mismatch for ${terminalId}. Overwriting old token (Trust-on-First-Use)`);
+        // We allow re-registration to support browser data clearing/re-installs
     }
 
     const token = `sync_${terminalId}_${Date.now()}`;

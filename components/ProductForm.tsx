@@ -114,6 +114,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     if (!base.tariffs) base.tariffs = [];
     if (!base.attributes) base.attributes = [];
     if (!base.variants) base.variants = [];
+    if (!base.images) base.images = [];
+    if (!base.appliedTaxIds) base.appliedTaxIds = config.taxes?.[0] ? [config.taxes[0].id] : [];
     if (!base.stockBalances) base.stockBalances = {};
     return base;
   });

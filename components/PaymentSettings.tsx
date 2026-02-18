@@ -1,8 +1,8 @@
 
 import React, { useState, useRef } from 'react';
-import { 
-  CreditCard, Banknote, QrCode, Wallet, GripVertical, 
-  Edit2, Trash2, X, Plus, Save, PenTool, Zap, 
+import {
+  CreditCard, Banknote, QrCode, Wallet, GripVertical,
+  Edit2, Trash2, X, Plus, Save, PenTool, Zap,
   CreditCard as CardIcon, DollarSign, Smartphone,
   Key, Server, CheckCircle2, AlertCircle, Wifi, RefreshCw, Calendar
 } from 'lucide-react';
@@ -27,7 +27,7 @@ const ICONS = {
 };
 
 const COLORS = [
-  'bg-green-500', 'bg-blue-500', 'bg-red-500', 'bg-orange-500', 
+  'bg-green-500', 'bg-blue-500', 'bg-red-500', 'bg-orange-500',
   'bg-purple-500', 'bg-pink-500', 'bg-teal-500', 'bg-gray-800'
 ];
 
@@ -79,16 +79,16 @@ const normalizePaymentMethod = (method: PaymentMethodDefinition): PaymentMethodD
 };
 
 const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfig, onClose }) => {
-  
+
   // State Initialization
   const [methods, setMethods] = useState<PaymentMethodDefinition[]>(
     (config.paymentMethods || DEFAULT_METHODS).map(normalizePaymentMethod)
   );
-  
+
   // Method Editing State
   const [editingMethod, setEditingMethod] = useState<PaymentMethodDefinition | null>(null);
   const [isMethodModalOpen, setIsMethodModalOpen] = useState(false);
-  
+
   // Connection Testing State
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'IDLE' | 'SUCCESS' | 'ERROR'>('IDLE');
@@ -116,7 +116,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
   };
 
   // --- METHOD HANDLERS ---
-  
+
   const handleAddNewMethod = () => {
     setEditingMethod({
       id: Math.random().toString(36).substr(2, 9),
@@ -175,7 +175,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
   const handleTestConnection = () => {
     setIsTestingConnection(true);
     setConnectionStatus('IDLE');
-    
+
     // Simulate API Call
     setTimeout(() => {
       const success = Math.random() > 0.3; // 70% success chance for demo
@@ -196,7 +196,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
 
   // --- RENDER HELPERS ---
   const Toggle: React.FC<{ label: string; checked: boolean; onChange: (v: boolean) => void }> = ({ label, checked, onChange }) => (
-    <div 
+    <div
       onClick={() => onChange(!checked)}
       className="flex items-center justify-between p-4 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors border border-transparent hover:border-gray-200"
     >
@@ -209,7 +209,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
 
   return (
     <div className="flex flex-col h-full bg-gray-50 animate-in fade-in">
-      
+
       {/* Header */}
       <div className="bg-white px-8 py-6 border-b border-gray-200 flex justify-between items-center shrink-0">
         <div>
@@ -217,28 +217,28 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
           <p className="text-sm text-gray-500">Configura las opciones de cobro disponibles en caja.</p>
         </div>
         <div className="flex gap-3">
-           <button onClick={onClose} className="px-4 py-2 text-gray-500 hover:bg-gray-100 rounded-lg font-bold">
-              Cancelar
-           </button>
-           <button 
-             onClick={handleSaveChanges}
-             className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow-lg hover:shadow-blue-500/30 transition-all flex items-center gap-2"
-           >
-             <Save size={20} /> Guardar Cambios
-           </button>
+          <button onClick={onClose} className="px-4 py-2 text-gray-500 hover:bg-gray-100 rounded-lg font-bold">
+            Cancelar
+          </button>
+          <button
+            onClick={handleSaveChanges}
+            className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow-lg hover:shadow-blue-500/30 transition-all flex items-center gap-2"
+          >
+            <Save size={20} /> Guardar Cambios
+          </button>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-8">
         <div className="max-w-3xl mx-auto">
-          
+
           {/* === PAYMENT METHODS LIST === */}
           <section>
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-lg font-bold text-gray-700 flex items-center gap-2">
                 <Wallet size={20} className="text-blue-500" /> Métodos Activos
               </h2>
-              <button 
+              <button
                 onClick={handleAddNewMethod}
                 className="text-sm font-bold text-white bg-blue-600 px-4 py-2 rounded-xl hover:bg-blue-700 shadow-md transition-all flex items-center gap-2"
               >
@@ -252,7 +252,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                 const IconComp = ICONS[method.icon as keyof typeof ICONS] || Wallet;
 
                 return (
-                  <div 
+                  <div
                     key={method.id}
                     draggable
                     onDragStart={(e) => handleDragStart(e, index)}
@@ -263,7 +263,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                     <div className="text-gray-300 group-hover:text-gray-500 cursor-grab">
                       <GripVertical size={24} />
                     </div>
-                    
+
                     <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-white shadow-md ${method.color}`}>
                       <IconComp size={28} />
                     </div>
@@ -292,7 +292,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                           </span>
                         )}
                         <span className="text-[10px] bg-gray-50 text-gray-500 px-2 py-0.5 rounded border border-gray-200 uppercase font-bold">
-                           {method.type}
+                          {method.type}
                         </span>
                       </div>
                     </div>
@@ -309,9 +309,9 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                 );
               })}
             </div>
-            
+
             <p className="text-center text-gray-400 text-xs mt-8">
-               Arrastra y suelta los elementos para reordenar cómo aparecen en la pantalla de cobro.
+              Arrastra y suelta los elementos para reordenar cómo aparecen en la pantalla de cobro.
             </p>
           </section>
 
@@ -328,15 +328,15 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                 <X size={20} />
               </button>
             </div>
-            
+
             <div className="p-6 overflow-y-auto space-y-6">
-              
+
               {/* Name & Type */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nombre</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={editingMethod.name}
                     onChange={(e) => {
                       const nextName = e.target.value;
@@ -348,7 +348,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tipo de Fondo</label>
-                  <select 
+                  <select
                     value={editingMethod.type}
                     onChange={(e) => setEditingMethod(normalizePaymentMethod({ ...editingMethod, type: e.target.value as PaymentMethod }))}
                     disabled={isPendingPaymentMethod(editingMethod.name)}
@@ -356,9 +356,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                   >
                     <option value="CASH">Efectivo</option>
                     <option value="CARD">Tarjeta</option>
-                    <option value="QR">QR / Digital</option>
-                    <option value="CREDIT">Crédito</option>
-                    <option value="OTHER">Otro</option>
+                    <option value="QR">Transferencia / QR</option>
                   </select>
                   {isPendingPaymentMethod(editingMethod.name) && (
                     <p className="mt-1 text-[11px] font-medium text-cyan-700">
@@ -366,14 +364,14 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                     </p>
                   )}
                 </div>
-                
+
                 {/* Integration Selector */}
                 {editingMethod.type === 'CARD' && (
                   <div>
                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Pasarela / Integración</label>
-                    <select 
+                    <select
                       value={editingMethod.integration || 'NONE'}
-                      onChange={(e) => setEditingMethod({...editingMethod, integration: e.target.value as any})}
+                      onChange={(e) => setEditingMethod({ ...editingMethod, integration: e.target.value as any })}
                       className="w-full p-3 bg-indigo-50 text-indigo-900 rounded-xl border border-indigo-100 outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
                     >
                       <option value="NONE">Ninguna (Manual)</option>
@@ -407,58 +405,57 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
               {/* --- DYNAMIC INTEGRATION CONFIGURATION --- */}
               {editingMethod.type === 'CARD' && editingMethod.integration && editingMethod.integration !== 'NONE' && (
                 <div className="bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100 space-y-4 animate-in slide-in-from-top-2">
-                   <div className="flex items-center gap-2 mb-2">
-                      <Wifi size={18} className="text-indigo-600" />
-                      <h4 className="text-sm font-bold text-indigo-800 uppercase tracking-wide">Configuración de Conexión</h4>
-                   </div>
-                   
-                   {PROVIDER_SCHEMAS[editingMethod.integration]?.map((field) => (
-                      <div key={field.key}>
-                         <label className="block text-xs font-bold text-indigo-400 uppercase mb-1">{field.label}</label>
-                         <div className="relative">
-                            <input 
-                               type={field.type}
-                               value={editingMethod.integrationConfig?.[field.key] || ''}
-                               onChange={(e) => handleIntegrationConfigChange(field.key, e.target.value)}
-                               placeholder={field.placeholder}
-                               className="w-full p-3 pl-10 bg-white border border-indigo-100 rounded-xl outline-none focus:ring-2 focus:ring-indigo-300 transition-all font-medium text-indigo-900 placeholder:text-indigo-300"
-                            />
-                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-300">
-                               <field.icon size={16} />
-                            </div>
-                         </div>
-                      </div>
-                   ))}
+                  <div className="flex items-center gap-2 mb-2">
+                    <Wifi size={18} className="text-indigo-600" />
+                    <h4 className="text-sm font-bold text-indigo-800 uppercase tracking-wide">Configuración de Conexión</h4>
+                  </div>
 
-                   <div className="pt-2">
-                      <button 
-                         onClick={handleTestConnection}
-                         disabled={isTestingConnection}
-                         className={`w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
-                            connectionStatus === 'SUCCESS' ? 'bg-green-100 text-green-700 border border-green-200' :
-                            connectionStatus === 'ERROR' ? 'bg-red-100 text-red-700 border border-red-200' :
+                  {PROVIDER_SCHEMAS[editingMethod.integration]?.map((field) => (
+                    <div key={field.key}>
+                      <label className="block text-xs font-bold text-indigo-400 uppercase mb-1">{field.label}</label>
+                      <div className="relative">
+                        <input
+                          type={field.type}
+                          value={editingMethod.integrationConfig?.[field.key] || ''}
+                          onChange={(e) => handleIntegrationConfigChange(field.key, e.target.value)}
+                          placeholder={field.placeholder}
+                          className="w-full p-3 pl-10 bg-white border border-indigo-100 rounded-xl outline-none focus:ring-2 focus:ring-indigo-300 transition-all font-medium text-indigo-900 placeholder:text-indigo-300"
+                        />
+                        <div className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-300">
+                          <field.icon size={16} />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="pt-2">
+                    <button
+                      onClick={handleTestConnection}
+                      disabled={isTestingConnection}
+                      className={`w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${connectionStatus === 'SUCCESS' ? 'bg-green-100 text-green-700 border border-green-200' :
+                          connectionStatus === 'ERROR' ? 'bg-red-100 text-red-700 border border-red-200' :
                             'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 border border-indigo-200'
-                         }`}
-                      >
-                         {isTestingConnection ? (
-                            <>
-                               <RefreshCw size={16} className="animate-spin" /> Probando...
-                            </>
-                         ) : connectionStatus === 'SUCCESS' ? (
-                            <>
-                               <CheckCircle2 size={16} /> Conexión Exitosa
-                            </>
-                         ) : connectionStatus === 'ERROR' ? (
-                            <>
-                               <AlertCircle size={16} /> Falló la Conexión
-                            </>
-                         ) : (
-                            <>
-                               <Wifi size={16} /> Probar Conexión
-                            </>
-                         )}
-                      </button>
-                   </div>
+                        }`}
+                    >
+                      {isTestingConnection ? (
+                        <>
+                          <RefreshCw size={16} className="animate-spin" /> Probando...
+                        </>
+                      ) : connectionStatus === 'SUCCESS' ? (
+                        <>
+                          <CheckCircle2 size={16} /> Conexión Exitosa
+                        </>
+                      ) : connectionStatus === 'ERROR' ? (
+                        <>
+                          <AlertCircle size={16} /> Falló la Conexión
+                        </>
+                      ) : (
+                        <>
+                          <Wifi size={16} /> Probar Conexión
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -470,12 +467,11 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                     {Object.keys(ICONS).map((iconName) => {
                       const I = ICONS[iconName as keyof typeof ICONS];
                       return (
-                        <button 
+                        <button
                           key={iconName}
-                          onClick={() => setEditingMethod({...editingMethod, icon: iconName})}
-                          className={`p-2 rounded-lg flex items-center justify-center border transition-all ${
-                            editingMethod.icon === iconName ? 'bg-gray-800 text-white border-gray-800' : 'bg-white border-gray-200 hover:bg-gray-50'
-                          }`}
+                          onClick={() => setEditingMethod({ ...editingMethod, icon: iconName })}
+                          className={`p-2 rounded-lg flex items-center justify-center border transition-all ${editingMethod.icon === iconName ? 'bg-gray-800 text-white border-gray-800' : 'bg-white border-gray-200 hover:bg-gray-50'
+                            }`}
                         >
                           <I size={20} />
                         </button>
@@ -487,7 +483,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                     {COLORS.map(color => (
                       <button
                         key={color}
-                        onClick={() => setEditingMethod({...editingMethod, color})}
+                        onClick={() => setEditingMethod({ ...editingMethod, color })}
                         className={`w-9 h-9 rounded-full ${color} transition-transform ${editingMethod.color === color ? 'scale-110 ring-2 ring-offset-2 ring-gray-300' : 'hover:scale-105'}`}
                       />
                     ))}
@@ -497,15 +493,15 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
 
               {/* Toggles */}
               <div className="space-y-2">
-                <Toggle 
-                  label="Abrir cajón portamonedas al cobrar" 
-                  checked={editingMethod.opensDrawer} 
-                  onChange={(v) => setEditingMethod({...editingMethod, opensDrawer: v})} 
+                <Toggle
+                  label="Abrir cajón portamonedas al cobrar"
+                  checked={editingMethod.opensDrawer}
+                  onChange={(v) => setEditingMethod({ ...editingMethod, opensDrawer: v })}
                 />
-                <Toggle 
-                  label="Requerir firma del cliente" 
-                  checked={editingMethod.requiresSignature} 
-                  onChange={(v) => setEditingMethod({...editingMethod, requiresSignature: v})} 
+                <Toggle
+                  label="Requerir firma del cliente"
+                  checked={editingMethod.requiresSignature}
+                  onChange={(v) => setEditingMethod({ ...editingMethod, requiresSignature: v })}
                 />
               </div>
 

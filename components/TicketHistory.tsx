@@ -12,6 +12,7 @@ import { printTicket } from '../utils/printer';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
 import { User, DeviceRole } from '../types';
+import { RefundModal } from './RefundModal';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -21,7 +22,8 @@ interface TicketHistoryProps {
    users: User[];
    roles: RoleDefinition[];
    onClose: () => void;
-   onRefundTransaction: (originalTx: Transaction, refundedItems: CartItem[], reason: string) => void;
+   initialSelectedId?: string | null; // NEW: For Smart Scan
+   onRefundTransaction: (originalTx: Transaction, refundedItems: CartItem[], conditions: Map<string, 'SELLABLE' | 'DAMAGED'>, reason: string) => void;
 }
 
 type ReturnReason = 'DAMAGED' | 'DISLIKE' | 'ERROR' | 'EXPIRED';
@@ -212,7 +214,10 @@ const SalesHistoryTable: React.FC<{
                         <tr
                            key={tx.id}
                            onClick={() => onRowClick(tx.id)}
-                           className="hover:bg-gray-50 transition-colors cursor-pointer group"
+                           className={`transition-colors cursor-pointer group ${tx.documentType === 'REFUND' || tx.status === 'REFUNDED' || tx.status === 'PARTIAL_REFUND'
+                              ? 'bg-red-50/50 hover:bg-red-100/50'
+                              : 'hover:bg-gray-50'
+                              }`}
                         >
                            <td className="px-4 py-3">{getStatusBadge(tx)}</td>
                            <td className="px-4 py-3 text-xs font-medium text-gray-500">{tx.displayId || tx.id.slice(-8).toUpperCase()}</td>
@@ -274,11 +279,16 @@ const TicketDetailDrawer: React.FC<{
    config: BusinessConfig;
    onClose: () => void;
    onPrint: (tx: Transaction) => void;
-   onVoid: (tx: Transaction) => void;
+   onRequestRefund: (tx: Transaction) => void;
    themeText: string;
    themeBg: string;
    users: User[];
-}> = ({ tx, config, onClose, onPrint, onVoid, themeText, themeBg, users }) => {
+}> = ({ tx, config, onClose, onPrint, onRequestRefund, themeText, themeBg, users }) => {
+   // Removed internal return state
+
+
+
+
    if (!tx) return null;
    const cashierName = tx.userName || users.find(u => u.id === tx.userId)?.name || 'Sistema';
    const supervisorName = tx.authorizedByName || users.find(u => u.id === tx.authorizedById)?.name || null;
@@ -460,28 +470,31 @@ const TicketDetailDrawer: React.FC<{
                </section>
             </div>
 
+            {/* Actions Footer */}
             <footer className="p-6 border-t border-gray-100 bg-gray-50 grid grid-cols-2 gap-3">
-               <button
-                  onClick={() => onPrint(tx)}
-                  className="flex items-center justify-center gap-2 py-3 bg-white border border-gray-200 text-gray-700 rounded-2xl font-bold hover:bg-gray-100 transition-all shadow-sm"
-               >
-                  <Printer size={18} /> Reimprimir
-               </button>
-               {tx.status !== 'REFUNDED' && (
+               <>
                   <button
-                     onClick={() => onVoid(tx)}
-                     className="flex items-center justify-center gap-2 py-3 bg-red-600 text-white rounded-2xl font-bold hover:bg-red-700 transition-all shadow-lg"
+                     onClick={() => onPrint(tx)}
+                     className="flex items-center justify-center gap-2 py-3 bg-white border border-gray-200 text-gray-700 rounded-2xl font-bold hover:bg-gray-100 transition-all shadow-sm"
                   >
-                     <RotateCcw size={18} /> Anular
+                     <Printer size={18} /> Reimprimir
                   </button>
-               )}
+                  {tx.status !== 'REFUNDED' && (
+                     <button
+                        onClick={() => onRequestRefund(tx)}
+                        className="flex items-center justify-center gap-2 py-3 bg-red-600 text-white rounded-2xl font-bold hover:bg-red-700 transition-all shadow-lg"
+                     >
+                        <RotateCcw size={18} /> Devolución / Anular
+                     </button>
+                  )}
+               </>
             </footer>
          </div>
       </div>
    );
 };
 
-const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, onRefundTransaction }) => {
+const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, onRefundTransaction, initialSelectedId }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [expandedId, setExpandedId] = useState<string | null>(null);
    const [showFilters, setShowFilters] = useState(false);
@@ -489,6 +502,18 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    // Filters State
    const [filterDateStart, setFilterDateStart] = useState('');
    const [filterDateEnd, setFilterDateEnd] = useState('');
+   // ... (other state)
+
+   // ... (keep loadHistory useEffect)
+
+   // Handle Initial Selection (Smart Scan)
+   useEffect(() => {
+      if (initialSelectedId) {
+         setSearchTerm(initialSelectedId); // Filter by ID
+         setExpandedId(initialSelectedId); // Auto-expand details
+         setSelectedTxId(initialSelectedId);
+      }
+   }, [initialSelectedId]);
    const [filterTerminal, setFilterTerminal] = useState('');
    const [filterCashier, setFilterCashier] = useState('');
    const [filterCustomer, setFilterCustomer] = useState('');
@@ -508,43 +533,49 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const [zReports, setZReports] = useState<ZReport[]>([]);
    const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
 
+   // Refund Modal State
+   const [isRefundModalOpen, setIsRefundModalOpen] = useState(false);
+   const [refundTx, setRefundTx] = useState<Transaction | null>(null);
+
    // Load History on Mount
    useEffect(() => {
       const loadHistory = async () => {
          try {
             // Load transactions directly from the 'transactions' collection (not 'transactionHistory')
-            // This matches where transactionService.createTransaction saves them
+            // ... (keep existing loading logic)
             const { db } = await import('../utils/db');
             const history = await db.get('transactions') as Transaction[];
             if (history && Array.isArray(history)) {
-               // Mark all loaded history as archived so they are highlighted even if missing zReportId
                const markedHistory = history.map(h => ({ ...h, _isArchived: true }));
                setHistoryTransactions(markedHistory);
             }
-
-            // Load Z-Reports for lookup
+            // ... (keep ZReport loading)
             const zReports = await db.get('zReports') as any[];
             if (zReports) {
                const map = new Map<string, string>();
                zReports.forEach(r => map.set(r.id, r.sequenceNumber));
                setZReportMap(map);
                setZReports(zReports);
-               console.log(`🔍 [TicketHistory] Loaded ${zReports.length} Z-Reports. Sample Map:`, Array.from(map.entries()).slice(0, 3));
-            }
-
-            if (history && history.length > 0) {
-               console.log(`🔍 [TicketHistory] Loaded ${history.length} transactions from 'transactions' collection`);
-               console.log(`🔍 [TicketHistory] Inspecting first 3 history items for Z-Report linkage:`);
-               history.slice(0, 3).forEach(h => {
-                  console.log(`   - Tx ${h.id.slice(-8)}: zReportId=${h.zReportId}, zReportSequence=${h.zReportSequence}`);
-               });
             }
          } catch (e) {
-            console.error("Failed to load transaction history:", e);
+            console.error("Failed to load history:", e);
          }
       };
       loadHistory();
    }, []);
+
+   // Handle Initial Selection (Smart Scan)
+   useEffect(() => {
+      if (initialSelectedId) {
+         setSearchTerm(initialSelectedId); // Filter by ID
+         // Attempt to find it immediately if loaded
+         // Note: We might need to wait for history to load, but filtering by ID usually works 
+         // as filteredTransactions recomputes.
+         setExpandedId(initialSelectedId); // Auto-expand details if we had inline details
+         // For Drawer:
+         setSelectedTxId(initialSelectedId);
+      }
+   }, [initialSelectedId]);
 
    // --- SMART SEARCH LOGIC ---
    const filteredTransactions = useMemo(() => {
@@ -723,7 +754,12 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                ...item,
                quantity: selectedItemsQty.get(item.cartId) || item.quantity
             }));
-         onRefundTransaction(transaction, itemsToRefund, REASONS.find(r => r.id === returnReason)?.label || 'Devolución');
+
+         // Legacy/Manual refund flow support
+         const conditions = new Map<string, 'SELLABLE' | 'DAMAGED'>();
+         itemsToRefund.forEach(i => conditions.set(i.cartId, 'SELLABLE'));
+
+         onRefundTransaction(transaction, itemsToRefund, conditions, REASONS.find(r => r.id === returnReason)?.label || 'Devolución');
          setReturnModeId(null);
          setSelectedItemsQty(new Map());
       }
@@ -859,15 +895,13 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
          {/* Detail Drawer */}
          <TicketDetailDrawer
-            tx={selectedTx}
+            tx={transactions.find(t => t.id === selectedTxId) || historyTransactions.find(t => t.id === selectedTxId) || null}
             config={config}
             onClose={() => setSelectedTxId(null)}
             onPrint={(tx) => printTicket(tx, config)}
-            onVoid={(tx) => {
-               if (confirm("¿Confirmar anulación completa de este ticket?")) {
-                  onRefundTransaction(tx, tx.items, "Anulación Administrativa");
-                  setSelectedTxId(null);
-               }
+            onRequestRefund={(tx) => {
+               setRefundTx(tx);
+               setIsRefundModalOpen(true);
             }}
             themeText={themeText}
             themeBg={themeBg}

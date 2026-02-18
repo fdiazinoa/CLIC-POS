@@ -12,12 +12,34 @@ interface BarcodeScannerOptions {
  * Barcode scanners typically type characters very fast (< 30-50ms gap)
  * and end with an 'Enter' key.
  */
+// Helper to identify if a scanned code is a Ticket/Invoice
+const detectTicketPattern = (code: string): string | null => {
+    // 1. Internal Ticket ID (TCK...)
+    if (/^TCK/i.test(code)) return code.toUpperCase();
+
+    // 2. Fiscal NCF (B0...)
+    if (/^B0[1-4]\d+/i.test(code)) return code.toUpperCase();
+
+    // 3. DGII URL (extract NCF or TrackId)
+    if (code.includes('dgii.gov.do')) {
+        // Try to extract NCF param
+        const urlParams = new URL(code).searchParams;
+        return urlParams.get('ncf') || urlParams.get('trackId') || null;
+    }
+
+    // 4. UUID fallback (if scanning raw ID)
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i.test(code)) return code;
+
+    return null;
+};
+
 export const useBarcodeScanner = ({
     onScan,
+    onTicketScan,
     enabled = true,
     prefixTimeout = 50,
     idleTimeout = 200
-}: BarcodeScannerOptions) => {
+}: BarcodeScannerOptions & { onTicketScan?: (ticketId: string) => void }) => {
     const buffer = useRef<string>('');
     const lastKeyTime = useRef<number>(0);
     const idleTimer = useRef<NodeJS.Timeout | null>(null);
@@ -36,12 +58,7 @@ export const useBarcodeScanner = ({
             );
 
             // If user is typing in a text field, we MUST ignore global capture
-            // to avoid interfering with manual entry or "hijacking" their typing.
-            // User explicit requirement: "Si el foco está actualmente en un input... ignorar la captura"
             if (isManualInput) {
-                // We do NOT clear the buffer here, because they might be typing fast manually
-                // but we also don't want to swallow their events.
-                // Just return and let the event bubble normally.
                 return;
             }
 
@@ -49,7 +66,6 @@ export const useBarcodeScanner = ({
             const gap = currentTime - lastKeyTime.current;
             lastKeyTime.current = currentTime;
 
-            // Clear the idle clearing timer on any activity
             if (idleTimer.current) clearTimeout(idleTimer.current);
 
             // If idle for too long, previous buffer is definitely stale/human noise
@@ -59,15 +75,18 @@ export const useBarcodeScanner = ({
 
             // Handle Enter - The signal that scanning is complete
             if (e.key === 'Enter') {
-                // Only fire if buffer has significant length (standard barcodes are usually 8+ chars)
-                // Short inputs (e.g. "1", "OK") might be keyboard navigation noise.
-                // Assuming minimum reasonable barcode length is 3.
                 if (buffer.current.length >= 3) {
                     console.log(`[Scanner] Detected code: ${buffer.current}`);
-                    onScan(buffer.current);
-                    buffer.current = '';
 
-                    // Prevent "Enter" from triggering other actions
+                    const ticketId = detectTicketPattern(buffer.current);
+                    if (ticketId && onTicketScan) {
+                        console.log(`[Scanner] 🎫 Ticket Match: ${ticketId}`);
+                        onTicketScan(ticketId);
+                    } else {
+                        onScan(buffer.current);
+                    }
+
+                    buffer.current = '';
                     e.preventDefault();
                     e.stopPropagation();
                 } else {
@@ -76,41 +95,29 @@ export const useBarcodeScanner = ({
                 return;
             }
 
-            // Capture printable characters (alphanumeric + symbols)
-            // Ignore specialized keys like Shift, Control, Alt, Arrows, etc.
+            // Capture printable characters
             if (e.key.length === 1) {
-                // Speed Detection:
-                // Scanners are superhumanly fast (~10-20ms per key caused by USB/keyboard emulation buffering).
-                // Humans are usually > 100ms per key, rarely faster than 50ms unless mashing.
-
                 if (buffer.current === '') {
-                    // First character of a potential scan starts the sequence
                     buffer.current = e.key;
                 } else {
                     if (gap < prefixTimeout) {
-                        // Fast sequence detected - looks like a machine!
                         buffer.current += e.key;
                     } else {
-                        // Slow sequence - looks like a human.
-                        // Reset buffer and assume this is just noise or slow navigation.
                         buffer.current = e.key; // Reset start with this new key
                     }
                 }
 
-                // Set idle timer to clear buffer if input stops (e.g. half-scan)
                 idleTimer.current = setTimeout(() => {
                     buffer.current = '';
                 }, idleTimeout);
             }
         };
 
-        // We use capture phase (true) to intercept keyboard events before they reach focused elements
-        // BUT we have the early exit check for `isManualInput` to respect focus.
         window.addEventListener('keydown', handleGlobalKeyDown, true);
 
         return () => {
             window.removeEventListener('keydown', handleGlobalKeyDown, true);
             if (idleTimer.current) clearTimeout(idleTimer.current);
         };
-    }, [enabled, onScan, prefixTimeout, idleTimeout]);
+    }, [enabled, onScan, onTicketScan, prefixTimeout, idleTimeout]);
 };

@@ -27,6 +27,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const [auditData, setAuditData] = useState<any[]>([]);
     const [selectedJson, setSelectedJson] = useState<any>(null);
     const [isRefreshingAudit, setIsRefreshingAudit] = useState(false);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [rowsPerPage, setRowsPerPage] = useState(10);
 
     const loadStatus = async () => {
         try {
@@ -140,6 +142,32 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         loadStatus();
         initialLoadDone.current = true;
     }, []);
+
+    // Memoized Filtered Content
+    const filteredAuditData = React.useMemo(() => {
+        return auditData.filter(item => {
+            const matchesSearch = item.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                (item.raw?.ncf || '').toLowerCase().includes(searchTerm.toLowerCase());
+            const matchesStatus = statusFilter === 'ALL' || item.status === statusFilter;
+            const matchesTerminal = terminalFilter === 'ALL' || item.terminalId === terminalFilter;
+            return matchesSearch && matchesStatus && matchesTerminal;
+        });
+    }, [auditData, searchTerm, statusFilter, terminalFilter]);
+
+    // Reset pagination when filters change
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchTerm, statusFilter, terminalFilter, rowsPerPage]);
+
+    // Pagination Logic
+    const totalPages = Math.ceil(filteredAuditData.length / rowsPerPage);
+    const paginatedData = filteredAuditData.slice(
+        (currentPage - 1) * rowsPerPage,
+        currentPage * rowsPerPage
+    );
+
+    const startIndex = (currentPage - 1) * rowsPerPage;
+    const endIndex = Math.min(startIndex + rowsPerPage, filteredAuditData.length);
 
     // Periodic polling
     useEffect(() => {
@@ -537,7 +565,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                 </div>
 
                                 {/* Audit Table */}
-                                <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+                                <div className="audit-table-container overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm overflow-y-auto max-h-[600px]">
                                     <table className="w-full border-collapse">
                                         <thead className="bg-gray-50 border-b border-gray-100">
                                             <tr>
@@ -550,85 +578,77 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-50">
-                                            {auditData
-                                                .filter(item => {
-                                                    const matchesSearch = item.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                                                        (item.raw?.ncf || '').toLowerCase().includes(searchTerm.toLowerCase());
-                                                    const matchesStatus = statusFilter === 'ALL' || item.status === statusFilter;
-                                                    const matchesTerminal = terminalFilter === 'ALL' || item.terminalId === terminalFilter;
-                                                    return matchesSearch && matchesStatus && matchesTerminal;
-                                                })
-                                                .map((item) => (
-                                                    <tr key={item.raw.id} className="hover:bg-gray-50/50 transition-colors group">
-                                                        <td className="py-4 px-6">
-                                                            <div className="font-bold text-gray-700 font-mono text-sm">{item.id}</div>
-                                                            {item.raw?.ncf && (
-                                                                <div className="text-[10px] text-blue-600 font-bold mt-0.5">{item.raw.ncf}</div>
-                                                            )}
-                                                        </td>
-                                                        <td className="py-4 px-6 text-center">
-                                                            <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-100 text-gray-600 font-bold text-xs">
-                                                                <Monitor size={12} /> {item.terminalId}
-                                                            </div>
-                                                        </td>
-                                                        <td className="py-4 px-6 text-center">
-                                                            <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${item.type === 'VENTA' ? 'bg-emerald-100 text-emerald-700' :
-                                                                item.type === 'RESERVA' ? 'bg-amber-100 text-amber-700' :
-                                                                    item.type === 'INVENTARIO' ? 'bg-blue-100 text-blue-700' :
-                                                                        'bg-purple-100 text-purple-700'
-                                                                }`}>
-                                                                {item.type}
-                                                            </span>
-                                                        </td>
-                                                        <td className="py-4 px-6 text-center">
-                                                            <div className="text-xs text-gray-600 font-medium">
-                                                                {new Date(item.date).toLocaleDateString()}
-                                                            </div>
-                                                            <div className="text-[10px] text-gray-400">
-                                                                {new Date(item.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                                                            </div>
-                                                        </td>
-                                                        <td className="py-4 px-6 text-center">
-                                                            <div className="flex items-center justify-center gap-2">
-                                                                {item.status === 'SYNCED' ? (
-                                                                    <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase">
-                                                                        <CheckCircle2 size={12} /> Sincronizado
-                                                                    </span>
-                                                                ) : item.status === 'ERROR' ? (
-                                                                    <span
-                                                                        className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-red-100 text-red-700 text-[10px] font-black uppercase cursor-help"
-                                                                        title={item.error || 'Error desconocido'}
-                                                                    >
-                                                                        <AlertCircle size={12} /> Error
-                                                                    </span>
-                                                                ) : (
-                                                                    <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-gray-100 text-gray-500 text-[10px] font-black uppercase">
-                                                                        <Clock size={12} /> Pendiente
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                        </td>
-                                                        <td className="py-4 px-6 text-right">
-                                                            <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                                <button
-                                                                    onClick={() => setSelectedJson(item.raw)}
-                                                                    className="p-2 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-all"
-                                                                    title="Ver JSON"
+                                            {paginatedData.map((item) => (
+                                                <tr key={item.raw.id} className="hover:bg-gray-50/50 transition-colors group">
+                                                    <td className="py-4 px-6">
+                                                        <div className="font-bold text-gray-700 font-mono text-sm">{item.id}</div>
+                                                        {item.raw?.ncf && (
+                                                            <div className="text-[10px] text-blue-600 font-bold mt-0.5">{item.raw.ncf}</div>
+                                                        )}
+                                                    </td>
+                                                    <td className="py-4 px-6 text-center">
+                                                        <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-100 text-gray-600 font-bold text-xs">
+                                                            <Monitor size={12} /> {item.terminalId}
+                                                        </div>
+                                                    </td>
+                                                    <td className="py-4 px-6 text-center">
+                                                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${item.type === 'VENTA' ? 'bg-emerald-100 text-emerald-700' :
+                                                            item.type === 'RESERVA' ? 'bg-amber-100 text-amber-700' :
+                                                                item.type === 'INVENTARIO' ? 'bg-blue-100 text-blue-700' :
+                                                                    'bg-purple-100 text-purple-700'
+                                                            }`}>
+                                                            {item.type}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-4 px-6 text-center">
+                                                        <div className="text-xs text-gray-600 font-medium">
+                                                            {new Date(item.date).toLocaleDateString()}
+                                                        </div>
+                                                        <div className="text-[10px] text-gray-400">
+                                                            {new Date(item.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                                        </div>
+                                                    </td>
+                                                    <td className="py-4 px-6 text-center">
+                                                        <div className="flex items-center justify-center gap-2">
+                                                            {item.status === 'SYNCED' ? (
+                                                                <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase">
+                                                                    <CheckCircle2 size={12} /> Sincronizado
+                                                                </span>
+                                                            ) : item.status === 'ERROR' ? (
+                                                                <span
+                                                                    className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-red-100 text-red-700 text-[10px] font-black uppercase cursor-help"
+                                                                    title={item.error || 'Error desconocido'}
                                                                 >
-                                                                    <Code size={16} />
+                                                                    <AlertCircle size={12} /> Error
+                                                                </span>
+                                                            ) : (
+                                                                <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-gray-100 text-gray-500 text-[10px] font-black uppercase">
+                                                                    <Clock size={12} /> Pendiente
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                    <td className="py-4 px-6 text-right">
+                                                        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                            <button
+                                                                onClick={() => setSelectedJson(item.raw)}
+                                                                className="p-2 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-all"
+                                                                title="Ver JSON"
+                                                            >
+                                                                <Code size={16} />
+                                                            </button>
+                                                            {item.status === 'ERROR' && (
+                                                                <button
+                                                                    className="p-2 hover:bg-gray-100 rounded-lg text-red-400 hover:text-red-600 transition-all"
+                                                                    title="Reintentar envío"
+                                                                >
+                                                                    <RotateCcw size={16} />
                                                                 </button>
-                                                                {item.status === 'ERROR' && (
-                                                                    <button
-                                                                        className="p-2 hover:bg-gray-100 rounded-lg text-red-400 hover:text-red-600 transition-all"
-                                                                        title="Reintentar envío"
-                                                                    >
-                                                                        <RotateCcw size={16} />
-                                                                    </button>
-                                                                )}
-                                                            </div>
-                                                        </td>
-                                                    </tr>
-                                                ))}
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ))}
                                             {auditData.length === 0 && (
                                                 <tr>
                                                     <td colSpan={6} className="py-12 text-center text-gray-400 italic">
@@ -639,6 +659,66 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                         </tbody>
                                     </table>
                                 </div>
+
+                                {/* Pagination Controls */}
+                                {filteredAuditData.length > 0 && (
+                                    <div className="flex flex-col md:flex-row items-center justify-between gap-4 py-2 px-2 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                                        {/* Records Summary */}
+                                        <div className="text-sm font-medium text-gray-400">
+                                            Mostrando <span className="text-gray-700 font-bold">{filteredAuditData.length > 0 ? startIndex + 1 : 0}</span> - <span className="text-gray-700 font-bold">{endIndex}</span> de <span className="text-gray-700 font-bold">{filteredAuditData.length}</span> documentos
+                                        </div>
+
+                                        {/* Navigation and Density */}
+                                        <div className="flex items-center gap-6">
+                                            {/* Density Selector */}
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-xs font-black text-gray-400 uppercase tracking-widest">Filas:</span>
+                                                <div className="flex bg-gray-100 p-1 rounded-xl gap-1">
+                                                    {[10, 25, 50].map(val => (
+                                                        <button
+                                                            key={val}
+                                                            onClick={() => setRowsPerPage(val)}
+                                                            className={`px-3 py-1 rounded-lg text-xs font-black transition-all ${rowsPerPage === val
+                                                                ? 'bg-white text-blue-600 shadow-sm'
+                                                                : 'text-gray-400 hover:text-gray-600'}`}
+                                                        >
+                                                            {val}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            {/* Navigation Buttons */}
+                                            <div className="flex items-center gap-3">
+                                                <button
+                                                    disabled={currentPage === 1}
+                                                    onClick={() => {
+                                                        setCurrentPage(prev => Math.max(1, prev - 1));
+                                                        document.querySelector('.audit-table-container')?.scrollTo({ top: 0, behavior: 'smooth' });
+                                                    }}
+                                                    className="p-2 bg-white border border-gray-200 rounded-xl text-gray-600 hover:bg-gray-50 hover:text-blue-600 disabled:opacity-30 disabled:hover:bg-white disabled:hover:text-gray-600 transition-all font-bold group"
+                                                >
+                                                    <ArrowRight size={18} className="rotate-180 group-active:-translate-x-1 transition-transform" />
+                                                </button>
+
+                                                <div className="px-4 py-2 bg-gray-50 rounded-xl text-xs font-black text-gray-500 uppercase tracking-widest border border-gray-100 italic">
+                                                    Página <span className="text-blue-600 font-bold">{currentPage}</span> de <span className="text-gray-800 font-bold">{totalPages || 1}</span>
+                                                </div>
+
+                                                <button
+                                                    disabled={currentPage >= totalPages}
+                                                    onClick={() => {
+                                                        setCurrentPage(prev => Math.min(totalPages, prev + 1));
+                                                        document.querySelector('.audit-table-container')?.scrollTo({ top: 0, behavior: 'smooth' });
+                                                    }}
+                                                    className="p-2 bg-white border border-gray-200 rounded-xl text-gray-600 hover:bg-gray-50 hover:text-blue-600 disabled:opacity-30 disabled:hover:bg-white disabled:hover:text-gray-600 transition-all font-bold group"
+                                                >
+                                                    <ArrowRight size={18} className="group-active:translate-x-1 transition-transform" />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
 

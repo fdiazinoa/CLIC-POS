@@ -62,6 +62,7 @@ import VerticalSelector from './components/VerticalSelector';
 import SetupWizard from './components/SetupWizard';
 import FranchiseDashboard from './components/FranchiseDashboard';
 import TerminalBindingScreen from './components/TerminalBindingScreen';
+import { TerminalPairingView } from './components/TerminalPairingView';
 import CustomerVisor from './components/CustomerVisor';
 import { visorSync } from './utils/visorSync';
 
@@ -145,10 +146,12 @@ const AppContent: React.FC = () => {
   const { clearSecurityState, setSupervisorPinValidator } = useKioskSecurityContext();
   // --- GLOBAL STATE ---
   const [activeTable, setActiveTable] = useState<Table | null>(null); // New state for selected table context
+  /* original code */
   const [currentView, setCurrentView] = useState<ViewState>(() => {
     const params = new URLSearchParams(window.location.search);
     return params.get('view') === 'VISOR' ? 'VISOR' : 'LOGIN';
   });
+  const [scanTargetTicketId, setScanTargetTicketId] = useState<string | null>(null); // NEW: Auto-select ticket from scan
   const [restoringHistory, setRestoringHistory] = useState(false);
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any));
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -162,6 +165,12 @@ const AppContent: React.FC = () => {
   const forceSyncHandledRef = useRef(false);
   const [reconnectionStatus, setReconnectionStatus] = useState<'idle' | 'searching' | 'connected' | 'failed'>('idle');
 
+  // --- SECURITY BOOTSTRAP STATE ---
+  const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+
+  // Security bootstrap logic moved to loadData
+
   useEffect(() => {
     const handleReconnection = (e: CustomEvent) => {
       setReconnectionStatus(e.detail.status);
@@ -172,6 +181,16 @@ const AppContent: React.FC = () => {
     window.addEventListener('sync:reconnecting', handleReconnection as any);
     return () => window.removeEventListener('sync:reconnecting', handleReconnection as any);
   }, []);
+
+  // --- AUTO-RETRY ON BOOT ERROR ---
+  useEffect(() => {
+    if (initialConnError || bootstrapError) {
+      const timer = setTimeout(() => {
+        window.location.reload();
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [initialConnError, bootstrapError]);
 
   // Helper: Get current terminal configuration
   const getCurrentTerminal = React.useCallback(() => {
@@ -339,8 +358,14 @@ const AppContent: React.FC = () => {
 
   useKioskMode(getCurrentDeviceRole() === DeviceRole.SELF_CHECKOUT);
   useBarcodeScanner({
+    enabled: currentView === 'POS' || currentView === 'HISTORY',
     onScan: (barcode) => {
       window.dispatchEvent(new CustomEvent('barcodeScanned', { detail: { barcode } }));
+    },
+    onTicketScan: (ticketId) => {
+      console.log(`🎟️ Smart Scan: Opening Ticket History for ${ticketId}`);
+      setScanTargetTicketId(ticketId);
+      setCurrentView('HISTORY');
     }
   });
 
@@ -680,6 +705,17 @@ const AppContent: React.FC = () => {
           (t: any) => t.config?.currentDeviceId === storedDeviceId
         );
 
+        // --- PAIRING CHECK & REDIRECT ---
+        // If no local pairing exists and we have no master IP, we are definitely unpaired.
+        // We must bail OUT of the loading sequence to let the user pair.
+        if (!localPairedTerminal && !masterIp) {
+          console.warn('[BOOT] Dispositivo no vinculado. Redirigiendo a pantalla de vinculación...');
+          setIsDataLoaded(true); // Stop "Loading CLIC POS..."
+          setIsSecurityLoaded(true); // Bypass "Loading Security..."
+          setCurrentView('TERMINAL_PAIRING');
+          return;
+        }
+
         const shouldFetchConfigFromMaster = !!masterIp && (
           !localPairedTerminal || localPairedTerminal?.config?.isPrimaryNode === false
         );
@@ -695,7 +731,13 @@ const AppContent: React.FC = () => {
             const currentProtocol = window.location.protocol;
             const targetUrl = `${currentProtocol}//${masterIp}:3001/api/config`;
 
-            const res = await fetch(targetUrl);
+            // ADDED TIMEOUT: Fail fast if Master is offline (common in emulators)
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000); // 3s timeout
+
+            const res = await fetch(targetUrl, { signal: controller.signal });
+            clearTimeout(timeoutId);
+
             if (res.ok) {
               const fetchedConfig = await res.json();
               if (fetchedConfig && fetchedConfig.terminals) {
@@ -704,8 +746,8 @@ const AppContent: React.FC = () => {
                 currentConfig = fetchedConfig;
               }
             }
-          } catch (e) {
-            console.error("❌ Failed to fetch config from Master:", e);
+          } catch (e: any) {
+            console.error("❌ Failed to fetch config from Master (Timeout/Network):", e.name === 'AbortError' ? 'Timeout' : e.message);
           }
         }
 
@@ -918,6 +960,30 @@ const AppContent: React.FC = () => {
             permissionService.initialize(finalConfig, pairedTerminal.id);
             authLevelService.init(finalConfig, pairedTerminal.id);
             terminalRouter.init(finalConfig, pairedTerminal.id, pairedTerminal.config.deviceRole || null);
+
+            // --- CRITICAL SECURITY BOOTSTRAP ---
+            try {
+              // Check if we have users. If not, we must fast-sync before allowing Login
+              const localUsers = await db.get('users') as User[];
+              if (!Array.isArray(localUsers) || localUsers.length === 0) {
+                console.log('🔒 Security Bootstrap: No users found. Starting Fast Sync...');
+                await syncManager.fastSyncCoreData();
+
+                const syncedUsers = await db.get('users') as User[];
+                if (Array.isArray(syncedUsers) && syncedUsers.length > 0) {
+                  setIsSecurityLoaded(true);
+                  setUsers(syncedUsers);
+                } else {
+                  throw new Error('No users received from Master. Check terminal pairing.');
+                }
+              } else {
+                setIsSecurityLoaded(true);
+              }
+            } catch (bootstrapErr: any) {
+              console.error('❌ Security Bootstrap Failed:', bootstrapErr);
+              setBootstrapError(bootstrapErr.message || 'Error loading security data.');
+            }
+            // -----------------------------------
 
             if (!authLevelService.shouldRequireUserLogin()) {
               const authResult = await authLevelService.authenticateHeadless();
@@ -2107,25 +2173,164 @@ const AppContent: React.FC = () => {
     );
   }
 
+  const handleProcessRefund = async (
+    originalTx: Transaction,
+    itemsToRefund: CartItem[],
+    conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
+    reason: string
+  ) => {
+    console.log("🔄 Procesando Devolución Integral:", { originalTx, items: itemsToRefund.length, reason });
+
+    // 1. Calculations
+    const refundSubtotalRaw = itemsToRefund.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+    const refundTotal = originalTx.isTaxIncluded
+      ? refundSubtotalRaw
+      : refundSubtotalRaw * (1 + (config.taxRate || 0));
+
+    // Check if full refund
+    const totalOriginalQty = originalTx.items.reduce((acc, i) => acc + i.quantity, 0);
+    const totalRefundedQty = itemsToRefund.reduce((acc, i) => acc + i.quantity, 0);
+    const isFullRefund = totalRefundedQty >= totalOriginalQty;
+    const newStatus = isFullRefund ? 'REFUNDED' : 'PARTIAL_REFUND';
+
+    // 2. NCF B04 Generation
+    const currentTerminalId = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
+    let ncfB04: string | null = null;
+    try {
+      ncfB04 = await db.getNextNCF('B04', currentTerminalId);
+    } catch (e) {
+      console.warn("No se pudo generar NCF B04:", e);
+    }
+
+    // 3. Document Sequence (Internal Refund Series)
+    const sequences = await db.get('internalSequences') as DocumentSeries[];
+    const refundSeries = sequences.find(s => s.id === 'REFUND');
+    let displayId = `NC-${Date.now().toString().slice(-6)}`;
+    if (refundSeries) {
+      displayId = `${refundSeries.prefix}${refundSeries.nextNumber.toString().padStart(refundSeries.padding, '0')}`;
+      const updatedSequences = sequences.map(s => s.id === 'REFUND' ? { ...s, nextNumber: s.nextNumber + 1 } : s);
+      await db.save('internalSequences', updatedSequences);
+      setInternalSequences(updatedSequences);
+    }
+
+    // 4. Create Credit Note Record
+    const creditNote: Transaction = {
+      id: crypto.randomUUID(),
+      displayId: displayId,
+      documentType: 'REFUND',
+      date: new Date().toISOString(),
+      items: itemsToRefund,
+      total: refundTotal,
+      payments: [{ method: 'STORE_CREDIT', amount: refundTotal, currency: config.currencySymbol }],
+      userId: currentUser?.id || 'sys',
+      userName: currentUser?.name || 'System',
+      terminalId: currentTerminalId,
+      status: 'COMPLETED',
+      customerId: originalTx.customerId,
+      customerName: originalTx.customerName,
+      ncf: ncfB04 || undefined,
+      ncfType: 'B04',
+      affectedNCF: originalTx.ncf,
+      affectedInvoiceNumber: originalTx.displayId || originalTx.id,
+      originalTransactionId: originalTx.id,
+      refundReason: reason,
+      isTaxIncluded: originalTx.isTaxIncluded,
+      syncStatus: 'PENDING'
+    };
+
+    // 5. Inventory & Kardex Updates
+    const defaultWarehouseId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
+
+    for (const item of itemsToRefund) {
+      const condition = conditions.get(item.cartId) || 'SELLABLE';
+      const isDamaged = condition === 'DAMAGED';
+
+      // KARDEX: Always "DEVOLUCIÓN_VENTA" (Input)
+      await db.recordInventoryMovement(
+        defaultWarehouseId,
+        item.id,
+        'DEVOLUCIÓN_VENTA',
+        `Devolución Ticket #${originalTx.displayId} (${condition})`,
+        item.quantity,
+        undefined,
+        currentTerminalId
+      );
+
+      // Waste Logic (If Damaged)
+      if (isDamaged) {
+        await db.recordInventoryMovement(
+          defaultWarehouseId,
+          item.id,
+          'AJUSTE_SALIDA',
+          'MERMA_POR_DEVOLUCION',
+          item.quantity,
+          undefined,
+          currentTerminalId
+        );
+      }
+    }
+
+    // 6. Financial Update (Customer Account)
+    if (originalTx.customerId && originalTx.pendingBalance && originalTx.pendingBalance > 0) {
+      // If the original transaction was on credit, we should reduce the debt.
+      // We do this by updating the customer debt directly (or creating a credit movement).
+      // Since we are creating a Credit Note transaction, 'TicketHistory' or 'FinanceDashboard' usually calculates balance.
+      // However, we track 'currentDebt' on the customer object for performance.
+      const customer = customers.find(c => c.id === originalTx.customerId);
+      if (customer) {
+        const newDebt = Math.max(0, (customer.currentDebt || 0) - refundTotal);
+        const updatedCustomer = { ...customer, currentDebt: newDebt };
+        await db.saveDocument('customers', updatedCustomer);
+        setCustomers(prev => prev.map(c => c.id === updatedCustomer.id ? updatedCustomer : c));
+      }
+    }
+
+    // 7. Update Original Transaction
+    const updatedTransactions = transactions.map(t => {
+      if (t.id === originalTx.id) {
+        return {
+          ...t,
+          status: newStatus as any,
+          relatedTransactions: [...(t.relatedTransactions || []), creditNote.id],
+          syncStatus: 'PENDING' as const
+        };
+      }
+      return t;
+    });
+
+    // 8. Save Everything
+    const finalTransactions = [...updatedTransactions, creditNote];
+    setTransactions(finalTransactions);
+    await db.save('transactions', finalTransactions);
+
+    // Sync
+    backgroundSyncManager.triggerSync().catch(console.error);
+
+    // Refresh products to show updated stock
+    const freshData = await db.init();
+    setProducts(freshData.products);
+
+    alert(`Devolución procesada correctamente.\nDocumento: ${displayId}\n${ncfB04 ? 'NCF: ' + ncfB04 : ''}`);
+  };
+
   const renderView = () => {
     switch (currentView) {
+      case 'TERMINAL_PAIRING':
       case 'DEVICE_UNAUTHORIZED':
         return (
-          <TerminalBindingScreen
-            config={config}
-            deviceId={deviceId}
-            adminUsers={users.filter(u => u.role?.toUpperCase() === 'ADMIN' || u.role?.toUpperCase() === 'ADMINISTRADOR')}
+          <TerminalPairingView
+            currentDeviceId={deviceId}
             onPair={handlePairTerminal}
-            onConfigUpdate={handleConfigUpdate}
-            onUsersUpdate={handleUsersUpdate}
-            initialError={initialConnError}
-            initialMasterIp={failedMasterIp}
+            initialMasterIp={localStorage.getItem('pos_master_ip') || ''}
           />
         );
 
       case 'LOGIN':
         if (!getCurrentTerminal()) {
-          setCurrentView('DEVICE_UNAUTHORIZED');
+          // If we are in LOGIN state but have no terminal config, 
+          // we must have failed to load key data. 
+          // Redirect to Pairing to attempt recovery/re-pair.
+          setCurrentView('TERMINAL_PAIRING');
           return null;
         }
         return (
@@ -2496,103 +2701,23 @@ const AppContent: React.FC = () => {
             currentUser={currentUser}
             users={users}
             roles={roles}
+            initialSelectedId={scanTargetTicketId}
             onUpdateConfig={handleConfigUpdate}
-            onClose={() => setCurrentView('POS')}
-            onRefundTransaction={async (tx, items, reason) => {
-              // 1. Calculate totals for the refund
-              const itemsToRefund = items && items.length > 0 ? items : tx.items;
-              const refundSubtotalRaw = itemsToRefund.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-
-              // Respect the original tax inclusion setting
-              const refundTotal = tx.isTaxIncluded
-                ? refundSubtotalRaw
-                : refundSubtotalRaw * (1 + (config.taxRate || 0));
-
-              // Check if it's a full refund
-              const isFullRefund = itemsToRefund.length === tx.items.length;
-              const newStatus = isFullRefund ? 'REFUNDED' : 'PARTIAL_REFUND';
-
-              // ... (sequences logic remains same) ...
-              const sequences = await db.get('internalSequences') as DocumentSeries[];
-              const refundSeries = sequences.find(s => s.id === 'REFUND');
-              let displayId = '';
-              if (refundSeries) {
-                displayId = `${refundSeries.prefix}${refundSeries.nextNumber.toString().padStart(refundSeries.padding, '0')}`;
-                refundSeries.nextNumber++;
-                await db.save('internalSequences', sequences);
-              }
-
-              // 3. Generate Fiscal Sequence (B04)
-              const currentTerminalId = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
-              const ncf = await db.getNextNCF('B04', currentTerminalId);
-
-              // 4. Create the Credit Note Transaction
-              const creditNote: Transaction = {
-                id: crypto.randomUUID(),
-                displayId: displayId,
-                documentType: 'REFUND',
-                date: new Date().toISOString(),
-                items: itemsToRefund.map(it => ({ ...it, quantity: it.quantity })),
-                total: refundTotal,
-                payments: [{ method: 'STORE_CREDIT', amount: refundTotal, date: new Date().toISOString() }],
-                userId: currentUser?.id || 'system',
-                userName: currentUser?.name || 'System',
-                terminalId: currentTerminalId,
-                status: 'COMPLETED',
-                customerId: tx.customerId,
-                customerName: tx.customerName || 'Cliente Mostrador',
-                ncf: ncf || undefined,
-                ncfType: 'B04',
-                affectedNCF: tx.ncf || undefined, // NCF de la factura afectada
-                affectedInvoiceNumber: tx.displayId || tx.id, // No. de factura afectada
-                originalTransactionId: tx.id,
-                refundReason: reason,
-                isTaxIncluded: tx.isTaxIncluded,
-                syncStatus: 'PENDING'
-              };
-
-              // 5. Update the Parent Transaction status and link the Credit Note
-              const updatedTxns = transactions.map(t => {
-                if (t.id === tx.id) {
-                  const related = t.relatedTransactions || [];
-                  return {
-                    ...t,
-                    status: newStatus as any,
-                    relatedTransactions: Array.from(new Set([...related, creditNote.id])),
-                    syncStatus: 'PENDING' as const
-                  };
-                }
-                return t;
-              });
-
-              // 6. Save both the updated parent and the new credit note
-              const finalizedTransactions = [...updatedTxns, creditNote];
-              setTransactions(finalizedTransactions);
-              await db.save('transactions', finalizedTransactions);
-
-              // 7. Trigger background sync
-              backgroundSyncManager.triggerSync().catch(console.error);
-
-              // 8. Record Inventory Movement (Return = Entry)
-              const defaultWarehouseId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
-
-              for (const item of itemsToRefund) {
-                await db.recordInventoryMovement(
-                  defaultWarehouseId,
-                  item.id,
-                  'DEVOLUCION',
-                  displayId || tx.displayId || tx.id,
-                  item.quantity, // Positive for returns (Entry)
-                  item.price,
-                  currentTerminalId
-                );
-              }
-
-              // Refresh products to show updated stock
-              const refreshedDb = await db.init();
-              setProducts(refreshedDb.products || []);
-
+            onClose={() => {
+              setScanTargetTicketId(null); // Clear selection on close
               setCurrentView('POS');
+            }}
+            onRefundTransaction={async (tx, items, conditions, reason) => {
+              // Direct call support
+              // If conditions is string (legacy call from somewhere else?), handle it. 
+              // But TicketHistory calls it with Map.
+              // We just pass it through to handleProcessRefund.
+              const validConditions = conditions instanceof Map ? conditions : new Map<string, 'SELLABLE' | 'DAMAGED'>();
+
+              // If legacy call passed reason as 3rd arg (and conditions was undefined/string)
+              const actualReason = typeof conditions === 'string' ? conditions : reason;
+
+              await handleProcessRefund(tx, items || [], validConditions, actualReason);
             }}
           />
         );
@@ -3223,6 +3348,32 @@ const AppContent: React.FC = () => {
           <div className="w-12 h-12 border-4 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
           <p className="font-bold animate-pulse">Cargando CLIC POS...</p>
         </div>
+      </div>
+    );
+  }
+
+  // --- SECURITY BLOCKER ---
+  if (!isSecurityLoaded) {
+    if (bootstrapError) {
+      return (
+        <div className="h-screen w-screen flex flex-col items-center justify-center bg-red-50 text-red-900 p-8">
+          <div className="text-6xl mb-4">🔐</div>
+          <h1 className="text-2xl font-bold mb-2">Error de Seguridad</h1>
+          <p className="text-lg bg-white p-4 rounded shadow border border-red-200">{bootstrapError}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-6 px-6 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+          >
+            Reintentar
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 text-slate-900">
+        <div className="w-16 h-16 border-4 border-slate-900 border-t-transparent rounded-full animate-spin mb-4"></div>
+        <h2 className="text-xl font-bold animate-pulse">Cargando Seguridad...</h2>
+        <p className="text-gray-500 mt-2">Sincronizando usuarios y permisos</p>
       </div>
     );
   }

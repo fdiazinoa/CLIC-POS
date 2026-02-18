@@ -401,6 +401,72 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         });
     }
 
+    async bulkUpsert<T extends { id: string }>(collectionName: string, docs: T[]): Promise<void> {
+        if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
+        if (!docs || docs.length === 0) return;
+
+        return new Promise((resolve, reject) => {
+            // Use localStorage for heavy collections
+            if (this.isFallbackOnlyCollection(collectionName)) {
+                try {
+                    const storedDocs = this.readFallbackCollection(collectionName);
+                    const docMap = new Map(storedDocs.map(d => [d.id, d]));
+
+                    docs.forEach(doc => docMap.set(doc.id, doc));
+
+                    this.writeFallbackCollection(collectionName, Array.from(docMap.values()));
+                    return resolve();
+                } catch (e) {
+                    return reject(e);
+                }
+            }
+
+            if (!this.hasStore(collectionName)) {
+                try {
+                    const storedDocs = this.readFallbackCollection(collectionName);
+                    const docMap = new Map(storedDocs.map(d => [d.id, d]));
+                    docs.forEach(doc => docMap.set(doc.id, doc));
+                    this.writeFallbackCollection(collectionName, Array.from(docMap.values()));
+                    return resolve();
+                } catch (e) {
+                    return reject(e);
+                }
+            }
+
+            try {
+                const transaction = this.db!.transaction(collectionName, 'readwrite');
+                const store = transaction.objectStore(collectionName);
+
+                docs.forEach(doc => store.put(doc));
+
+                transaction.oncomplete = () => resolve();
+                transaction.onerror = () => {
+                    console.warn(`[IndexedDBAdapter] bulkUpsert fallback for ${collectionName}:`, transaction.error);
+                    try {
+                        const storedDocs = this.readFallbackCollection(collectionName);
+                        const docMap = new Map(storedDocs.map(d => [d.id, d]));
+                        docs.forEach(doc => docMap.set(doc.id, doc));
+                        this.writeFallbackCollection(collectionName, Array.from(docMap.values()));
+                        resolve();
+                    } catch (e) {
+                        reject(transaction.error || e);
+                    }
+                };
+            } catch (error) {
+                console.warn(`[IndexedDBAdapter] bulkUpsert immediate fallback for ${collectionName}:`, error);
+                try {
+                    const storedDocs = this.readFallbackCollection(collectionName);
+                    const docMap = new Map(storedDocs.map(d => [d.id, d]));
+                    docs.forEach(doc => docMap.set(doc.id, doc));
+                    this.writeFallbackCollection(collectionName, Array.from(docMap.values()));
+                    resolve();
+                } catch (e) {
+                    reject(error || e);
+                }
+            }
+        });
+    }
+
     async getDocument<T>(collectionName: string, id: string): Promise<T | null> {
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
 
