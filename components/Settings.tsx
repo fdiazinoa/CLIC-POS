@@ -5,7 +5,7 @@ import {
   Monitor, Users, Truck, ShieldCheck, FileText,
   Globe, Database, Activity, Mail, Coins, Grid,
   Cpu, HardDrive, Smartphone, Cloud, Lock, Package, Building2,
-  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw, Layers, ChefHat, UserCircle, BarChart3
+  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw, Layers, ChefHat, UserCircle, BarChart3, Calendar, MessageCircle, Map as MapIcon, MapPin
 } from 'lucide-react';
 import {
   BusinessConfig,
@@ -26,10 +26,13 @@ import {
   InventoryCountSession,
   CashMovement,
   ZReport,
-  Collection
+  Collection,
+  Room
 } from '../types';
 
 // Component Imports
+import AgendaManager from './AgendaManager';
+import SpacesManager from './SpacesManager';
 import WarehouseManager from './WarehouseManager';
 import CatalogManager from './CatalogManager';
 import TerminalSettings from './TerminalSettings';
@@ -102,9 +105,11 @@ interface SettingsProps {
   terminalId?: string;
   initialView?: SettingsView;
   initialData?: any;
+  rooms: Room[];
+  onUpdateRooms?: (rooms: Room[]) => void;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -236,6 +241,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
             transfers={props.transfers}
             purchaseOrders={props.purchaseOrders}
             suppliers={props.suppliers}
+            rooms={props.rooms}
+            onUpdateRooms={props.onUpdateRooms || (() => { })}
           />
         );
 
@@ -423,6 +430,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
           <CustomerManagement
             customers={props.customers || []}
             config={props.config}
+            rooms={props.rooms}
+            users={props.users}
             currentUser={props.currentUser || props.users[0] || { id: 'sys', name: 'System', pin: '0000', role: 'admin' }}
             terminalId={props.terminalId || 'T1'}
             collections={props.collections || []}
@@ -439,6 +448,30 @@ const Settings: React.FC<SettingsProps> = (props) => {
               const updated = (props.customers || []).filter(c => c.id !== id);
               props.onUpdateCustomers?.(updated);
             }}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'AGENDA':
+        return (
+          <AgendaManager
+            config={props.config}
+            currentUser={props.currentUser!}
+            customers={props.customers || []}
+            rooms={props.rooms}
+            users={props.users}
+            warehouses={props.warehouses}
+            onUpdateRooms={props.onUpdateRooms}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'SPACES':
+        return (
+          <SpacesManager
+            rooms={props.rooms}
+            warehouses={props.warehouses}
+            onUpdateRooms={props.onUpdateRooms || (() => { })}
             onClose={() => setCurrentView('HOME')}
           />
         );
@@ -733,6 +766,14 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={Receipt} label="Diseño de Ticket" description="Logo, Cabecera y Pie" color="bg-rose-600" onClick={() => setCurrentView('RECEIPT')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Mail} label="E-mail" description="Factura Digital" color="bg-sky-500" onClick={() => setCurrentView('EMAIL')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Wallet} label="Wallet Keys" description="Apple & Google Pay" color="bg-slate-800" onClick={() => setCurrentView('WALLET_KEYS')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard
+                    icon={Calendar}
+                    label="Agenda & Reservas"
+                    description="CRM, Citas y Salones"
+                    color="bg-sky-600"
+                    onClick={() => setCurrentView('AGENDA')}
+                    locked={!hasPermission('CUSTOMER_MANAGE')}
+                  />
                 </div>
               </section>
 

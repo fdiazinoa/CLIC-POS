@@ -164,7 +164,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             key: 'WALLET',
             id: 'WALLET',
             type: 'WALLET',
-            label: 'Wallet',
+            label: 'Saldo a Favor',
             iconName: 'Wallet',
             Icon: Wallet
          });

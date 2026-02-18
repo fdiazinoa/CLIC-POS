@@ -84,6 +84,7 @@ interface POSInterfaceProps {
    onOpenInventoryTracking: (productId?: string) => void;
    onOpenAudit?: () => void;
    onOpenTableMap?: () => void;
+   onOpenAgenda?: () => void;
    onTransactionComplete: (txn: Transaction) => void;
    onAddCustomer: (customer: Customer) => void;
    onUpdateConfig: (newConfig: BusinessConfig) => void;
@@ -131,6 +132,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onOpenInventoryTracking,
    onOpenAudit,
    onOpenTableMap,
+   onOpenAgenda,
    onTransactionComplete,
    onAddCustomer,
    onUpdateConfig,
@@ -1913,6 +1915,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
             break;
          case 'loyalty_card': setShowLoyaltyModal(true); break;
+         case 'AGENDA': if (onOpenAgenda) onOpenAgenda(); break;
       }
    };
 

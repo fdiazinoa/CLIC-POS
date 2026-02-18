@@ -8,11 +8,13 @@ import {
    Globe, Calendar, Map, Navigation, CheckSquare, Clock, Landmark, ShieldCheck, Zap, Gift,
    Loader2, AlertOctagon, Printer, DollarSign, Banknote, QrCode, ArrowRightLeft
 } from 'lucide-react';
-import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType, Wallet, LoyaltyCard, Transaction, User, Collection } from '../types';
+import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType, Wallet, LoyaltyCard, Transaction, User, Collection, Activity } from '../types';
 import { dgiiService, DGIIResponse } from '../services/dgii/DGIIValidationService';
 import { printTicket } from '../utils/printer';
 import AccountReceivableModal from './AccountReceivableModal';
 import CreditAccountDashboard from './CreditAccountDashboard';
+import { agendaService } from '../services/AgendaService';
+import ActivityModal from './ActivityModal';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -26,6 +28,8 @@ interface CustomerManagementProps {
    terminalId: string;
    collections: Collection[];
    onUpdateCollections: (collections: Collection[]) => void;
+   rooms: any[];
+   users: User[];
 }
 
 const CustomerManagement: React.FC<CustomerManagementProps> = ({
@@ -39,16 +43,24 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    currentUser,
    terminalId,
    collections,
-   onUpdateCollections
+   onUpdateCollections,
+   rooms,
+   users
 }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
    const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-   const [activeProfileTab, setActiveProfileTab] = useState<'HISTORY' | 'WALLET' | 'LOYALTY' | 'CREDIT'>('HISTORY');
+   const [activeProfileTab, setActiveProfileTab] = useState<'HISTORY' | 'WALLET' | 'LOYALTY' | 'CREDIT' | 'AGENDA'>('HISTORY');
    const [editModalTab, setEditModalTab] = useState<'GENERAL' | 'ADDRESSES'>('GENERAL');
    const [isAbonoModalOpen, setIsAbonoModalOpen] = useState(false);
    const [abonoInitialAmount, setAbonoInitialAmount] = useState<number | undefined>(undefined);
    const [abonoInitialInvoices, setAbonoInitialInvoices] = useState<string[] | undefined>(undefined);
+
+   // Agenda State
+   const [customerActivities, setCustomerActivities] = useState<Activity[]>([]);
+   const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
+   const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null);
+   const [prefilledDate, setPrefilledDate] = useState<Date | null>(null);
 
    // Filter State
    const [filterTag, setFilterTag] = useState<string>('ALL');
@@ -395,20 +407,12 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                continue;
             }
 
-            const existingPending = toPending(existing.pendingBalance);
-            const nextPending = toPending(tx.pendingBalance);
+            // Prioritize by most recent update regardless of balance changes
+            const existingTs = Math.max(toTimestamp((existing as any).updatedAt), toTimestamp(existing.date));
+            const nextTs = Math.max(toTimestamp((tx as any).updatedAt), toTimestamp(tx.date));
 
-            if (nextPending > existingPending) {
+            if (nextTs >= existingTs) {
                mergedMap.set(tx.id, tx);
-               continue;
-            }
-
-            if (nextPending === existingPending) {
-               const existingTs = Math.max(toTimestamp((existing as any).updatedAt), toTimestamp(existing.date));
-               const nextTs = Math.max(toTimestamp((tx as any).updatedAt), toTimestamp(tx.date));
-               if (nextTs >= existingTs) {
-                  mergedMap.set(tx.id, tx);
-               }
             }
          }
 
@@ -423,10 +427,23 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       }
    }, [selectedCustomer?.id]);
 
-   // --- LOAD CUSTOMER TRANSACTIONS ---
+   // --- LOAD CUSTOMER ACTIVITIES ---
+   const fetchActivities = useCallback(async () => {
+      if (!selectedCustomer?.id) return;
+      try {
+         const acts = await agendaService.getCustomerActivities(selectedCustomer.id);
+         setCustomerActivities(acts);
+      } catch (e) {
+         console.error("Failed to load customer activities:", e);
+      }
+   }, [selectedCustomer?.id]);
+
+   // --- LOAD CUSTOMER DATA ---
    useEffect(() => {
       loadCustomerTransactions();
-   }, [loadCustomerTransactions]);
+      fetchActivities();
+   }, [loadCustomerTransactions, fetchActivities, customers]);
+
 
    // --- ADDRESS LOGIC ---
    const handleCreateWallet = () => {
@@ -831,25 +848,29 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                               </div>
                            </div>
 
-                           {/* Mini Stats */}
-                           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8 pt-6 border-t border-gray-100">
+                           {/* Mini Stats (Financial Summary Header) */}
+                           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-8 pt-6 border-t border-gray-100">
                               <div>
                                  <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Total Gastado</p>
                                  <p className="text-xl font-black text-gray-800">{config.currencySymbol}{selectedCustomer.totalSpent?.toLocaleString() || '0.00'}</p>
                               </div>
                               <div>
-                                 <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Última Visita</p>
-                                 <p className="text-sm font-bold text-gray-700">{selectedCustomer.lastVisit ? new Date(selectedCustomer.lastVisit).toLocaleDateString() : 'N/A'}</p>
-                              </div>
-                              <div>
                                  <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Deuda Actual</p>
-                                 <p className={`text-xl font-black ${selectedCustomer.currentDebt ? 'text-red-500' : 'text-green-500'}`}>
+                                 <p className="text-xl font-black text-red-500">
                                     {config.currencySymbol}{selectedCustomer.currentDebt?.toLocaleString() || '0.00'}
                                  </p>
                               </div>
                               <div>
-                                 <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Puntos</p>
-                                 <p className="text-xl font-black text-purple-600">{selectedCustomer.loyaltyPoints || 0}</p>
+                                 <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Saldo a Favor / Anticipos</p>
+                                 <p className="text-xl font-black text-emerald-500">
+                                    {config.currencySymbol}{selectedCustomer.wallet?.balance.toLocaleString() || '0.00'}
+                                 </p>
+                              </div>
+                              <div className="md:border-l md:pl-6">
+                                 <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Total Neto</p>
+                                 <p className={`text-xl font-black ${((selectedCustomer.wallet?.balance || 0) - (selectedCustomer.currentDebt || 0)) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                    {config.currencySymbol}{((selectedCustomer.wallet?.balance || 0) - (selectedCustomer.currentDebt || 0)).toLocaleString()}
+                                 </p>
                               </div>
                            </div>
                         </div>
@@ -861,6 +882,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                               { id: 'WALLET', label: 'Billetera', icon: WalletIcon },
                               { id: 'LOYALTY', label: 'Lealtad', icon: Star },
                               { id: 'CREDIT', label: 'Crédito', icon: CreditCard },
+                              { id: 'AGENDA', label: 'Agenda', icon: Calendar },
                            ].map(tab => (
                               <button
                                  key={tab.id}
@@ -878,41 +900,60 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                            {activeProfileTab === 'HISTORY' && (
                               <div className="space-y-3">
                                  {customerTransactions.length > 0 ? (
-                                    customerTransactions.map((tx) => (
-                                       (() => {
-                                          const effectivePending = getEffectivePendingBalance(tx);
-                                          return (
-                                             <div
-                                                key={tx.id}
-                                                onClick={() => setSelectedTransactionId(tx.id)}
-                                                className="bg-white p-4 rounded-xl border border-gray-100 flex items-center justify-between hover:shadow-md transition-all cursor-pointer group"
-                                             >
-                                                <div className="flex items-center gap-4">
-                                                   <div className="p-2 bg-gray-50 rounded-lg text-gray-400 group-hover:bg-blue-50 group-hover:text-blue-600 transition-colors">
-                                                      <ShoppingBag size={20} />
-                                                   </div>
-                                                   <div>
-                                                      <p className="font-bold text-gray-800 text-sm">Compra #{tx.displayId || tx.id.slice(-8).toUpperCase()}</p>
-                                                      <p className="text-xs text-gray-400">{new Date(tx.date).toLocaleDateString()} • {tx.items.length} items</p>
-                                                   </div>
+                                    customerTransactions.map((tx) => {
+                                       const effectivePending = getEffectivePendingBalance(tx);
+                                       const isRefund = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+
+                                       // Dynamic Document Name Detection
+                                       const getDocumentName = () => {
+                                          if (tx.documentType === 'REFUND') return 'Nota de Crédito';
+                                          if (tx.ncfType === 'B04') return 'Devolución (NC)';
+                                          return 'Compra';
+                                       };
+
+                                       return (
+                                          <div
+                                             key={tx.id}
+                                             onClick={() => setSelectedTransactionId(tx.id)}
+                                             className={`p-4 rounded-xl border flex items-center justify-between transition-all cursor-pointer group shadow-sm hover:shadow-md ${isRefund
+                                                ? 'bg-red-50/50 border-red-200'
+                                                : 'bg-white border-gray-100 hover:border-gray-200'
+                                                }`}
+                                          >
+                                             <div className="flex items-center gap-4">
+                                                <div className={`p-2 rounded-lg transition-colors ${isRefund
+                                                   ? 'bg-red-100 text-red-600'
+                                                   : 'bg-gray-50 text-gray-400 group-hover:bg-blue-50 group-hover:text-blue-600'
+                                                   }`}>
+                                                   {isRefund ? <ArrowRightLeft size={20} /> : <ShoppingBag size={20} />}
                                                 </div>
-                                                <div className="text-right">
-                                                   <p className="font-bold text-gray-800">{config.currencySymbol}{tx.total.toFixed(2)}</p>
-                                                   <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${tx.status === 'REFUNDED' ? 'bg-red-50 text-red-600' :
-                                                      tx.status === 'PARTIAL_REFUND' ? 'bg-orange-50 text-orange-600' :
-                                                         effectivePending > 0 ? 'bg-amber-50 text-amber-600' :
-                                                            'bg-green-50 text-green-600'
-                                                      }`}>
-                                                      {tx.status === 'REFUNDED' ? 'ANULADO' :
-                                                         tx.status === 'PARTIAL_REFUND' ? 'PARCIAL' :
-                                                            effectivePending > 0 ? 'PENDIENTE' :
-                                                               'PAGADO'}
-                                                   </span>
+                                                <div>
+                                                   <p className={`font-bold text-sm ${isRefund ? 'text-red-900' : 'text-gray-800'}`}>
+                                                      {getDocumentName()} #{tx.displayId || tx.id.slice(-8).toUpperCase()}
+                                                   </p>
+                                                   <p className="text-[10px] font-medium text-gray-400 uppercase tracking-widest">
+                                                      {new Date(tx.date).toLocaleDateString()} • {tx.items.length} items
+                                                   </p>
                                                 </div>
                                              </div>
-                                          );
-                                       })()
-                                    ))
+                                             <div className="text-right">
+                                                <p className={`font-black ${isRefund ? 'text-red-600' : 'text-gray-900'}`}>
+                                                   {isRefund ? '-' : ''}{config.currencySymbol}{tx.total.toFixed(2)}
+                                                </p>
+                                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${tx.status === 'REFUNDED' ? 'bg-red-100 text-red-700' :
+                                                   tx.status === 'PARTIAL_REFUND' ? 'bg-orange-100 text-orange-700' :
+                                                      effectivePending > 0 ? 'bg-amber-100 text-amber-700' :
+                                                         'bg-emerald-100 text-emerald-700'
+                                                   }`}>
+                                                   {tx.status === 'REFUNDED' ? 'ANULADO' :
+                                                      tx.status === 'PARTIAL_REFUND' ? 'DEVUELTO' :
+                                                         effectivePending > 0 ? 'PENDIENTE' :
+                                                            'PAGADO'}
+                                                </span>
+                                             </div>
+                                          </div>
+                                       );
+                                    })
                                  ) : (
                                     <div className="text-center py-8 text-gray-400 border-2 border-dashed border-gray-100 rounded-xl">
                                        <ShoppingBag size={32} className="mx-auto mb-2 opacity-50" />
@@ -1092,6 +1133,76 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                        setIsAbonoModalOpen(true);
                                     }}
                                  />
+                              </div>
+                           )}
+
+                           {activeProfileTab === 'AGENDA' && selectedCustomer && (
+                              <div className="space-y-6">
+                                 <div className="flex justify-between items-center bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+                                    <div>
+                                       <h3 className="text-lg font-black text-gray-800">Actividades & Citas</h3>
+                                       <p className="text-xs text-gray-400 font-bold uppercase tracking-widest">Planificadas para este cliente</p>
+                                    </div>
+                                    <button
+                                       onClick={() => {
+                                          setSelectedActivity(null);
+                                          setPrefilledDate(new Date());
+                                          setIsActivityModalOpen(true);
+                                       }}
+                                       className="px-4 py-2 bg-blue-600 text-white rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-blue-100 hover:scale-105 transition-all text-sm"
+                                    >
+                                       <Calendar size={18} /> Agendar
+                                    </button>
+                                 </div>
+
+                                 <div className="space-y-3">
+                                    {customerActivities.length > 0 ? (
+                                       customerActivities.sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime()).map(act => (
+                                          <div
+                                             key={act.id}
+                                             onClick={() => {
+                                                setSelectedActivity(act);
+                                                setIsActivityModalOpen(true);
+                                             }}
+                                             className="p-4 bg-white rounded-xl border border-gray-100 shadow-sm hover:border-blue-200 transition-all cursor-pointer group"
+                                          >
+                                             <div className="flex justify-between items-start">
+                                                <div className="flex items-center gap-4">
+                                                   <div className={`p-2 rounded-lg ${act.nature === 'BOOKING' ? 'bg-orange-50 text-orange-600' : 'bg-blue-50 text-blue-600'}`}>
+                                                      {act.nature === 'BOOKING' ? <Map size={20} /> : <MessageCircle size={20} />}
+                                                   </div>
+                                                   <div>
+                                                      <p className="font-bold text-gray-800">{act.title}</p>
+                                                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest leading-tight mt-0.5">
+                                                         {new Date(act.startDate).toLocaleDateString()} {new Date(act.startDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {act.type}
+                                                      </p>
+                                                      {act.spaceName && (
+                                                         <p className="text-[10px] text-orange-600 font-black flex items-center gap-1 mt-1">
+                                                            <MapPin size={10} /> {act.spaceName}
+                                                         </p>
+                                                      )}
+                                                   </div>
+                                                </div>
+                                                <div className="text-right">
+                                                   <span className={`text-[9px] px-2 py-0.5 rounded-full font-black ${act.status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-700' :
+                                                      act.status === 'CANCELLED' ? 'bg-red-100 text-red-700' :
+                                                         'bg-blue-100 text-blue-700'
+                                                      }`}>
+                                                      {act.status}
+                                                   </span>
+                                                   <p className="text-[10px] text-gray-400 font-bold mt-1">Ref: {act.displayId}</p>
+                                                </div>
+                                             </div>
+                                          </div>
+                                       ))
+                                    ) : (
+                                       <div className="text-center py-12 bg-white rounded-2xl border-2 border-dashed border-gray-100">
+                                          <Calendar size={48} className="mx-auto text-gray-200 mb-3" />
+                                          <p className="text-gray-400 font-bold">Sin actividades registradas</p>
+                                          <p className="text-xs text-gray-300">Haz clic en Agendar para programar una cita o tarea.</p>
+                                       </div>
+                                    )}
+                                 </div>
                               </div>
                            )}
                         </div>
@@ -1617,7 +1728,48 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                }}
             />
          )}
-      </div >
+
+         {/* ACTIVITY MODAL */}
+         {selectedCustomer && (
+            <ActivityModal
+               isOpen={isActivityModalOpen}
+               onClose={() => {
+                  setIsActivityModalOpen(false);
+                  setSelectedActivity(null);
+                  setPrefilledDate(null);
+                  fetchActivities();
+               }}
+               activity={selectedActivity}
+               initialDate={prefilledDate || undefined}
+               customers={[selectedCustomer]}
+               rooms={rooms}
+               users={users}
+               onSave={async (activity) => {
+                  if (selectedActivity) {
+                     await agendaService.updateActivity(selectedActivity.id, activity);
+                  } else {
+                     await agendaService.createActivity({
+                        ...activity,
+                        customerId: selectedCustomer.id,
+                        customerName: selectedCustomer.name
+                     });
+                  }
+                  setIsActivityModalOpen(false);
+                  setSelectedActivity(null);
+                  setPrefilledDate(null);
+                  fetchActivities();
+               }}
+               onDelete={async (id) => {
+                  if (confirm('¿Eliminar actividad?')) {
+                     await agendaService.deleteActivity(id);
+                     setIsActivityModalOpen(false);
+                     setSelectedActivity(null);
+                     fetchActivities();
+                  }
+               }}
+            />
+         )}
+      </div>
    );
 };
 

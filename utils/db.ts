@@ -190,7 +190,8 @@ const SEED_DATA = {
   rooms: [] as any[],
   tables: [] as any[],
   collections: [] as any[],
-  paymentMethods: [] as PaymentMethodDefinition[]
+  paymentMethods: [] as PaymentMethodDefinition[],
+  activities: [] as any[]
 };
 
 export const db = {
@@ -235,7 +236,8 @@ export const db = {
         'productStocks',
         'reservations',
         'inventoryCommitments',
-        'collections'
+        'collections',
+        'activities'
       ].includes(key);
 
     const isDeferredHeavyCollection = (key: string) =>

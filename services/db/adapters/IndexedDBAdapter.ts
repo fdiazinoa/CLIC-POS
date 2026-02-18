@@ -1,7 +1,7 @@
 import { DatabaseAdapter } from '../DatabaseAdapter';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 13; // Incremented to add reservations and inventory commitments
+const DB_VERSION = 14; // Incremented to add activities for CRM & Booking
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
@@ -18,7 +18,7 @@ const STORES = [
     'watchlists', 'syncMetadata', 'inventorySnapshots', 'inventoryAuditLogs', 'inventoryCounts',
     'offline_receptions', 'offline_reception_queue', 'offline_reception_conflicts',
     'offline_inventory_counts', 'offline_inventory_count_queue', 'offline_inventory_count_conflicts',
-    'offline_print_queue', 'reservations', 'inventoryCommitments'
+    'offline_print_queue', 'reservations', 'inventoryCommitments', 'activities'
 ];
 
 export class IndexedDBAdapter implements DatabaseAdapter {
@@ -143,7 +143,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
     }
 
     private isFallbackOnlyCollection(collectionName: string): boolean {
-        return collectionName === 'transactions' || collectionName === 'transactionHistory';
+        return false; // Disable global fallback only mode for all collections to prioritize IndexedDB
     }
 
     private reconcileFlagKey(collectionName: string): string {

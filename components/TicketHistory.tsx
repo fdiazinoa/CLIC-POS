@@ -169,7 +169,7 @@ const SalesHistoryTable: React.FC<{
 
    const getStatusBadge = (tx: Transaction) => {
       if (tx.status === 'REFUNDED') return <span className="px-2 py-0.5 bg-red-100 text-red-600 rounded-full text-[10px] font-bold">ANULADO</span>;
-      if (tx.status === 'PARTIAL_REFUND') return <span className="px-2 py-0.5 bg-orange-100 text-orange-600 rounded-full text-[10px] font-bold">PARTIAL</span>;
+      if (tx.status === 'PARTIAL_REFUND') return <span className="px-2 py-0.5 bg-orange-100 text-orange-600 rounded-full text-[10px] font-bold">DEVUELTO</span>;
       if ((tx.pendingBalance || 0) > 0) return <span className="px-2 py-0.5 bg-amber-100 text-amber-600 rounded-full text-[10px] font-bold">PENDIENTE</span>;
       return <span className="px-2 py-0.5 bg-green-100 text-green-600 rounded-full text-[10px] font-bold">COMPLETADO</span>;
    };
@@ -361,6 +361,8 @@ const TicketDetailDrawer: React.FC<{
                         <div className="mt-1 flex items-center gap-2">
                            {tx.status === 'REFUNDED' ? (
                               <span className="bg-red-100 text-red-600 px-3 py-1 rounded-full text-xs font-black italic">ANULADO</span>
+                           ) : tx.status === 'PARTIAL_REFUND' ? (
+                              <span className="bg-orange-100 text-orange-600 px-3 py-1 rounded-full text-xs font-black">DEVUELTO</span>
                            ) : (tx.pendingBalance || 0) > 0 ? (
                               <span className="bg-amber-100 text-amber-600 px-3 py-1 rounded-full text-xs font-black">PENDIENTE</span>
                            ) : (
@@ -580,10 +582,10 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    // --- SMART SEARCH LOGIC ---
    const filteredTransactions = useMemo(() => {
       // Merge current transactions (props) with history
-      // Deduplicate by ID just in case
-      const allTransactions = [...transactions, ...historyTransactions];
+      // Deduplicate by ID: Prioritize props (active state) over history cache
       const uniqueMap = new Map();
-      allTransactions.forEach(t => uniqueMap.set(t.id, t));
+      historyTransactions.forEach(t => uniqueMap.set(t.id, t));
+      transactions.forEach(t => uniqueMap.set(t.id, t));
 
       const isValidTicketRecord = (tx: any): boolean => {
          const rawId = typeof tx?.id === 'string' ? tx.id.trim() : '';

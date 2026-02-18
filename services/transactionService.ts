@@ -380,9 +380,23 @@ class TransactionService {
     }
 
     /**
+     * applyRefundToWallet
+     * Dispatched when a Credit Note (NC) has no associated sale in the same session.
+     * Automatically adds the refund amount to the customer's wallet balance.
+     */
+    async applyRefundToWallet(
+        customerId: string,
+        amount: number,
+        refundDisplayId: string
+    ): Promise<void> {
+        console.log(`💰 [Scenario B] Applying refund ${amount} to wallet for customer ${customerId}`);
+        await this.updateWalletBalance(customerId, amount, 'DEPOSIT', refundDisplayId);
+    }
+
+    /**
      * Atomic Wallet Balance Update
      */
-    private async updateWalletBalance(
+    async updateWalletBalance(
         customerId: string,
         amount: number,
         type: 'DEPOSIT' | 'PAYMENT' | 'REFUND',

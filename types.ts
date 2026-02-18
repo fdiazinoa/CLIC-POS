@@ -926,8 +926,12 @@ export interface Room {
   id: string;
   nombre: string;
   name?: string;
-  consumo_minimo?: number;
-  capacidad_personas?: number;
+  consumo_minimo?: number; // Legacy, but keeping for compatibility
+  capacidad_personas?: number; // Legacy
+  capacidad_pax?: number; // New standard for Spaces
+  base_price?: number; // For quotes
+  color?: string; // For calendar
+  warehouse_id?: string; // For inventory mapping
   cargo_servicio_pct?: number;
   orden?: number;
   data?: {
@@ -1110,7 +1114,8 @@ export type ViewState =
   | 'KITCHEN_ORDERS'
   // Customer Visor views
   | 'VISOR'
-  | 'TERMINAL_PAIRING'; // Added for boot flow refactor
+  | 'TERMINAL_PAIRING'
+  | 'AGENDA'; // Added for CRM & Booking Module
 
 export interface TariffPriceOverride {
   productId: string;
@@ -1766,4 +1771,67 @@ export interface AttendanceLog {
   };
   notes?: string;
   syncStatus?: SyncStatus;
+}
+
+// --- CRM & BOOKING TYPES ---
+
+export type ActivityNature = 'CRM' | 'BOOKING';
+
+export type ActivityType =
+  | 'CALL'
+  | 'EMAIL'
+  | 'LUNCH'
+  | 'MEETING'
+  | 'VISIT'
+  | 'TECHNICAL'
+  | 'WEDDING'
+  | 'CONFERENCE'
+  | 'SPACE_RENTAL'
+  | 'OTHER';
+
+export type ActivityPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+
+export type ActivityStatus = 'PLANNED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'NO_SHOW';
+
+export interface Activity {
+  id: string;
+  displayId: string;
+  nature: ActivityNature;
+  type: ActivityType;
+  title: string;
+  description?: string;
+  status: ActivityStatus;
+  priority: ActivityPriority;
+  outcome?: string; // Captured when completed (e.g., "Interesado", "Generó Cotización")
+
+  // Timings
+  startDate: string; // ISO
+  endDate: string;   // ISO
+  allDay?: boolean;
+  reminderMinutes?: number; // Minutes before start
+
+  // Relationships
+  customerId?: string;
+  customerName?: string;
+  assignedToId: string; // Employee/User assigned
+  assignedToName: string;
+  spaceId?: string; // Room ID if BOOKING
+  spaceName?: string;
+
+  // Integration
+  linkedTransactionId?: string; // To Quote/Invoice
+  reservationId?: string;
+
+  // Metadata
+  terminalId: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+}
+
+export interface ActivityStats {
+  byType: Record<string, number>;
+  byStatus: Record<string, number>;
+  byEmployee: Record<string, number>;
+  successRate?: number;
 }

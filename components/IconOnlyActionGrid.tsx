@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
     Percent, QrCode, Inbox, StickyNote, Box, Save, Settings,
-    Lock, LogOut, Package, RotateCcw, CreditCard
+    Lock, LogOut, Package, RotateCcw, CreditCard, Calendar
 } from 'lucide-react';
 import { BusinessConfig } from '../types';
 
@@ -105,6 +105,7 @@ const IconOnlyActionGrid: React.FC<IconOnlyActionGridProps> = ({
                 {renderButton('SETTINGS', 'Ajustes', <Settings />, 'utility')}
                 {renderButton('DRAWER', 'Cajón', <Box />, 'utility')}
                 {renderButton('TRACKING', 'Rastreo', <Package />, 'utility')}
+                {renderButton('AGENDA', 'Agenda', <Calendar />, 'utility')}
 
                 {/* CLOSING GROUP (Red) */}
                 {renderButton('Z_REPORT', 'Cierre Z', <Lock />, 'closing')}
