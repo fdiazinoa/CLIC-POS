@@ -1045,13 +1045,15 @@ const AppContent: React.FC = () => {
             setIsDataLoaded(true);
           } else {
             console.warn('⚠️ No paired terminal found. Waiting for pairing...');
-            // Still load to allow access to pairing screen
+            // Still load to allow access to pairing/unauthorized screens.
             setIsDataLoaded(true);
+            setIsSecurityLoaded(true);
           }
         } else {
           // First run or no data
           console.log('INFO: No data found, setting isDataLoaded = true for setup');
           setIsDataLoaded(true);
+          setIsSecurityLoaded(true);
         }
       } catch (error: any) {
         console.error('CRITICAL: Failed to load initial data:', error);

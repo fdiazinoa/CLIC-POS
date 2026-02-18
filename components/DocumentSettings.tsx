@@ -1,5 +1,4 @@
 
-// Document Center, no se visualizan los documentos ni los NCF creado
 import React, { useState, useMemo, useEffect } from 'react';
 import { BusinessConfig, DocumentSeries, FiscalRangeDGII, Transaction } from '../types';
 import {
@@ -13,10 +12,168 @@ import { db } from '../utils/db';
 import { NCFType } from '../types';
 import { seriesSyncService } from '../services/sync/SeriesSyncService';
 import { syncManager } from '../services/sync/SyncManager';
+import { DEFAULT_DOCUMENT_SERIES } from '../constants';
 
 interface DocumentSettingsProps {
    onClose: () => void;
 }
+
+const DOCUMENT_TYPE_ORDER = [
+   'TICKET', 'REFUND', 'VOID',
+   'TRANSFER', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'PURCHASE', 'PRODUCTION',
+   'CASH_IN', 'CASH_OUT', 'CASH_DEPOSIT', 'CASH_WITHDRAWAL',
+   'Z_REPORT', 'X_REPORT',
+   'RECEIVABLE', 'PAYABLE', 'PAYMENT_IN', 'PAYMENT_OUT'
+] as const;
+
+const DOCUMENT_TYPE_SET = new Set<string>(DOCUMENT_TYPE_ORDER as readonly string[]);
+const NCF_TYPES: NCFType[] = ['B01', 'B02', 'B04', 'B14', 'B15'];
+
+const DOCUMENT_TYPE_CONFIG: Record<string, { label: string; icon: React.ComponentType<any>; color: string }> = {
+   // Ventas
+   TICKET: { label: 'Tickets de Venta', icon: Receipt, color: 'blue' },
+   REFUND: { label: 'Devoluciones / Abonos', icon: RotateCcw, color: 'orange' },
+   VOID: { label: 'Anulaciones', icon: X, color: 'red' },
+
+   // Inventario
+   TRANSFER: { label: 'Traspasos', icon: ArrowRightLeft, color: 'purple' },
+   ADJUSTMENT_IN: { label: 'Ajustes Positivos', icon: Plus, color: 'green' },
+   ADJUSTMENT_OUT: { label: 'Ajustes Negativos', icon: Trash2, color: 'red' },
+   PURCHASE: { label: 'Compras', icon: ShoppingBag, color: 'indigo' },
+   PRODUCTION: { label: 'Producción', icon: Box, color: 'cyan' },
+
+   // Efectivo
+   CASH_IN: { label: 'Entradas de Efectivo', icon: ArrowRight, color: 'emerald' },
+   CASH_OUT: { label: 'Salidas de Efectivo', icon: ArrowRight, color: 'rose' },
+   CASH_DEPOSIT: { label: 'Depósitos Bancarios', icon: Landmark, color: 'teal' },
+   CASH_WITHDRAWAL: { label: 'Retiros', icon: Landmark, color: 'amber' },
+
+   // Cierres
+   Z_REPORT: { label: 'Cierres de Caja (Z)', icon: Save, color: 'slate' },
+   X_REPORT: { label: 'Cortes Parciales (X)', icon: FileText, color: 'gray' },
+
+   // Cuentas
+   RECEIVABLE: { label: 'Cuentas por Cobrar', icon: ArrowUpRight, color: 'sky' },
+   PAYABLE: { label: 'Cuentas por Pagar', icon: ArrowUpRight, color: 'violet' },
+   PAYMENT_IN: { label: 'Cobros Recibidos', icon: Check, color: 'lime' },
+   PAYMENT_OUT: { label: 'Pagos Realizados', icon: Check, color: 'fuchsia' }
+};
+
+const normalizeDocumentType = (value: unknown): string => {
+   if (typeof value !== 'string') return '';
+   return value.trim().toUpperCase().replace(/[\s-]+/g, '_');
+};
+
+const inferDocumentType = (series: any): string => {
+   const explicitType = normalizeDocumentType(series?.documentType);
+   if (DOCUMENT_TYPE_SET.has(explicitType)) return explicitType;
+
+   const typeFromId = normalizeDocumentType(series?.id);
+   if (DOCUMENT_TYPE_SET.has(typeFromId)) return typeFromId;
+
+   const prefix = String(series?.prefix || '').trim().toUpperCase();
+   if (prefix.startsWith('TCK')) return 'TICKET';
+   if (prefix.startsWith('NC') || prefix.startsWith('REF')) return 'REFUND';
+   if (prefix.startsWith('TR')) return 'TRANSFER';
+   if (prefix.startsWith('VOID')) return 'VOID';
+   if (prefix.startsWith('RCB') || prefix.startsWith('COB')) return 'PAYMENT_IN';
+   if (prefix.startsWith('PAG')) return 'PAYMENT_OUT';
+
+   return explicitType || typeFromId || 'TICKET';
+};
+
+const normalizeSequence = (raw: any): DocumentSeries | null => {
+   if (!raw || typeof raw !== 'object') return null;
+
+   const documentType = inferDocumentType(raw);
+   const fallback = DEFAULT_DOCUMENT_SERIES.find(s =>
+      normalizeDocumentType(s.documentType) === documentType ||
+      normalizeDocumentType(s.id) === documentType
+   );
+
+   const prefix = String(raw.prefix || fallback?.prefix || 'DOC').trim().toUpperCase();
+   const safeId = String(raw.id || `${documentType}_${prefix}`).trim();
+   if (!safeId) return null;
+
+   const nextNumberRaw = Number(raw.nextNumber);
+   const paddingRaw = Number(raw.padding);
+
+   return {
+      id: safeId,
+      documentType: documentType as DocumentSeries['documentType'],
+      name: String(raw.name || fallback?.name || `Serie ${documentType}`).trim(),
+      description: String(raw.description || fallback?.description || 'Documento interno.').trim(),
+      prefix: prefix || 'DOC',
+      nextNumber: Number.isFinite(nextNumberRaw) && nextNumberRaw > 0 ? Math.floor(nextNumberRaw) : (fallback?.nextNumber || 1),
+      padding: Number.isFinite(paddingRaw) && paddingRaw >= 0 ? Math.floor(paddingRaw) : (fallback?.padding ?? 6),
+      icon: String(raw.icon || fallback?.icon || 'FileText'),
+      color: String(raw.color || fallback?.color || 'blue'),
+      businessUnit: typeof raw.businessUnit === 'string' ? raw.businessUnit : undefined
+   };
+};
+
+const normalizeSequenceCollection = (rows: any[]): DocumentSeries[] => {
+   const map = new Map<string, DocumentSeries>();
+   for (const row of Array.isArray(rows) ? rows : []) {
+      const normalized = normalizeSequence(row);
+      if (!normalized) continue;
+      const existing = map.get(normalized.id);
+      if (!existing) {
+         map.set(normalized.id, normalized);
+         continue;
+      }
+      map.set(normalized.id, {
+         ...existing,
+         ...normalized,
+         nextNumber: Math.max(existing.nextNumber || 1, normalized.nextNumber || 1)
+      });
+   }
+   return Array.from(map.values());
+};
+
+const extractConfig = (raw: any): BusinessConfig | null => {
+   if (!raw) return null;
+   if (Array.isArray(raw)) {
+      const current = raw.find((c: any) => c?.id === 'current');
+      return (current || raw[0] || null) as BusinessConfig | null;
+   }
+   if (typeof raw === 'object') return raw as BusinessConfig;
+   return null;
+};
+
+const buildRecoveredFiscalRanges = (transactions: Transaction[]): FiscalRangeDGII[] => {
+   const maxUsedByType: Record<NCFType, number> = {
+      B01: 0,
+      B02: 0,
+      B04: 0,
+      B14: 0,
+      B15: 0
+   };
+
+   for (const tx of Array.isArray(transactions) ? transactions : []) {
+      if (!tx?.ncfType || !NCF_TYPES.includes(tx.ncfType)) continue;
+      const ncf = String(tx.ncf || '').trim().toUpperCase();
+      const numericPart = ncf.startsWith(tx.ncfType) ? ncf.slice(tx.ncfType.length) : '';
+      const num = Number(numericPart);
+      if (Number.isFinite(num) && num > maxUsedByType[tx.ncfType]) {
+         maxUsedByType[tx.ncfType] = num;
+      }
+   }
+
+   return NCF_TYPES.map((type) => {
+      const maxUsed = maxUsedByType[type] || 0;
+      return {
+         id: `fr-recovered-${type}`,
+         type,
+         prefix: type,
+         startNumber: 1,
+         endNumber: Math.max(10000, maxUsed + 1000),
+         currentGlobal: maxUsed,
+         expiryDate: '2030-12-31',
+         isActive: true
+      };
+   });
+};
 
 const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
    const [activeSubTab, setActiveSubTab] = useState<'SERIES' | 'FISCAL_POOL'>('SERIES');
@@ -33,13 +190,62 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
 
    useEffect(() => {
       const loadData = async () => {
-         console.log('📖 DocumentSettings: Loading series data...');
-         const seqs = (await db.get('internalSequences') || []) as DocumentSeries[];
-         console.log(`📖 DocumentSettings: Loaded ${seqs.length} series from DB:`, seqs);
-         setSeriesList(seqs);
+         try {
+            console.log('📖 DocumentSettings: Loading series data...');
+            const [rawSequences, rawFiscalRanges, rawTransactions, rawConfig] = await Promise.all([
+               db.get('internalSequences'),
+               db.get('fiscalRanges'),
+               db.get('transactions'),
+               db.get('config')
+            ]);
 
-         setFiscalRanges((await db.get('fiscalRanges') || []) as FiscalRangeDGII[]);
-         setTransactions((await db.get('transactions') as Transaction[]) || []);
+            const transactionsList = (Array.isArray(rawTransactions) ? rawTransactions : []) as Transaction[];
+            setTransactions(transactionsList);
+
+            const localSeries = normalizeSequenceCollection(rawSequences as any[]);
+            const config = extractConfig(rawConfig);
+            const terminalSeries = normalizeSequenceCollection(
+               (config?.terminals || []).flatMap((terminal: any) =>
+                  Array.isArray(terminal?.config?.documentSeries) ? terminal.config.documentSeries : []
+               )
+            );
+
+            let finalSeries = normalizeSequenceCollection([...localSeries, ...terminalSeries]);
+            if (finalSeries.length === 0) {
+               finalSeries = normalizeSequenceCollection(DEFAULT_DOCUMENT_SERIES);
+            }
+
+            const localSeriesIds = new Set(localSeries.map(s => s.id));
+            const shouldPersistRecoveredSeries =
+               finalSeries.length > 0 &&
+               (
+                  localSeries.length === 0 ||
+                  finalSeries.some(series => !localSeriesIds.has(series.id))
+               );
+
+            if (shouldPersistRecoveredSeries) {
+               await db.save('internalSequences', finalSeries);
+               console.warn(`🛠️ DocumentSettings: Sincronizadas/recuperadas ${finalSeries.length} series internas.`);
+            }
+
+            console.log(`📖 DocumentSettings: Loaded ${finalSeries.length} series after recovery.`);
+            setSeriesList(finalSeries);
+
+            const ranges = (Array.isArray(rawFiscalRanges) ? rawFiscalRanges : []) as FiscalRangeDGII[];
+            if (ranges.length > 0) {
+               setFiscalRanges(ranges);
+            } else {
+               const recoveredRanges = buildRecoveredFiscalRanges(transactionsList);
+               setFiscalRanges(recoveredRanges);
+               await db.save('fiscalRanges', recoveredRanges);
+               console.warn('🛠️ DocumentSettings: fiscalRanges estaba vacío. Se regeneraron rangos base por tipo NCF.');
+            }
+         } catch (error) {
+            console.error('❌ DocumentSettings: Failed to load data:', error);
+            setSeriesList([]);
+            setFiscalRanges([]);
+            setTransactions([]);
+         }
       };
       loadData();
 
@@ -78,6 +284,22 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
 
       return stats;
    }, [transactions]);
+
+   const extraDocumentTypes = useMemo(() => {
+      const extras = new Set<string>();
+      for (const series of seriesList) {
+         const normalizedType = normalizeDocumentType((series as any)?.documentType);
+         if (normalizedType && !DOCUMENT_TYPE_SET.has(normalizedType)) {
+            extras.add(normalizedType);
+         }
+      }
+      return Array.from(extras);
+   }, [seriesList]);
+
+   const documentTypesToRender = useMemo(
+      () => [...DOCUMENT_TYPE_ORDER, ...extraDocumentTypes],
+      [extraDocumentTypes]
+   );
 
    const handleAddNewSeries = () => {
       setEditingSeries({
@@ -199,50 +421,17 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
 
 
                      {/* Group by Document Type */}
-                     {([
-                        'TICKET', 'REFUND', 'VOID',
-                        'TRANSFER', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'PURCHASE', 'PRODUCTION',
-                        'CASH_IN', 'CASH_OUT', 'CASH_DEPOSIT', 'CASH_WITHDRAWAL',
-                        'Z_REPORT', 'X_REPORT',
-                        'RECEIVABLE', 'PAYABLE', 'PAYMENT_IN', 'PAYMENT_OUT'
-                     ] as const).map(docType => {
-                        const typeSeries = seriesList.filter(s => s.documentType === docType);
+                     {documentTypesToRender.map(docType => {
+                        const typeSeries = seriesList.filter(s => normalizeDocumentType((s as any).documentType) === docType);
 
                         // Skip if no series for this type
                         if (typeSeries.length === 0) return null;
 
-                        const typeConfig: Record<string, { label: string; icon: any; color: string }> = {
-                           // Ventas
-                           TICKET: { label: 'Tickets de Venta', icon: Receipt, color: 'blue' },
-                           REFUND: { label: 'Devoluciones / Abonos', icon: RotateCcw, color: 'orange' },
-                           VOID: { label: 'Anulaciones', icon: X, color: 'red' },
-
-                           // Inventario
-                           TRANSFER: { label: 'Traspasos', icon: ArrowRightLeft, color: 'purple' },
-                           ADJUSTMENT_IN: { label: 'Ajustes Positivos', icon: Plus, color: 'green' },
-                           ADJUSTMENT_OUT: { label: 'Ajustes Negativos', icon: Trash2, color: 'red' },
-                           PURCHASE: { label: 'Compras', icon: ShoppingBag, color: 'indigo' },
-                           PRODUCTION: { label: 'Producción', icon: Box, color: 'cyan' },
-
-                           // Efectivo
-                           CASH_IN: { label: 'Entradas de Efectivo', icon: ArrowRight, color: 'emerald' },
-                           CASH_OUT: { label: 'Salidas de Efectivo', icon: ArrowRight, color: 'rose' },
-                           CASH_DEPOSIT: { label: 'Depósitos Bancarios', icon: Landmark, color: 'teal' },
-                           CASH_WITHDRAWAL: { label: 'Retiros', icon: Landmark, color: 'amber' },
-
-                           // Cierres
-                           Z_REPORT: { label: 'Cierres de Caja (Z)', icon: Save, color: 'slate' },
-                           X_REPORT: { label: 'Cortes Parciales (X)', icon: FileText, color: 'gray' },
-
-                           // Cuentas
-                           RECEIVABLE: { label: 'Cuentas por Cobrar', icon: ArrowUpRight, color: 'sky' },
-                           PAYABLE: { label: 'Cuentas por Pagar', icon: ArrowUpRight, color: 'violet' },
-                           PAYMENT_IN: { label: 'Cobros Recibidos', icon: Check, color: 'lime' },
-                           PAYMENT_OUT: { label: 'Pagos Realizados', icon: Check, color: 'fuchsia' }
+                        const config = DOCUMENT_TYPE_CONFIG[docType] || {
+                           label: `Tipo ${docType}`,
+                           icon: FileText,
+                           color: 'slate'
                         };
-
-                        const config = typeConfig[docType];
-                        if (!config) return null;
 
                         const Icon = config.icon;
 

@@ -259,6 +259,12 @@ export class NetworkAdapter implements DatabaseAdapter {
         }
     }
 
+    async bulkUpsert<T extends { id: string }>(collectionName: string, docs: T[]): Promise<void> {
+        for (const doc of docs || []) {
+            await this.saveDocument(collectionName, doc);
+        }
+    }
+
     async getDocument<T>(collectionName: string, id: string): Promise<T | null> {
         try {
             const url = this.getUrl(`${collectionName}/${id}`);

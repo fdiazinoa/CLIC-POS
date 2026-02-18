@@ -770,6 +770,43 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       setGiftReceiptTx(tx);
    };
 
+   const handleConfirmRefundFromModal = async (
+      originalTx: Transaction,
+      refundItems: CartItem[],
+      conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
+      reason: string
+   ) => {
+      if (!originalTx || refundItems.length === 0) return;
+
+      const terminalId = originalTx.terminalId || config.terminals?.[0]?.id || 'T1';
+      const validation = validateTerminalDocument(config, terminalId, 'REFUND');
+      if (!validation.isValid) {
+         alert(validation.error);
+         return;
+      }
+
+      const refundSubtotal = refundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+      const refundTotal = originalTx.isTaxIncluded
+         ? refundSubtotal
+         : refundSubtotal * (1 + (config.taxRate || 0));
+
+      const authorized = await requestApproval({
+         permission: 'POS_VOID_PAID_TICKET',
+         actionDescription: 'Anular/Devolver Factura Pagada',
+         context: {
+            ticketId: originalTx.id,
+            originalValue: refundTotal
+         }
+      });
+
+      if (!authorized) return;
+
+      onRefundTransaction(originalTx, refundItems, conditions, reason || 'Devolución');
+      setIsRefundModalOpen(false);
+      setRefundTx(null);
+      setSelectedTxId(null);
+   };
+
    // Calculate Refund Total
    const currentRefundTotal = useMemo(() => {
       if (!returnModeId) return 0;
@@ -939,6 +976,17 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                </div>
             </div>
          )}
+
+         <RefundModal
+            isOpen={isRefundModalOpen}
+            onClose={() => {
+               setIsRefundModalOpen(false);
+               setRefundTx(null);
+            }}
+            transaction={refundTx}
+            onConfirm={handleConfirmRefundFromModal}
+            currencySymbol={config.currencySymbol}
+         />
 
          <SupervisorModal {...supervisorModalProps} users={users} />
       </div>

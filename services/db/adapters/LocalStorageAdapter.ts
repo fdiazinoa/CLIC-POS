@@ -65,6 +65,12 @@ export class LocalStorageAdapter implements DatabaseAdapter {
         this.saveToStorage();
     }
 
+    async bulkUpsert<T extends { id: string }>(collectionName: string, docs: T[]): Promise<void> {
+        for (const doc of docs || []) {
+            await this.saveDocument(collectionName, doc);
+        }
+    }
+
     async getDocument<T>(collectionName: string, id: string): Promise<T | null> {
         if (!this.dbCache) this.loadFromStorage();
         const collection = (this.dbCache[collectionName] as any[]) || [];

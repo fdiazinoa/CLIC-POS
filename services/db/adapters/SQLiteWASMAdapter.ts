@@ -111,6 +111,12 @@ export class SQLiteWASMAdapter implements DatabaseAdapter {
         await this.saveCollection(collectionName, collection);
     }
 
+    async bulkUpsert<T extends { id: string }>(collectionName: string, docs: T[]): Promise<void> {
+        for (const doc of docs || []) {
+            await this.saveDocument(collectionName, doc);
+        }
+    }
+
     async getDocument<T>(collectionName: string, id: string): Promise<T | null> {
         const collection = await this.getCollection<T[]>(collectionName);
         if (collection && Array.isArray(collection)) {
