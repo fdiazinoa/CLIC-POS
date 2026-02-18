@@ -865,6 +865,7 @@ router.post('/transactions', async (req, res) => {
         const now = new Date().toISOString();
         db.transaction(() => {
             const stmt = db.prepare(`INSERT OR IGNORE INTO transactions (id, globalSequence, displayId, documentType, seriesId, seriesNumber, date, items, total, payments, userId, userName, terminalId, status, customerId, customerName, customerSnapshot, taxAmount, netAmount, discountAmount, isTaxIncluded, ncf, ncfType, relatedTransactions, originalTransactionId, refundReason, affectedInvoiceNumber, affectedNCF, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            const updateStmt = db.prepare(`UPDATE transactions SET globalSequence = ?, displayId = ?, documentType = ?, seriesId = ?, seriesNumber = ?, date = ?, items = ?, total = ?, payments = ?, userId = ?, userName = ?, terminalId = ?, status = ?, customerId = ?, customerName = ?, customerSnapshot = ?, taxAmount = ?, netAmount = ?, discountAmount = ?, isTaxIncluded = ?, ncf = ?, ncfType = ?, relatedTransactions = ?, originalTransactionId = ?, refundReason = ?, affectedInvoiceNumber = ?, affectedNCF = ?, syncStatus = ?, syncError = ? WHERE id = ?`);
             const byIdStmt = db.prepare(`SELECT id, displayId, terminalId FROM transactions WHERE id = ?`);
             const byDisplayIdStmt = db.prepare(`SELECT id, displayId, terminalId FROM transactions WHERE displayId = ?`);
 
@@ -902,6 +903,40 @@ router.post('/transactions', async (req, res) => {
                     txn.syncError
                 );
 
+            const updateTxn = (targetId: string, txn: any) =>
+                updateStmt.run(
+                    txn.globalSequence,
+                    txn.displayId,
+                    txn.documentType,
+                    txn.seriesId,
+                    txn.seriesNumber,
+                    txn.date,
+                    JSON.stringify(txn.items),
+                    txn.total,
+                    JSON.stringify(txn.payments),
+                    txn.userId,
+                    txn.userName,
+                    txn.terminalId,
+                    txn.status,
+                    txn.customerId,
+                    txn.customerName,
+                    JSON.stringify(txn.customerSnapshot),
+                    txn.taxAmount,
+                    txn.netAmount,
+                    txn.discountAmount,
+                    txn.isTaxIncluded ? 1 : 0,
+                    txn.ncf,
+                    txn.ncfType,
+                    JSON.stringify(txn.relatedTransactions),
+                    txn.originalTransactionId,
+                    txn.refundReason,
+                    txn.affectedInvoiceNumber,
+                    txn.affectedNCF,
+                    txn.syncStatus,
+                    txn.syncError,
+                    targetId
+                );
+
             for (const txn of items) {
                 const result = insertTxn(txn);
                 if (result.changes > 0) {
@@ -912,18 +947,25 @@ router.post('/transactions', async (req, res) => {
                 }
 
                 // Conflict handling path:
-                // 1) If same id + same displayId already exists, it's a replay, ignore safely.
-                // 2) If displayId exists with different id, upsert into existing displayId row.
+                // 1) If id already exists, update existing row with newest payload.
+                // 2) If displayId exists with different id, merge into existing display row.
                 // 3) If id collision with different displayId, synthesize deterministic id and insert.
                 const existingById = byIdStmt.get(txn.id) as any;
-                if (existingById && existingById.displayId === txn.displayId) {
+                if (existingById?.id) {
+                    const updatedTxn = { ...txn, id: existingById.id };
+                    const updateResult = updateTxn(existingById.id, updatedTxn);
+                    if (updateResult.changes > 0) {
+                        conflictResolvedCount++;
+                        const version = bumpVersion('transactions');
+                        insertChangeStmt.run('transactions', updatedTxn.id, version, 'UPSERT', JSON.stringify(updatedTxn), now);
+                    }
                     continue;
                 }
 
                 const existingByDisplayId = txn.displayId ? (byDisplayIdStmt.get(txn.displayId) as any) : null;
                 if (existingByDisplayId?.id) {
                     const mergedTxn = { ...txn, id: existingByDisplayId.id };
-                    const updateResult = insertTxn(mergedTxn);
+                    const updateResult = updateTxn(existingByDisplayId.id, mergedTxn);
                     if (updateResult.changes > 0) {
                         conflictResolvedCount++;
                         const version = bumpVersion('transactions');

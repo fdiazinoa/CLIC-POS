@@ -117,6 +117,35 @@ export class SQLiteWASMAdapter implements DatabaseAdapter {
         }
     }
 
+    async bulkUpdateProducts(productIds: string[], updates: any): Promise<void> {
+        let products = await this.getCollection<any[]>('products') || [];
+        if (!Array.isArray(products)) products = [];
+
+        const idSet = new Set(productIds || []);
+        const now = new Date().toISOString();
+
+        const updatedProducts = products.map((product: any) => {
+            if (!idSet.has(product.id)) return product;
+
+            const next = { ...product };
+            if (updates?.flags) {
+                next.operationalFlags = { ...(next.operationalFlags || {}) };
+                Object.entries(updates.flags).forEach(([key, cfg]: [string, any]) => {
+                    if (cfg?.apply) (next.operationalFlags as any)[key] = cfg.value;
+                });
+            }
+            if (updates?.classification) {
+                if (updates.classification.categoryId) next.category = updates.classification.categoryId;
+                if (updates.classification.measurementUnit) next.measurementUnit = updates.classification.measurementUnit;
+                if (updates.classification.purchaseUnit) next.purchaseUnit = updates.classification.purchaseUnit;
+            }
+            next.updatedAt = now;
+            return next;
+        });
+
+        await this.saveCollection('products', updatedProducts);
+    }
+
     async getDocument<T>(collectionName: string, id: string): Promise<T | null> {
         const collection = await this.getCollection<T[]>(collectionName);
         if (collection && Array.isArray(collection)) {

@@ -765,6 +765,60 @@ class SyncManager {
     private watchdogTimer: any = null;
     private readonly WATCHDOG_TIMEOUT_MS = 45000; // 45 seconds max sync time
 
+    /**
+     * Prevent local credit-note/refund data loss during full transaction pulls.
+     * Full snapshots can be stale while a refund is still syncing.
+     */
+    private async mergeTransactionsFullSnapshot(serverItems: any[]): Promise<any[]> {
+        if (!Array.isArray(serverItems)) return [];
+
+        const normalizeText = (value: any) =>
+            typeof value === 'string' ? value.trim().toUpperCase() : '';
+        const toTimestamp = (value?: string) => {
+            const ts = value ? new Date(value).getTime() : NaN;
+            return Number.isFinite(ts) ? ts : 0;
+        };
+        const isPendingSync = (value: any) =>
+            ['PENDING', 'ERROR', 'SYNCING'].includes(normalizeText(value));
+        const isCreditNoteLike = (tx: any) => {
+            const docType = normalizeText(tx?.documentType);
+            const ncfType = normalizeText(tx?.ncfType);
+            const status = normalizeText(tx?.status);
+            return docType === 'REFUND' || ncfType === 'B04' || status === 'PARTIAL_REFUND';
+        };
+
+        const localTransactions = (await db.get('transactions' as any)) as any[] || [];
+        const mergedById = new Map<string, any>();
+
+        for (const tx of serverItems) {
+            if (!tx?.id) continue;
+            mergedById.set(tx.id, tx);
+        }
+
+        for (const localTx of localTransactions) {
+            if (!localTx?.id) continue;
+            if (!isCreditNoteLike(localTx) && !isPendingSync(localTx?.syncStatus)) continue;
+
+            const existing = mergedById.get(localTx.id);
+            if (!existing) {
+                mergedById.set(localTx.id, localTx);
+                continue;
+            }
+
+            const localTs = Math.max(toTimestamp(localTx?.updatedAt), toTimestamp(localTx?.date));
+            const remoteTs = Math.max(toTimestamp(existing?.updatedAt), toTimestamp(existing?.date));
+            if (localTs >= remoteTs) {
+                mergedById.set(localTx.id, { ...existing, ...localTx });
+            }
+        }
+
+        return Array.from(mergedById.values()).sort((a, b) => {
+            const aTs = toTimestamp(a?.date);
+            const bTs = toTimestamp(b?.date);
+            return bTs - aTs;
+        });
+    }
+
     getIsInternalSyncing() {
         return this.isInternalSyncing;
     }
@@ -850,7 +904,11 @@ class SyncManager {
                             return rest;
                         });
 
-                        await db.save(collection, cleanItems);
+                        const safeItems = collection === 'transactions'
+                            ? await this.mergeTransactionsFullSnapshot(cleanItems)
+                            : cleanItems;
+
+                        await db.save(collection, safeItems);
 
                         if (typeof remoteVersion === 'number') {
                             this.syncVersions.set(collection, remoteVersion);
@@ -875,8 +933,8 @@ class SyncManager {
                             window.dispatchEvent(new CustomEvent('seriesUpdated'));
                         }
 
-                        console.log(`✅ SyncManager: Drift recovery completed for ${collection} with ${cleanItems.length} items.`);
-                        return cleanItems.length;
+                        console.log(`✅ SyncManager: Drift recovery completed for ${collection} with ${safeItems.length} items.`);
+                        return safeItems.length;
                     }
                 }
 
@@ -909,7 +967,10 @@ class SyncManager {
 
                     return rest;
                 });
-                await db.save(collection, cleanItems);
+                const safeItems = collection === 'transactions'
+                    ? await this.mergeTransactionsFullSnapshot(cleanItems)
+                    : cleanItems;
+                await db.save(collection, safeItems);
             } else {
                 // Incremental update (Upsert / Delete)
                 console.log(`💾 SyncManager: Performing INCREMENTAL update for ${collection}...`);

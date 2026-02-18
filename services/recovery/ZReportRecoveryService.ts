@@ -129,6 +129,8 @@ export class ZReportRecoveryService {
                         topProduct: null,
                         returnsCount: 0,
                         returnsTotal: 0,
+                        grossSales: Object.values(totalsByMethod).reduce((a, b) => a + b, 0),
+                        netSales: Object.values(totalsByMethod).reduce((a, b) => a + b, 0),
                         discountsTotal: 0,
                         advancementsTotal: 0,
                         collectionsTotal: 0

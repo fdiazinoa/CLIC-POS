@@ -108,12 +108,15 @@ import { nativePrintBridge } from './services/printer/NativePrintBridge';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
+  scannedWalletMovements: number;
   repairedTransactions: number;
+  repairedCreditNotes: number;
   recalculatedCustomers: number;
   customersWithDebtChanges: number;
   totalPendingBefore: number;
   totalPendingAfter: number;
   transactionIds: string[];
+  creditNoteIds: string[];
 };
 
 const CREDIT_PAYMENT_METHODS = new Set(['CREDIT', 'CREDITO', 'PENDIENTE']);
@@ -1465,27 +1468,19 @@ const AppContent: React.FC = () => {
 
   const handleRepairLegacyReceivables = useCallback(async (): Promise<ReceivableRepairSummary> => {
     const now = new Date().toISOString();
-    const [persistedTransactions, persistedTransactionHistory, persistedCustomers] = await Promise.all([
+    const [persistedTransactions, persistedTransactionHistory, persistedCustomers, persistedWallets, persistedWalletTransactions] = await Promise.all([
       db.get('transactions') as Promise<Transaction[] | null>,
       db.get('transactionHistory') as Promise<Transaction[] | null>,
-      db.get('customers') as Promise<Customer[] | null>
+      db.get('customers') as Promise<Customer[] | null>,
+      db.get('wallets' as any) as Promise<any[] | null>,
+      db.get('wallet_transactions' as any) as Promise<any[] | null>
     ]);
 
     const activeTransactions = Array.isArray(persistedTransactions) ? persistedTransactions : transactions;
     const historyTransactions = Array.isArray(persistedTransactionHistory) ? persistedTransactionHistory : [];
     const sourceCustomers = Array.isArray(persistedCustomers) ? persistedCustomers : customers;
-
-    if (activeTransactions.length === 0 && historyTransactions.length === 0) {
-      return {
-        scannedTransactions: 0,
-        repairedTransactions: 0,
-        recalculatedCustomers: 0,
-        customersWithDebtChanges: 0,
-        totalPendingBefore: 0,
-        totalPendingAfter: 0,
-        transactionIds: []
-      };
-    }
+    const wallets = Array.isArray(persistedWallets) ? persistedWallets : [];
+    const walletMovements = Array.isArray(persistedWalletTransactions) ? persistedWalletTransactions : [];
 
     const inferPendingBalance = (tx: Transaction): number => {
       const paymentEntries = Array.isArray(tx.payments) ? tx.payments : [];
@@ -1536,10 +1531,218 @@ const AppContent: React.FC = () => {
     const activeRepair = repairTransactions(activeTransactions);
     const historyRepair = repairTransactions(historyTransactions);
 
-    const repairedTransactions = activeRepair.updatedItems;
-    const repairedHistoryTransactions = historyRepair.updatedItems;
+    const repairedTransactions = [...activeRepair.updatedItems];
+    const repairedHistoryTransactions = [...historyRepair.updatedItems];
     const repairedIdSet = new Set([...activeRepair.repairedIds, ...historyRepair.repairedIds]);
     const repairedIds = Array.from(repairedIdSet);
+
+    const normalizeDocId = (value: unknown): string => {
+      if (typeof value !== 'string') return '';
+      return value.trim().toUpperCase();
+    };
+
+    const seenDisplayIds = new Set<string>();
+    for (const tx of [...repairedTransactions, ...repairedHistoryTransactions]) {
+      const displayId = normalizeDocId(tx.displayId);
+      if (displayId) seenDisplayIds.add(displayId);
+    }
+
+    const walletById = new Map<string, any>();
+    for (const wallet of wallets) {
+      if (!wallet?.id) continue;
+      walletById.set(String(wallet.id), wallet);
+    }
+
+    const customerById = new Map<string, Customer>();
+    for (const customer of sourceCustomers) {
+      if (!customer?.id) continue;
+      customerById.set(customer.id, customer);
+    }
+
+    const isRefundDocument = (tx: Transaction): boolean => {
+      const docType = typeof tx.documentType === 'string' ? tx.documentType.trim().toUpperCase() : '';
+      const ncfType = typeof tx.ncfType === 'string' ? tx.ncfType.trim().toUpperCase() : '';
+      const displayId = typeof tx.displayId === 'string' ? tx.displayId.trim().toUpperCase() : '';
+      return docType === 'REFUND' || ncfType === 'B04' || displayId.startsWith('NC');
+    };
+
+    const toMillis = (value?: string): number => {
+      const ts = value ? new Date(value).getTime() : NaN;
+      return Number.isFinite(ts) ? ts : 0;
+    };
+
+    const salesCandidatesByCustomer = new Map<string, Transaction[]>();
+    for (const tx of [...repairedTransactions, ...repairedHistoryTransactions]) {
+      const customerId = typeof tx.customerId === 'string' ? tx.customerId.trim() : '';
+      if (!customerId) continue;
+      if (isRefundDocument(tx)) continue;
+      const list = salesCandidatesByCustomer.get(customerId) || [];
+      list.push(tx);
+      salesCandidatesByCustomer.set(customerId, list);
+    }
+
+    const pickAffectedInvoice = (customerId: string, creditNoteAmount: number, movementDate: string): Transaction | null => {
+      const candidates = salesCandidatesByCustomer.get(customerId) || [];
+      if (candidates.length === 0) return null;
+
+      const movementMs = toMillis(movementDate);
+      let best: Transaction | null = null;
+      let bestScore = Number.NEGATIVE_INFINITY;
+      for (const candidate of candidates) {
+        let score = 0;
+        if (candidate.status === 'PARTIAL_REFUND' || candidate.status === 'REFUNDED') score += 40;
+        if (toPositiveNumber(candidate.total) + 0.01 >= creditNoteAmount) score += 12;
+
+        const candidateMs = toMillis(candidate.date);
+        const diffMs = movementMs > 0 && candidateMs > 0
+          ? Math.abs(candidateMs - movementMs)
+          : Number.POSITIVE_INFINITY;
+        if (diffMs <= 24 * 60 * 60 * 1000) score += 20;
+        else if (diffMs <= 7 * 24 * 60 * 60 * 1000) score += 10;
+        else if (diffMs <= 30 * 24 * 60 * 60 * 1000) score += 4;
+
+        if (typeof candidate.ncf === 'string' && candidate.ncf.trim()) score += 5;
+        if (typeof candidate.displayId === 'string' && candidate.displayId.trim()) score += 3;
+
+        if (score > bestScore) {
+          best = candidate;
+          bestScore = score;
+        }
+      }
+      return best;
+    };
+
+    const extractB04NcfFromMovement = (movement: any): string | undefined => {
+      const rawCandidates = [
+        movement?.ncf,
+        movement?.ncfB04,
+        movement?.fiscalNcf,
+        movement?.b04,
+        movement?.metadata?.ncf,
+        movement?.meta?.ncf
+      ];
+      for (const raw of rawCandidates) {
+        if (typeof raw !== 'string') continue;
+        const candidate = raw.trim().toUpperCase();
+        if (candidate.startsWith('B04')) return candidate;
+      }
+      return undefined;
+    };
+
+    const synthesizedCreditNotes: Transaction[] = [];
+    const synthesizedIdSet = new Set<string>();
+    const enrichedCreditNoteIds = new Set<string>();
+
+    const upsertTxById = (nextTx: Transaction) => {
+      const activeIdx = repairedTransactions.findIndex(tx => tx.id === nextTx.id);
+      if (activeIdx >= 0) repairedTransactions[activeIdx] = nextTx;
+      const historyIdx = repairedHistoryTransactions.findIndex(tx => tx.id === nextTx.id);
+      if (historyIdx >= 0) repairedHistoryTransactions[historyIdx] = nextTx;
+    };
+
+    const txIdsByDisplayId = new Map<string, string[]>();
+    for (const tx of [...repairedTransactions, ...repairedHistoryTransactions]) {
+      const key = normalizeDocId(tx.displayId);
+      if (!key) continue;
+      const list = txIdsByDisplayId.get(key) || [];
+      if (!list.includes(tx.id)) list.push(tx.id);
+      txIdsByDisplayId.set(key, list);
+    }
+
+    let scannedWalletMovements = 0;
+    for (const movement of walletMovements) {
+      scannedWalletMovements++;
+
+      const refRaw = typeof movement?.referenceId === 'string' ? movement.referenceId.trim() : '';
+      const ref = normalizeDocId(refRaw);
+      if (!ref.startsWith('NC')) continue;
+
+      const movementAmount = toPositiveNumber(movement?.amount);
+      if (movementAmount <= 0) continue;
+
+      const wallet = walletById.get(String(movement?.walletId || ''));
+      const customerId = wallet?.customerId ? String(wallet.customerId) : '';
+      if (!customerId) continue;
+
+      const parsedMovementDate = typeof movement?.createdAt === 'string' ? new Date(movement.createdAt).getTime() : NaN;
+      const movementDate = Number.isFinite(parsedMovementDate) ? String(movement.createdAt) : now;
+      const roundedAmount = parseFloat(movementAmount.toFixed(2));
+      const displayId = refRaw || ref;
+      const inferredB04Ncf = extractB04NcfFromMovement(movement);
+      const affectedSale = pickAffectedInvoice(customerId, roundedAmount, movementDate);
+      const inferredAffectedInvoice = (affectedSale?.displayId || affectedSale?.id || '').toString().trim();
+      const inferredAffectedNCF = (affectedSale?.ncf || '').toString().trim();
+
+      if (seenDisplayIds.has(ref)) {
+        const existingIds = txIdsByDisplayId.get(ref) || [];
+        for (const existingId of existingIds) {
+          const existing = repairedTransactions.find(tx => tx.id === existingId)
+            || repairedHistoryTransactions.find(tx => tx.id === existingId);
+          if (!existing) continue;
+          if (!isRefundDocument(existing)) continue;
+
+          const patch: Partial<Transaction> = {};
+          if ((!existing.ncf || !existing.ncf.trim()) && inferredB04Ncf) patch.ncf = inferredB04Ncf;
+          if ((!existing.affectedInvoiceNumber || !existing.affectedInvoiceNumber.trim()) && inferredAffectedInvoice) {
+            patch.affectedInvoiceNumber = inferredAffectedInvoice;
+          }
+          if ((!existing.affectedNCF || !existing.affectedNCF.trim()) && inferredAffectedNCF) {
+            patch.affectedNCF = inferredAffectedNCF;
+          }
+          if (!existing.originalTransactionId && affectedSale?.id) patch.originalTransactionId = affectedSale.id;
+
+          if (Object.keys(patch).length <= 0) continue;
+
+          const patchedTx: Transaction = {
+            ...existing,
+            ...patch,
+            syncStatus: 'PENDING'
+          };
+          upsertTxById(patchedTx);
+          await db.saveDocument('transactions', patchedTx);
+          await db.saveDocument('transactionHistory', patchedTx);
+          enrichedCreditNoteIds.add(patchedTx.displayId || patchedTx.id);
+        }
+        continue;
+      }
+
+      const owner = customerById.get(customerId);
+      const rawMovementId = movement?.id !== undefined && movement?.id !== null
+        ? String(movement.id).trim()
+        : `${customerId}-${ref}`;
+      const synthesizedId = `WLT-NC-${rawMovementId}-${customerId}`.replace(/[^a-zA-Z0-9_.:-]/g, '_');
+      if (synthesizedIdSet.has(synthesizedId)) continue;
+
+      const syntheticCreditNote: Transaction = {
+        id: synthesizedId,
+        displayId,
+        documentType: 'REFUND',
+        date: movementDate,
+        items: [],
+        total: roundedAmount,
+        payments: [{ method: 'STORE_CREDIT', amount: roundedAmount }],
+        userId: 'SYSTEM',
+        userName: 'Sistema',
+        terminalId: 'N/A',
+        status: 'REFUNDED',
+        customerId,
+        customerName: owner?.name,
+        ncf: inferredB04Ncf,
+        ncfType: 'B04',
+        affectedInvoiceNumber: inferredAffectedInvoice || undefined,
+        affectedNCF: inferredAffectedNCF || undefined,
+        originalTransactionId: affectedSale?.id,
+        refundReason: 'NC recuperada desde wallet',
+        syncStatus: 'PENDING'
+      };
+
+      synthesizedCreditNotes.push(syntheticCreditNote);
+      synthesizedIdSet.add(synthesizedId);
+      seenDisplayIds.add(ref);
+      txIdsByDisplayId.set(ref, [...(txIdsByDisplayId.get(ref) || []), synthesizedId]);
+      repairedTransactions.push(syntheticCreditNote);
+      repairedHistoryTransactions.push(syntheticCreditNote);
+    }
 
     const combinedBefore = [...activeTransactions, ...historyTransactions];
     const combinedAfter = [...repairedTransactions, ...repairedHistoryTransactions];
@@ -1564,6 +1767,13 @@ const AppContent: React.FC = () => {
       for (const tx of repairedHistoryTransactions) {
         if (!historySet.has(tx.id)) continue;
         await db.saveDocument('transactionHistory', tx);
+      }
+    }
+
+    if (synthesizedCreditNotes.length > 0) {
+      for (const note of synthesizedCreditNotes) {
+        await db.saveDocument('transactions', note);
+        await db.saveDocument('transactionHistory', note);
       }
     }
 
@@ -1625,14 +1835,22 @@ const AppContent: React.FC = () => {
 
     backgroundSyncManager.triggerSync().catch(console.error);
 
+    const scannedTransactions = dedupedForDebt.size;
+    const repairedCreditNoteIdSet = new Set<string>([
+      ...synthesizedCreditNotes.map(note => note.displayId || note.id),
+      ...Array.from(enrichedCreditNoteIds)
+    ]);
     return {
-      scannedTransactions: combinedAfter.length,
+      scannedTransactions,
+      scannedWalletMovements,
       repairedTransactions: repairedIds.length,
+      repairedCreditNotes: repairedCreditNoteIdSet.size,
       recalculatedCustomers: recalculatedCustomers.length,
       customersWithDebtChanges: changedCustomers,
       totalPendingBefore,
       totalPendingAfter,
-      transactionIds: repairedIds
+      transactionIds: repairedIds,
+      creditNoteIds: Array.from(repairedCreditNoteIdSet)
     };
   }, [customers, transactions]);
 
@@ -2196,6 +2414,16 @@ const AppContent: React.FC = () => {
     const isFullRefund = totalRefundedQty >= totalOriginalQty;
     const newStatus = isFullRefund ? 'REFUNDED' : 'PARTIAL_REFUND';
 
+    const normalizeText = (value?: string | null) => (value || '').trim().toLowerCase();
+    const matchedCustomer = originalTx.customerId
+      ? customers.find(c => c.id === originalTx.customerId)
+      : customers.find(c =>
+        normalizeText(c.name) !== '' &&
+        normalizeText(c.name) === normalizeText(originalTx.customerName)
+      );
+    const resolvedCustomerId = originalTx.customerId || matchedCustomer?.id;
+    const resolvedCustomerName = originalTx.customerName || matchedCustomer?.name;
+
     // 2. NCF B04 Generation
     const currentTerminalId = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
     let ncfB04: string | null = null;
@@ -2228,9 +2456,9 @@ const AppContent: React.FC = () => {
       userId: currentUser?.id || 'sys',
       userName: currentUser?.name || 'System',
       terminalId: currentTerminalId,
-      status: 'COMPLETED',
-      customerId: originalTx.customerId,
-      customerName: originalTx.customerName,
+      status: 'REFUNDED',
+      customerId: resolvedCustomerId,
+      customerName: resolvedCustomerName,
       ncf: ncfB04 || undefined,
       ncfType: 'B04',
       affectedNCF: originalTx.ncf,
@@ -2274,8 +2502,8 @@ const AppContent: React.FC = () => {
     }
 
     // 6. Financial Update (Customer Account & Wallet)
-    if (originalTx.customerId) {
-      const customer = customers.find(c => c.id === originalTx.customerId);
+    if (resolvedCustomerId) {
+      const customer = customers.find(c => c.id === resolvedCustomerId);
       if (customer) {
         let remainingRefund = refundTotal;
         let newDebt = customer.currentDebt || 0;
@@ -2290,14 +2518,14 @@ const AppContent: React.FC = () => {
         // Step B: If there is still a refund amount (Scenario B - pure credit or surplus), add to Wallet
         if (remainingRefund > 0.01) {
           await transactionService.applyRefundToWallet(
-            originalTx.customerId,
+            resolvedCustomerId,
             remainingRefund,
             displayId
           );
 
           // Re-fetch wallets to get the updated balance for the customer nested object
           const wallets = await (await import('./utils/db')).db.get('wallets' as any) as any[] || [];
-          const updatedWallet = wallets.find(w => w.customerId === originalTx.customerId);
+          const updatedWallet = wallets.find(w => w.customerId === resolvedCustomerId);
           if (updatedWallet) {
             customer.wallet = updatedWallet;
           }
@@ -2312,8 +2540,11 @@ const AppContent: React.FC = () => {
     // 7. Update Original Transaction
     const updatedOriginalTx = {
       ...originalTx,
+      customerId: resolvedCustomerId,
+      customerName: resolvedCustomerName,
       status: newStatus as any,
       relatedTransactions: [...(originalTx.relatedTransactions || []), creditNote.id],
+      updatedAt: new Date().toISOString(),
       syncStatus: 'PENDING' as const
     };
 
@@ -2321,9 +2552,17 @@ const AppContent: React.FC = () => {
     await db.saveDocument('transactions', updatedOriginalTx);
     await db.saveDocument('transactions', creditNote);
 
+    // Keep history mirror in sync so legacy/history views always include credit notes.
+    try {
+      await db.saveDocument('transactionHistory', updatedOriginalTx as any);
+      await db.saveDocument('transactionHistory', creditNote as any);
+    } catch (historyMirrorError) {
+      console.warn('⚠️ Refund history mirror update skipped:', historyMirrorError);
+    }
+
     // Update local state
     setTransactions(prev => {
-      const filtered = prev.filter(t => t.id !== updatedOriginalTx.id);
+      const filtered = prev.filter(t => t.id !== updatedOriginalTx.id && t.id !== creditNote.id);
       return [updatedOriginalTx, ...filtered, creditNote].sort((a, b) =>
         new Date(b.date).getTime() - new Date(a.date).getTime()
       );

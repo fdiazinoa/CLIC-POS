@@ -8,7 +8,7 @@ import {
    Globe, Calendar, Map, Navigation, CheckSquare, Clock, Landmark, ShieldCheck, Zap, Gift,
    Loader2, AlertOctagon, Printer, DollarSign, Banknote, QrCode, ArrowRightLeft
 } from 'lucide-react';
-import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType, Wallet, LoyaltyCard, Transaction, User, Collection, Activity } from '../types';
+import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType, Wallet, LoyaltyCard, Transaction, User, Collection, Activity, WalletTransaction } from '../types';
 import { dgiiService, DGIIResponse } from '../services/dgii/DGIIValidationService';
 import { printTicket } from '../utils/printer';
 import AccountReceivableModal from './AccountReceivableModal';
@@ -88,6 +88,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    // --- TRANSACTION DETAIL STATE ---
    const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
    const [customerTransactions, setCustomerTransactions] = useState<Transaction[]>([]);
+   const [walletMovements, setWalletMovements] = useState<WalletTransaction[]>([]);
 
    const CREDIT_METHOD_MARKERS = useMemo(() => new Set(['CREDIT', 'CREDITO', 'PENDIENTE']), []);
 
@@ -105,6 +106,17 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       if (!Number.isFinite(num) || num <= 0) return 0;
       return num;
    };
+
+   const toSafeNumber = (value: unknown): number => {
+      const num = typeof value === 'number' ? value : Number(value);
+      return Number.isFinite(num) ? num : 0;
+   };
+
+   const formatMoney = (value: unknown): string =>
+      toSafeNumber(value).toLocaleString(undefined, {
+         minimumFractionDigits: 2,
+         maximumFractionDigits: 2
+      });
 
    const isRNC = (term: string) => /^\d{9,11}$/.test(term);
 
@@ -378,9 +390,11 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
       try {
          const { db } = await import('../utils/db');
-         const [activeTransactions, historyTransactions] = await Promise.all([
+         const [activeTransactions, historyTransactions, wallets, walletTxns] = await Promise.all([
             db.get('transactions') as Promise<Transaction[]>,
-            db.get('transactionHistory') as Promise<Transaction[]>
+            db.get('transactionHistory') as Promise<Transaction[]>,
+            db.get('wallets' as any) as Promise<any[]>,
+            db.get('wallet_transactions' as any) as Promise<any[]>
          ]);
 
          const mergedMap = new globalThis.Map<string, Transaction>();
@@ -416,14 +430,219 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             }
          }
 
+         // Fallback bridge: if a wallet refund movement exists (NC reference) but the
+         // refund transaction row is missing, expose a synthetic refund transaction
+         // so credit notes remain visible in customer history/statements.
+         const displayIdSet = new globalThis.Set<string>();
+         for (const tx of mergedMap.values()) {
+            const key = typeof tx.displayId === 'string' ? tx.displayId.trim().toUpperCase() : '';
+            if (key) displayIdSet.add(key);
+         }
+
+         const walletById = new globalThis.Map<string, any>();
+         for (const wallet of (wallets || [])) {
+            if (wallet?.id) walletById.set(wallet.id, wallet);
+         }
+
+         const isRefundDocument = (tx: Transaction): boolean => {
+            const docType = typeof tx.documentType === 'string' ? tx.documentType.trim().toUpperCase() : '';
+            const ncfType = typeof tx.ncfType === 'string' ? tx.ncfType.trim().toUpperCase() : '';
+            const displayId = typeof tx.displayId === 'string' ? tx.displayId.trim().toUpperCase() : '';
+            return docType === 'REFUND' || ncfType === 'B04' || displayId.startsWith('NC');
+         };
+
+         const toMillis = (value?: string): number => {
+            const ts = value ? new Date(value).getTime() : NaN;
+            return Number.isFinite(ts) ? ts : 0;
+         };
+
+         const salesCandidatesByCustomer = new globalThis.Map<string, Transaction[]>();
+         for (const tx of mergedMap.values()) {
+            const customerId = typeof tx.customerId === 'string' ? tx.customerId.trim() : '';
+            if (!customerId) continue;
+            if (isRefundDocument(tx)) continue;
+            const list = salesCandidatesByCustomer.get(customerId) || [];
+            list.push(tx);
+            salesCandidatesByCustomer.set(customerId, list);
+         }
+
+         const pickAffectedInvoice = (customerId: string, amount: number, movementDate: string): Transaction | null => {
+            const candidates = salesCandidatesByCustomer.get(customerId) || [];
+            if (candidates.length === 0) return null;
+
+            const movementMs = toMillis(movementDate);
+            let best: Transaction | null = null;
+            let bestScore = Number.NEGATIVE_INFINITY;
+            for (const candidate of candidates) {
+               let score = 0;
+               if (candidate.status === 'PARTIAL_REFUND' || candidate.status === 'REFUNDED') score += 40;
+               if (toPositiveNumber(candidate.total) + 0.01 >= amount) score += 12;
+
+               const candidateMs = toMillis(candidate.date);
+               const diffMs = movementMs > 0 && candidateMs > 0
+                  ? Math.abs(candidateMs - movementMs)
+                  : Number.POSITIVE_INFINITY;
+               if (diffMs <= 24 * 60 * 60 * 1000) score += 20;
+               else if (diffMs <= 7 * 24 * 60 * 60 * 1000) score += 10;
+               else if (diffMs <= 30 * 24 * 60 * 60 * 1000) score += 4;
+
+               if (typeof candidate.ncf === 'string' && candidate.ncf.trim()) score += 5;
+               if (typeof candidate.displayId === 'string' && candidate.displayId.trim()) score += 3;
+
+               if (score > bestScore) {
+                  best = candidate;
+                  bestScore = score;
+               }
+            }
+            return best;
+         };
+
+         const extractB04NcfFromMovement = (movement: any): string | undefined => {
+            const rawCandidates = [
+               movement?.ncf,
+               movement?.ncfB04,
+               movement?.fiscalNcf,
+               movement?.b04,
+               movement?.metadata?.ncf,
+               movement?.meta?.ncf
+            ];
+            for (const raw of rawCandidates) {
+               if (typeof raw !== 'string') continue;
+               const candidate = raw.trim().toUpperCase();
+               if (candidate.startsWith('B04')) return candidate;
+            }
+            return undefined;
+         };
+
+         for (const movement of (walletTxns || [])) {
+            const ref = typeof movement?.referenceId === 'string' ? movement.referenceId.trim() : '';
+            const refUpper = ref.toUpperCase();
+            if (!refUpper.startsWith('NC')) continue;
+
+            const amount = toPositiveNumber(movement?.amount);
+            if (amount <= 0) continue;
+
+            const wallet = walletById.get(movement?.walletId);
+            const walletCustomerId = wallet?.customerId;
+            if (!walletCustomerId) continue;
+            const parsedMovementDate = typeof movement?.createdAt === 'string' ? new Date(movement.createdAt).getTime() : NaN;
+            const movementDate = Number.isFinite(parsedMovementDate) ? String(movement.createdAt) : new Date().toISOString();
+            const affectedSale = pickAffectedInvoice(String(walletCustomerId), amount, movementDate);
+            const inferredAffectedInvoice = (affectedSale?.displayId || affectedSale?.id || '').toString().trim();
+            const inferredAffectedNCF = (affectedSale?.ncf || '').toString().trim();
+            const inferredNcf = extractB04NcfFromMovement(movement);
+
+            if (displayIdSet.has(refUpper)) {
+               for (const [txId, currentTx] of mergedMap.entries()) {
+                  const currentDisplay = typeof currentTx.displayId === 'string' ? currentTx.displayId.trim().toUpperCase() : '';
+                  if (currentDisplay !== refUpper) continue;
+                  if (!isRefundDocument(currentTx)) continue;
+
+                  const patch: Partial<Transaction> = {};
+                  if ((!currentTx.ncf || !currentTx.ncf.trim()) && inferredNcf) patch.ncf = inferredNcf;
+                  if ((!currentTx.affectedInvoiceNumber || !currentTx.affectedInvoiceNumber.trim()) && inferredAffectedInvoice) {
+                     patch.affectedInvoiceNumber = inferredAffectedInvoice;
+                  }
+                  if ((!currentTx.affectedNCF || !currentTx.affectedNCF.trim()) && inferredAffectedNCF) {
+                     patch.affectedNCF = inferredAffectedNCF;
+                  }
+                  if (!currentTx.originalTransactionId && affectedSale?.id) patch.originalTransactionId = affectedSale.id;
+                  if (Object.keys(patch).length === 0) continue;
+
+                  mergedMap.set(txId, {
+                     ...currentTx,
+                     ...patch
+                  });
+               }
+               continue;
+            }
+
+            const owner = customers.find(c => c.id === walletCustomerId);
+            const syntheticId = `WLT-NC-${movement?.id || ref}-${walletCustomerId}`;
+
+            mergedMap.set(syntheticId, {
+               id: syntheticId,
+               displayId: ref,
+               documentType: 'REFUND',
+               date: movementDate,
+               items: [],
+               total: amount,
+               payments: [{ method: 'STORE_CREDIT', amount }],
+               userId: 'SYSTEM',
+               userName: 'Sistema',
+               terminalId: 'N/A',
+               status: 'REFUNDED',
+               customerId: walletCustomerId,
+               customerName: owner?.name,
+               ncf: inferredNcf,
+               ncfType: 'B04',
+               refundReason: 'NC registrada vía wallet',
+               affectedInvoiceNumber: inferredAffectedInvoice || undefined,
+               affectedNCF: inferredAffectedNCF || undefined,
+               originalTransactionId: affectedSale?.id,
+               syncStatus: 'COMPLETED'
+            } as Transaction);
+
+            displayIdSet.add(refUpper);
+         }
+
+         const normalizeText = (value?: string | null) => (value || '').trim().toLowerCase();
+         const selectedById = customers.find(c => c.id === effectiveCustomerId);
+         const selectedName = normalizeText(selectedById?.name);
+
          const customerTxs = Array.from(mergedMap.values())
-            .filter(tx => tx.customerId === effectiveCustomerId)
+            .filter(tx => {
+               if (tx.customerId === effectiveCustomerId) return true;
+               if (!selectedName) return false;
+               return normalizeText(tx.customerName) === selectedName;
+            })
             .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
          setCustomerTransactions(customerTxs);
       } catch (e) {
          console.error("Failed to load customer transactions:", e);
          setCustomerTransactions([]);
+      }
+   }, [selectedCustomer?.id, customers]);
+
+   const loadWalletMovements = useCallback(async (customerId?: string | null) => {
+      const effectiveCustomerId = customerId || selectedCustomer?.id;
+      if (!effectiveCustomerId) {
+         setWalletMovements([]);
+         return;
+      }
+
+      try {
+         const { db } = await import('../utils/db');
+         const [wallets, rawWalletTx] = await Promise.all([
+            db.get('wallets' as any) as Promise<any[]>,
+            db.get('wallet_transactions' as any) as Promise<any[]>
+         ]);
+
+         const wallet = (wallets || []).find((w: any) => w?.customerId === effectiveCustomerId);
+         if (!wallet?.id) {
+            setWalletMovements([]);
+            return;
+         }
+
+         const txs = (rawWalletTx || [])
+            .filter((tx: any) => tx?.walletId === wallet.id)
+            .map((tx: any) => ({
+               id: String(tx.id || `wallet_tx_${Math.random().toString(36).slice(2)}`),
+               walletId: String(tx.walletId || wallet.id),
+               type: tx.type as WalletTransaction['type'],
+               amount: Number(tx.amount || 0),
+               referenceId: tx.referenceId,
+               timestamp: tx.timestamp || tx.createdAt || new Date().toISOString()
+            }))
+            .sort((a: WalletTransaction, b: WalletTransaction) =>
+               new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+            );
+
+         setWalletMovements(txs);
+      } catch (error) {
+         console.error('Failed to load wallet movements:', error);
+         setWalletMovements([]);
       }
    }, [selectedCustomer?.id]);
 
@@ -442,7 +661,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    useEffect(() => {
       loadCustomerTransactions();
       fetchActivities();
-   }, [loadCustomerTransactions, fetchActivities, customers]);
+      loadWalletMovements();
+   }, [loadCustomerTransactions, fetchActivities, loadWalletMovements, customers]);
 
 
    // --- ADDRESS LOGIC ---
@@ -852,24 +1072,24 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-8 pt-6 border-t border-gray-100">
                               <div>
                                  <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Total Gastado</p>
-                                 <p className="text-xl font-black text-gray-800">{config.currencySymbol}{selectedCustomer.totalSpent?.toLocaleString() || '0.00'}</p>
+                                 <p className="text-xl font-black text-gray-800">{config.currencySymbol}{formatMoney(selectedCustomer.totalSpent)}</p>
                               </div>
                               <div>
                                  <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Deuda Actual</p>
                                  <p className="text-xl font-black text-red-500">
-                                    {config.currencySymbol}{selectedCustomer.currentDebt?.toLocaleString() || '0.00'}
+                                    {config.currencySymbol}{formatMoney(selectedCustomer.currentDebt)}
                                  </p>
                               </div>
                               <div>
                                  <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Saldo a Favor / Anticipos</p>
                                  <p className="text-xl font-black text-emerald-500">
-                                    {config.currencySymbol}{selectedCustomer.wallet?.balance.toLocaleString() || '0.00'}
+                                    {config.currencySymbol}{formatMoney(selectedCustomer.wallet?.balance)}
                                  </p>
                               </div>
                               <div className="md:border-l md:pl-6">
                                  <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Total Neto</p>
-                                 <p className={`text-xl font-black ${((selectedCustomer.wallet?.balance || 0) - (selectedCustomer.currentDebt || 0)) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                                    {config.currencySymbol}{((selectedCustomer.wallet?.balance || 0) - (selectedCustomer.currentDebt || 0)).toLocaleString()}
+                                 <p className={`text-xl font-black ${(toSafeNumber(selectedCustomer.wallet?.balance) - toSafeNumber(selectedCustomer.currentDebt)) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                    {config.currencySymbol}{formatMoney(toSafeNumber(selectedCustomer.wallet?.balance) - toSafeNumber(selectedCustomer.currentDebt))}
                                  </p>
                               </div>
                            </div>
@@ -940,17 +1160,18 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                                 <p className={`font-black ${isRefund ? 'text-red-600' : 'text-gray-900'}`}>
                                                    {isRefund ? '-' : ''}{config.currencySymbol}{tx.total.toFixed(2)}
                                                 </p>
-                                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${tx.status === 'REFUNDED' ? 'bg-red-100 text-red-700' :
+                                               <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${tx.status === 'REFUNDED' ? 'bg-red-100 text-red-700' :
                                                    tx.status === 'PARTIAL_REFUND' ? 'bg-orange-100 text-orange-700' :
                                                       effectivePending > 0 ? 'bg-amber-100 text-amber-700' :
                                                          'bg-emerald-100 text-emerald-700'
                                                    }`}>
-                                                   {tx.status === 'REFUNDED' ? 'ANULADO' :
+                                                   {isRefund ? 'NOTA CRÉDITO' :
+                                                      tx.status === 'REFUNDED' ? 'ANULADO' :
                                                       tx.status === 'PARTIAL_REFUND' ? 'DEVUELTO' :
                                                          effectivePending > 0 ? 'PENDIENTE' :
                                                             'PAGADO'}
-                                                </span>
-                                             </div>
+                                               </span>
+                                            </div>
                                           </div>
                                        );
                                     })
@@ -973,7 +1194,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                           <div>
                                              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Monedero Virtual</p>
                                              <h3 className="text-4xl font-mono mt-1 font-black tracking-tight">
-                                                {config.currencySymbol}{selectedCustomer.wallet?.balance.toLocaleString() || '0.00'}
+                                                {config.currencySymbol}{formatMoney(selectedCustomer.wallet?.balance)}
                                              </h3>
                                           </div>
                                           <WalletIcon size={32} className="text-emerald-400" />
@@ -1007,6 +1228,47 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                              </button>
                                           )}
                                        </div>
+                                    </div>
+                                 </div>
+
+                                 <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
+                                    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                                       <h4 className="text-xs font-black uppercase tracking-widest text-gray-500">Movimientos de Wallet</h4>
+                                       <span className="text-[10px] text-gray-400 font-bold">{walletMovements.length} registros</span>
+                                    </div>
+                                    <div className="p-3 space-y-2 max-h-72 overflow-y-auto">
+                                       {walletMovements.length === 0 ? (
+                                          <div className="text-center py-8 text-gray-400 border-2 border-dashed border-gray-100 rounded-xl">
+                                             <WalletIcon size={28} className="mx-auto mb-2 opacity-40" />
+                                             <p className="text-sm font-medium">Sin movimientos de wallet</p>
+                                          </div>
+                                       ) : (
+                                          walletMovements.map((movement) => {
+                                             const isCredit = Number(movement.amount || 0) >= 0;
+                                             const movementType = (movement.type || '').toUpperCase();
+                                             const label =
+                                                movementType === 'DEPOSIT' ? 'Abono' :
+                                                   movementType === 'PAYMENT' ? 'Consumo' :
+                                                      movementType === 'REFUND' ? 'Reembolso' :
+                                                         movementType === 'CASHBACK' ? 'Cashback' :
+                                                            movement.type;
+
+                                             return (
+                                                <div key={movement.id} className="p-3 rounded-xl border border-gray-100 bg-gray-50/60 flex items-center justify-between">
+                                                   <div>
+                                                      <p className="text-sm font-bold text-gray-800">{label}</p>
+                                                      <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+                                                         {new Date(movement.timestamp).toLocaleString()}
+                                                         {movement.referenceId ? ` • Ref: ${movement.referenceId}` : ''}
+                                                      </p>
+                                                   </div>
+                                                   <p className={`font-black ${isCredit ? 'text-emerald-600' : 'text-red-600'}`}>
+                                                      {isCredit ? '+' : ''}{config.currencySymbol}{Math.abs(Number(movement.amount || 0)).toFixed(2)}
+                                                   </p>
+                                                </div>
+                                             );
+                                          })
+                                       )}
                                     </div>
                                  </div>
 
@@ -1559,6 +1821,9 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
             const payments = Array.isArray(tx.payments) ? tx.payments : [];
             const paymentTotal = payments.reduce((acc, p: any) => acc + Number(p?.amount || 0), 0);
+            const isRefundDoc = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+            const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
+            const affectedNCF = (tx.affectedNCF || '').toString().trim();
 
             return (
                <div className="fixed inset-0 z-[100] overflow-hidden">
@@ -1647,8 +1912,20 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                               </div>
                               <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
                                  <p className="text-[10px] font-bold text-gray-400 uppercase">NCF</p>
-                                 <p className="text-xs font-bold text-gray-800 truncate">{tx.ncf || 'N/A'}</p>
+                                 <p className="text-xs font-bold text-gray-800 truncate">{tx.ncf || 'Sin NCF'}</p>
                               </div>
+                              {isRefundDoc && (
+                                 <div className="p-3 bg-red-50/60 rounded-xl border border-red-100">
+                                    <p className="text-[10px] font-bold text-red-400 uppercase">Factura afectada</p>
+                                    <p className="text-xs font-bold text-red-800 truncate">{affectedInvoice || 'No disponible'}</p>
+                                 </div>
+                              )}
+                              {isRefundDoc && (
+                                 <div className="p-3 bg-red-50/60 rounded-xl border border-red-100">
+                                    <p className="text-[10px] font-bold text-red-400 uppercase">NCF afectado</p>
+                                    <p className="text-xs font-bold text-red-800 truncate">{affectedNCF || 'No disponible'}</p>
+                                 </div>
+                              )}
                            </div>
 
                            <div className="rounded-xl border border-gray-100 overflow-hidden">

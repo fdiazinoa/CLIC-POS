@@ -30,6 +30,13 @@ const ProfessionalAccountStatement: React.FC<ProfessionalAccountStatementProps> 
 }) => {
     const [expandedInvoiceId, setExpandedInvoiceId] = useState<string | null>(null);
 
+    const isRefundDocument = (tx: Transaction) => {
+        const docType = typeof tx.documentType === 'string' ? tx.documentType.trim().toUpperCase() : '';
+        const ncfType = typeof tx.ncfType === 'string' ? tx.ncfType.trim().toUpperCase() : '';
+        const displayId = typeof tx.displayId === 'string' ? tx.displayId.trim().toUpperCase() : '';
+        return docType === 'REFUND' || ncfType === 'B04' || displayId.startsWith('NC');
+    };
+
     // Group allocations by transactionId
     const allocationsByTx = useMemo(() => {
         const map: Record<string, (CollectionAllocation & { collectionDisplayId: string, collectionDate: string })[]> = {};
@@ -48,7 +55,7 @@ const ProfessionalAccountStatement: React.FC<ProfessionalAccountStatementProps> 
 
     // Financial Indicators Calculation
     const stats = useMemo(() => {
-        const unpaid = transactions.filter(tx => tx.status !== 'REFUNDED' && (tx.pendingBalance || 0) > 0);
+        const unpaid = transactions.filter(tx => !isRefundDocument(tx) && tx.status !== 'REFUNDED' && (tx.pendingBalance || 0) > 0);
         const totalDebt = unpaid.reduce((acc, tx) => acc + (tx.pendingBalance || 0), 0);
 
         const overdueCount = unpaid.filter(tx => {
@@ -69,7 +76,7 @@ const ProfessionalAccountStatement: React.FC<ProfessionalAccountStatementProps> 
 
     const sortedTransactions = useMemo(() => {
         return [...transactions]
-            .filter(tx => tx.status !== 'REFUNDED')
+            .filter(tx => isRefundDocument(tx) || tx.status !== 'REFUNDED')
             .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     }, [transactions]);
 
@@ -85,6 +92,9 @@ const ProfessionalAccountStatement: React.FC<ProfessionalAccountStatementProps> 
     };
 
     const getStatusBadge = (tx: Transaction) => {
+        if (isRefundDocument(tx)) {
+            return <span className="px-2 py-0.5 rounded-sm bg-red-50 text-red-600 text-[10px] font-black uppercase ring-1 ring-red-100">Nota Crédito</span>;
+        }
         const pending = tx.pendingBalance || 0;
         if (pending <= 0) {
             return <span className="px-2 py-0.5 rounded-sm bg-emerald-50 text-emerald-600 text-[10px] font-black uppercase ring-1 ring-emerald-100">Pagado</span>;
@@ -146,6 +156,10 @@ const ProfessionalAccountStatement: React.FC<ProfessionalAccountStatementProps> 
                             const isExpanded = expandedInvoiceId === tx.id;
                             const txAllocations = allocationsByTx[tx.id] || [];
                             const pending = tx.pendingBalance || 0;
+                            const isRefund = isRefundDocument(tx);
+                            const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
+                            const affectedNCF = (tx.affectedNCF || '').toString().trim();
+                            const rowNcf = (tx.ncf || '').toString().trim();
 
                             return (
                                 <React.Fragment key={tx.id}>
@@ -160,13 +174,13 @@ const ProfessionalAccountStatement: React.FC<ProfessionalAccountStatementProps> 
                                             {tx.displayId || tx.id.slice(-8).toUpperCase()}
                                         </td>
                                         <td className="px-4 py-3 font-mono text-[11px] text-slate-400 letter-spacing-1">
-                                            {tx.ncf || '0000000000'}
+                                            {rowNcf || 'Sin NCF'}
                                         </td>
                                         <td className="px-4 py-3 text-center">
                                             {getStatusBadge(tx)}
                                         </td>
                                         <td className="px-4 py-3 text-right font-medium text-slate-400">
-                                            {formatCurrency(tx.total)}
+                                            {isRefundDocument(tx) ? `-${formatCurrency(Math.abs(tx.total || 0))}` : formatCurrency(tx.total)}
                                         </td>
                                         <td className={`px-4 py-3 text-right font-black ${pending > 0 ? 'text-red-600' : 'text-emerald-500'}`}>
                                             {formatCurrency(pending)}
@@ -186,18 +200,30 @@ const ProfessionalAccountStatement: React.FC<ProfessionalAccountStatementProps> 
                                                         {/* Factura Generada */}
                                                         <div className="flex items-center justify-between py-2 border-b border-gray-100">
                                                             <div className="flex items-center gap-3">
-                                                                <div className="w-6 h-6 bg-slate-100 text-slate-500 rounded-sm flex items-center justify-center">
-                                                                    <CheckCircle2 size={12} />
+                                                                <div className={`w-6 h-6 rounded-sm flex items-center justify-center ${isRefund ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'}`}>
+                                                                    {isRefund ? <ArrowDownLeft size={12} /> : <CheckCircle2 size={12} />}
                                                                 </div>
                                                                 <div>
-                                                                    <p className="text-[11px] font-black text-slate-800 uppercase">Factura Generada</p>
+                                                                    <p className="text-[11px] font-black text-slate-800 uppercase">{isRefund ? 'Nota de Crédito Emitida' : 'Factura Generada'}</p>
                                                                     <div className="flex items-center gap-2 text-[10px] text-slate-400 font-bold">
                                                                         <Calendar size={10} /> {new Date(tx.date).toLocaleDateString()}
                                                                         <Clock size={10} /> {new Date(tx.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                                                     </div>
+                                                                    {isRefund && (
+                                                                        <div className="mt-1 space-y-0.5">
+                                                                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">
+                                                                                Factura afectada: {affectedInvoice || 'No disponible'}
+                                                                            </p>
+                                                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
+                                                                                NCF afectado: {affectedNCF || 'No disponible'}
+                                                                            </p>
+                                                                        </div>
+                                                                    )}
                                                                 </div>
                                                             </div>
-                                                            <span className="text-[11px] font-black text-slate-500">+{formatCurrency(tx.total)}</span>
+                                                            <span className={`text-[11px] font-black ${isRefund ? 'text-red-500' : 'text-slate-500'}`}>
+                                                                {isRefund ? `-${formatCurrency(Math.abs(tx.total || 0))}` : `+${formatCurrency(tx.total)}`}
+                                                            </span>
                                                         </div>
 
                                                         {/* Abonos */}

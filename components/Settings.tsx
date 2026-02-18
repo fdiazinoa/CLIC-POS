@@ -87,12 +87,15 @@ interface SettingsProps {
   onUpdateCustomers?: (customers: Customer[]) => void;
   onRepairLegacyReceivables?: () => Promise<{
     scannedTransactions: number;
+    scannedWalletMovements: number;
     repairedTransactions: number;
+    repairedCreditNotes: number;
     recalculatedCustomers: number;
     customersWithDebtChanges: number;
     totalPendingBefore: number;
     totalPendingAfter: number;
     transactionIds: string[];
+    creditNoteIds: string[];
   }>;
   onAdjustStock: (adjustments: { productId: string; quantity: number }[]) => void;
   onOpenZReport: () => void;
@@ -113,12 +116,15 @@ type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' |
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
+  scannedWalletMovements: number;
   repairedTransactions: number;
+  repairedCreditNotes: number;
   recalculatedCustomers: number;
   customersWithDebtChanges: number;
   totalPendingBefore: number;
   totalPendingAfter: number;
   transactionIds: string[];
+  creditNoteIds: string[];
 };
 
 const Settings: React.FC<SettingsProps> = (props) => {
@@ -159,16 +165,16 @@ const Settings: React.FC<SettingsProps> = (props) => {
     }
 
     const confirmed = window.confirm(
-      'Esto recalculará saldos pendientes CxC y deudas por cliente usando las facturas guardadas.\n\n¿Desea continuar?'
+      'Esto recalculará saldos pendientes CxC/deudas y recuperará Notas de Crédito faltantes desde movimientos de wallet.\n\n¿Desea continuar?'
     );
     if (!confirmed) return;
 
     setIsRepairingReceivables(true);
     try {
       const result: ReceivableRepairSummary = await props.onRepairLegacyReceivables();
-      if (result.scannedTransactions === 0) {
+      if (result.scannedTransactions === 0 && result.repairedCreditNotes === 0) {
         alert(
-          'No se encontraron facturas para revisar en transactions/transactionHistory.\n\n' +
+          'No se encontraron facturas ni notas de crédito wallet para reparar.\n\n' +
           'No se aplicaron cambios.'
         );
         return;
@@ -177,15 +183,21 @@ const Settings: React.FC<SettingsProps> = (props) => {
       const repairedList = result.transactionIds.length > 0
         ? `\nTickets reparados: ${result.transactionIds.join(', ')}`
         : '';
+      const repairedCreditNotesList = result.creditNoteIds.length > 0
+        ? `\nNC recuperadas: ${result.creditNoteIds.join(', ')}`
+        : '';
 
       alert(
         `Reparación CxC completada.\n\n` +
         `Facturas revisadas: ${result.scannedTransactions}\n` +
+        `Mov. wallet revisados: ${result.scannedWalletMovements}\n` +
         `Facturas reparadas: ${result.repairedTransactions}\n` +
+        `NC recuperadas: ${result.repairedCreditNotes}\n` +
         `Clientes ajustados: ${result.customersWithDebtChanges}\n` +
         `Pendiente antes: ${props.config.currencySymbol}${result.totalPendingBefore.toLocaleString()}\n` +
         `Pendiente después: ${props.config.currencySymbol}${result.totalPendingAfter.toLocaleString()}` +
-        repairedList
+        repairedList +
+        repairedCreditNotesList
       );
     } catch (error) {
       console.error('Receivable repair failed:', error);

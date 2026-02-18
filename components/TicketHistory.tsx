@@ -168,6 +168,9 @@ const SalesHistoryTable: React.FC<{
    }, [transactions, zReports]);
 
    const getStatusBadge = (tx: Transaction) => {
+      if (tx.documentType === 'REFUND' || tx.ncfType === 'B04') {
+         return <span className="px-2 py-0.5 bg-red-100 text-red-600 rounded-full text-[10px] font-bold">DEVOLUCIÓN</span>;
+      }
       if (tx.status === 'REFUNDED') return <span className="px-2 py-0.5 bg-red-100 text-red-600 rounded-full text-[10px] font-bold">ANULADO</span>;
       if (tx.status === 'PARTIAL_REFUND') return <span className="px-2 py-0.5 bg-orange-100 text-orange-600 rounded-full text-[10px] font-bold">DEVUELTO</span>;
       if ((tx.pendingBalance || 0) > 0) return <span className="px-2 py-0.5 bg-amber-100 text-amber-600 rounded-full text-[10px] font-bold">PENDIENTE</span>;
@@ -294,6 +297,9 @@ const TicketDetailDrawer: React.FC<{
    const supervisorName = tx.authorizedByName || users.find(u => u.id === tx.authorizedById)?.name || null;
    const payments = Array.isArray(tx.payments) ? tx.payments : [];
    const paymentTotal = payments.reduce((acc, p: any) => acc + Number(p?.amount || 0), 0);
+   const isRefundDoc = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+   const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
+   const affectedNCF = (tx.affectedNCF || '').toString().trim();
 
    const getPaymentMethodLabel = (payment: any): string => {
       const method = (payment?.method || '').toString().toUpperCase();
@@ -432,8 +438,20 @@ const TicketDetailDrawer: React.FC<{
                      </div>
                      <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
                         <p className="text-[10px] font-bold text-gray-400 uppercase">NCF</p>
-                        <p className="text-xs font-bold text-gray-800 truncate">{tx.ncf || 'N/A'}</p>
+                        <p className="text-xs font-bold text-gray-800 truncate">{tx.ncf || 'Sin NCF'}</p>
                      </div>
+                     {isRefundDoc && (
+                        <div className="p-3 bg-red-50/60 rounded-xl border border-red-100">
+                           <p className="text-[10px] font-bold text-red-400 uppercase">Factura afectada</p>
+                           <p className="text-xs font-bold text-red-800 truncate">{affectedInvoice || 'No disponible'}</p>
+                        </div>
+                     )}
+                     {isRefundDoc && (
+                        <div className="p-3 bg-red-50/60 rounded-xl border border-red-100">
+                           <p className="text-[10px] font-bold text-red-400 uppercase">NCF afectado</p>
+                           <p className="text-xs font-bold text-red-800 truncate">{affectedNCF || 'No disponible'}</p>
+                        </div>
+                     )}
                   </div>
 
                   {supervisorName && (
@@ -543,15 +561,202 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    useEffect(() => {
       const loadHistory = async () => {
          try {
-            // Load transactions directly from the 'transactions' collection (not 'transactionHistory')
-            // ... (keep existing loading logic)
             const { db } = await import('../utils/db');
-            const history = await db.get('transactions') as Transaction[];
-            if (history && Array.isArray(history)) {
-               const markedHistory = history.map(h => ({ ...h, _isArchived: true }));
-               setHistoryTransactions(markedHistory);
+            const [activeTransactions, archivedTransactions, wallets, walletTxns, customers] = await Promise.all([
+               db.get('transactions') as Promise<Transaction[]>,
+               db.get('transactionHistory') as Promise<Transaction[]>,
+               db.get('wallets' as any) as Promise<any[]>,
+               db.get('wallet_transactions' as any) as Promise<any[]>,
+               db.get('customers') as Promise<any[]>
+            ]);
+
+            const toTimestamp = (value?: string) => {
+               const ts = value ? new Date(value).getTime() : NaN;
+               return Number.isFinite(ts) ? ts : 0;
+            };
+
+            const mergedMap = new Map<string, Transaction>();
+            const mergedRows = [
+               ...(Array.isArray(archivedTransactions) ? archivedTransactions : []),
+               ...(Array.isArray(activeTransactions) ? activeTransactions : [])
+            ];
+
+            for (const tx of mergedRows) {
+               if (!tx?.id) continue;
+               const existing = mergedMap.get(tx.id);
+               if (!existing) {
+                  mergedMap.set(tx.id, tx);
+                  continue;
+               }
+               const existingTs = Math.max(toTimestamp((existing as any).updatedAt), toTimestamp(existing.date));
+               const nextTs = Math.max(toTimestamp((tx as any).updatedAt), toTimestamp(tx.date));
+               if (nextTs >= existingTs) mergedMap.set(tx.id, tx);
             }
-            // ... (keep ZReport loading)
+
+            // Fallback bridge for legacy gaps: surface wallet NC refs as refund records
+            // when the refund transaction row is missing.
+            const displayIdSet = new Set<string>();
+            for (const tx of mergedMap.values()) {
+               const key = typeof tx.displayId === 'string' ? tx.displayId.trim().toUpperCase() : '';
+               if (key) displayIdSet.add(key);
+            }
+
+            const walletById = new Map<string, any>();
+            for (const wallet of (wallets || [])) {
+               if (wallet?.id) walletById.set(wallet.id, wallet);
+            }
+
+            const customerById = new Map<string, any>();
+            for (const customer of (customers || [])) {
+               if (customer?.id) customerById.set(customer.id, customer);
+            }
+
+            const isRefundDocument = (tx: Transaction): boolean => {
+               const docType = typeof tx.documentType === 'string' ? tx.documentType.trim().toUpperCase() : '';
+               const ncfType = typeof tx.ncfType === 'string' ? tx.ncfType.trim().toUpperCase() : '';
+               const displayId = typeof tx.displayId === 'string' ? tx.displayId.trim().toUpperCase() : '';
+               return docType === 'REFUND' || ncfType === 'B04' || displayId.startsWith('NC');
+            };
+
+            const toMillis = (value?: string): number => {
+               const ts = value ? new Date(value).getTime() : NaN;
+               return Number.isFinite(ts) ? ts : 0;
+            };
+
+            const salesCandidatesByCustomer = new Map<string, Transaction[]>();
+            for (const tx of mergedMap.values()) {
+               const customerId = typeof tx.customerId === 'string' ? tx.customerId.trim() : '';
+               if (!customerId) continue;
+               if (isRefundDocument(tx)) continue;
+               const list = salesCandidatesByCustomer.get(customerId) || [];
+               list.push(tx);
+               salesCandidatesByCustomer.set(customerId, list);
+            }
+
+            const pickAffectedInvoice = (customerId: string, amount: number, movementDate: string): Transaction | null => {
+               const candidates = salesCandidatesByCustomer.get(customerId) || [];
+               if (candidates.length === 0) return null;
+
+               const movementMs = toMillis(movementDate);
+               let best: Transaction | null = null;
+               let bestScore = Number.NEGATIVE_INFINITY;
+               for (const candidate of candidates) {
+                  let score = 0;
+                  if (candidate.status === 'PARTIAL_REFUND' || candidate.status === 'REFUNDED') score += 40;
+                  if ((Number(candidate.total) || 0) + 0.01 >= amount) score += 12;
+
+                  const candidateMs = toMillis(candidate.date);
+                  const diffMs = movementMs > 0 && candidateMs > 0
+                     ? Math.abs(candidateMs - movementMs)
+                     : Number.POSITIVE_INFINITY;
+                  if (diffMs <= 24 * 60 * 60 * 1000) score += 20;
+                  else if (diffMs <= 7 * 24 * 60 * 60 * 1000) score += 10;
+                  else if (diffMs <= 30 * 24 * 60 * 60 * 1000) score += 4;
+
+                  if (typeof candidate.ncf === 'string' && candidate.ncf.trim()) score += 5;
+                  if (typeof candidate.displayId === 'string' && candidate.displayId.trim()) score += 3;
+
+                  if (score > bestScore) {
+                     best = candidate;
+                     bestScore = score;
+                  }
+               }
+               return best;
+            };
+
+            const extractB04NcfFromMovement = (movement: any): string | undefined => {
+               const rawCandidates = [
+                  movement?.ncf,
+                  movement?.ncfB04,
+                  movement?.fiscalNcf,
+                  movement?.b04,
+                  movement?.metadata?.ncf,
+                  movement?.meta?.ncf
+               ];
+               for (const raw of rawCandidates) {
+                  if (typeof raw !== 'string') continue;
+                  const candidate = raw.trim().toUpperCase();
+                  if (candidate.startsWith('B04')) return candidate;
+               }
+               return undefined;
+            };
+
+            for (const movement of (walletTxns || [])) {
+               const ref = typeof movement?.referenceId === 'string' ? movement.referenceId.trim() : '';
+               const refUpper = ref.toUpperCase();
+               if (!refUpper.startsWith('NC')) continue;
+
+               const amountNum = Number(movement?.amount);
+               const amount = Number.isFinite(amountNum) && amountNum > 0 ? amountNum : 0;
+               if (amount <= 0) continue;
+
+               const wallet = walletById.get(movement?.walletId);
+               const walletCustomerId = wallet?.customerId;
+               if (!walletCustomerId) continue;
+               const parsedMovementDate = typeof movement?.createdAt === 'string' ? new Date(movement.createdAt).getTime() : NaN;
+               const movementDate = Number.isFinite(parsedMovementDate) ? String(movement.createdAt) : new Date().toISOString();
+               const affectedSale = pickAffectedInvoice(String(walletCustomerId), amount, movementDate);
+               const inferredAffectedInvoice = (affectedSale?.displayId || affectedSale?.id || '').toString().trim();
+               const inferredAffectedNCF = (affectedSale?.ncf || '').toString().trim();
+               const inferredNcf = extractB04NcfFromMovement(movement);
+
+               if (displayIdSet.has(refUpper)) {
+                  for (const [txId, currentTx] of mergedMap.entries()) {
+                     const currentDisplay = typeof currentTx.displayId === 'string' ? currentTx.displayId.trim().toUpperCase() : '';
+                     if (currentDisplay !== refUpper) continue;
+                     if (!isRefundDocument(currentTx)) continue;
+
+                     const patch: Partial<Transaction> = {};
+                     if ((!currentTx.ncf || !currentTx.ncf.trim()) && inferredNcf) patch.ncf = inferredNcf;
+                     if ((!currentTx.affectedInvoiceNumber || !currentTx.affectedInvoiceNumber.trim()) && inferredAffectedInvoice) {
+                        patch.affectedInvoiceNumber = inferredAffectedInvoice;
+                     }
+                     if ((!currentTx.affectedNCF || !currentTx.affectedNCF.trim()) && inferredAffectedNCF) {
+                        patch.affectedNCF = inferredAffectedNCF;
+                     }
+                     if (!currentTx.originalTransactionId && affectedSale?.id) patch.originalTransactionId = affectedSale.id;
+                     if (Object.keys(patch).length === 0) continue;
+
+                     mergedMap.set(txId, {
+                        ...currentTx,
+                        ...patch
+                     });
+                  }
+                  continue;
+               }
+
+               const owner = customerById.get(walletCustomerId);
+
+               const syntheticId = `WLT-NC-${movement?.id || ref}-${walletCustomerId}`;
+               mergedMap.set(syntheticId, {
+                  id: syntheticId,
+                  displayId: ref,
+                  documentType: 'REFUND',
+                  date: movementDate,
+                  items: [],
+                  total: amount,
+                  payments: [{ method: 'STORE_CREDIT', amount }],
+                  userId: 'SYSTEM',
+                  userName: 'Sistema',
+                  terminalId: 'N/A',
+                  status: 'REFUNDED',
+                  customerId: walletCustomerId,
+                  customerName: owner?.name,
+                  ncf: inferredNcf,
+                  ncfType: 'B04',
+                  affectedInvoiceNumber: inferredAffectedInvoice || undefined,
+                  affectedNCF: inferredAffectedNCF || undefined,
+                  originalTransactionId: affectedSale?.id,
+                  refundReason: 'NC registrada vía wallet',
+                  syncStatus: 'COMPLETED'
+               } as Transaction);
+
+               displayIdSet.add(refUpper);
+            }
+
+            const markedHistory = Array.from(mergedMap.values()).map(h => ({ ...h, _isArchived: true }));
+            setHistoryTransactions(markedHistory);
+
             const zReports = await db.get('zReports') as any[];
             if (zReports) {
                const map = new Map<string, string>();
@@ -583,9 +788,61 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    const filteredTransactions = useMemo(() => {
       // Merge current transactions (props) with history
       // Deduplicate by ID: Prioritize props (active state) over history cache
-      const uniqueMap = new Map();
-      historyTransactions.forEach(t => uniqueMap.set(t.id, t));
-      transactions.forEach(t => uniqueMap.set(t.id, t));
+      const uniqueMap = new Map<string, Transaction>();
+      const businessMap = new Map<string, Transaction>();
+
+      const toTimestamp = (value?: string) => {
+         const ts = value ? new Date(value).getTime() : NaN;
+         return Number.isFinite(ts) ? ts : 0;
+      };
+
+      // Merge preferring newest row (updatedAt/date), so stale transactionHistory
+      // never overwrites a recent PARTIAL_REFUND from active transactions.
+      [...historyTransactions, ...transactions].forEach((tx) => {
+         if (!tx?.id) return;
+         const existing = uniqueMap.get(tx.id);
+         if (!existing) {
+            uniqueMap.set(tx.id, tx);
+            return;
+         }
+
+         const existingTs = Math.max(
+            toTimestamp((existing as any).updatedAt),
+            toTimestamp(existing.date)
+         );
+         const candidateTs = Math.max(
+            toTimestamp((tx as any).updatedAt),
+            toTimestamp(tx.date)
+         );
+
+         if (candidateTs >= existingTs) {
+            uniqueMap.set(tx.id, tx);
+         }
+      });
+
+      for (const tx of uniqueMap.values()) {
+         const businessKey = typeof tx.displayId === 'string' && tx.displayId.trim().length > 0
+            ? `DISPLAY:${tx.displayId.trim().toUpperCase()}`
+            : `ID:${tx.id}`;
+         const existing = businessMap.get(businessKey);
+         if (!existing) {
+            businessMap.set(businessKey, tx);
+            continue;
+         }
+
+         const existingTs = Math.max(
+            toTimestamp((existing as any).updatedAt),
+            toTimestamp(existing.date)
+         );
+         const candidateTs = Math.max(
+            toTimestamp((tx as any).updatedAt),
+            toTimestamp(tx.date)
+         );
+
+         if (candidateTs >= existingTs) {
+            businessMap.set(businessKey, tx);
+         }
+      }
 
       const isValidTicketRecord = (tx: any): boolean => {
          const rawId = typeof tx?.id === 'string' ? tx.id.trim() : '';
@@ -600,7 +857,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          return isSalesDocument || hasDisplayId;
       };
 
-      let data = Array.from(uniqueMap.values())
+      let data = Array.from(businessMap.values())
          .filter(isValidTicketRecord)
          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()); // Newest first
 
@@ -667,11 +924,14 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
    // --- KPI CALCULATIONS ---
    const kpis = useMemo(() => {
-      const totalSales = filteredTransactions.reduce((acc, tx) => acc + (tx.status !== 'REFUNDED' ? tx.total : 0), 0);
+      const totalSales = filteredTransactions.reduce((acc, tx) => {
+         const isRefundDoc = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+         return acc + (!isRefundDoc && tx.status !== 'REFUNDED' ? tx.total : 0);
+      }, 0);
       const ticketCount = filteredTransactions.length;
       const avgTicket = ticketCount > 0 ? totalSales / ticketCount : 0;
       const refunds = filteredTransactions.reduce((acc, tx) => {
-         if (tx.status === 'REFUNDED' || tx.status === 'PARTIAL_REFUND') {
+         if (tx.documentType === 'REFUND' || tx.ncfType === 'B04' || tx.status === 'REFUNDED' || tx.status === 'PARTIAL_REFUND') {
             return acc + tx.total;
          }
          return acc;

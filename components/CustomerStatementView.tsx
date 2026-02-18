@@ -38,6 +38,13 @@ const CustomerStatementView: React.FC<CustomerStatementViewProps> = ({
     const [viewType, setViewType] = useState<'SUMMARY' | 'DETAILED'>(initialType);
     const [expandedInvoices, setExpandedInvoices] = useState<Set<string>>(new Set());
 
+    const isRefundDocument = (tx: Transaction) => {
+        const docType = typeof tx.documentType === 'string' ? tx.documentType.trim().toUpperCase() : '';
+        const ncfType = typeof tx.ncfType === 'string' ? tx.ncfType.trim().toUpperCase() : '';
+        const displayId = typeof tx.displayId === 'string' ? tx.displayId.trim().toUpperCase() : '';
+        return docType === 'REFUND' || ncfType === 'B04' || displayId.startsWith('NC');
+    };
+
     // Logical Join: Group allocations by transactionId
     const allocationsByTx = useMemo(() => {
         const map: Record<string, (CollectionAllocation & { collectionDisplayId: string, collectionDate: string })[]> = {};
@@ -66,7 +73,7 @@ const CustomerStatementView: React.FC<CustomerStatementViewProps> = ({
     // Data processing for Detailed View (All transactions for the customer)
     const detailedData = useMemo(() => {
         return transactions
-            .filter(tx => tx.status !== 'REFUNDED')
+            .filter(tx => isRefundDocument(tx) || tx.status !== 'REFUNDED')
             .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()); // Newest first
     }, [transactions]);
 

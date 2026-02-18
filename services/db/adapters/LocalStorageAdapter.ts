@@ -71,6 +71,36 @@ export class LocalStorageAdapter implements DatabaseAdapter {
         }
     }
 
+    async bulkUpdateProducts(productIds: string[], updates: any): Promise<void> {
+        if (!this.dbCache) this.loadFromStorage();
+
+        const products = (this.dbCache['products'] as any[]) || [];
+        const now = new Date().toISOString();
+        const idSet = new Set(productIds || []);
+
+        const updated = products.map((product: any) => {
+            if (!idSet.has(product.id)) return product;
+
+            const next = { ...product };
+            if (updates?.flags) {
+                next.operationalFlags = { ...(next.operationalFlags || {}) };
+                Object.entries(updates.flags).forEach(([key, cfg]: [string, any]) => {
+                    if (cfg?.apply) (next.operationalFlags as any)[key] = cfg.value;
+                });
+            }
+            if (updates?.classification) {
+                if (updates.classification.categoryId) next.category = updates.classification.categoryId;
+                if (updates.classification.measurementUnit) next.measurementUnit = updates.classification.measurementUnit;
+                if (updates.classification.purchaseUnit) next.purchaseUnit = updates.classification.purchaseUnit;
+            }
+            next.updatedAt = now;
+            return next;
+        });
+
+        this.dbCache['products'] = updated;
+        this.saveToStorage();
+    }
+
     async getDocument<T>(collectionName: string, id: string): Promise<T | null> {
         if (!this.dbCache) this.loadFromStorage();
         const collection = (this.dbCache[collectionName] as any[]) || [];
