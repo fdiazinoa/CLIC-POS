@@ -1,4 +1,4 @@
-import { BusinessConfig } from '../types';
+import { BusinessConfig, Product } from '../types';
 
 export const validateTerminalDocument = (
     config: BusinessConfig,
@@ -22,6 +22,28 @@ export const validateTerminalDocument = (
         return {
             isValid: false,
             error: `🚫 ACCIÓN DENEGADA\n\nEsta terminal (${terminal.id}) no tiene una serie de documentos asignada para: ${roleNames[role]}.\n\nPor favor, vaya a Ajustes > Terminales > Series / Documentos y asigne una secuencia.`
+        };
+    }
+
+    return { isValid: true };
+};
+
+/**
+ * Validates if a product is explicitly enabled in a specific warehouse.
+ * Centralized business rule for Strict Warehouse Mode.
+ */
+export const validateWarehouseAccess = (
+    product: Product,
+    warehouseId: string
+): { isValid: boolean; error?: string } => {
+    if (!warehouseId) return { isValid: true }; // Skip if no warehouse context provided
+
+    const isEnabled = product.activeInWarehouses?.includes(warehouseId);
+
+    if (!isEnabled) {
+        return {
+            isValid: false,
+            error: `Artículo no habilitado en este almacén.`
         };
     }
 

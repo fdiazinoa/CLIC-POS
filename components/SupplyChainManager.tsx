@@ -8,6 +8,8 @@ import {
    CreditCard, DollarSign, Clock, Info, ShieldAlert, History, Trash2
 } from 'lucide-react';
 import { BusinessConfig, Product, Supplier, PurchaseOrder, PurchaseOrderItem, Reception, ProductVariant } from '../types';
+import { validateWarehouseAccess } from '../utils/validation';
+
 import InventoryAudit from './InventoryAudit';
 import SupplierSelector from './SupplierSelector';
 import PurchaseOrderList from './PurchaseOrderList';
@@ -760,6 +762,18 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
 
             const currentItem = (order.items || []).find(i => i.variantSku === itemIdOrSku || (i.productId === itemIdOrSku && !i.variantSku));
             const currentQty = currentItem?.quantityReceived || 0;
+
+            if (newVal > currentQty) {
+               const targetWarehouseId = order.warehouseId || config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
+               const validation = validateWarehouseAccess(product!, targetWarehouseId);
+               if (!validation.isValid) {
+                  const whName = (config.terminals || [])
+                     .find(t => t.config.inventoryScope?.defaultSalesWarehouseId === targetWarehouseId || t.config.inventoryScope?.visibleWarehouseIds?.includes(targetWarehouseId))
+                     ?.config.inventoryScope?.defaultSalesWarehouseId === targetWarehouseId ? 'Almacén Principal' : 'Almacén Destino';
+                  alert(`🚫 Recepción Bloqueada:\n\nEl artículo "${product!.name}" no está habilitado en el almacén de entrada.\n\nPor favor, active el almacén en la ficha del producto antes de proceder.`);
+                  return;
+               }
+            }
 
             if (newVal > currentQty && (usesLots || usesSerial)) {
                setPendingTracking({

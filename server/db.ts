@@ -35,6 +35,38 @@ db.exec(`
         timestamp TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS inventory_ledger (
+        id TEXT PRIMARY KEY,
+        createdAt TEXT NOT NULL,
+        warehouseId TEXT NOT NULL,
+        productId TEXT NOT NULL,
+        concept TEXT NOT NULL,
+        documentRef TEXT,
+        qtyIn REAL DEFAULT 0,
+        qtyOut REAL DEFAULT 0,
+        unitCost REAL DEFAULT 0,
+        balanceQty REAL DEFAULT 0,
+        balanceAvgCost REAL DEFAULT 0,
+        terminalId TEXT,
+        syncStatus TEXT DEFAULT 'PENDING',
+        syncError TEXT,
+        FOREIGN KEY (productId) REFERENCES products(id),
+        FOREIGN KEY (warehouseId) REFERENCES warehouses(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ledger_product_warehouse ON inventory_ledger(productId, warehouseId);
+
+    -- TRG_STRICT_WAREHOUSE_VALIDATION
+    -- Prevents entries in the ledger if the product is not enabled (exists in product_stocks)
+    -- This enforces the "Active Product in Warehouse" rule at the database level.
+    CREATE TRIGGER IF NOT EXISTS trg_inventory_ledger_integrity
+    BEFORE INSERT ON inventory_ledger
+    FOR EACH ROW
+    WHEN NOT EXISTS (SELECT 1 FROM product_stocks WHERE productId = NEW.productId AND warehouseId = NEW.warehouseId)
+    BEGIN
+        SELECT RAISE(ABORT, '🚫 INTEGRIDAD DE ALMACÉN: El artículo no está habilitado para operar en el almacén especificado.');
+    END;
+
     -- Optimistic Locking columns
     -- Try/Catch is not possible in .exec(), so we use a safe approach or separate statements
     -- For better-sqlite3, we can just run these separately and ignore errors if column exists

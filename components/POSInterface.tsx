@@ -30,7 +30,7 @@ import GlobalDiscountModal from './GlobalDiscountModal';
 import LoyaltyScanModal from './LoyaltyScanModal';
 import TrackingSelectionModal from './TrackingSelectionModal';
 import { db } from '../utils/db';
-import { validateTerminalDocument } from '../utils/validation';
+import { validateTerminalDocument, validateWarehouseAccess } from '../utils/validation';
 import { isSessionExpired } from '../utils/session';
 import { FiscalRangeDGII } from '../types';
 import { parseScaleBarcode } from '../utils/barcodeParser';
@@ -665,13 +665,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       // 1. Warehouse enablement check
-      if (!defaultSalesWarehouseId) return true;
-      const isEnabled = product.activeInWarehouses?.includes(defaultSalesWarehouseId);
-      if (!isEnabled) {
-         const whName = (warehouses || []).find(w => w.id === defaultSalesWarehouseId)?.name || 'Almacén Actual';
-         setErrorToast(`Artículo no habilitado para la venta en: ${whName}`);
-         setTimeout(() => setErrorToast(null), 3500);
-         return false;
+      if (defaultSalesWarehouseId) {
+         const validation = validateWarehouseAccess(product, defaultSalesWarehouseId);
+         if (!validation.isValid) {
+            const whName = (warehouses || []).find(w => w.id === defaultSalesWarehouseId)?.name || 'Almacén Actual';
+            setErrorToast(`${validation.error} (${whName})`);
+            setTimeout(() => setErrorToast(null), 3500);
+            return false;
+         }
       }
 
       // 2. Stock validation

@@ -7,7 +7,7 @@ import {
    Eye, Filter, ChevronRight, Sparkles, LayoutGrid, ChevronDown, Zap, ShoppingBag, ClipboardList
 } from 'lucide-react';
 import { Warehouse, Product, StockTransfer, StockTransferItem, BusinessConfig, LedgerConcept, RoleDefinition, User } from '../types';
-import { validateTerminalDocument } from '../utils/validation';
+import { validateTerminalDocument, validateWarehouseAccess } from '../utils/validation';
 import { db } from '../utils/db';
 
 interface WarehouseManagerProps {
@@ -301,14 +301,16 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
       }
 
       // Validation: Check if product is active in Source Warehouse
-      if (!product.activeInWarehouses?.includes(sourceId)) {
+      const sourceValidation = validateWarehouseAccess(product, sourceId);
+      if (!sourceValidation.isValid) {
          const whName = warehouses.find(w => w.id === sourceId)?.name || 'Origen';
          alert(`Operación denegada:\n\nEl artículo "${product.name}" no está habilitado para operar en el almacén de origen (${whName}).\n\nPor favor, active el almacén en la ficha del producto.`);
          return;
       }
 
       // Validation: Check if product is active in Destination Warehouse
-      if (!product.activeInWarehouses?.includes(destId)) {
+      const destValidation = validateWarehouseAccess(product, destId);
+      if (!destValidation.isValid) {
          const whName = warehouses.find(w => w.id === destId)?.name || 'Destino';
          alert(`Operación denegada:\n\nEl artículo "${product.name}" no está habilitado en el almacén de destino (${whName}).\n\nNo se puede traspasar inventario a una ubicación donde el producto está desactivado.`);
          return;
