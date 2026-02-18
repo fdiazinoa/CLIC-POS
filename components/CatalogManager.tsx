@@ -7,7 +7,7 @@ import {
    ChevronDown, ChevronRight, Box, AlertCircle, MapPin, Grid, Sun,
    CheckSquare, Square, MoreHorizontal, Settings2, Activity, RefreshCw
 } from 'lucide-react';
-import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season, Watchlist, ProductStock, StockTransfer, Supplier } from '../types';
+import { Product, BusinessConfig, Tariff, Transaction, ProductVariant, Warehouse, ProductGroup, Season, Watchlist, ProductStock, StockTransfer, Supplier, Room } from '../types';
 import { calculateOptimalInventoryLevels } from '../utils/inventoryEngine';
 import ProductForm from './ProductForm';
 import TariffForm from './TariffForm';
@@ -38,9 +38,11 @@ interface CatalogManagerProps {
    transfers?: StockTransfer[];
    purchaseOrders?: any[];
    suppliers?: Supplier[];
+   rooms: Room[];
+   onUpdateRooms: (rooms: Room[]) => void;
 }
 
-type CatalogViewMode = 'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS' | 'GROUPS' | 'SEASONS' | 'BI_MONITOR' | 'CLASSIFICATIONS';
+type CatalogViewMode = 'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS' | 'GROUPS' | 'SEASONS' | 'BI_MONITOR' | 'CLASSIFICATIONS' | 'SPACES';
 
 // --- SUB-COMPONENT: STOCK ROW ---
 const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks: ProductStock[] }> = ({ product, warehouseId, productStocks }) => {
@@ -285,44 +287,31 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       }
    };
 
-   const handleBulkUpdate = (changes: any) => {
+   const handleBulkUpdate = async (changes: any) => {
       setShowBulkModal(false);
 
-      const updatedProducts = products.map(p => {
-         if (!selectedIds.has(p.id)) return p;
-         let newP = { ...p };
+      try {
+         // Call persistent bulk API instead of local state mutation
+         await db.bulkUpdateProducts(
+            Array.from(selectedIds),
+            changes,
+            currentUser?.id,
+            currentUser?.name
+         );
 
-         if (changes.warehouseActions) {
-            let currentActive = new Set(p.activeInWarehouses || []);
-            Object.entries(changes.warehouseActions).forEach(([whId, action]) => {
-               if (action === 'ENABLE') currentActive.add(whId);
-               if (action === 'DISABLE') currentActive.delete(whId);
-            });
-            newP.activeInWarehouses = Array.from(currentActive);
-         }
+         // Force refresh from database to ensure UI is in sync with server/IndexedDB
+         const refreshedProducts = await db.get('products') as Product[];
+         onUpdateProducts(refreshedProducts);
 
-         if (changes.flags) {
-            const newFlags = { ...(p.operationalFlags || {}) };
-            Object.entries(changes.flags).forEach(([key, cfg]: [string, any]) => {
-               if (cfg.apply) (newFlags as any)[key] = cfg.value;
-            });
-            newP.operationalFlags = newFlags as any;
-         }
+         setSelectedIds(new Set());
 
-         if (changes.classification?.categoryId) newP.category = changes.classification.categoryId;
-         if (changes.classification?.measurementUnit) newP.measurementUnit = changes.classification.measurementUnit;
-         if (changes.classification?.purchaseUnit) newP.purchaseUnit = changes.classification.purchaseUnit;
-
-         newP.updatedAt = new Date().toISOString();
-         return newP;
-      });
-
-      onUpdateProducts(updatedProducts);
-      setSelectedIds(new Set());
-
-      setTimeout(() => {
-         alert("Operación masiva completada con éxito.");
-      }, 200);
+         setTimeout(() => {
+            alert("Operación masiva completada con éxito.");
+         }, 200);
+      } catch (error: any) {
+         console.error('❌ CatalogManager: Bulk update failed', error);
+         alert(`Error al procesar la actualización masiva: ${error.message || 'Error desconocido'}`);
+      }
    };
 
    const handleUpdateWatchlists = async (newLists: Watchlist[]) => {

@@ -667,6 +667,10 @@ export const db = {
     await dbAdapter.saveCollection(collection as string, payload);
   },
 
+  bulkUpdateProducts: async (productIds: string[], updates: any, userId?: string, userName?: string) => {
+    await dbAdapter.bulkUpdateProducts(productIds, updates, userId, userName);
+  },
+
   saveDocument: async (collection: keyof typeof SEED_DATA, doc: any) => {
     await dbAdapter.saveDocument(collection as string, doc);
   },

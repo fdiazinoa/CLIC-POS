@@ -265,6 +265,29 @@ export class NetworkAdapter implements DatabaseAdapter {
         }
     }
 
+    async bulkUpdateProducts(productIds: string[], updates: any, userId?: string, userName?: string): Promise<void> {
+        const url = this.getUrl('bulk/products');
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Connection': 'keep-alive'
+                },
+                mode: 'cors',
+                body: JSON.stringify({ productIds, updates, userId, userName })
+            });
+
+            if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                throw new Error(errorData.error || `Bulk update failed: ${res.statusText}`);
+            }
+        } catch (error) {
+            console.error('❌ NetworkAdapter: Bulk update failed', error);
+            throw error;
+        }
+    }
+
     async getDocument<T>(collectionName: string, id: string): Promise<T | null> {
         try {
             const url = this.getUrl(`${collectionName}/${id}`);

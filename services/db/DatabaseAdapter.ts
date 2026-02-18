@@ -11,6 +11,7 @@ export interface DatabaseAdapter {
     // Document operations (simulated in LocalStorage, real in SQLite)
     saveDocument<T extends { id: string }>(collectionName: string, doc: T): Promise<void>;
     bulkUpsert<T extends { id: string }>(collectionName: string, docs: T[]): Promise<void>; // NEW: Efficient bulk upsert
+    bulkUpdateProducts(productIds: string[], updates: any, userId?: string, userName?: string): Promise<void>; // NEW: Bulk specific handling
     getDocument<T>(collectionName: string, id: string): Promise<T | null>;
     deleteDocument(collectionName: string, id: string): Promise<void>;
 

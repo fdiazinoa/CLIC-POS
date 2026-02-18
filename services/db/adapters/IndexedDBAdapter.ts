@@ -467,6 +467,84 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         });
     }
 
+    async bulkUpdateProducts(productIds: string[], updates: any, userId?: string, userName?: string): Promise<void> {
+        if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
+
+        return new Promise((resolve, reject) => {
+            try {
+                const transaction = this.db!.transaction(['products', 'productStocks', 'inventoryAuditLogs'], 'readwrite');
+                const productsStore = transaction.objectStore('products');
+                const stocksStore = transaction.objectStore('productStocks');
+                const auditStore = transaction.objectStore('inventoryAuditLogs');
+
+                const now = new Date().toISOString();
+
+                // Process each product
+                productIds.forEach(productId => {
+                    const getRequest = productsStore.get(productId);
+                    getRequest.onsuccess = () => {
+                        const product = getRequest.result;
+                        if (!product) return;
+
+                        // 1. Update Product Properties
+                        if (updates.flags) {
+                            const newFlags = { ...(product.operationalFlags || {}) };
+                            Object.entries(updates.flags).forEach(([key, cfg]: [string, any]) => {
+                                if (cfg.apply) (newFlags as any)[key] = cfg.value;
+                            });
+                            product.operationalFlags = newFlags;
+                        }
+
+                        if (updates.classification) {
+                            if (updates.classification.categoryId) product.category = updates.classification.categoryId;
+                            if (updates.classification.measurementUnit) product.measurementUnit = updates.classification.measurementUnit;
+                            if (updates.classification.purchaseUnit) product.purchaseUnit = updates.classification.purchaseUnit;
+                        }
+
+                        product.updatedAt = now;
+                        productsStore.put(product);
+
+                        // 2. Warehouse Actions
+                        if (updates.warehouseActions) {
+                            Object.entries(updates.warehouseActions).forEach(([whId, action]) => {
+                                const stockId = `${productId}_${whId}`;
+                                if (action === 'ENABLE') {
+                                    stocksStore.put({
+                                        id: stockId,
+                                        productId,
+                                        warehouseId: whId,
+                                        updatedAt: now
+                                    });
+                                } else if (action === 'DISABLE') {
+                                    stocksStore.delete(stockId);
+                                }
+                            });
+                        }
+                    };
+                });
+
+                // 3. Audit Log
+                const auditId = `BULK-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+                auditStore.put({
+                    id: auditId,
+                    sessionId: 'BULK_CATALOG_UPDATE',
+                    warehouseId: 'SYSTEM',
+                    action: 'APPLY',
+                    reason: `Edición masiva aplicada a ${productIds.length} artículos`,
+                    createdAt: now,
+                    createdBy: userId || 'SYSTEM',
+                    createdByName: userName || 'Sistema'
+                });
+
+                transaction.oncomplete = () => resolve();
+                transaction.onerror = () => reject(transaction.error);
+            } catch (error) {
+                console.warn('[IndexedDBAdapter] bulkUpdateProducts execution failed:', error);
+                reject(error);
+            }
+        });
+    }
+
     async getDocument<T>(collectionName: string, id: string): Promise<T | null> {
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
 

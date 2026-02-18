@@ -52,6 +52,7 @@ import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryServi
 import LoginScreen from './components/LoginScreen';
 import ErrorBoundary from './components/ErrorBoundary';
 import POSInterface from './components/POSInterface';
+import AgendaManager from './components/AgendaManager';
 import Settings from './components/Settings';
 import CustomerManagement from './components/CustomerManagement';
 import TicketHistory from './components/TicketHistory';
@@ -2272,15 +2273,36 @@ const AppContent: React.FC = () => {
       }
     }
 
-    // 6. Financial Update (Customer Account)
-    if (originalTx.customerId && originalTx.pendingBalance && originalTx.pendingBalance > 0) {
-      // If the original transaction was on credit, we should reduce the debt.
-      // We do this by updating the customer debt directly (or creating a credit movement).
-      // Since we are creating a Credit Note transaction, 'TicketHistory' or 'FinanceDashboard' usually calculates balance.
-      // However, we track 'currentDebt' on the customer object for performance.
+    // 6. Financial Update (Customer Account & Wallet)
+    if (originalTx.customerId) {
       const customer = customers.find(c => c.id === originalTx.customerId);
       if (customer) {
-        const newDebt = Math.max(0, (customer.currentDebt || 0) - refundTotal);
+        let remainingRefund = refundTotal;
+        let newDebt = customer.currentDebt || 0;
+
+        // Step A: Reduce Debt if original invoice had pending balance
+        if (originalTx.pendingBalance && originalTx.pendingBalance > 0 && newDebt > 0) {
+          const debtToReduce = Math.min(newDebt, remainingRefund);
+          newDebt -= debtToReduce;
+          remainingRefund -= debtToReduce;
+        }
+
+        // Step B: If there is still a refund amount (Scenario B - pure credit or surplus), add to Wallet
+        if (remainingRefund > 0.01) {
+          await transactionService.applyRefundToWallet(
+            originalTx.customerId,
+            remainingRefund,
+            displayId
+          );
+
+          // Re-fetch wallets to get the updated balance for the customer nested object
+          const wallets = await (await import('./utils/db')).db.get('wallets' as any) as any[] || [];
+          const updatedWallet = wallets.find(w => w.customerId === originalTx.customerId);
+          if (updatedWallet) {
+            customer.wallet = updatedWallet;
+          }
+        }
+
         const updatedCustomer = { ...customer, currentDebt: newDebt };
         await db.saveDocument('customers', updatedCustomer);
         setCustomers(prev => prev.map(c => c.id === updatedCustomer.id ? updatedCustomer : c));
@@ -2288,22 +2310,24 @@ const AppContent: React.FC = () => {
     }
 
     // 7. Update Original Transaction
-    const updatedTransactions = transactions.map(t => {
-      if (t.id === originalTx.id) {
-        return {
-          ...t,
-          status: newStatus as any,
-          relatedTransactions: [...(t.relatedTransactions || []), creditNote.id],
-          syncStatus: 'PENDING' as const
-        };
-      }
-      return t;
-    });
+    const updatedOriginalTx = {
+      ...originalTx,
+      status: newStatus as any,
+      relatedTransactions: [...(originalTx.relatedTransactions || []), creditNote.id],
+      syncStatus: 'PENDING' as const
+    };
 
-    // 8. Save Everything
-    const finalTransactions = [...updatedTransactions, creditNote];
-    setTransactions(finalTransactions);
-    await db.save('transactions', finalTransactions);
+    // 8. Save Everything Atomically
+    await db.saveDocument('transactions', updatedOriginalTx);
+    await db.saveDocument('transactions', creditNote);
+
+    // Update local state
+    setTransactions(prev => {
+      const filtered = prev.filter(t => t.id !== updatedOriginalTx.id);
+      return [updatedOriginalTx, ...filtered, creditNote].sort((a, b) =>
+        new Date(b.date).getTime() - new Date(a.date).getTime()
+      );
+    });
 
     // Sync
     backgroundSyncManager.triggerSync().catch(console.error);
@@ -2520,6 +2544,7 @@ const AppContent: React.FC = () => {
             onOpenInventoryTracking={(productId) => handleViewChange('TRACKING', { productId })}
             onOpenAudit={() => handleViewChange('INVENTORY_AUDIT')}
             onOpenTableMap={() => handleViewChange('TABLE_MAP')}
+            onOpenAgenda={() => setCurrentView('AGENDA')}
             onTransactionComplete={handleTransactionComplete}
             activeTable={activeTable}
             rooms={rooms}
@@ -2536,6 +2561,12 @@ const AppContent: React.FC = () => {
           />
         );
 
+      case 'AGENDA':
+        // Redirecting to Settings with Agenda as initial view
+        setSettingsInitialView('AGENDA');
+        setCurrentView('SETTINGS');
+        return null;
+
       case 'SETTINGS':
         return (
           <Settings
@@ -2550,6 +2581,7 @@ const AppContent: React.FC = () => {
             internalSequences={internalSequences}
             suppliers={suppliers}
             customers={customers}
+            rooms={rooms}
             collections={collections}
             onUpdateCollections={setCollections}
             purchaseOrders={purchaseOrders}
@@ -2602,6 +2634,7 @@ const AppContent: React.FC = () => {
               else setCurrentView('POS');
             }}
             currentDeviceId={deviceId}
+            onUpdateRooms={async (newRooms) => { setRooms(newRooms); await db.save('rooms', newRooms); }}
           />
         );
 
@@ -2616,6 +2649,7 @@ const AppContent: React.FC = () => {
             products={products}
             warehouses={warehouses}
             transfers={transfers}
+            rooms={rooms}
             internalSequences={internalSequences}
             onUpdateTransfers={async (t) => { setTransfers(t); await db.save('transfers', t); }}
             onUpdateSequences={async (s) => { setInternalSequences(s); await db.save('internalSequences', s); }}
@@ -2666,6 +2700,8 @@ const AppContent: React.FC = () => {
           <CustomerManagement
             customers={customers}
             config={config}
+            rooms={rooms}
+            users={users}
             collections={collections}
             currentUser={currentUser!}
             terminalId={(config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1'}
