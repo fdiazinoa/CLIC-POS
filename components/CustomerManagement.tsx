@@ -1160,18 +1160,18 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                                 <p className={`font-black ${isRefund ? 'text-red-600' : 'text-gray-900'}`}>
                                                    {isRefund ? '-' : ''}{config.currencySymbol}{tx.total.toFixed(2)}
                                                 </p>
-                                               <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${tx.status === 'REFUNDED' ? 'bg-red-100 text-red-700' :
+                                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${tx.status === 'REFUNDED' ? 'bg-red-100 text-red-700' :
                                                    tx.status === 'PARTIAL_REFUND' ? 'bg-orange-100 text-orange-700' :
                                                       effectivePending > 0 ? 'bg-amber-100 text-amber-700' :
                                                          'bg-emerald-100 text-emerald-700'
                                                    }`}>
                                                    {isRefund ? 'NOTA CRÉDITO' :
                                                       tx.status === 'REFUNDED' ? 'ANULADO' :
-                                                      tx.status === 'PARTIAL_REFUND' ? 'DEVUELTO' :
-                                                         effectivePending > 0 ? 'PENDIENTE' :
-                                                            'PAGADO'}
-                                               </span>
-                                            </div>
+                                                         tx.status === 'PARTIAL_REFUND' ? 'DEVUELTO' :
+                                                            effectivePending > 0 ? 'PENDIENTE' :
+                                                               'PAGADO'}
+                                                </span>
+                                             </div>
                                           </div>
                                        );
                                     })
@@ -1276,105 +1276,149 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                            )}
 
                            {activeProfileTab === 'LOYALTY' && (
-                              <div className="space-y-6">
-                                 <div className="bg-gradient-to-r from-purple-600 to-indigo-600 rounded-3xl p-8 text-white text-center relative overflow-hidden shadow-xl">
-                                    <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10"></div>
-                                    <Award size={48} className="mx-auto mb-4 text-yellow-300 drop-shadow-lg" />
-                                    <h3 className="text-5xl font-black mb-1">{selectedCustomer.loyaltyPoints || 0}</h3>
-                                    <p className="text-purple-200 font-bold uppercase tracking-widest text-sm mb-6">Puntos Disponibles</p>
+                              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                                 {/* HERO CARD (Rediseñada - Requirement 1) */}
+                                 <div className="bg-gradient-to-br from-[#7C3AED] via-[#6D28D9] to-[#4C1D95] rounded-[2.5rem] p-8 text-white relative overflow-hidden shadow-2xl shadow-purple-200/50 min-h-[280px] flex flex-col justify-center border border-white/10">
+                                    {/* Decorative Elements */}
+                                    <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-20 -mt-20 blur-3xl animate-pulse"></div>
+                                    <div className="absolute bottom-0 left-0 w-48 h-48 bg-purple-400/20 rounded-full -ml-10 -mb-10 blur-2xl"></div>
 
-                                    {(() => {
-                                       const loyaltyTiers = config.loyalty?.tiers || [
-                                          { id: 'bronze', name: 'BRONZE', minPoints: 0, color: 'text-orange-600' },
-                                          { id: 'silver', name: 'SILVER', minPoints: 500, color: 'text-gray-400' },
-                                          { id: 'gold', name: 'GOLD', minPoints: 1500, color: 'text-yellow-500' },
-                                          { id: 'platinum', name: 'PLATINUM', minPoints: 3000, color: 'text-purple-600' }
-                                       ];
-
-                                       const currentPoints = selectedCustomer.loyaltyPoints || 0;
-                                       const currentTier = [...loyaltyTiers].reverse().find(t => currentPoints >= t.minPoints) || loyaltyTiers[0];
-                                       const nextTier = loyaltyTiers.find(t => t.minPoints > currentPoints);
-
-                                       const pointsForNext = nextTier ? nextTier.minPoints - currentPoints : 0;
-                                       const progressPercent = nextTier
-                                          ? Math.min(100, Math.max(0, ((currentPoints - currentTier.minPoints) / (nextTier.minPoints - currentTier.minPoints)) * 100))
-                                          : 100;
-
-                                       return (
-                                          <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 max-w-sm mx-auto border border-white/20">
-                                             <div className="flex justify-between text-xs font-bold mb-2">
-                                                <span>Nivel Actual: {currentTier.name}</span>
-                                                {nextTier && <span>Siguiente: {nextTier.name}</span>}
+                                    <div className="relative z-10">
+                                       <div className="flex flex-col md:flex-row justify-between items-start gap-4 mb-8">
+                                          <div>
+                                             <p className="text-purple-100 font-bold uppercase tracking-[0.2em] text-[10px] mb-1 opacity-80">Puntos Acumulados</p>
+                                             <div className="flex items-baseline gap-2">
+                                                <h3 className="text-7xl font-black tracking-tighter drop-shadow-2xl">
+                                                   {(selectedCustomer.loyaltyPoints || 0).toLocaleString()}
+                                                </h3>
+                                                <span className="text-purple-200 font-bold text-lg uppercase tracking-widest">Pts</span>
                                              </div>
-                                             <div className="w-full bg-black/20 h-3 rounded-full overflow-hidden">
-                                                <div
-                                                   className="bg-yellow-400 h-full shadow-[0_0_10px_rgba(250,204,21,0.5)] transition-all duration-1000"
-                                                   style={{ width: `${progressPercent}%` }}
-                                                ></div>
-                                             </div>
-                                             {nextTier ? (
-                                                <p className="text-xs mt-2 text-purple-200">
-                                                   Faltan {pointsForNext} puntos para subir de nivel.
-                                                </p>
-                                             ) : (
-                                                <p className="text-xs mt-2 text-yellow-300 font-bold">
-                                                   ¡Nivel máximo alcanzado!
-                                                </p>
-                                             )}
                                           </div>
-                                       );
-                                    })()}
+                                          <div className="bg-white/10 backdrop-blur-md border border-white/20 px-4 py-2 rounded-2xl flex items-center gap-2 shadow-xl self-end md:self-start">
+                                             <Award size={18} className="text-yellow-400" />
+                                             <span className="text-xs font-black uppercase tracking-widest">Rango: {selectedCustomer.tier || 'BRONZE'}</span>
+                                          </div>
+                                       </div>
+
+                                       {/* EVOLVED PROGRESS BAR (Requirement 2) */}
+                                       <div className="space-y-3">
+                                          {(() => {
+                                             const loyaltyTiers = config.loyalty?.tiers || [
+                                                { id: 'bronze', name: 'BRONZE', minPoints: 0 },
+                                                { id: 'silver', name: 'SILVER', minPoints: 500 },
+                                                { id: 'gold', name: 'GOLD', minPoints: 1500 },
+                                                { id: 'platinum', name: 'PLATINUM', minPoints: 3000 }
+                                             ];
+
+                                             const currentPoints = selectedCustomer.loyaltyPoints || 0;
+                                             const currentTierIdx = [...loyaltyTiers].findIndex(t => currentPoints < t.minPoints) === -1
+                                                ? loyaltyTiers.length - 1
+                                                : Math.max(0, [...loyaltyTiers].findIndex(t => currentPoints < t.minPoints) - 1);
+
+                                             const currentTier = loyaltyTiers[currentTierIdx];
+                                             const nextTier = loyaltyTiers[currentTierIdx + 1];
+
+                                             const progressPercent = nextTier
+                                                ? Math.min(100, Math.max(0, ((currentPoints - currentTier.minPoints) / (nextTier.minPoints - currentTier.minPoints)) * 100))
+                                                : 100;
+
+                                             return (
+                                                <>
+                                                   <div className="flex justify-between items-end text-xs font-black uppercase tracking-widest text-purple-100 mb-1 opacity-90">
+                                                      <span>{currentTier.name}</span>
+                                                      {nextTier && <span>Siguiente: {nextTier.name}</span>}
+                                                   </div>
+                                                   <div className="relative h-4 w-full bg-black/20 rounded-full overflow-hidden border border-white/5 shadow-inner p-1">
+                                                      <div
+                                                         className="h-full bg-gradient-to-r from-yellow-300 to-yellow-500 rounded-full shadow-[0_0_15px_rgba(250,204,21,0.6)] transition-all duration-1000 ease-out flex items-center justify-end pr-1"
+                                                         style={{ width: `${progressPercent}%` }}
+                                                      >
+                                                         <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse shadow-sm"></div>
+                                                      </div>
+                                                   </div>
+                                                   <div className="flex justify-between text-[10px] font-bold text-purple-200 mt-1">
+                                                      <span>{currentTier.minPoints} pts</span>
+                                                      {nextTier && <span className="animate-pulse">Faltan {(nextTier.minPoints - currentPoints)} puntos para {nextTier.name}</span>}
+                                                      {nextTier && <span>{nextTier.minPoints} pts</span>}
+                                                   </div>
+                                                </>
+                                             );
+                                          })()}
+                                       </div>
+                                    </div>
                                  </div>
 
-                                 {/* LOYALTY CARD SECTION */}
-                                 {/* LOYALTY CARD SECTION */}
-                                 <div className="bg-white rounded-2xl p-6 border border-gray-200">
-                                    <div className="flex justify-between items-center mb-4">
-                                       <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                                          <CreditCard size={18} className="text-purple-600" /> Mis Tarjetas
+                                 {/* BENEFITS GRID (Requirement 3) */}
+                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex items-center gap-4 group hover:shadow-md transition-all">
+                                       <div className="p-4 bg-purple-50 text-purple-600 rounded-2xl group-hover:scale-110 transition-transform">
+                                          <TrendingUp size={24} />
+                                       </div>
+                                       <div>
+                                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Tasa de Ganancia</p>
+                                          <p className="text-sm font-bold text-gray-800">Ganas 1 punto por cada <span className="text-purple-600 font-black">{config.currencySymbol}100</span></p>
+                                       </div>
+                                    </div>
+                                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex items-center gap-4 group hover:shadow-md transition-all">
+                                       <div className="p-4 bg-amber-50 text-amber-600 rounded-2xl group-hover:scale-110 transition-transform">
+                                          <Calendar size={24} />
+                                       </div>
+                                       <div>
+                                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Vencimiento</p>
+                                          <p className="text-sm font-bold text-gray-800">Puntos vencen el <span className="text-amber-600 font-black">Dic 31</span></p>
+                                       </div>
+                                    </div>
+                                 </div>
+
+                                 {/* MY CARDS SECTION (Requirement 4: Spacing and Clean) */}
+                                 <div className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm mt-4">
+                                    <div className="flex justify-between items-center mb-6">
+                                       <h3 className="font-black text-xs uppercase tracking-widest text-gray-400 flex items-center gap-2">
+                                          <CreditCard size={18} className="text-purple-600" /> Tarjetas Registradas
                                        </h3>
                                        <button
                                           onClick={handleLinkCard}
-                                          className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors"
+                                          className="text-[10px] font-black uppercase tracking-widest text-purple-600 bg-purple-50 px-4 py-2 rounded-xl hover:bg-purple-100 transition-all border border-purple-100"
                                        >
-                                          + Agregar Tarjeta
+                                          + Agregar Nueva
                                        </button>
                                     </div>
 
-                                    <div className="space-y-3">
+                                    <div className="space-y-4">
                                        {(selectedCustomer.cards || []).length > 0 ? (
                                           (selectedCustomer.cards || []).map((card, idx) => (
-                                             <div key={card.id || `card-${idx}`} className="p-4 bg-gray-50 rounded-xl border border-gray-200 flex items-center justify-between group">
-                                                <div className="flex items-center gap-3">
-                                                   <div className={`w-10 h-10 rounded-lg flex items-center justify-center border ${card.type === 'GIFT' ? 'bg-pink-50 border-pink-200 text-pink-500' : 'bg-purple-50 border-purple-200 text-purple-500'}`}>
-                                                      {card.type === 'GIFT' ? <Gift size={20} /> : <Award size={20} />}
+                                             <div key={card.id || `card-${idx}`} className="p-4 bg-gray-50/50 rounded-2xl border border-gray-100 flex items-center justify-between group hover:border-purple-200 hover:bg-white transition-all shadow-sm">
+                                                <div className="flex items-center gap-4">
+                                                   <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border shadow-sm ${card.type === 'GIFT' ? 'bg-pink-100 border-pink-200 text-pink-600' : 'bg-purple-100 border-purple-200 text-purple-600'}`}>
+                                                      {card.type === 'GIFT' ? <Gift size={24} /> : <Award size={24} />}
                                                    </div>
                                                    <div>
                                                       <div className="flex items-center gap-2">
-                                                         <p className="text-xs text-gray-400 font-bold uppercase">{card.type === 'GIFT' ? 'Tarjeta Regalo' : 'Fidelización'}</p>
-                                                         <span className="text-[9px] font-bold bg-green-50 text-green-600 px-1.5 py-0.5 rounded border border-green-100 uppercase">Activa</span>
+                                                         <p className="text-[10px] text-gray-400 font-black uppercase tracking-tighter">{card.type === 'GIFT' ? 'Gift Card' : 'Loyalty Pass'}</p>
+                                                         <span className="text-[8px] font-black bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full uppercase">Activa</span>
                                                       </div>
-                                                      <p className="font-mono font-bold text-sm text-gray-700 tracking-wider">
-                                                         {card.cardNumber}
+                                                      <p className="font-mono font-bold text-sm text-gray-800 tracking-[0.15em] mt-0.5">
+                                                         {card.cardNumber?.replace(/(.{4})/g, '$1 ').trim()}
                                                       </p>
                                                    </div>
                                                 </div>
                                                 <div className="flex items-center gap-4">
                                                    {card.type === 'GIFT' && (
                                                       <div className="text-right">
-                                                         <p className="text-[10px] text-gray-400 font-bold uppercase">Saldo</p>
-                                                         <p className="font-bold text-gray-800">{config.currencySymbol}{card.pointsBalance.toFixed(2)}</p>
+                                                         <p className="text-[9px] text-gray-400 font-black uppercase">Saldo</p>
+                                                         <p className="font-black text-gray-900 text-sm tracking-tighter">{config.currencySymbol}{card.pointsBalance.toLocaleString()}</p>
                                                       </div>
                                                    )}
-                                                   <button onClick={() => handleUnlinkCard(card.id)} className="p-2 hover:bg-red-50 text-gray-300 hover:text-red-500 rounded-lg transition-colors">
-                                                      <Trash2 size={16} />
+                                                   <button onClick={() => handleUnlinkCard(card.id)} className="p-2.5 hover:bg-red-50 text-gray-300 hover:text-red-500 rounded-xl transition-all">
+                                                      <Trash2 size={18} />
                                                    </button>
                                                 </div>
                                              </div>
                                           ))
                                        ) : (
-                                          <div className="text-center py-6 text-gray-400 border-2 border-dashed border-gray-100 rounded-xl">
-                                             <p className="text-sm">No hay tarjetas vinculadas.</p>
+                                          <div className="text-center py-12 text-gray-300 border-2 border-dashed border-gray-100 rounded-[2rem]">
+                                             <Award size={48} className="mx-auto mb-3 opacity-20" />
+                                             <p className="text-xs font-black uppercase tracking-widest opacity-60">No hay tarjetas vinculadas</p>
                                           </div>
                                        )}
                                     </div>
