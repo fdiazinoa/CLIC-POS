@@ -15,6 +15,7 @@ import AccountReceivableModal from './AccountReceivableModal';
 import CreditAccountDashboard from './CreditAccountDashboard';
 import { agendaService } from '../services/AgendaService';
 import ActivityModal from './ActivityModal';
+import LoyaltyDashboard from './LoyaltyDashboard';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -1276,154 +1277,12 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                            )}
 
                            {activeProfileTab === 'LOYALTY' && (
-                              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
-                                 {/* HERO CARD (Rediseñada - Requirement 1) */}
-                                 <div className="bg-gradient-to-br from-[#7C3AED] via-[#6D28D9] to-[#4C1D95] rounded-[2.5rem] p-8 text-white relative overflow-hidden shadow-2xl shadow-purple-200/50 min-h-[280px] flex flex-col justify-center border border-white/10">
-                                    {/* Decorative Elements */}
-                                    <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-20 -mt-20 blur-3xl animate-pulse"></div>
-                                    <div className="absolute bottom-0 left-0 w-48 h-48 bg-purple-400/20 rounded-full -ml-10 -mb-10 blur-2xl"></div>
-
-                                    <div className="relative z-10">
-                                       <div className="flex flex-col md:flex-row justify-between items-start gap-4 mb-8">
-                                          <div>
-                                             <p className="text-purple-100 font-bold uppercase tracking-[0.2em] text-[10px] mb-1 opacity-80">Puntos Acumulados</p>
-                                             <div className="flex items-baseline gap-2">
-                                                <h3 className="text-7xl font-black tracking-tighter drop-shadow-2xl">
-                                                   {(selectedCustomer.loyaltyPoints || 0).toLocaleString()}
-                                                </h3>
-                                                <span className="text-purple-200 font-bold text-lg uppercase tracking-widest">Pts</span>
-                                             </div>
-                                          </div>
-                                          <div className="bg-white/10 backdrop-blur-md border border-white/20 px-4 py-2 rounded-2xl flex items-center gap-2 shadow-xl self-end md:self-start">
-                                             <Award size={18} className="text-yellow-400" />
-                                             <span className="text-xs font-black uppercase tracking-widest">Rango: {selectedCustomer.tier || 'BRONZE'}</span>
-                                          </div>
-                                       </div>
-
-                                       {/* EVOLVED PROGRESS BAR (Requirement 2) */}
-                                       <div className="space-y-3">
-                                          {(() => {
-                                             const loyaltyTiers = config.loyalty?.tiers || [
-                                                { id: 'bronze', name: 'BRONZE', minPoints: 0 },
-                                                { id: 'silver', name: 'SILVER', minPoints: 500 },
-                                                { id: 'gold', name: 'GOLD', minPoints: 1500 },
-                                                { id: 'platinum', name: 'PLATINUM', minPoints: 3000 }
-                                             ];
-
-                                             const currentPoints = selectedCustomer.loyaltyPoints || 0;
-                                             const currentTierIdx = [...loyaltyTiers].findIndex(t => currentPoints < t.minPoints) === -1
-                                                ? loyaltyTiers.length - 1
-                                                : Math.max(0, [...loyaltyTiers].findIndex(t => currentPoints < t.minPoints) - 1);
-
-                                             const currentTier = loyaltyTiers[currentTierIdx];
-                                             const nextTier = loyaltyTiers[currentTierIdx + 1];
-
-                                             const progressPercent = nextTier
-                                                ? Math.min(100, Math.max(0, ((currentPoints - currentTier.minPoints) / (nextTier.minPoints - currentTier.minPoints)) * 100))
-                                                : 100;
-
-                                             return (
-                                                <>
-                                                   <div className="flex justify-between items-end text-xs font-black uppercase tracking-widest text-purple-100 mb-1 opacity-90">
-                                                      <span>{currentTier.name}</span>
-                                                      {nextTier && <span>Siguiente: {nextTier.name}</span>}
-                                                   </div>
-                                                   <div className="relative h-4 w-full bg-black/20 rounded-full overflow-hidden border border-white/5 shadow-inner p-1">
-                                                      <div
-                                                         className="h-full bg-gradient-to-r from-yellow-300 to-yellow-500 rounded-full shadow-[0_0_15px_rgba(250,204,21,0.6)] transition-all duration-1000 ease-out flex items-center justify-end pr-1"
-                                                         style={{ width: `${progressPercent}%` }}
-                                                      >
-                                                         <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse shadow-sm"></div>
-                                                      </div>
-                                                   </div>
-                                                   <div className="flex justify-between text-[10px] font-bold text-purple-200 mt-1">
-                                                      <span>{currentTier.minPoints} pts</span>
-                                                      {nextTier && <span className="animate-pulse">Faltan {(nextTier.minPoints - currentPoints)} puntos para {nextTier.name}</span>}
-                                                      {nextTier && <span>{nextTier.minPoints} pts</span>}
-                                                   </div>
-                                                </>
-                                             );
-                                          })()}
-                                       </div>
-                                    </div>
-                                 </div>
-
-                                 {/* BENEFITS GRID (Requirement 3) */}
-                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex items-center gap-4 group hover:shadow-md transition-all">
-                                       <div className="p-4 bg-purple-50 text-purple-600 rounded-2xl group-hover:scale-110 transition-transform">
-                                          <TrendingUp size={24} />
-                                       </div>
-                                       <div>
-                                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Tasa de Ganancia</p>
-                                          <p className="text-sm font-bold text-gray-800">Ganas 1 punto por cada <span className="text-purple-600 font-black">{config.currencySymbol}100</span></p>
-                                       </div>
-                                    </div>
-                                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex items-center gap-4 group hover:shadow-md transition-all">
-                                       <div className="p-4 bg-amber-50 text-amber-600 rounded-2xl group-hover:scale-110 transition-transform">
-                                          <Calendar size={24} />
-                                       </div>
-                                       <div>
-                                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Vencimiento</p>
-                                          <p className="text-sm font-bold text-gray-800">Puntos vencen el <span className="text-amber-600 font-black">Dic 31</span></p>
-                                       </div>
-                                    </div>
-                                 </div>
-
-                                 {/* MY CARDS SECTION (Requirement 4: Spacing and Clean) */}
-                                 <div className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm mt-4">
-                                    <div className="flex justify-between items-center mb-6">
-                                       <h3 className="font-black text-xs uppercase tracking-widest text-gray-400 flex items-center gap-2">
-                                          <CreditCard size={18} className="text-purple-600" /> Tarjetas Registradas
-                                       </h3>
-                                       <button
-                                          onClick={handleLinkCard}
-                                          className="text-[10px] font-black uppercase tracking-widest text-purple-600 bg-purple-50 px-4 py-2 rounded-xl hover:bg-purple-100 transition-all border border-purple-100"
-                                       >
-                                          + Agregar Nueva
-                                       </button>
-                                    </div>
-
-                                    <div className="space-y-4">
-                                       {(selectedCustomer.cards || []).length > 0 ? (
-                                          (selectedCustomer.cards || []).map((card, idx) => (
-                                             <div key={card.id || `card-${idx}`} className="p-4 bg-gray-50/50 rounded-2xl border border-gray-100 flex items-center justify-between group hover:border-purple-200 hover:bg-white transition-all shadow-sm">
-                                                <div className="flex items-center gap-4">
-                                                   <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border shadow-sm ${card.type === 'GIFT' ? 'bg-pink-100 border-pink-200 text-pink-600' : 'bg-purple-100 border-purple-200 text-purple-600'}`}>
-                                                      {card.type === 'GIFT' ? <Gift size={24} /> : <Award size={24} />}
-                                                   </div>
-                                                   <div>
-                                                      <div className="flex items-center gap-2">
-                                                         <p className="text-[10px] text-gray-400 font-black uppercase tracking-tighter">{card.type === 'GIFT' ? 'Gift Card' : 'Loyalty Pass'}</p>
-                                                         <span className="text-[8px] font-black bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full uppercase">Activa</span>
-                                                      </div>
-                                                      <p className="font-mono font-bold text-sm text-gray-800 tracking-[0.15em] mt-0.5">
-                                                         {card.cardNumber?.replace(/(.{4})/g, '$1 ').trim()}
-                                                      </p>
-                                                   </div>
-                                                </div>
-                                                <div className="flex items-center gap-4">
-                                                   {card.type === 'GIFT' && (
-                                                      <div className="text-right">
-                                                         <p className="text-[9px] text-gray-400 font-black uppercase">Saldo</p>
-                                                         <p className="font-black text-gray-900 text-sm tracking-tighter">{config.currencySymbol}{card.pointsBalance.toLocaleString()}</p>
-                                                      </div>
-                                                   )}
-                                                   <button onClick={() => handleUnlinkCard(card.id)} className="p-2.5 hover:bg-red-50 text-gray-300 hover:text-red-500 rounded-xl transition-all">
-                                                      <Trash2 size={18} />
-                                                   </button>
-                                                </div>
-                                             </div>
-                                          ))
-                                       ) : (
-                                          <div className="text-center py-12 text-gray-300 border-2 border-dashed border-gray-100 rounded-[2rem]">
-                                             <Award size={48} className="mx-auto mb-3 opacity-20" />
-                                             <p className="text-xs font-black uppercase tracking-widest opacity-60">No hay tarjetas vinculadas</p>
-                                          </div>
-                                       )}
-                                    </div>
-                                 </div>
-                              </div>
+                              <LoyaltyDashboard
+                                 customer={selectedCustomer}
+                                 config={config}
+                                 onLinkCard={handleLinkCard}
+                                 onUnlinkCard={handleUnlinkCard}
+                              />
                            )}
 
                            {activeProfileTab === 'CREDIT' && selectedCustomer && (
