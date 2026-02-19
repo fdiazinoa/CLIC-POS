@@ -57,6 +57,7 @@ import SupervisorAuthModal from './SupervisorAuthModal';
 import VirtualKeyboard from './VirtualKeyboard';
 import SafetyGateModal from './SafetyGateModal';
 import { printReservation } from '../utils/printer';
+import MobileCartButton from './MobileCartButton';
 
 // ... existing imports
 
@@ -2009,21 +2010,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             config={config}
          />
 
-         {/* --- BOTÓN FLOTANTE MÓVIL (IR AL TICKET) --- */}
          {mobileView === 'PRODUCTS' && (
-            <button
+            <MobileCartButton
+               itemCount={cart.length}
                onClick={() => setMobileView('TICKET')}
-               className="md:hidden fixed bottom-6 right-6 z-50 bg-blue-600 text-white p-5 rounded-full shadow-[0_15px_40px_rgba(37,99,235,0.4)] flex items-center justify-center animate-in zoom-in-50"
-            >
-               <div className="relative">
-                  <ShoppingCart size={28} />
-                  {cart.length > 0 && (
-                     <span className="absolute -top-3 -right-3 bg-red-500 text-white text-[10px] font-black w-6 h-6 rounded-full flex items-center justify-center border-2 border-white shadow-sm">
-                        {cart.reduce((acc, i) => acc + i.quantity, 0)}
-                     </span>
-                  )}
-               </div>
-            </button>
+            />
          )}
 
          {/* LEFT AREA: PRODUCTS */}
