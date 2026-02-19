@@ -472,21 +472,58 @@ export class IndexedDBAdapter implements DatabaseAdapter {
 
         return new Promise((resolve, reject) => {
             try {
-                const transaction = this.db!.transaction(['products', 'productStocks', 'inventoryAuditLogs'], 'readwrite');
+                const transaction = this.db!.transaction(['products', 'productStocks', 'inventoryAuditLogs', 'config'], 'readwrite');
                 const productsStore = transaction.objectStore('products');
                 const stocksStore = transaction.objectStore('productStocks');
                 const auditStore = transaction.objectStore('inventoryAuditLogs');
+                const configStore = transaction.objectStore('config');
 
                 const now = new Date().toISOString();
 
-                // Process each product
+                // 1. Update Config (Seasons and Groups)
+                const configReq = configStore.get('current');
+                configReq.onsuccess = () => {
+                    const config = configReq.result;
+                    if (config) {
+                        let configChanged = false;
+                        if (updates.classification?.seasonId) {
+                            config.seasons = (config.seasons || []).map((s: any) => ({
+                                ...s,
+                                productIds: (s.productIds || []).filter((id: string) => !productIds.includes(id))
+                            }));
+                            const target = config.seasons.find((s: any) => s.id === updates.classification.seasonId);
+                            if (target) {
+                                target.productIds = Array.from(new Set([...(target.productIds || []), ...productIds]));
+                            }
+                            configChanged = true;
+                        }
+
+                        if (updates.classification?.groupId) {
+                            config.productGroups = (config.productGroups || []).map((g: any) => ({
+                                ...g,
+                                productIds: (g.productIds || []).filter((id: string) => !productIds.includes(id))
+                            }));
+                            const target = config.productGroups.find((g: any) => g.id === updates.classification.groupId);
+                            if (target) {
+                                target.productIds = Array.from(new Set([...(target.productIds || []), ...productIds]));
+                            }
+                            configChanged = true;
+                        }
+
+                        if (configChanged) {
+                            configStore.put(config);
+                        }
+                    }
+                };
+
+                // 2. Process each product
                 productIds.forEach(productId => {
                     const getRequest = productsStore.get(productId);
                     getRequest.onsuccess = () => {
                         const product = getRequest.result;
                         if (!product) return;
 
-                        // 1. Update Product Properties
+                        // --- Update Product Properties ---
                         if (updates.flags) {
                             const newFlags = { ...(product.operationalFlags || {}) };
                             Object.entries(updates.flags).forEach(([key, cfg]: [string, any]) => {
@@ -496,19 +533,19 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                         }
 
                         if (updates.classification) {
-                            if (updates.classification.categoryId) product.category = updates.classification.categoryId;
-                            if (updates.classification.measurementUnit) product.measurementUnit = updates.classification.measurementUnit;
-                            if (updates.classification.purchaseUnit) product.purchaseUnit = updates.classification.purchaseUnit;
+                            const c = updates.classification;
+                            if (c.categoryId) product.category = c.categoryId;
+                            if (c.measurementUnit) product.measurementUnit = c.measurementUnit;
+                            if (c.purchaseUnit) product.purchaseUnit = c.purchaseUnit;
                         }
 
-                        product.updatedAt = now;
-                        productsStore.put(product);
-
-                        // 2. Warehouse Actions
+                        // --- Warehouse Actions & activeInWarehouses Sync ---
                         if (updates.warehouseActions) {
+                            const activeInWarehouses = new Set(product.activeInWarehouses || []);
                             Object.entries(updates.warehouseActions).forEach(([whId, action]) => {
                                 const stockId = `${productId}_${whId}`;
                                 if (action === 'ENABLE') {
+                                    activeInWarehouses.add(whId);
                                     stocksStore.put({
                                         id: stockId,
                                         productId,
@@ -516,10 +553,15 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                                         updatedAt: now
                                     });
                                 } else if (action === 'DISABLE') {
+                                    activeInWarehouses.delete(whId);
                                     stocksStore.delete(stockId);
                                 }
                             });
+                            product.activeInWarehouses = Array.from(activeInWarehouses);
                         }
+
+                        product.updatedAt = now;
+                        productsStore.put(product);
                     };
                 });
 
