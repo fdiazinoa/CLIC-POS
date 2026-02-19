@@ -2113,7 +2113,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                ))}
             </div>
 
-            <div className="flex-1 overflow-y-auto p-8 custom-scrollbar dark:bg-slate-900">
+            <div className={`flex-1 overflow-y-auto ${isMobile ? 'p-4' : 'p-8'} custom-scrollbar dark:bg-slate-900`}>
                <div className={gridClass}>
                   {filteredProducts.map((product, idx) => {
                      const productName = product.name || '';
@@ -2818,7 +2818,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          {/* MOBILE STICKY FOOTER */}
          {
-            isMobile && (
+            isMobile && mobileView === 'TICKET' && (
                <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5">
                   <div className="flex justify-between items-center mb-4 px-2">
                      <div className="flex gap-4">
