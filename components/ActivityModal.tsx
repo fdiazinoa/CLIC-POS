@@ -1,35 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import {
-    X, Calendar, Clock, User, Users, MapPin,
-    Tag, AlertCircle, Check, Trash2, Building2, ArrowUpRight, Plus
+    X, Save, Calendar, Clock, MapPin, User,
+    FileText, Tag, Briefcase, CheckCircle,
+    AlertCircle, Users, Building2
 } from 'lucide-react';
-import {
-    Activity,
-    ActivityNature,
-    ActivityType,
-    ActivityStatus,
-    ActivityPriority,
-    Customer,
-    Room,
-    User as UserType
-} from '../types';
-import { format, parseISO } from 'date-fns';
-import { agendaService } from '../services/AgendaService';
-import { v4 as uuidv4 } from 'uuid';
-import { db } from '../utils/db';
+import { Activity, ActivityNature, ActivityType, Customer, Room, User as UserType, ServiceType } from '../types';
+import { format } from 'date-fns';
 
 interface ActivityModalProps {
     isOpen: boolean;
     onClose: () => void;
     activity: Activity | null;
-    initialDate?: Date | null;
-    initialResourceId?: string | null;
+    initialDate: Date | null;
+    initialResourceId: string | null; // Room ID or User ID
     customers: Customer[];
     rooms: Room[];
     users: UserType[];
+    serviceTypes: ServiceType[];
     onSave: (activity: Partial<Activity>) => Promise<void>;
-    onDelete?: (id: string) => Promise<void>;
-    onConvertToQuote?: (activity: Activity) => Promise<void>;
+    onDelete: (id: string) => Promise<void>;
     onUpdateRooms?: (rooms: Room[]) => void;
 }
 
@@ -42,151 +31,92 @@ const ActivityModal: React.FC<ActivityModalProps> = ({
     customers,
     rooms,
     users,
+    serviceTypes,
     onSave,
     onDelete,
-    onConvertToQuote,
     onUpdateRooms
 }) => {
     const [formData, setFormData] = useState<Partial<Activity>>({
         nature: 'CRM',
         type: 'MEETING',
         status: 'PLANNED',
-        priority: 'MEDIUM',
-        title: '',
-        startDate: new Date().toISOString(),
-        endDate: new Date(Date.now() + 3600000).toISOString(),
-        assignedToId: 'sys'
+        priority: 'MEDIUM'
     });
-
     const [isSaving, setIsSaving] = useState(false);
-    const [isCreatingSpace, setIsCreatingSpace] = useState(false);
+    const [showSpaceQuickAdd, setShowSpaceQuickAdd] = useState(false);
     const [newSpaceName, setNewSpaceName] = useState('');
-    const [availabilityConflict, setAvailabilityConflict] = useState<Activity | null>(null);
+    const [newSpaceCapacity, setNewSpaceCapacity] = useState('10');
 
     useEffect(() => {
-        if (activity) {
-            setFormData(activity);
-        } else if (initialDate) {
-            const room = rooms.find(r => r.id === initialResourceId);
-            setFormData({
-                nature: initialResourceId ? 'BOOKING' : 'CRM',
-                type: initialResourceId ? 'SPACE_RENTAL' : 'MEETING',
-                status: 'PLANNED',
-                priority: 'MEDIUM',
-                title: '',
-                startDate: initialDate.toISOString(),
-                endDate: new Date(initialDate.getTime() + 3600000).toISOString(),
-                assignedToId: 'sys',
-                spaceId: initialResourceId || undefined,
-                spaceName: room ? (room.name || room.nombre) : undefined
-            });
-        } else {
-            setFormData({
-                nature: 'CRM',
-                type: 'MEETING',
-                status: 'PLANNED',
-                priority: 'MEDIUM',
-                title: '',
-                startDate: new Date().toISOString(),
-                endDate: new Date(Date.now() + 3600000).toISOString(),
-                assignedToId: 'sys'
-            });
+        if (isOpen) {
+            if (activity) {
+                setFormData({ ...activity });
+            } else {
+                // Initialize new activity
+                const now = initialDate || new Date();
+                const end = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour duration default
+
+                // Try to infer resource (Space or User)
+                const inferredSpace = rooms.find(r => r.id === initialResourceId);
+                const inferredUser = users.find(u => u.id === initialResourceId);
+
+                setFormData({
+                    nature: 'CRM',
+                    type: 'MEETING',
+                    status: 'PLANNED',
+                    priority: 'MEDIUM',
+                    startDate: now.toISOString(),
+                    endDate: end.toISOString(),
+                    spaceId: inferredSpace ? inferredSpace.id : undefined,
+                    spaceName: inferredSpace ? inferredSpace.name : undefined,
+                    assignedToId: inferredUser ? inferredUser.id : undefined,
+                    assignedToName: inferredUser ? inferredUser.name : undefined,
+                });
+            }
         }
-    }, [activity, initialDate, initialResourceId, isOpen, rooms]);
+    }, [isOpen, activity, initialDate, initialResourceId, rooms, users]);
 
-    if (!isOpen) return null;
-
-    const handleSave = async (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsSaving(true);
-        setAvailabilityConflict(null);
-
         try {
-            // Real-time Availability Validation (only for Bookings)
-            if (formData.nature === 'BOOKING' && formData.spaceId && formData.startDate && formData.endDate) {
-                const conflicts = await agendaService.getActivitiesByRange(formData.startDate, formData.endDate);
-                const actualConflict = conflicts.find(a =>
-                    a.id !== activity?.id &&
-                    a.nature === 'BOOKING' &&
-                    a.spaceId === formData.spaceId &&
-                    a.status !== 'CANCELLED'
-                );
-
-                if (actualConflict) {
-                    setAvailabilityConflict(actualConflict);
-                    setIsSaving(false);
-                    return;
-                }
-            }
-
             await onSave(formData);
             onClose();
         } catch (error) {
-            console.error("Save error:", error);
+            console.error("Error saving activity:", error);
             alert("Error al guardar la actividad");
         } finally {
             setIsSaving(false);
         }
     };
 
-    const handleQuickAddSpace = async () => {
-        if (!newSpaceName.trim()) return;
-        setIsSaving(true);
-        try {
-            const newRoom: Room = {
-                id: uuidv4(),
-                name: newSpaceName,
-                nombre: newSpaceName,
-                color: '#4f46e5',
-                capacidad_pax: 0,
-                base_price: 0
-            } as Room;
-
-            const updatedRooms = [...rooms, newRoom];
-            await db.save('rooms' as any, updatedRooms);
-
-            if (onUpdateRooms) {
-                onUpdateRooms(updatedRooms);
-            }
-
-            setFormData({
-                ...formData,
-                spaceId: newRoom.id,
-                spaceName: newRoom.name
-            });
-            setIsCreatingSpace(false);
-            setNewSpaceName('');
-        } catch (error) {
-            console.error("Quick add failed:", error);
-        } finally {
-            setIsSaving(false);
+    const handleDelete = async () => {
+        if (activity && confirm('¿Estás seguro de eliminar esta actividad?')) {
+            await onDelete(activity.id);
+            onClose();
         }
     };
 
-    const crmTypes: ActivityType[] = ['CALL', 'EMAIL', 'MEETING', 'VISIT', 'TECHNICAL', 'LUNCH', 'OTHER'];
-    const bookingTypes: ActivityType[] = ['WEDDING', 'CONFERENCE', 'SPACE_RENTAL', 'OTHER'];
+    // Filter service types based on nature
+    const currentTypes = serviceTypes.filter(t => t.nature === formData.nature && t.isActive);
+
+    if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            {/* Backdrop */}
-            <div
-                className="absolute inset-0 bg-slate-900/40 backdrop-blur-md transition-opacity"
-                onClick={onClose}
-            />
-
-            {/* Modal Card */}
-            <div className="relative w-full max-w-4xl bg-white/90 backdrop-blur-2xl rounded-[2.5rem] shadow-[0_20px_70px_rgba(0,0,0,0.25)] border border-white overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
-                <header className="px-8 py-6 border-b border-gray-100 flex items-center justify-between bg-white/50">
-                    <div className="flex items-center gap-3">
-                        <div className={`p-2.5 rounded-2xl shadow-lg ${formData.nature === 'BOOKING' ? 'bg-emerald-500 shadow-emerald-200' : 'bg-indigo-500 shadow-indigo-200'} text-white`}>
-                            {formData.nature === 'BOOKING' ? <Building2 size={20} /> : <Calendar size={20} />}
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-3xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in zoom-in-95 duration-200">
+                {/* Header */}
+                <div className="px-8 py-5 border-b border-gray-100 flex items-center justify-between shrink-0 bg-white">
+                    <div className="flex items-center gap-4">
+                        <div className={`p-3 rounded-2xl ${formData.nature === 'BOOKING' ? 'bg-purple-100 text-purple-600' : 'bg-indigo-100 text-indigo-600'}`}>
+                            {formData.nature === 'BOOKING' ? <Building2 size={24} /> : <Briefcase size={24} />}
                         </div>
                         <div>
                             <h2 className="text-xl font-black text-gray-900 tracking-tight">
                                 {activity ? 'Editar Actividad' : 'Nueva Actividad'}
                             </h2>
-                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                                {formData.nature === 'BOOKING' ? 'Reserva de Espacio' : 'Gestión de Cliente'}
+                            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+                                {formData.nature === 'BOOKING' ? 'Reserva de Espacio' : 'Gestión CRM'}
                             </p>
                         </div>
                     </div>
@@ -196,294 +126,273 @@ const ActivityModal: React.FC<ActivityModalProps> = ({
                     >
                         <X size={24} />
                     </button>
-                </header>
+                </div>
 
-                <form onSubmit={handleSave} className="flex-1 flex flex-col min-h-0">
-                    <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
-                        <div className="grid grid-cols-2 gap-8">
-
+                <div className="flex-1 overflow-hidden flex">
+                    {/* LEFT COLUMN: Main Details */}
+                    <div className="flex-1 overflow-y-auto p-8 custom-scrollbar border-r border-gray-100">
+                        <form onSubmit={handleSubmit} id="activity-form" className="space-y-6">
                             {/* Nature Selector */}
-                            <div className="col-span-2">
-                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Naturaleza de la Actividad</label>
-                                <div className="flex bg-gray-100 p-1.5 rounded-2xl border border-gray-100">
-                                    <button
-                                        type="button"
-                                        onClick={() => setFormData({ ...formData, nature: 'CRM', type: 'MEETING' })}
-                                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${formData.nature === 'CRM' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}
-                                    >
-                                        <Users size={16} /> CRM
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setFormData({ ...formData, nature: 'BOOKING', type: 'SPACE_RENTAL' })}
-                                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${formData.nature === 'BOOKING' ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}
-                                    >
-                                        <Building2 size={16} /> Reserva
-                                    </button>
-                                </div>
+                            <div className="flex bg-gray-100 p-1.5 rounded-2xl">
+                                <button
+                                    type="button"
+                                    onClick={() => setFormData({ ...formData, nature: 'CRM', type: serviceTypes.find(t => t.nature === 'CRM')?.name || 'MEETING' })}
+                                    className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${formData.nature === 'CRM' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                                >
+                                    <Briefcase size={16} /> CRM
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setFormData({ ...formData, nature: 'BOOKING', type: serviceTypes.find(t => t.nature === 'BOOKING')?.name || 'SPACE_RENTAL' })}
+                                    className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${formData.nature === 'BOOKING' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                                >
+                                    <Building2 size={16} /> Booking
+                                </button>
                             </div>
 
                             {/* Title */}
-                            <div className="col-span-2">
-                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Título / Motivo</label>
+                            <div>
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Título</label>
                                 <input
                                     required
-                                    type="text"
                                     value={formData.title || ''}
-                                    onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                                    placeholder="Ej: Reunión de ventas, Reserva Salón A..."
-                                    className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 transition-all outline-none"
+                                    onChange={e => setFormData({ ...formData, title: e.target.value })}
+                                    placeholder={formData.nature === 'BOOKING' ? "Ej: Boda García-Pérez" : "Ej: Reunión de ventas"}
+                                    className="w-full px-4 py-3 bg-gray-50 rounded-xl font-bold text-gray-900 placeholder:text-gray-300 focus:ring-2 focus:ring-indigo-100 outline-none transition-all"
                                 />
                             </div>
 
-                            {/* Type & Priority */}
-                            <div className="flex flex-col gap-2">
-                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Tipo</label>
-                                <select
-                                    value={formData.type}
-                                    onChange={(e) => setFormData({ ...formData, type: e.target.value as ActivityType })}
-                                    className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 appearance-none outline-none"
-                                >
-                                    {(formData.nature === 'BOOKING' ? bookingTypes : crmTypes).map(t => (
-                                        <option key={t} value={t}>{t}</option>
+                            {/* Type & Priority Row */}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Tipo</label>
+                                    <div className="relative">
+                                        <select
+                                            value={formData.type || ''}
+                                            onChange={e => setFormData({ ...formData, type: e.target.value })}
+                                            className="w-full px-4 py-3 bg-gray-50 rounded-xl font-bold text-sm text-gray-900 appearance-none focus:ring-2 focus:ring-indigo-100 outline-none"
+                                        >
+                                            {currentTypes.length > 0 ? (
+                                                currentTypes.map(t => (
+                                                    <option key={t.id} value={t.name}>{t.label}</option>
+                                                ))
+                                            ) : (
+                                                <option value="" disabled>No hay tipos definidos</option>
+                                            )}
+                                        </select>
+                                        <Tag size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Prioridad</label>
+                                    <div className="relative">
+                                        <select
+                                            value={formData.priority || 'MEDIUM'}
+                                            onChange={e => setFormData({ ...formData, priority: e.target.value as any })}
+                                            className="w-full px-4 py-3 bg-gray-50 rounded-xl font-bold text-sm text-gray-900 appearance-none focus:ring-2 focus:ring-indigo-100 outline-none"
+                                        >
+                                            <option value="LOW">Baja</option>
+                                            <option value="MEDIUM">Media</option>
+                                            <option value="HIGH">Alta</option>
+                                            <option value="URGENT">Urgente</option>
+                                        </select>
+                                        <AlertCircle size={16} className={`absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none ${formData.priority === 'URGENT' ? 'text-red-500' : 'text-gray-400'}`} />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Status */}
+                            <div>
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Estado</label>
+                                <div className="flex gap-2">
+                                    {['PLANNED', 'CONFIRMED', 'COMPLETED', 'CANCELLED'].map(s => (
+                                        <button
+                                            key={s}
+                                            type="button"
+                                            onClick={() => setFormData({ ...formData, status: s as any })}
+                                            className={`
+                                                flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest border transition-all
+                                                ${formData.status === s
+                                                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                                                    : 'bg-white border-gray-100 text-gray-400 hover:bg-gray-50'}
+                                            `}
+                                        >
+                                            {s === 'PLANNED' && 'Planificado'}
+                                            {s === 'CONFIRMED' && 'Confirmado'}
+                                            {s === 'COMPLETED' && 'Completado'}
+                                            {s === 'CANCELLED' && 'Cancelado'}
+                                        </button>
                                     ))}
-                                </select>
-                            </div>
-
-                            <div className="flex flex-col gap-2">
-                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Prioridad</label>
-                                <select
-                                    value={formData.priority}
-                                    onChange={(e) => setFormData({ ...formData, priority: e.target.value as ActivityPriority })}
-                                    className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 appearance-none outline-none"
-                                >
-                                    <option value="LOW">BAJA</option>
-                                    <option value="MEDIUM">MEDIA</option>
-                                    <option value="HIGH">ALTA</option>
-                                    <option value="URGENT">URGENTE</option>
-                                </select>
-                            </div>
-
-                            {/* Timestamps */}
-                            <div className="flex flex-col gap-2">
-                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                                    <Clock size={12} /> Inicio
-                                </label>
-                                <input
-                                    type="datetime-local"
-                                    value={formData.startDate ? format(parseISO(formData.startDate), "yyyy-MM-dd'T'HH:mm") : ''}
-                                    onChange={(e) => setFormData({ ...formData, startDate: new Date(e.target.value).toISOString() })}
-                                    className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
-                                />
-                            </div>
-
-                            <div className="flex flex-col gap-2">
-                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                                    <Clock size={12} /> Fin
-                                </label>
-                                <input
-                                    type="datetime-local"
-                                    value={formData.endDate ? format(parseISO(formData.endDate), "yyyy-MM-dd'T'HH:mm") : ''}
-                                    onChange={(e) => setFormData({ ...formData, endDate: new Date(e.target.value).toISOString() })}
-                                    className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
-                                />
-                            </div>
-
-                            {/* Relationships */}
-                            <div className="col-span-2 grid grid-cols-2 gap-6 pt-4 border-t border-gray-50">
-                                <div className="flex flex-col gap-2">
-                                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                                        <User size={12} /> Cliente (Opcional)
-                                    </label>
-                                    <select
-                                        value={formData.customerId || ''}
-                                        onChange={(e) => {
-                                            const c = customers.find(x => x.id === e.target.value);
-                                            setFormData({ ...formData, customerId: e.target.value, customerName: c?.name });
-                                        }}
-                                        className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 appearance-none outline-none"
-                                    >
-                                        <option value="">Ninguno</option>
-                                        {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                    </select>
-                                </div>
-
-                                <div className="flex flex-col gap-2">
-                                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                                        <Tag size={12} /> Responsable
-                                    </label>
-                                    <select
-                                        value={formData.assignedToId || ''}
-                                        onChange={(e) => {
-                                            const u = users.find(x => x.id === e.target.value);
-                                            setFormData({ ...formData, assignedToId: e.target.value, assignedToName: u?.name });
-                                        }}
-                                        className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 appearance-none outline-none"
-                                    >
-                                        {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                                    </select>
                                 </div>
                             </div>
-
-                            {/* Space Selector (only for Bookings) */}
-                            {formData.nature === 'BOOKING' && (
-                                <div className="col-span-2">
-                                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 mb-2">
-                                        <Building2 size={12} /> Espacio / Salón
-                                    </label>
-                                    <div className="flex gap-3">
-                                        {isCreatingSpace ? (
-                                            <div className="flex-1 flex gap-2">
-                                                <input
-                                                    autoFocus
-                                                    type="text"
-                                                    value={newSpaceName}
-                                                    onChange={(e) => setNewSpaceName(e.target.value)}
-                                                    placeholder="Nombre del nuevo salón..."
-                                                    className="flex-1 px-5 py-4 bg-white border-2 border-emerald-500 rounded-2xl text-sm font-bold outline-none"
-                                                />
-                                                <button
-                                                    type="button"
-                                                    onClick={handleQuickAddSpace}
-                                                    className="px-6 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700"
-                                                >
-                                                    Crear
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setIsCreatingSpace(false)}
-                                                    className="p-4 bg-gray-100 text-gray-400 rounded-2xl hover:bg-gray-200"
-                                                >
-                                                    <X size={20} />
-                                                </button>
-                                            </div>
-                                        ) : (
-                                            <>
-                                                <select
-                                                    required
-                                                    value={formData.spaceId || ''}
-                                                    onChange={(e) => {
-                                                        const r = rooms.find(x => x.id === e.target.value);
-                                                        setFormData({ ...formData, spaceId: e.target.value, spaceName: r?.name || r?.nombre });
-                                                    }}
-                                                    className="flex-1 px-5 py-4 bg-emerald-50 text-emerald-900 border-none rounded-2xl text-sm font-bold focus:ring-2 focus:ring-emerald-500 appearance-none outline-none"
-                                                >
-                                                    <option value="">Seleccione un espacio...</option>
-                                                    {rooms.map(r => <option key={r.id} value={r.id}>{r.name || r.nombre}</option>)}
-                                                </select>
-                                                <button
-                                                    type="button"
-                                                    title="Alta Rápida de Espacio"
-                                                    onClick={() => setIsCreatingSpace(true)}
-                                                    className="p-4 bg-emerald-100 text-emerald-600 rounded-2xl hover:bg-emerald-200 transition-colors"
-                                                >
-                                                    <Plus size={20} />
-                                                </button>
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Availability Conflict Alert */}
-                            {availabilityConflict && (
-                                <div className="col-span-2 p-4 bg-red-50 border border-red-100 rounded-2xl flex items-start gap-4 animate-in fade-in slide-in-from-top-2">
-                                    <AlertCircle className="text-red-500 shrink-0 mt-1" size={20} />
-                                    <div>
-                                        <p className="text-sm font-black text-red-900">Conflicto de Disponibilidad</p>
-                                        <p className="text-xs text-red-700 font-medium">
-                                            El espacio <b>{formData.spaceName}</b> ya está reservado para: <br />
-                                            <span className="font-bold">"{availabilityConflict.title}"</span> ({format(parseISO(availabilityConflict.startDate), "HH:mm")} - {format(parseISO(availabilityConflict.endDate), "HH:mm")})
-                                        </p>
-                                    </div>
-                                </div>
-                            )}
 
                             {/* Description */}
-                            <div className="col-span-2">
-                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Descripción / Notas</label>
+                            <div>
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Descripción</label>
                                 <textarea
+                                    rows={4}
                                     value={formData.description || ''}
-                                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                                    rows={3}
-                                    placeholder="Detalles adicionales..."
-                                    className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 transition-all outline-none resize-none"
+                                    onChange={e => setFormData({ ...formData, description: e.target.value })}
+                                    placeholder="Detalles adicionales, notas, requerimientos..."
+                                    className="w-full px-4 py-3 bg-gray-50 rounded-xl font-medium text-sm text-gray-900 placeholder:text-gray-300 focus:ring-2 focus:ring-indigo-100 outline-none resize-none"
                                 />
+                            </div>
+                        </form>
+                    </div>
+
+                    {/* RIGHT COLUMN: Resources & Date */}
+                    <div className="w-80 bg-gray-50/50 p-8 flex flex-col gap-6 overflow-y-auto custom-scrollbar">
+                        {/* Time & Date */}
+                        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                            <h3 className="text-xs font-black text-gray-900 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                <Calendar size={14} className="text-indigo-500" />
+                                Fecha y Hora
+                            </h3>
+                            <div className="space-y-3">
+                                <div>
+                                    <label className="text-[10px] font-bold text-gray-400 uppercase mb-1 block">Inicio</label>
+                                    <input
+                                        type="datetime-local"
+                                        required
+                                        value={formData.startDate?.slice(0, 16) || ''}
+                                        onChange={e => setFormData({ ...formData, startDate: new Date(e.target.value).toISOString() })}
+                                        className="w-full bg-gray-50 border-none rounded-lg text-xs font-bold text-gray-700 py-2"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-bold text-gray-400 uppercase mb-1 block">Fin</label>
+                                    <input
+                                        type="datetime-local"
+                                        required
+                                        value={formData.endDate?.slice(0, 16) || ''}
+                                        onChange={e => setFormData({ ...formData, endDate: new Date(e.target.value).toISOString() })}
+                                        className="w-full bg-gray-50 border-none rounded-lg text-xs font-bold text-gray-700 py-2"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Customer */}
+                        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                            <h3 className="text-xs font-black text-gray-900 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                <Users size={14} className="text-pink-500" />
+                                Cliente
+                            </h3>
+                            <select
+                                value={formData.customerId || ''}
+                                onChange={e => {
+                                    const cust = customers.find(c => c.id === e.target.value);
+                                    setFormData({
+                                        ...formData,
+                                        customerId: cust?.id,
+                                        customerName: cust ? cust.name : undefined
+                                    });
+                                }}
+                                className="w-full bg-gray-50 border-none rounded-lg text-xs font-bold text-gray-700 py-2.5 px-3 outline-none"
+                            >
+                                <option value="">-- Seleccionar Cliente --</option>
+                                {customers.map(c => (
+                                    <option key={c.id} value={c.id}>{c.name}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {/* Assignments */}
+                        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                            <h3 className="text-xs font-black text-gray-900 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                <MapPin size={14} className="text-emerald-500" />
+                                Asignación
+                            </h3>
+
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="text-[10px] font-bold text-gray-400 uppercase mb-1 block">Espacio / Salón</label>
+                                    <select
+                                        value={formData.spaceId || ''}
+                                        onChange={e => {
+                                            const room = rooms.find(r => r.id === e.target.value);
+                                            setFormData({
+                                                ...formData,
+                                                spaceId: room?.id,
+                                                spaceName: room?.name
+                                            });
+                                        }}
+                                        className="w-full bg-gray-50 border-none rounded-lg text-xs font-bold text-gray-700 py-2.5 px-3 outline-none"
+                                    >
+                                        <option value="">-- Ninguno --</option>
+                                        {rooms.map(r => (
+                                            <option key={r.id} value={r.id}>{r.name} ({r.capacity}p)</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="text-[10px] font-bold text-gray-400 uppercase mb-1 block">Responsable</label>
+                                    <select
+                                        value={formData.assignedToId || ''}
+                                        onChange={e => {
+                                            const user = users.find(u => u.id === e.target.value);
+                                            setFormData({
+                                                ...formData,
+                                                assignedToId: user?.id,
+                                                assignedToName: user?.name
+                                            });
+                                        }}
+                                        className="w-full bg-gray-50 border-none rounded-lg text-xs font-bold text-gray-700 py-2.5 px-3 outline-none"
+                                    >
+                                        <option value="">-- Sistema --</option>
+                                        {users.map(u => (
+                                            <option key={u.id} value={u.id}>{u.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
                             </div>
                         </div>
                     </div>
+                </div>
 
-                    {/* Footer Actions (Sticky) */}
-                    <div className="px-8 py-6 bg-white/50 backdrop-blur-md border-t border-gray-100 flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                            {activity && onDelete && (
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        if (confirm('¿Seguro que desea eliminar esta actividad?')) {
-                                            onDelete(activity.id).then(onClose);
-                                        }
-                                    }}
-                                    className="flex items-center gap-2 px-6 py-3 text-red-600 hover:bg-red-50 rounded-xl font-bold transition-all"
-                                >
-                                    <Trash2 size={18} /> <span className="hidden md:inline">Eliminar</span>
-                                </button>
-                            )}
-                            {activity && activity.status !== 'COMPLETED' && (
-                                <button
-                                    type="button"
-                                    onClick={async () => {
-                                        if (confirm(`¿Convertir esta ${activity.nature === 'BOOKING' ? 'reserva' : 'actividad'} en una cotización de venta?`)) {
-                                            setIsSaving(true);
-                                            try {
-                                                if (onConvertToQuote) {
-                                                    await onConvertToQuote(activity);
-                                                } else {
-                                                    await agendaService.convertToQuote(activity);
-                                                }
-                                                onClose();
-                                            } catch (e) {
-                                                console.error(e);
-                                                alert("Error al convertir a cotización");
-                                            } finally {
-                                                setIsSaving(false);
-                                            }
-                                        }
-                                    }}
-                                    className="flex items-center gap-2 px-6 py-3 text-indigo-600 hover:bg-indigo-50 rounded-xl font-bold transition-all"
-                                >
-                                    <ArrowUpRight size={18} /> <span className="hidden lg:inline">Convertir a Cotización</span>
-                                </button>
-                            )}
-                        </div>
+                {/* Footer Actions */}
+                <div className="px-8 py-5 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between shrink-0">
+                    {activity ? (
+                        <button
+                            type="button"
+                            onClick={handleDelete}
+                            className="text-red-500 hover:text-red-700 font-bold text-sm flex items-center gap-2 px-4 py-2 hover:bg-red-50 rounded-xl transition-colors"
+                        >
+                            <span className="hidden sm:inline">Eliminar</span> {/* Hidden text on mobile if needed, but this is desk */}
+                            Eliminar
+                        </button>
+                    ) : (
+                        <div />
+                    )}
 
-                        <div className="flex items-center gap-4">
-                            <button
-                                type="button"
-                                onClick={onClose}
-                                className="px-8 py-4 text-gray-500 font-bold hover:bg-gray-100 rounded-2xl transition-all"
-                            >
-                                Cancelar
-                            </button>
-                            <button
-                                disabled={isSaving}
-                                type="submit"
-                                className={`
-                                    px-12 py-4 rounded-2xl text-white font-black uppercase tracking-widest flex items-center gap-3 transition-all
-                                    ${formData.nature === 'BOOKING' ? 'bg-emerald-600 shadow-xl shadow-emerald-200 hover:bg-emerald-700' : 'bg-indigo-600 shadow-xl shadow-indigo-200 hover:bg-indigo-700'}
-                                    ${isSaving ? 'opacity-50' : 'active:scale-95'}
-                                `}
-                            >
-                                {isSaving ? (
-                                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                ) : (
-                                    <Check size={20} strokeWidth={3} />
-                                )}
-                                {activity ? 'Actualizar' : 'Guardar'}
-                            </button>
-                        </div>
+                    <div className="flex items-center gap-3">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="px-6 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors text-sm"
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            onClick={handleSubmit}
+                            disabled={isSaving}
+                            className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 active:scale-95 transition-all text-sm flex items-center gap-2 disabled:opacity-50 disabled:pointer-events-none"
+                        >
+                            {isSaving ? (
+                                <>
+                                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                    <span>Guardando...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <CheckCircle size={18} />
+                                    <span>Guardar Actividad</span>
+                                </>
+                            )}
+                        </button>
                     </div>
-                </form>
+                </div>
             </div>
         </div>
     );

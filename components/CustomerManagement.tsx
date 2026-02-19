@@ -1921,6 +1921,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                }}
                activity={selectedActivity}
                initialDate={prefilledDate || undefined}
+               initialResourceId={undefined}
+               serviceTypes={[]} // TODO: Fetch service types
                customers={[selectedCustomer]}
                rooms={rooms}
                users={users}

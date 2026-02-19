@@ -1,9 +1,58 @@
-
 import { db } from '../utils/db';
-import { Activity, ActivityNature, ActivityStatus } from '../types';
+import { Activity, ActivityNature, ActivityStatus, ServiceType } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
 class AgendaService {
+    /**
+     * Get all service types
+     */
+    async getServiceTypes(): Promise<ServiceType[]> {
+        const types = await db.get('serviceTypes' as any) as ServiceType[] || [];
+        if (types.length === 0) {
+            return this.seedServiceTypes();
+        }
+        return types;
+    }
+
+    /**
+     * Save a service type (create or update)
+     */
+    async saveServiceType(type: ServiceType): Promise<ServiceType> {
+        await db.saveDocument('serviceTypes' as any, type);
+        return type;
+    }
+
+    /**
+     * Delete a service type
+     */
+    async deleteServiceType(id: string): Promise<void> {
+        await db.deleteDocument('serviceTypes' as any, id);
+    }
+
+    /**
+     * Seed initial service types
+     */
+    private async seedServiceTypes(): Promise<ServiceType[]> {
+        const initialTypes: ServiceType[] = [
+            // CRM
+            { id: uuidv4(), name: 'MEETING', label: 'Reunión', nature: 'CRM', color: '#4f46e5', isActive: true },
+            { id: uuidv4(), name: 'CALL', label: 'Llamada', nature: 'CRM', color: '#0ea5e9', isActive: true },
+            { id: uuidv4(), name: 'EMAIL', label: 'Email', nature: 'CRM', color: '#8b5cf6', isActive: true },
+            { id: uuidv4(), name: 'VISIT', label: 'Visita', nature: 'CRM', color: '#f59e0b', isActive: true },
+            { id: uuidv4(), name: 'TECHNICAL', label: 'Técnico', nature: 'CRM', color: '#10b981', isActive: true },
+            { id: uuidv4(), name: 'LUNCH', label: 'Almuerzo', nature: 'CRM', color: '#f97316', isActive: true },
+            { id: uuidv4(), name: 'OTHER', label: 'Otro', nature: 'CRM', color: '#6b7280', isActive: true },
+            // BOOKING
+            { id: uuidv4(), name: 'SPACE_RENTAL', label: 'Alquiler Espacio', nature: 'BOOKING', color: '#10b981', isActive: true },
+            { id: uuidv4(), name: 'WEDDING', label: 'Boda', nature: 'BOOKING', color: '#ec4899', isActive: true },
+            { id: uuidv4(), name: 'CONFERENCE', label: 'Conferencia', nature: 'BOOKING', color: '#6366f1', isActive: true },
+            { id: uuidv4(), name: 'OTHER', label: 'Otro', nature: 'BOOKING', color: '#94a3b8', isActive: true },
+        ];
+
+        await db.save('serviceTypes' as any, initialTypes);
+        return initialTypes;
+    }
+
     /**
      * Create a new activity
      */

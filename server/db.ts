@@ -67,6 +67,31 @@ db.exec(`
         SELECT RAISE(ABORT, '🚫 INTEGRIDAD DE ALMACÉN: El artículo no está habilitado para operar en el almacén especificado.');
     END;
 
+    -- AUDIT SYSTEM (WMS)
+    CREATE TABLE IF NOT EXISTS audit_sessions (
+        id TEXT PRIMARY KEY,
+        warehouseId TEXT NOT NULL,
+        startedAt TEXT NOT NULL,
+        closedAt TEXT,
+        status TEXT DEFAULT 'OPEN', -- OPEN, CLOSED, CANCELLED
+        method TEXT, -- ABSOLUTE, RECONCILED
+        notes TEXT,
+        FOREIGN KEY (warehouseId) REFERENCES warehouses(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_items (
+        id TEXT PRIMARY KEY,
+        sessionId TEXT NOT NULL,
+        productId TEXT NOT NULL,
+        countedQty REAL DEFAULT 0,
+        systemQtyAtStart REAL DEFAULT 0, -- Snapshot for reference
+        updatedAt TEXT NOT NULL,
+        FOREIGN KEY (sessionId) REFERENCES audit_sessions(id),
+        FOREIGN KEY (productId) REFERENCES products(id)
+    );
+    
+    CREATE INDEX IF NOT EXISTS idx_audit_items_session ON audit_items(sessionId);
+
     -- Optimistic Locking columns
     -- Try/Catch is not possible in .exec(), so we use a safe approach or separate statements
     -- For better-sqlite3, we can just run these separately and ignore errors if column exists

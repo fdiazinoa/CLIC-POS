@@ -14,6 +14,16 @@ export const SubVertical = {
 
 export type SubVertical = typeof SubVertical[keyof typeof SubVertical];
 
+export interface ServiceType {
+  id: string;
+  name: string; // Internal codename/value
+  label: string; // Display name
+  nature: 'CRM' | 'BOOKING';
+  color?: string;
+  icon?: string;
+  isActive: boolean;
+}
+
 // --- SYNC CONFIGURATION TYPES ---
 export type SyncMode = 'MASTER' | 'SLAVE';
 export type SyncStatus = 'PENDING' | 'SYNCING' | 'COMPLETED' | 'ERROR';
@@ -928,6 +938,7 @@ export interface Room {
   name?: string;
   consumo_minimo?: number; // Legacy, but keeping for compatibility
   capacidad_personas?: number; // Legacy
+  capacity?: number; // Standardized capacity
   capacidad_pax?: number; // New standard for Spaces
   base_price?: number; // For quotes
   color?: string; // For calendar
@@ -1777,17 +1788,7 @@ export interface AttendanceLog {
 
 export type ActivityNature = 'CRM' | 'BOOKING';
 
-export type ActivityType =
-  | 'CALL'
-  | 'EMAIL'
-  | 'LUNCH'
-  | 'MEETING'
-  | 'VISIT'
-  | 'TECHNICAL'
-  | 'WEDDING'
-  | 'CONFERENCE'
-  | 'SPACE_RENTAL'
-  | 'OTHER';
+export type ActivityType = string;
 
 export type ActivityPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
 

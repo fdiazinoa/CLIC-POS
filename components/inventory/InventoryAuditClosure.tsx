@@ -74,19 +74,64 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
     return map;
   }, [warehouses]);
 
-  const loadData = async () => {
-    const [storedSessions, storedSnapshots] = await Promise.all([
-      db.get('inventoryCounts') as Promise<InventoryCountSession[]>,
-      db.get('inventorySnapshots') as Promise<InventorySnapshot[]>
-    ]);
+  const loadData = async (warehouseId: string) => {
+    if (!warehouseId) return;
 
-    setSessions(storedSessions || []);
-    setSnapshots(storedSnapshots || []);
+    try {
+      // 1. Load Legacy Data
+      const [storedSessions, storedSnapshots] = await Promise.all([
+        db.get('inventoryCounts') as Promise<InventoryCountSession[]>,
+        db.get('inventorySnapshots') as Promise<InventorySnapshot[]>
+      ]);
+
+      // 2. Load New API Data
+      const response = await fetch(`http://localhost:3001/api/audit/history/${warehouseId}`);
+      if (!response.ok) throw new Error('Failed to fetch audit history');
+
+      const apiSessions: any[] = await response.json();
+
+      // 3. Map API Data to InventoryCountSession
+      const mappedSessions: InventoryCountSession[] = apiSessions.map(s => ({
+        id: s.id,
+        warehouseId: s.warehouseId,
+        warehouseName: warehouseNameById.get(s.warehouseId) || 'Unknown',
+        createdAt: s.startedAt,
+        finalizedAt: s.closedAt,
+        status: s.status === 'CLOSED' ? 'FINALIZED' : 'OPEN',
+        createdBy: 'SYSTEM', // or populate from parsing s.notes if strictly needed
+        createdByName: 'Sistema',
+        items: s.items.map((item: any) => {
+          const product = products.find(p => p.id === item.productId);
+          return {
+            productId: item.productId,
+            productName: product?.name || 'Unknown Product',
+            category: product?.category,
+            systemQty: item.systemQtyAtStart,
+            countedQty: item.countedQty,
+            difference: item.countedQty - item.systemQtyAtStart
+          };
+        })
+      }));
+
+      // 4. Merge (Prefer API if collision, though IDs should be UUIDs vs timestamps)
+      const specificLegacy = (storedSessions || []).filter(s => s.warehouseId === warehouseId);
+      const combined = [...mappedSessions, ...specificLegacy];
+
+      // Deduplicate by ID just in case
+      const unique = Array.from(new Map(combined.map(s => [s.id, s])).values());
+
+      setSessions(unique);
+      setSnapshots(storedSnapshots || []);
+    } catch (error) {
+      console.error("Error loading audit data:", error);
+    }
   };
 
   useEffect(() => {
-    loadData().catch(console.error);
-  }, []);
+    if (selectedWarehouseId) {
+      loadData(selectedWarehouseId);
+    }
+  }, [selectedWarehouseId]);
 
   useEffect(() => {
     if (!selectedWarehouseId && warehouses[0]?.id) {
@@ -99,13 +144,16 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
 
     return sessions
       .filter(session => {
+        // Already filtered by selectedWarehouseId in loadData, but safe to keep check or just check ID match
         if (selectedWarehouseId && session.warehouseId !== selectedWarehouseId) return false;
+
         if (dateFilter && toInputDate(session.createdAt) !== dateFilter) return false;
+
         if (normalizedSearch) {
           const haystack = `${session.id} ${session.createdByName || ''} ${session.warehouseName || ''}`.toLowerCase();
           if (!haystack.includes(normalizedSearch)) return false;
         }
-        if (session.status && session.status !== 'FINALIZED') return false;
+
         return true;
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -348,7 +396,7 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
       };
       await db.saveDocument('inventoryAuditLogs' as any, closeLog);
 
-      await loadData();
+      await loadData(selectedWarehouseId);
       setStatusMessage('Cierre completado. Hard lock activo para fechas <= al corte seleccionado.');
     } catch (error: any) {
       setStatusMessage(error?.message || 'No fue posible completar el cierre.');
@@ -376,7 +424,7 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
             ))}
           </select>
           <button
-            onClick={() => loadData().catch(console.error)}
+            onClick={() => loadData(selectedWarehouseId).catch(console.error)}
             className="px-3 py-2 bg-gray-900 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2"
           >
             <RefreshCw size={14} /> Recargar

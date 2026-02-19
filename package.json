@@ -20,6 +20,7 @@
     "@google/genai": "^1.35.0",
     "@types/nodemailer": "^7.0.5",
     "@types/papaparse": "^5.5.2",
+    "@types/uuid": "^10.0.0",
     "better-sqlite3": "^12.6.2",
     "date-fns": "^4.1.0",
     "framer-motion": "^11.18.2",
@@ -33,6 +34,7 @@
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "sql.js": "^1.13.0",
+    "uuid": "^13.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

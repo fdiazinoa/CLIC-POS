@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
     Calendar, Users, Building2, Plus, ChevronLeft,
     Search, Filter, MoreVertical, Layout, Grid,
-    RefreshCw, Zap, Target, Clock, AlertTriangle
+    RefreshCw, Zap, Target, Clock, AlertTriangle, Tag
 } from 'lucide-react';
 import {
     BusinessConfig,
@@ -10,11 +10,13 @@ import {
     Customer,
     Room,
     Activity,
-    Warehouse
+    Warehouse,
+    ServiceType
 } from '../types';
 import AdvancedCalendar from './AdvancedCalendar';
 import ActivityModal from './ActivityModal';
 import SpacesManager from './SpacesManager';
+import ServiceTypeManager from './ServiceTypeManager'; // Import the new component
 import { agendaService } from '../services/AgendaService';
 import { startOfMonth, endOfMonth, addMonths, subMonths, format } from 'date-fns';
 
@@ -39,10 +41,11 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
     onUpdateRooms,
     onClose
 }) => {
-    const [activeTab, setActiveTab] = useState<'CALENDAR' | 'SPACES'>('CALENDAR');
+    const [activeTab, setActiveTab] = useState<'CALENDAR' | 'SPACES' | 'TYPES'>('CALENDAR');
     const [viewMode, setViewMode] = useState<'MONTH' | 'WEEK' | 'RESOURCE' | 'TEAM'>('MONTH');
     const [currentDate, setCurrentDate] = useState(new Date());
     const [activities, setActivities] = useState<Activity[]>([]);
+    const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]); // New state
     const [isLoading, setIsLoading] = useState(false);
     const [showActivityModal, setShowActivityModal] = useState(false);
     const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null);
@@ -66,9 +69,19 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
         }
     }, [currentDate]);
 
+    const fetchServiceTypes = useCallback(async () => {
+        try {
+            const types = await agendaService.getServiceTypes();
+            setServiceTypes(types);
+        } catch (error) {
+            console.error("Failed to fetch service types:", error);
+        }
+    }, []);
+
     useEffect(() => {
         fetchActivities();
-    }, [fetchActivities]);
+        fetchServiceTypes();
+    }, [fetchActivities, fetchServiceTypes]);
 
     // HANDLERS
     const handleSaveActivity = async (activityData: Partial<Activity>) => {
@@ -125,6 +138,13 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
                     >
                         <Building2 size={14} />
                         <span className="hidden md:inline">Espacios</span>
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('TYPES')}
+                        className={`flex items-center gap-2 px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'TYPES' ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                        <Tag size={14} />
+                        <span className="hidden md:inline">Tipos</span>
                     </button>
                 </div>
 
@@ -203,6 +223,7 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
                                     setPrefilledResourceId(resourceId || null);
                                     setShowActivityModal(true);
                                 }}
+                                serviceTypes={serviceTypes}
                             />
                         </div>
 
@@ -298,13 +319,20 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
                             </div>
                         </aside>
                     </>
-                ) : (
+                ) : activeTab === 'SPACES' ? (
                     <div className="flex-1 bg-white/60 backdrop-blur-md rounded-[2.5rem] border border-white shadow-2xl shadow-gray-200/50 overflow-hidden">
                         <SpacesManager
                             rooms={rooms}
                             warehouses={warehouses}
                             onUpdateRooms={onUpdateRooms || (() => { })}
                             onClose={() => setActiveTab('CALENDAR')}
+                        />
+                    </div>
+                ) : (
+                    <div className="flex-1 bg-white/60 backdrop-blur-md rounded-[2.5rem] border border-white shadow-2xl shadow-gray-200/50 overflow-hidden">
+                        <ServiceTypeManager
+                            onClose={() => setActiveTab('CALENDAR')}
+                            onUpdate={fetchServiceTypes}
                         />
                     </div>
                 )}
@@ -325,6 +353,7 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
                 customers={customers}
                 rooms={rooms}
                 users={users}
+                serviceTypes={serviceTypes}
                 onSave={handleSaveActivity}
                 onDelete={handleDeleteActivity}
                 onUpdateRooms={onUpdateRooms}

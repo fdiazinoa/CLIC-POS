@@ -115,7 +115,8 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
    const [activeTracking, setActiveTracking] = useState<any[]>([]);
 
    // Inventory State
-   const [isAuditMode, setIsAuditMode] = useState(false);
+   const [auditWarehouseId, setAuditWarehouseId] = useState<string | null>(null);
+   const [showAuditSelector, setShowAuditSelector] = useState(false);
    const [productSearch, setProductSearch] = useState('');
    const [selectedCategory, setSelectedCategory] = useState<string>('Todas');
 
@@ -173,7 +174,7 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
       });
 
       onAdjustStock(normalizedAdjustments);
-      setIsAuditMode(false);
+      setAuditWarehouseId(null);
       alert("Inventario actualizado y sesión de auditoría registrada.");
    };
 
@@ -182,7 +183,13 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
          <div className="flex justify-between items-center mb-6">
             <h2 className="text-xl font-bold text-gray-800">Inventario Actual</h2>
             <button
-               onClick={() => setIsAuditMode(true)}
+               onClick={() => {
+                  if (warehouses.length === 1) {
+                     setAuditWarehouseId(warehouses[0].id);
+                  } else {
+                     setShowAuditSelector(true);
+                  }
+               }}
                className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-500 transition-all flex items-center gap-2"
             >
                <ScanBarcode size={20} />
@@ -1632,9 +1639,41 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                </div>
             )}
 
-         {isAuditMode && (
+         {showAuditSelector && (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+               <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+                  <div className="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+                     <h3 className="font-bold text-gray-800">Seleccionar Almacén</h3>
+                     <button onClick={() => setShowAuditSelector(false)}><X size={20} className="text-gray-500" /></button>
+                  </div>
+                  <div className="p-2 max-h-[60vh] overflow-y-auto">
+                     {warehouses.map(w => (
+                        <button
+                           key={w.id}
+                           onClick={() => {
+                              setAuditWarehouseId(w.id);
+                              setShowAuditSelector(false);
+                           }}
+                           className="w-full text-left p-4 hover:bg-purple-50 rounded-xl transition-colors border-b border-gray-50 last:border-0"
+                        >
+                           <p className="font-bold text-gray-800">{w.name}</p>
+                           <p className="text-xs text-gray-400">{w.address}</p>
+                        </button>
+                     ))}
+                  </div>
+               </div>
+            </div>
+         )}
+
+         {auditWarehouseId && (
             <ErrorBoundary componentName="InventoryAudit">
-               <InventoryAudit products={products} mode="ABSOLUTE" onClose={() => setIsAuditMode(false)} onCommit={handleAuditCommit} />
+               <InventoryAudit
+                  warehouseId={auditWarehouseId}
+                  products={products}
+                  mode="ABSOLUTE"
+                  onClose={() => setAuditWarehouseId(null)}
+                  onCommit={handleAuditCommit}
+               />
             </ErrorBoundary>
          )}
       </>
