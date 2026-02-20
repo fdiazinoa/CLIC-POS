@@ -23,6 +23,13 @@ class AgendaService {
     }
 
     /**
+     * Save multiple service types (useful for reordering)
+     */
+    async saveServiceTypes(types: ServiceType[]): Promise<void> {
+        await db.save('serviceTypes' as any, types);
+    }
+
+    /**
      * Delete a service type
      */
     async deleteServiceType(id: string): Promise<void> {
@@ -54,10 +61,48 @@ class AgendaService {
     }
 
     /**
+     * Check if a space is available for a given timeframe
+     */
+    async checkAvailability(spaceId: string, start: string, end: string, excludeActivityId?: string): Promise<{ available: boolean, conflict?: Activity }> {
+        const all = await db.get('activities' as any) as Activity[] || [];
+        const startTime = new Date(start).getTime();
+        const endTime = new Date(end).getTime();
+
+        const conflict = all.find(a => {
+            if (a.id === excludeActivityId) return false;
+            if (a.nature !== 'BOOKING' || a.spaceId !== spaceId) return false;
+            if (a.status === 'CANCELLED') return false;
+
+            const aStart = new Date(a.startDate).getTime();
+            const aEnd = new Date(a.endDate).getTime();
+
+            // Check for overlap
+            return (startTime < aEnd && endTime > aStart);
+        });
+
+        return {
+            available: !conflict,
+            conflict
+        };
+    }
+
+    /**
      * Create a new activity
      */
     async createActivity(activity: Partial<Activity>): Promise<Activity> {
         const isBooking = activity.nature === 'BOOKING';
+
+        // 1. Availability Check for Booking
+        if (isBooking && activity.spaceId) {
+            const availability = await this.checkAvailability(
+                activity.spaceId,
+                activity.startDate || new Date().toISOString(),
+                activity.endDate || new Date(Date.now() + 3600000).toISOString()
+            );
+            if (!availability.available) {
+                throw new Error(`Conflicto de disponibilidad: El espacio ya está reservado para "${availability.conflict?.title}"`);
+            }
+        }
 
         // Generate Display ID (e.g., ACT-001 or BKG-001)
         const prefix = isBooking ? 'BKG' : 'ACT';
@@ -84,8 +129,17 @@ class AgendaService {
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             createdBy: activity.assignedToId || 'sys',
+            items: activity.items || [],
+            required_deposit: activity.required_deposit || 0,
+            current_balance: activity.current_balance || 0,
+            payment_status: activity.payment_status || 'PENDING',
             ...activity
         } as Activity;
+
+        // 2. Commit Inventory if it has items
+        if (newActivity.items && newActivity.items.length > 0 && (newActivity.status === 'PLANNED' || newActivity.status === 'CONFIRMED')) {
+            await db.commitInventory(newActivity.items, newActivity.startDate);
+        }
 
         await db.saveDocument('activities' as any, newActivity);
         return newActivity;
@@ -97,6 +151,42 @@ class AgendaService {
     async updateActivity(id: string, updates: Partial<Activity>): Promise<Activity> {
         const existing = await db.getDocument('activities' as any, id) as Activity;
         if (!existing) throw new Error('Actividad no encontrada');
+
+        // 1. Availability check if room/time changed
+        const spaceChanged = updates.spaceId && updates.spaceId !== existing.spaceId;
+        const timeChanged = (updates.startDate && updates.startDate !== existing.startDate) ||
+            (updates.endDate && updates.endDate !== existing.endDate);
+
+        if (existing.nature === 'BOOKING' && (spaceChanged || timeChanged)) {
+            const availability = await this.checkAvailability(
+                updates.spaceId || existing.spaceId!,
+                updates.startDate || existing.startDate,
+                updates.endDate || existing.endDate,
+                existing.id
+            );
+            if (!availability.available) {
+                throw new Error(`Conflicto de disponibilidad: El espacio ya está reservado para "${availability.conflict?.title}"`);
+            }
+        }
+
+        // 2. Re-commit inventory if items changed
+        if (updates.items) {
+            const oldItems = existing.items || [];
+            const newItems = updates.items;
+
+            // Rollback old items
+            for (const item of oldItems) {
+                await db.adjustCommittedStock(item.id, 'wh_central', -item.quantity);
+            }
+
+            // Commit new items
+            for (const item of newItems) {
+                await db.adjustCommittedStock(item.id, 'wh_central', item.quantity);
+            }
+        } else if (timeChanged || spaceChanged) {
+            // If time or space changed but items didn't, we might need to re-verify but 
+            // the commitment stays the same unless we have warehouse-specific commitment
+        }
 
         const updated = {
             ...existing,
@@ -197,6 +287,20 @@ class AgendaService {
 
             return { type: 'PARKED', id: parked.id };
         }
+    }
+
+    /**
+     * Get attendance logs for a specific range
+     */
+    async getAttendanceLogs(start: string, end: string): Promise<any[]> {
+        const all = await db.get('attendanceLogs' as any) as any[] || [];
+        const startTime = new Date(start).getTime();
+        const endTime = new Date(end).getTime();
+
+        return all.filter(log => {
+            const logTime = new Date(log.timestamp).getTime();
+            return logTime >= startTime && logTime <= endTime;
+        });
     }
 }
 

@@ -17,8 +17,11 @@ import AdvancedCalendar from './AdvancedCalendar';
 import ActivityModal from './ActivityModal';
 import SpacesManager from './SpacesManager';
 import ServiceTypeManager from './ServiceTypeManager'; // Import the new component
+import SpaceTimelineView from './SpaceTimelineView';
+import TeamTimelineView from './TeamTimelineView';
 import { agendaService } from '../services/AgendaService';
-import { startOfMonth, endOfMonth, addMonths, subMonths, format } from 'date-fns';
+import { startOfMonth, endOfMonth, addMonths, subMonths, format, startOfDay, endOfDay } from 'date-fns';
+import { AttendanceLog } from '../types';
 
 interface AgendaManagerProps {
     config: BusinessConfig;
@@ -46,6 +49,7 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
     const [currentDate, setCurrentDate] = useState(new Date());
     const [activities, setActivities] = useState<Activity[]>([]);
     const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]); // New state
+    const [attendanceLogs, setAttendanceLogs] = useState<AttendanceLog[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [showActivityModal, setShowActivityModal] = useState(false);
     const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null);
@@ -62,6 +66,13 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
                 endOfMonth(addMonths(currentDate, 1)).toISOString()
             );
             setActivities(all);
+
+            // Fetch attendance for the current day
+            const logs = await agendaService.getAttendanceLogs(
+                startOfDay(currentDate).toISOString(),
+                endOfDay(currentDate).toISOString()
+            );
+            setAttendanceLogs(logs);
         } catch (error) {
             console.error("Failed to fetch activities:", error);
         } finally {
@@ -99,6 +110,30 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
     const handleDeleteActivity = async (id: string) => {
         await agendaService.deleteActivity(id);
         fetchActivities();
+    };
+
+    const handleUpdateActivity = async (activityId: string, newUserId: string, newStartDate: Date) => {
+        const activity = activities.find(a => a.id === activityId);
+        if (!activity) return;
+
+        const oldStart = new Date(activity.startDate);
+        const oldEnd = new Date(activity.endDate);
+        const duration = oldEnd.getTime() - oldStart.getTime();
+
+        const newEndDate = new Date(newStartDate.getTime() + duration);
+        const newUser = users.find(u => u.id === newUserId);
+
+        try {
+            await agendaService.updateActivity(activityId, {
+                assignedToId: newUserId,
+                assignedToName: newUser?.name || activity.assignedToName,
+                startDate: newStartDate.toISOString(),
+                endDate: newEndDate.toISOString()
+            });
+            fetchActivities();
+        } catch (error) {
+            console.error("Failed to update activity:", error);
+        }
     };
 
     return (
@@ -153,7 +188,7 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
                         {[
                             { id: 'MONTH', label: 'Mes', icon: <Grid size={14} /> },
                             { id: 'WEEK', label: 'Semana', icon: <Layout size={14} /> },
-                            { id: 'RESOURCE', label: 'Salones', icon: <Building2 size={14} /> },
+                            { id: 'RESOURCE', label: 'Espacios', icon: <Building2 size={14} /> },
                             { id: 'TEAM', label: 'Equipo', icon: <Users size={14} /> }
                         ].map(view => (
                             <button
@@ -206,25 +241,60 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
                                 </div>
                             ) : null}
 
-                            <AdvancedCalendar
-                                viewMode={viewMode}
-                                currentDate={currentDate}
-                                onNavigate={setCurrentDate}
-                                activities={activities}
-                                rooms={rooms}
-                                users={users}
-                                onActivityClick={(act) => {
-                                    setSelectedActivity(act);
-                                    setShowActivityModal(true);
-                                }}
-                                onDateClick={(date, resourceId) => {
-                                    setSelectedActivity(null);
-                                    setPrefilledDate(date);
-                                    setPrefilledResourceId(resourceId || null);
-                                    setShowActivityModal(true);
-                                }}
-                                serviceTypes={serviceTypes}
-                            />
+                            {viewMode === 'RESOURCE' ? (
+                                <SpaceTimelineView
+                                    activities={activities}
+                                    rooms={rooms}
+                                    onActivityClick={(act) => {
+                                        setSelectedActivity(act);
+                                        setShowActivityModal(true);
+                                    }}
+                                    onAddActivity={(date, spaceId) => {
+                                        setSelectedActivity(null);
+                                        setPrefilledDate(date);
+                                        setPrefilledResourceId(spaceId);
+                                        setShowActivityModal(true);
+                                    }}
+                                />
+                            ) : viewMode === 'TEAM' ? (
+                                <TeamTimelineView
+                                    activities={activities}
+                                    users={users}
+                                    attendanceLogs={attendanceLogs}
+                                    serviceTypes={serviceTypes}
+                                    onActivityClick={(act) => {
+                                        setSelectedActivity(act);
+                                        setShowActivityModal(true);
+                                    }}
+                                    onAddActivity={(date, userId) => {
+                                        setSelectedActivity(null);
+                                        setPrefilledDate(date);
+                                        setPrefilledResourceId(userId);
+                                        setShowActivityModal(true);
+                                    }}
+                                    onUpdateActivity={handleUpdateActivity}
+                                />
+                            ) : (
+                                <AdvancedCalendar
+                                    viewMode={viewMode}
+                                    currentDate={currentDate}
+                                    onNavigate={setCurrentDate}
+                                    activities={activities}
+                                    rooms={rooms}
+                                    users={users}
+                                    onActivityClick={(act) => {
+                                        setSelectedActivity(act);
+                                        setShowActivityModal(true);
+                                    }}
+                                    onDateClick={(date, resourceId) => {
+                                        setSelectedActivity(null);
+                                        setPrefilledDate(date);
+                                        setPrefilledResourceId(resourceId || null);
+                                        setShowActivityModal(true);
+                                    }}
+                                    serviceTypes={serviceTypes}
+                                />
+                            )}
                         </div>
 
                         {/* Sidebar Stats/Filters */}

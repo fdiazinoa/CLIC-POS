@@ -22,6 +22,15 @@ export interface ServiceType {
   color?: string;
   icon?: string;
   isActive: boolean;
+  defaultDuration?: number; // In minutes
+  basePrice?: number;
+  requiresSpace?: boolean; // For BOOKING nature
+  order?: number; // For drag and drop sorting
+
+  // Suggested Action Fields
+  next_suggested_type_id?: string;
+  suggested_interval?: number;
+  suggested_interval_unit?: 'HOURS' | 'DAYS';
 }
 
 // --- SYNC CONFIGURATION TYPES ---
@@ -346,6 +355,7 @@ export interface TerminalConfig {
   deviceBindingToken: string;
   isPrimaryNode?: boolean; // Rol jerárquico de la terminal
   governedByMaster?: boolean; // NEW: If true, this terminal follows the configuration defined by the Master
+  startWithAgenda?: boolean; // NEW: Boot directly into Agenda view
   deviceRole?: DeviceRoleConfig; // NEW: Configuración de rol de dispositivo
 
   fiscal: {
@@ -857,6 +867,7 @@ export interface Product {
   price: number;
   category: string;
   stock?: number;
+  qty_committed?: number; // Committed for events/bookings
   image?: string;
   barcode?: string;
   cost?: number;
@@ -1792,7 +1803,7 @@ export type ActivityType = string;
 
 export type ActivityPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
 
-export type ActivityStatus = 'PLANNED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'NO_SHOW';
+export type ActivityStatus = 'PLANNED' | 'CONFIRMED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'NO_SHOW';
 
 export interface Activity {
   id: string;
@@ -1822,6 +1833,10 @@ export interface Activity {
   // Integration
   linkedTransactionId?: string; // To Quote/Invoice
   reservationId?: string;
+  items?: CartItem[]; // Linked products/services
+  required_deposit?: number;
+  current_balance?: number;
+  payment_status?: 'PENDING' | 'PARTIAL' | 'PAID';
 
   // Metadata
   terminalId: string;

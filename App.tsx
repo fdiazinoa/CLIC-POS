@@ -720,6 +720,14 @@ const AppContent: React.FC = () => {
           return;
         }
 
+        // --- AGENDA STARTUP CHECK ---
+        if (localPairedTerminal?.config?.startWithAgenda && !new URLSearchParams(window.location.search).get('view')) {
+          console.log('📅 Startup: Configured to start in AGENDA mode.');
+          // We set the view but still allow data loading to proceed
+          // Authentication will be handled by the Agenda view or App layout if needed
+          setCurrentView('AGENDA');
+        }
+
         const shouldFetchConfigFromMaster = !!masterIp && (
           !localPairedTerminal || localPairedTerminal?.config?.isPrimaryNode === false
         );

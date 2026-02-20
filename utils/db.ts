@@ -3,7 +3,7 @@ import {
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, PurchaseOrderItem, Supplier, Watchlist,
   NCFType, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
-  Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment, PaymentMethodDefinition
+  Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment, PaymentMethodDefinition, CartItem
 } from '../types';
 import {
   MOCK_USERS, RETAIL_PRODUCTS, FOOD_PRODUCTS,
@@ -1222,6 +1222,13 @@ export const db = {
     }
 
     return nextCommitted;
+  },
+
+  commitInventory: async (items: CartItem[], effectiveDate: string, warehouseId: string = 'wh_central'): Promise<void> => {
+    console.log(`📦 Committing inventory for ${items.length} items on ${effectiveDate}`);
+    for (const item of items) {
+      await db.adjustCommittedStock(item.id, warehouseId, item.quantity);
+    }
   },
 
   getNextGlobalSequence: async (): Promise<number> => {

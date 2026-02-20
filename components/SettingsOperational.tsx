@@ -226,6 +226,15 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                         icon={LayoutGrid}
                         disabled={isReadOnly}
                     />
+
+                    <Toggle
+                        label="Iniciar en Modo Agenda"
+                        description="Al iniciar la aplicación, ir directamente a la vista de Agenda en lugar del POS o Login."
+                        checked={config.startWithAgenda || false}
+                        onChange={(v: boolean) => onUpdate('', 'startWithAgenda', v)}
+                        icon={CalendarDays}
+                        disabled={isReadOnly}
+                    />
                 </div>
             </div>
 
