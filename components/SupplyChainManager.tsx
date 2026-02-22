@@ -796,56 +796,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
             });
          };
 
-         const updateSupplierPriceCatalog = async () => {
-            // 1. Get raw updates from current reception
-            const receivedItems = (order.items || []).filter(i => i.quantityReceived > 0);
-            if (receivedItems.length === 0) return;
 
-            // 2. Fetch existing records to preserve history
-            const updates = [];
-            for (const item of receivedItems) {
-               const recordId = `${order.supplierId}_${item.productId}`;
-               let existingRecord = await db.getDocument('supplierProductPrices', recordId) as any;
-
-               // Initialize if not exists
-               if (!existingRecord) {
-                  existingRecord = {
-                     id: recordId,
-                     supplierId: order.supplierId,
-                     productId: item.productId,
-                     history: []
-                  };
-               }
-
-               // 3. Update Record
-               const newCost = item.cost || 0;
-               const newHistoryEntry = {
-                  date: new Date().toISOString(),
-                  cost: newCost,
-                  orderId: order.id
-               };
-
-               const updatedRecord = {
-                  ...existingRecord,
-                  lastCost: newCost,
-                  currency: config.currencySymbol,
-                  updatedAt: new Date().toISOString(),
-                  history: [...(existingRecord.history || []), newHistoryEntry]
-               };
-
-               updates.push(updatedRecord);
-            }
-
-            // 4. Save to DB
-            for (const update of updates) {
-               await db.saveDocument('supplierProductPrices', update);
-            }
-
-            // 5. Broadcast (Optimistic)
-            if (updates.length > 0) {
-               syncManager.broadcastChange('supplierProductPrices', updates, 'UPDATE').catch(console.error);
-            }
-         };
 
          const confirmReception = async () => {
             try {
@@ -884,7 +835,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                   const keepPending = true;
                   await onReceiveStock(order.items, order.id);
                   await saveTrackingRecords(order.items);
-                  try { await updateSupplierPriceCatalog(); } catch (e) { console.warn("Price update failed", e); }
 
                   if (keepPending) {
                      const updatedItems = (order.items || []).map(i => {
@@ -908,7 +858,6 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                } else {
                   await onReceiveStock(order.items, order.id);
                   await saveTrackingRecords(order.items);
-                  try { await updateSupplierPriceCatalog(); } catch (e) { console.warn("Price update failed", e); }
                   await onUpdateOrder({ ...order, status: 'COMPLETED' });
                }
 

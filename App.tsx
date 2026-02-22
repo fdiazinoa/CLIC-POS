@@ -3161,8 +3161,20 @@ const AppContent: React.FC = () => {
               }
 
               // 2. Save Reception Document
+              let receptionId = `REC-${Date.now()}`;
+              try {
+                // Try to get sequence for 'PURCHASE'
+                const seriesId = pairedTerminal?.config?.documentAssignments?.['PURCHASE'];
+                if (seriesId) {
+                  const seqResult = await transactionService.generateTransactionId('PURCHASE' as any, seriesId);
+                  receptionId = seqResult.displayId;
+                }
+              } catch (e) {
+                console.warn("⚠️ APP: Failed to generate reception sequence, falling back to REC-Date", e);
+              }
+
               const newReception: Reception = {
-                id: `REC-${Date.now()}`,
+                id: receptionId,
                 purchaseOrderId: orderId || 'MANUAL',
                 date: new Date().toISOString(),
                 receivedBy: currentUser?.id || 'sys',
@@ -3174,10 +3186,56 @@ const AppContent: React.FC = () => {
               };
 
               console.log("📝 APP: Saving new reception document:", newReception.id);
-
               const updatedReceptions = [...receptions, newReception];
               setReceptions(updatedReceptions);
               await db.saveDocument('receptions', newReception);
+
+              // 2.5 Update Supplier Price Catalog
+              try {
+                const po = purchaseOrders.find(p => p.id === orderId);
+                if (po && po.supplierId && items.length > 0) {
+                  console.log(`🏷️ APP: Updating price catalog for supplier ${po.supplierId}...`);
+                  const priceUpdates = [];
+                  for (const item of items) {
+                    if (item.quantityReceived <= 0) continue;
+
+                    const recordId = `${po.supplierId}_${item.productId}`;
+                    let existingRecord = await db.getDocument('supplierProductPrices', recordId) as any;
+
+                    if (!existingRecord) {
+                      existingRecord = {
+                        id: recordId,
+                        supplierId: po.supplierId,
+                        productId: item.productId,
+                        history: []
+                      };
+                    }
+
+                    const newCost = item.cost || 0;
+                    const newHistoryEntry = {
+                      date: new Date().toISOString(),
+                      cost: newCost,
+                      orderId: orderId || 'MANUAL'
+                    };
+
+                    const updatedRecord = {
+                      ...existingRecord,
+                      lastCost: newCost,
+                      currency: config.currencySymbol,
+                      updatedAt: new Date().toISOString(),
+                      history: [...(existingRecord.history || []), newHistoryEntry]
+                    };
+                    priceUpdates.push(updatedRecord);
+                    await db.saveDocument('supplierProductPrices', updatedRecord);
+                  }
+
+                  if (priceUpdates.length > 0) {
+                    syncManager.broadcastChange('supplierProductPrices', priceUpdates, 'UPDATE').catch(console.error);
+                  }
+                }
+              } catch (e) {
+                console.warn("⚠️ APP: Failed to update supplier price catalog:", e);
+              }
 
               // 3. Refresh Products State
               const refreshedProducts = await db.get('products') as Product[] || [];
