@@ -79,6 +79,8 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
    const [activeDays, setActiveDays] = useState<string[]>(['L', 'M', 'X', 'J', 'V', 'S', 'D']);
    const [timeStart, setTimeStart] = useState('00:00');
    const [timeEnd, setTimeEnd] = useState('23:59');
+   const [startDate, setStartDate] = useState('');
+   const [endDate, setEndDate] = useState('');
 
    // Conditional Promo State
    const [triggerAmount, setTriggerAmount] = useState<number>(0);
@@ -110,6 +112,8 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
       setActiveDays(['L', 'M', 'X', 'J', 'V', 'S', 'D']);
       setTimeStart('00:00');
       setTimeEnd('23:59');
+      setStartDate('');
+      setEndDate('');
       setTriggerAmount(0);
       setTargetStrategyMode('CHEAPEST_ITEM');
       setTargetStrategyValue('');
@@ -129,6 +133,8 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
       setActiveDays(promo.schedule.days);
       setTimeStart(promo.schedule.startTime);
       setTimeEnd(promo.schedule.endTime);
+      setStartDate(promo.schedule.startDate || '');
+      setEndDate(promo.schedule.endDate || '');
       setTriggerAmount(promo.trigger?.value || 0);
       setTargetStrategyMode(promo.targetStrategy?.mode || 'CHEAPEST_ITEM');
       setTargetStrategyValue(promo.targetStrategy?.filterValue?.toString() || '');
@@ -184,7 +190,14 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
             tieBreaker: 'LAST_ADDED'
          } : undefined,
 
-         schedule: { days: activeDays, startTime: timeStart, endTime: timeEnd, isActive },
+         schedule: {
+            days: activeDays,
+            startTime: timeStart,
+            endTime: timeEnd,
+            startDate: startDate || undefined,
+            endDate: endDate || undefined,
+            isActive
+         },
          terminalIds: selectedTerminals.length > 0 ? selectedTerminals : undefined,
          priority
       };
@@ -621,6 +634,27 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                            className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm font-bold text-gray-700 outline-none focus:border-blue-400"
                         />
                      </div>
+
+                     <div className="grid grid-cols-2 gap-3 pt-3 border-t border-gray-100">
+                        <div className="space-y-1">
+                           <span className="text-[10px] font-bold text-gray-400 uppercase ml-1">Vigencia Desde</span>
+                           <input
+                              type="date"
+                              value={startDate}
+                              onChange={(e) => setStartDate(e.target.value)}
+                              className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm font-bold text-gray-700 outline-none focus:border-blue-400"
+                           />
+                        </div>
+                        <div className="space-y-1">
+                           <span className="text-[10px] font-bold text-gray-400 uppercase ml-1">Vigencia Hasta</span>
+                           <input
+                              type="date"
+                              value={endDate}
+                              onChange={(e) => setEndDate(e.target.value)}
+                              className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm font-bold text-gray-700 outline-none focus:border-blue-400"
+                           />
+                        </div>
+                     </div>
                   </div>
                </div>
             </section>
@@ -673,78 +707,87 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
 
 
             {/* Step 5: AI Insights & Analytics (Only for existing promos) */}
-            {editingId && (
-               <section className="animate-in fade-in slide-in-from-bottom-4 duration-700">
-                  <div className="flex items-center gap-2 mb-4">
-                     <Lightbulb className="text-yellow-500" size={20} />
-                     <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest">IA Insights & Recomendaciones</label>
-                  </div>
+            {
+               editingId && (
+                  <section className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+                     <div className="flex items-center gap-2 mb-4">
+                        <Lightbulb className="text-yellow-500" size={20} />
+                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest">IA Insights & Recomendaciones</label>
+                     </div>
 
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                     {/* Performance Card */}
-                     <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
-                        <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                           <BarChart3 size={18} className="text-blue-500" />
-                           Rendimiento Actual
-                        </h4>
-                        <div className="space-y-4">
-                           <div className="flex justify-between items-end">
-                              <span className="text-sm text-gray-500">Ventas Totales</span>
-                              <span className="text-xl font-black text-gray-800">$12,450</span>
+                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        {/* Performance Card */}
+                        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
+                           <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                              <BarChart3 size={18} className="text-blue-500" />
+                              Rendimiento Actual
+                           </h4>
+                           <div className="space-y-4">
+                              <div className="flex justify-between items-end">
+                                 <span className="text-sm text-gray-500">Ventas Totales</span>
+                                 <span className="text-xl font-black text-gray-800">$12,450</span>
+                              </div>
+                              <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+                                 <div className="bg-blue-500 h-full rounded-full" style={{ width: '65%' }}></div>
+                              </div>
+                              <div className="flex justify-between items-end">
+                                 <span className="text-sm text-gray-500">Tasa de Conversión</span>
+                                 <span className="text-xl font-black text-green-600">18.5%</span>
+                              </div>
+                              <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+                                 <div className="bg-green-500 h-full rounded-full" style={{ width: '18.5%' }}></div>
+                              </div>
+                              <p className="text-xs text-gray-400 mt-2">
+                                 * Datos simulados basados en el histórico de 30 días.
+                              </p>
                            </div>
-                           <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
-                              <div className="bg-blue-500 h-full rounded-full" style={{ width: '65%' }}></div>
-                           </div>
-                           <div className="flex justify-between items-end">
-                              <span className="text-sm text-gray-500">Tasa de Conversión</span>
-                              <span className="text-xl font-black text-green-600">18.5%</span>
-                           </div>
-                           <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
-                              <div className="bg-green-500 h-full rounded-full" style={{ width: '18.5%' }}></div>
-                           </div>
-                           <p className="text-xs text-gray-400 mt-2">
-                              * Datos simulados basados en el histórico de 30 días.
-                           </p>
+                        </div>
+
+                        {/* AI Recommendations */}
+                        <div className="lg:col-span-2 space-y-3">
+                           {generateRecommendations({
+                              id: editingId,
+                              name: promoName,
+                              type: selectedType,
+                              targetType,
+                              targetValue,
+                              benefitValue,
+                              schedule: {
+                                 days: activeDays,
+                                 startTime: timeStart,
+                                 endTime: timeEnd,
+                                 startDate: startDate || undefined,
+                                 endDate: endDate || undefined,
+                                 isActive
+                              },
+                              terminalIds: selectedTerminals
+                           } as Promotion).map((rec, idx) => (
+                              <div key={idx} className="bg-gradient-to-r from-indigo-50 to-white p-4 rounded-2xl border border-indigo-100 flex gap-4 items-start">
+                                 <div className="p-2 bg-white rounded-xl shadow-sm text-indigo-600 shrink-0">
+                                    <TrendingUp size={20} />
+                                 </div>
+                                 <div>
+                                    <div className="flex items-center gap-2 mb-1">
+                                       <span className="text-xs font-black text-indigo-600 uppercase tracking-wider bg-indigo-100 px-2 py-0.5 rounded-md">
+                                          {rec.type}
+                                       </span>
+                                       <span className="text-xs font-bold text-green-600">
+                                          {(rec.confidence * 100).toFixed(0)}% Confianza
+                                       </span>
+                                    </div>
+                                    <p className="text-sm text-gray-700 font-medium leading-relaxed">
+                                       {rec.message}
+                                    </p>
+                                 </div>
+                              </div>
+                           ))}
                         </div>
                      </div>
+                  </section>
+               )
+            }
 
-                     {/* AI Recommendations */}
-                     <div className="lg:col-span-2 space-y-3">
-                        {generateRecommendations({
-                           id: editingId,
-                           name: promoName,
-                           type: selectedType,
-                           targetType,
-                           targetValue,
-                           benefitValue,
-                           schedule: { days: activeDays, startTime: timeStart, endTime: timeEnd, isActive },
-                           terminalIds: selectedTerminals
-                        } as Promotion).map((rec, idx) => (
-                           <div key={idx} className="bg-gradient-to-r from-indigo-50 to-white p-4 rounded-2xl border border-indigo-100 flex gap-4 items-start">
-                              <div className="p-2 bg-white rounded-xl shadow-sm text-indigo-600 shrink-0">
-                                 <TrendingUp size={20} />
-                              </div>
-                              <div>
-                                 <div className="flex items-center gap-2 mb-1">
-                                    <span className="text-xs font-black text-indigo-600 uppercase tracking-wider bg-indigo-100 px-2 py-0.5 rounded-md">
-                                       {rec.type}
-                                    </span>
-                                    <span className="text-xs font-bold text-green-600">
-                                       {(rec.confidence * 100).toFixed(0)}% Confianza
-                                    </span>
-                                 </div>
-                                 <p className="text-sm text-gray-700 font-medium leading-relaxed">
-                                    {rec.message}
-                                 </p>
-                              </div>
-                           </div>
-                        ))}
-                     </div>
-                  </div>
-               </section>
-            )}
-
-         </div>
+         </div >
 
       </div >
    );

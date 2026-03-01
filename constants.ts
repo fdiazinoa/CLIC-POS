@@ -170,7 +170,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
       'ALL',
       'POS_VOID_ITEM', 'POS_VOID_TICKET', 'POS_DISCOUNT',
       'POS_PRICE_OVERRIDE', 'POS_OPEN_DRAWER', 'POS_RETURNS',
-      'POS_REPRINT_RECEIPT', 'SETTINGS_ACCESS'
+      'POS_REPRINT_RECEIPT', 'SETTINGS_ACCESS', 'POS_ALLOW_ZERO_PRICE'
     ],
     isSystem: true,
     maxDiscountPercent: 100
@@ -378,6 +378,8 @@ export const AVAILABLE_PERMISSIONS = [
   { key: 'POS_PAY_CREDIT', label: 'Cobrar a Crédito (Pendiente)', description: 'Permite finalizar ventas con el método de pago a crédito', category: 'SALES' },
   { key: 'POS_DISCOUNT', label: 'Aplicar Descuentos', description: 'Descuentos manuales en ítems o total', category: 'SALES' },
   { key: 'POS_PRICE_OVERRIDE', label: 'Modificar Precios', description: 'Cambiar precio unitario de productos', category: 'SALES' },
+  { key: 'POS_ALLOW_ZERO_PRICE', label: 'Permitir Precio Cero', description: 'Permitir vender artículos con precio en 0', category: 'SALES' },
+  { key: 'POS_CREDIT_OVERRIDE', label: 'Vender sobre límite de crédito', description: 'Vender a clientes excediendo su límite de crédito', category: 'SALES' },
   { key: 'POS_VOID_ITEM', label: 'Anular Ítem', description: 'Eliminar productos del carrito', category: 'SALES' },
   { key: 'POS_VOID_TICKET', label: 'Anular Ticket (En Curso)', description: 'Cancelar venta antes de pago', category: 'SALES' },
   { key: 'POS_VOID_PAID_TICKET', label: 'Anular Factura Pagada', description: 'Revertir una venta finalizada', category: 'SALES' },

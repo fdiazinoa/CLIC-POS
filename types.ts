@@ -297,6 +297,8 @@ export interface ReceiptConfig {
   showSavings?: boolean;
   showQr?: boolean;
   showForeignCurrencyTotals?: boolean;
+  showSerialNumbers?: boolean; // NEW: Toggle printing serial numbers
+  showLotNumbers?: boolean; // NEW: Toggle printing lot numbers
 }
 
 // Document Types for all transaction categories
@@ -1253,6 +1255,8 @@ export interface Promotion {
     days: string[]; // L, M, X, J, V, S, D
     startTime: string;
     endTime: string;
+    startDate?: string;
+    endDate?: string;
     isActive: boolean;
   };
   terminalIds?: string[];
@@ -1553,6 +1557,7 @@ export type Permission =
   | 'CAN_REFUND'
   | 'POS_CREDIT_OVERRIDE'
   | 'POS_PAY_CREDIT'
+  | 'POS_ALLOW_ZERO_PRICE'
   // --- POS CORE ---
   | 'SALE'
   | 'POS_VOID_ITEM'

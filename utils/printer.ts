@@ -236,6 +236,23 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
             const originalPrice = item.originalPrice || item.price;
             const hasDiscount = originalPrice > item.price;
 
+            const trackingHtml = [];
+            if (item.trackingData && item.trackingData.length > 0) {
+                if (receiptConfig?.showSerialNumbers) {
+                    const serials = item.trackingData.filter(t => t.type === 'SERIAL').map(t => t.trackingCode);
+                    if (serials.length > 0) {
+                        trackingHtml.push(`No. Serie: ${serials.join(', ')}`);
+                    }
+                }
+                if (receiptConfig?.showLotNumbers) {
+                    const lots = item.trackingData.filter(t => t.type === 'LOT').map(t => t.trackingCode);
+                    if (lots.length > 0) {
+                        trackingHtml.push(`Lote: ${lots.join(', ')}`);
+                    }
+                }
+            }
+            const hasTrackingHtml = trackingHtml.length > 0;
+
             return `
                         <tr>
                             <td style="width: 70%;">
@@ -244,6 +261,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                                     ${item.quantity} x ${currencySymbol}${item.price.toFixed(2)}
                                     ${hasDiscount ? `<span style="text-decoration: line-through; color: #999; margin-left: 5px;">${currencySymbol}${originalPrice.toFixed(2)}</span>` : ''}
                                     ${item.modifiers ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
+                                    ${hasTrackingHtml ? `<br/>${trackingHtml.join('<br/>')}` : ''}
                                     <br/>ITBIS: ${currencySymbol}${iTax.toFixed(2)}
                                 </span>
                             </td>

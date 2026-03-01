@@ -231,6 +231,20 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
       const amountInBase = valInSelectedCurrency * selectedCurrency.rate;
 
+      // Credit Limit Check (NEW)
+      if (activePaymentMethod.type === 'CREDIT' && !isOverrideActive) {
+         // Check if user has permission to override
+         if (!hasPermission('POS_CREDIT_OVERRIDE')) {
+            const limit = customer?.creditLimit || 0;
+            const currentDebt = customer?.currentDebt || 0;
+            if (limit > 0 && (currentDebt + amountInBase) > limit) {
+               setFinalizeError(`Límite de crédito excedido (${currencySymbol}${limit.toFixed(2)}). Requiere autorización.`);
+               setShowSupervisorModal(true);
+               return;
+            }
+         }
+      }
+
       const newPayment: PaymentEntry = {
          id: Math.random().toString(36).substr(2, 9),
          method: activePaymentMethod.type,
@@ -284,6 +298,21 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                return;
             }
 
+            // Credit Limit Check for Auto-Finalize (NEW)
+            if (activePaymentMethod.type === 'CREDIT' && !isOverrideActive) {
+               // Check if user has permission to override
+               if (!hasPermission('POS_CREDIT_OVERRIDE')) {
+                  const limit = customer?.creditLimit || 0;
+                  const currentDebt = customer?.currentDebt || 0;
+                  if (limit > 0 && (currentDebt + typedAmountInBase) > limit) {
+                     setFinalizeError(`Límite de crédito excedido (${currencySymbol}${limit.toFixed(2)}). Requiere autorización.`);
+                     setShowSupervisorModal(true);
+                     setIsFinalizing(false);
+                     return;
+                  }
+               }
+            }
+
             const autoPayment: PaymentEntry = {
                id: Math.random().toString(36).substr(2, 9),
                method: activePaymentMethod.type,
@@ -298,6 +327,15 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             };
             paymentsToConfirm = [...payments, autoPayment];
             setPayments(paymentsToConfirm);
+         }
+
+         // Zero Price Check
+         const hasZeroPriceItem = items.some(item => item.price === 0);
+         if (hasZeroPriceItem && !hasPermission('POS_ALLOW_ZERO_PRICE') && !isOverrideActive) {
+            setFinalizeError(`Venta contiene artículos con precio en $0.00. Requiere autorización.`);
+            setShowSupervisorModal(true);
+            setIsFinalizing(false);
+            return;
          }
 
          // Final safety check: ensure no CREDIT or WALLET payments are sent while offline (unless Master)
@@ -586,18 +624,17 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                {/* Payment Methods */}
                <div className="flex p-3 md:p-4 gap-3 md:gap-4 overflow-x-auto no-scrollbar shrink-0">
                   {configuredMethods.map(method => {
-                     const isDisabled = method.type === 'CREDIT' && isDelinquent && !isOverrideActive;
+                     const isExceeded = method.type === 'CREDIT' && isDelinquent && !isOverrideActive;
                      return (
                         <button
                            key={method.key}
-                           disabled={isDisabled}
                            onClick={() => setActiveMethodKey(method.key)}
-                           className={`flex-1 min-w-[80px] md:min-w-[100px] py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center gap-1 md:gap-2 transition-all ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} bg-gray-50 shadow-sm` : 'border-transparent text-gray-400 hover:bg-gray-50'} ${isDisabled ? 'opacity-50 cursor-not-allowed bg-red-50' : ''}`}
+                           className={`flex-1 min-w-[80px] md:min-w-[100px] py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center gap-1 md:gap-2 transition-all ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} bg-gray-50 shadow-sm` : 'border-transparent text-gray-400 hover:bg-gray-50'} ${isExceeded ? 'bg-red-50/50' : ''}`}
                         >
                            <method.Icon size={24} className="md:w-8 md:h-8" />
                            <span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{method.label}</span>
-                           {method.type === 'CREDIT' && isDelinquent && !isOverrideActive && (
-                              <span className="text-[7px] text-red-600 font-bold">BLOQUEADO</span>
+                           {isExceeded && (
+                              <span className="text-[7px] text-red-600 font-bold">LÍMITE EXCEDIDO</span>
                            )}
                         </button>
                      );

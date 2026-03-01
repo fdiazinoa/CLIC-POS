@@ -83,24 +83,72 @@ export async function processInventoryDeduction(
         // If we are deducting an ingredient, we don't apply the parent's tracking/variant info
         const isDirectDeduction = productId === item.id;
 
-        entries.push({
-            id: `INV-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-            createdAt: new Date().toISOString(),
-            warehouseId,
-            productId,
-            concept: 'VENTA',
-            documentRef: transactionId,
-            qtyIn: 0,
-            qtyOut: qty,
-            unitCost: cost,
-            balanceQty: 0, // Will be calculated by recalculateProductStock
-            balanceAvgCost: cost, // Will be calculated
-            terminalId,
-            variantId: isDirectDeduction ? item.variantSku : undefined, // Use SKU as Variant ID reference
-            variantName: isDirectDeduction ? item.variantInfo : undefined,
-            trackingId: isDirectDeduction ? item.trackingId : undefined,
-            trackingCode: isDirectDeduction ? item.trackingCode : undefined
-        });
+        if (isDirectDeduction && item.trackingData && item.trackingData.length > 0) {
+            // Create one ledger entry per selected serial number
+            for (const tracking of item.trackingData) {
+                entries.push({
+                    id: `INV-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                    createdAt: new Date().toISOString(),
+                    warehouseId,
+                    productId,
+                    concept: 'VENTA',
+                    documentRef: transactionId,
+                    qtyIn: 0,
+                    qtyOut: 1, // Deduct 1 per serial
+                    unitCost: cost,
+                    balanceQty: 0,
+                    balanceAvgCost: cost,
+                    terminalId,
+                    variantId: item.variantSku,
+                    variantName: item.variantInfo,
+                    trackingId: tracking.id,
+                    trackingCode: tracking.code || tracking.trackingCode, // Support both common shapes
+                });
+            }
+
+            // If for some reason the total sold quantity is greater than the selected serials,
+            // we deduct the remainder as a bulk untracked operation.
+            const remainder = qty - item.trackingData.length;
+            if (remainder > 0) {
+                entries.push({
+                    id: `INV-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                    createdAt: new Date().toISOString(),
+                    warehouseId,
+                    productId,
+                    concept: 'VENTA',
+                    documentRef: transactionId,
+                    qtyIn: 0,
+                    qtyOut: remainder,
+                    unitCost: cost,
+                    balanceQty: 0,
+                    balanceAvgCost: cost,
+                    terminalId,
+                    variantId: item.variantSku,
+                    variantName: item.variantInfo,
+                    // Remaining items have no specific tracking info
+                });
+            }
+        } else {
+            // Standard bulk deduction (no serials selected OR it's an ingredient)
+            entries.push({
+                id: `INV-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                createdAt: new Date().toISOString(),
+                warehouseId,
+                productId,
+                concept: 'VENTA',
+                documentRef: transactionId,
+                qtyIn: 0,
+                qtyOut: qty,
+                unitCost: cost,
+                balanceQty: 0,
+                balanceAvgCost: cost,
+                terminalId,
+                variantId: isDirectDeduction ? item.variantSku : undefined,
+                variantName: isDirectDeduction ? item.variantInfo : undefined,
+                trackingId: isDirectDeduction ? item.trackingId : undefined,
+                trackingCode: isDirectDeduction ? item.trackingCode : undefined
+            });
+        }
     }
 
     return entries;

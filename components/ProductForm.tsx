@@ -254,7 +254,11 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             qtyIn: 0,
             qtyOut: 0,
             // Keep latest balance (since entries are sorted Newest -> Oldest, first seen is latest)
-            dynamicBalance: entry.dynamicBalance
+            dynamicBalance: entry.dynamicBalance,
+            trackingCode: entry.trackingCode, // Ensure tracking info is pulled into master when group has 1 item
+            trackingId: entry.trackingId,
+            variantName: entry.variantName,
+            variantId: entry.variantId
           }
         };
         groups.push(group);
@@ -767,6 +771,18 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                 {group.isGroup && (isExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />)}
                                 {entry.documentRef}
                               </span>
+                              {!group.isGroup && (entry.trackingCode || entry.variantName) && (
+                                <span className="text-[10px] font-bold text-gray-600 flex items-center gap-1 mt-0.5">
+                                  {entry.trackingCode ? (
+                                    <span className="flex items-center gap-1">
+                                      <span className="text-[8px] bg-indigo-50 text-indigo-600 px-1 py-0.5 rounded font-black uppercase tracking-tighter">Serie</span>
+                                      {entry.trackingCode}
+                                    </span>
+                                  ) : (
+                                    <span className="text-[9px] text-gray-500">{entry.variantName}</span>
+                                  )}
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td className="p-4 text-center font-bold text-emerald-600">

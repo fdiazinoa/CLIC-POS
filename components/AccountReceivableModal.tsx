@@ -311,9 +311,14 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
                                 <label className="block">
                                     <span className="text-xs font-black text-gray-500 uppercase tracking-widest ml-1">Monto a Recibir</span>
                                     <input
-                                        type="number"
-                                        value={amount}
-                                        onChange={(e) => setAmount(e.target.value)}
+                                        type="text"
+                                        value={amount ? Number(amount.replace(/,/g, '')).toLocaleString() : ''}
+                                        onChange={(e) => {
+                                            const rawValue = e.target.value.replace(/,/g, '');
+                                            if (!isNaN(Number(rawValue)) || rawValue === '') {
+                                                setAmount(rawValue);
+                                            }
+                                        }}
                                         className="w-full mt-2 p-4 bg-gray-100 rounded-2xl text-2xl font-black text-gray-800 focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all outline-none"
                                         placeholder="0.00"
                                     />
@@ -354,7 +359,7 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
 
                         {/* Distribution Preview */}
                         <div>
-                            <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Distribución FIFO (Liquidador)</h4>
+                            <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">DISTRIBUCIÓN AUTOMÁTICA</h4>
                             <div className="space-y-3">
                                 {enteredAmount <= 0 && unpaidInvoices.length > 0 && (
                                     <p className="text-xs text-gray-500 font-bold p-4 bg-gray-50 rounded-2xl border border-gray-100">

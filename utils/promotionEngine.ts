@@ -19,6 +19,18 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
         const end = endH * 60 + endM;
         if (now < start || now > end) return false;
 
+        // 3.5 Check Date Range (NEW)
+        if (p.schedule.startDate) {
+            const startDate = new Date(p.schedule.startDate);
+            startDate.setHours(0, 0, 0, 0);
+            if (today < startDate) return false;
+        }
+        if (p.schedule.endDate) {
+            const endDate = new Date(p.schedule.endDate);
+            endDate.setHours(23, 59, 59, 999);
+            if (today > endDate) return false;
+        }
+
         // 4. Check Terminal Scope
         if (p.terminalIds && p.terminalIds.length > 0 && terminalId) {
             if (!p.terminalIds.includes(terminalId)) return false;
@@ -213,6 +225,18 @@ export const hasProductPromotion = (product: any, config: BusinessConfig, termin
         const start = startH * 60 + startM;
         const end = endH * 60 + endM;
         if (now < start || now > end) return false;
+
+        // Date Range (NEW)
+        if (p.schedule.startDate) {
+            const startDate = new Date(p.schedule.startDate);
+            startDate.setHours(0, 0, 0, 0);
+            if (today < startDate) return false;
+        }
+        if (p.schedule.endDate) {
+            const endDate = new Date(p.schedule.endDate);
+            endDate.setHours(23, 59, 59, 999);
+            if (today > endDate) return false;
+        }
 
         // Terminal scope check
         if (p.terminalIds && p.terminalIds.length > 0 && terminalId) {

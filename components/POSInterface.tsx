@@ -1178,7 +1178,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          : 0;
 
       if (reservationPolicy.requireAdvance && advance < minAdvance) {
-         alert(`Anticipo insuficiente. Mínimo requerido: ${baseCurrency.symbol}${minAdvance.toFixed(2)} (${reservationPolicy.minimumAdvancePercent}%).`);
+         alert(`Anticipo insuficiente. Mínimo requerido: ${baseCurrency.symbol}${minAdvance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${reservationPolicy.minimumAdvancePercent}%).`);
          return;
       }
 
@@ -1599,7 +1599,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const proceedToCheckout = () => {
       const threshold = activeTerminalConfig?.operational?.fiscalThreshold || 0;
       if (threshold > 0 && cartTotal > threshold && !selectedCustomer) {
-         alert(`ATENCIÓN: El monto de la venta (${baseCurrency.symbol}${cartTotal.toFixed(2)}) excede el umbral fiscal permitido para facturas de consumo (${baseCurrency.symbol}${threshold.toFixed(2)}).\n\nEs obligatorio identificar al cliente y emitir una Factura de Crédito Fiscal (B01).`);
+         alert(`ATENCIÓN: El monto de la venta (${baseCurrency.symbol}${cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) excede el umbral fiscal permitido para facturas de consumo (${baseCurrency.symbol}${threshold.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}).\n\nEs obligatorio identificar al cliente y emitir una Factura de Crédito Fiscal (B01).`);
          onOpenCustomers();
          return;
       }
@@ -1876,7 +1876,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       onTransactionComplete(refundTxn);
-      alert(`Devolución registrada: ${config.currencySymbol}${refundTotal.toFixed(2)}\nTicket original (${originalTransaction.displayId}) marcado como REEMBOLSADO.`);
+      alert(`Devolución registrada: ${config.currencySymbol}${refundTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\nTicket original (${originalTransaction.displayId}) marcado como REEMBOLSADO.`);
    };
 
    // --- ACTION GRID HANDLER ---
@@ -2203,7 +2203,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <div className="flex flex-col flex-1">
                               <span className="text-[9px] font-bold text-purple-500 uppercase mb-1 opacity-60">{product.category}</span>
                               <h3 className="font-bold text-gray-800 dark:text-white text-sm leading-tight mb-2 line-clamp-2 flex-1">{product.name}</h3>
-                              <div className="mt-auto pt-2 border-t border-gray-50 dark:border-slate-700"><span className="font-black text-lg text-gray-900 dark:text-white">{baseCurrency.symbol}{getProductPrice(product).toFixed(2)}</span></div>
+                              <div className="mt-auto pt-2 border-t border-gray-50 dark:border-slate-700"><span className="font-black text-lg text-gray-900 dark:text-white">{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
                            </div>
                         </div>
                      );
@@ -2406,7 +2406,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <p className="font-bold text-gray-800 text-sm group-hover:text-purple-700">{product.name}</p>
                                        <p className="text-[10px] text-gray-400 font-mono">{product.barcode || 'Sin Código'}</p>
                                     </div>
-                                    <span className="font-black text-gray-900">{baseCurrency.symbol}{getProductPrice(product).toFixed(2)}</span>
+                                    <span className="font-black text-gray-900">{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                  </div>
                               ))}
                            </div>
@@ -2517,11 +2517,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        </div>
                                        <div className="flex flex-col mt-0.5">
                                           <div className="flex items-center gap-2">
-                                             <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toFixed(2)}</span>
-                                             {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toFixed(2)}</span>}
+                                             <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                             {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
                                           </div>
                                           <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">
-                                             ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)})
+                                             ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
                                           </span>
                                        </div>
                                        {item.salespersonId && (
@@ -2537,7 +2537,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           <span className="text-xs font-black min-w-[20px] text-center">{item.quantity}</span>
                                           <button onClick={() => updateCartItem({ ...item, quantity: item.quantity + 1 })} className="w-6 h-6 flex items-center justify-center bg-blue-600 rounded shadow-sm text-white hover:bg-blue-700 font-bold">+</button>
                                        </div>
-                                       <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toFixed(2)}</span>
+                                       <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                     </div>
                                  </div>
                               </div>
@@ -2567,8 +2567,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     <div className="flex justify-between items-start mb-1">
                                        <h4 className="font-bold text-gray-800 text-sm leading-tight line-clamp-2" title={item.name}>{item.name}</h4>
                                        <div className="text-right shrink-0 ml-2">
-                                          <p className="font-black text-gray-900">{baseCurrency.symbol}{lineNet.toFixed(2)}</p>
-                                          {hasDiscount && <p className="text-[10px] text-gray-400 line-through">{baseCurrency.symbol}{(item.originalPrice! * item.quantity).toFixed(2)}</p>}
+                                          <p className="font-black text-gray-900">{baseCurrency.symbol}{lineNet.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                                          {hasDiscount && <p className="text-[10px] text-gray-400 line-through">{baseCurrency.symbol}{(item.originalPrice! * item.quantity).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>}
                                        </div>
                                     </div>
 
@@ -2576,11 +2576,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <div className="flex flex-col">
                                           <div className="flex flex-col">
                                              <div className="flex items-center gap-1 text-[10px] text-gray-500">
-                                                <span>{item.quantity} x {baseCurrency.symbol}{item.price.toFixed(2)}</span>
+                                                <span>{item.quantity} x {baseCurrency.symbol}{item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                                 {item.modifiers && item.modifiers.length > 0 && <span className="text-blue-600 font-bold ml-1">+{item.modifiers.length} mod</span>}
                                              </div>
                                              <div className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">
-                                                ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toFixed(2)})
+                                                ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
                                              </div>
                                           </div>
                                           {/* Salesperson Badge */}
@@ -2631,7 +2631,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <p className="text-[10px] font-black uppercase tracking-widest">Reserva Recuperada</p>
                   <p className="text-xs font-bold mt-1">{activeRecoveredReservation.code} • {activeRecoveredReservation.customerName}</p>
                   <p className="text-[11px] mt-1">
-                     Total: {baseCurrency.symbol}{cartTotal.toFixed(2)} | Anticipo: {baseCurrency.symbol}{reservationAdvanceApplied.toFixed(2)} | Saldo: {baseCurrency.symbol}{reservationBalanceDue.toFixed(2)}
+                     Total: {baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | Anticipo: {baseCurrency.symbol}{reservationAdvanceApplied.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | Saldo: {baseCurrency.symbol}{reservationBalanceDue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </p>
                </div>
             )}
@@ -2649,17 +2649,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <div className="hidden xl:flex items-center gap-6 mr-2">
                               <div className="text-right">
                                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Subtotal</p>
-                                 <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartSubtotal.toFixed(2)}</p>
+                                 <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                               </div>
                               {discountAmount > 0 && (
                                  <div className="text-right">
                                     <p className="text-[10px] text-red-400 font-bold uppercase tracking-wider">Descuento</p>
-                                    <p className="text-lg font-bold text-red-500">-{baseCurrency.symbol}{discountAmount.toFixed(2)}</p>
+                                    <p className="text-lg font-bold text-red-500">-{baseCurrency.symbol}{discountAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                                  </div>
                               )}
                               <div className="text-right">
                                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Impuestos</p>
-                                 <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartTax.toFixed(2)}</p>
+                                 <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartTax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                               </div>
                               <div className="w-px h-10 bg-gray-200"></div>
                            </div>
@@ -2667,7 +2667,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <div className="text-right hidden sm:block">
                               <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Total a Pagar</p>
                               <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
-                                 {baseCurrency.symbol}{cartTotal.toFixed(2)}
+                                 {baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </div>
                               <p className="text-[10px] font-bold text-gray-400 mt-1">
                                  {cart.reduce((acc, i) => acc + i.quantity, 0)} Artículos
@@ -2722,7 +2722,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               {/* Simple Kiosk Totals */}
                               <div className="flex justify-between items-end px-2">
                                  <span className="text-xl font-bold text-gray-400">Total a Pagar</span>
-                                 <span className="text-6xl font-black text-slate-900 tracking-tighter">{baseCurrency.symbol}{cartTotal.toFixed(2)}</span>
+                                 <span className="text-6xl font-black text-slate-900 tracking-tighter">{baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               </div>
 
                               <button
@@ -2764,22 +2764,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <div className="space-y-1.5 pt-1 border-t border-dashed border-gray-200 mt-2">
                                  <div className="flex justify-between items-center text-xs font-bold text-gray-500">
                                     <span>SUBTOTAL</span>
-                                    <span>{baseCurrency.symbol}{cartSubtotal.toFixed(2)}</span>
+                                    <span>{baseCurrency.symbol}{cartSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                  </div>
                                  {discountAmount > 0 && (
                                     <div className="flex justify-between items-center text-xs font-black text-red-500">
                                        <span>DESCUENTO</span>
-                                       <span>-{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>
+                                       <span>-{baseCurrency.symbol}{discountAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                     </div>
                                  )}
                                  <div className="flex justify-between items-center text-xs font-bold text-gray-500">
                                     <span>IMPUESTOS</span>
-                                    <span>{baseCurrency.symbol}{cartTax.toFixed(2)}</span>
+                                    <span>{baseCurrency.symbol}{cartTax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                  </div>
 
                                  <div className="flex justify-between items-end pt-2">
                                     <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
-                                       {baseCurrency.symbol}{cartTotal.toFixed(2)}
+                                       {baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </div>
                                     <div className="text-right">
                                        <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total General</p>
@@ -2859,14 +2859,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </button>
                      </div>
                      <div className="text-right">
-                        <span className="text-[10px] font-bold text-gray-400 uppercase block">Subtotal: {baseCurrency.symbol}{cartSubtotal.toFixed(2)}</span>
-                        {discountAmount > 0 && <span className="text-[10px] font-bold text-red-500 uppercase block">Desc: -{baseCurrency.symbol}{discountAmount.toFixed(2)}</span>}
+                        <span className="text-[10px] font-bold text-gray-400 uppercase block">Subtotal: {baseCurrency.symbol}{cartSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        {discountAmount > 0 && <span className="text-[10px] font-bold text-red-500 uppercase block">Desc: -{baseCurrency.symbol}{discountAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
                      </div>
                   </div>
                   <div className="flex items-center gap-4">
                      <div className="flex-1">
                         <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block leading-none mb-1">Total</span>
-                        <span className="text-3xl font-black text-gray-900 tracking-tighter leading-none">{baseCurrency.symbol}{cartTotal.toFixed(2)}</span>
+                        <span className="text-3xl font-black text-gray-900 tracking-tighter leading-none">{baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                      </div>
                      <button
                         onClick={() => {
@@ -3030,11 +3030,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <div className="p-4 rounded-xl border border-gray-100 bg-gray-50 text-sm">
                            <div className="flex justify-between font-bold text-gray-600">
                               <span>Total Reserva</span>
-                              <span>{baseCurrency.symbol}{cartTotal.toFixed(2)}</span>
+                              <span>{baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                            </div>
                            <div className="flex justify-between text-gray-500 mt-1">
                               <span>Saldo estimado</span>
-                              <span>{baseCurrency.symbol}{Math.max(0, cartTotal - (parseFloat(reservationAdvanceInput || '0') || 0)).toFixed(2)}</span>
+                              <span>{baseCurrency.symbol}{Math.max(0, cartTotal - (parseFloat(reservationAdvanceInput || '0') || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                            </div>
                         </div>
                      </div>
@@ -3114,8 +3114,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        <p className="text-[11px] font-bold text-gray-500 mt-0.5">{reservation.code}</p>
                                     </div>
                                     <div className="text-right">
-                                       <p className="text-xs font-black text-gray-800">{baseCurrency.symbol}{reservation.total.toFixed(2)}</p>
-                                       <p className="text-[11px] text-gray-500">Abono: {baseCurrency.symbol}{(reservation.balancePaid || 0).toFixed(2)}</p>
+                                       <p className="text-xs font-black text-gray-800">{baseCurrency.symbol}{reservation.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                                       <p className="text-[11px] text-gray-500">Abono: {baseCurrency.symbol}{(reservation.balancePaid || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                                     </div>
                                  </div>
                                  <p className="text-[11px] text-gray-500 mt-2">
@@ -3154,8 +3154,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </div>
                         <div className="p-4 rounded-xl border border-gray-100 bg-gray-50 text-sm">
                            <div className="flex justify-between"><span className="text-gray-500">Cliente</span><span className="font-bold text-gray-800">{showReservationReceipt.customerName}</span></div>
-                           <div className="flex justify-between mt-1"><span className="text-gray-500">Total</span><span className="font-bold text-gray-800">{baseCurrency.symbol}{showReservationReceipt.total.toFixed(2)}</span></div>
-                           <div className="flex justify-between mt-1"><span className="text-gray-500">Abono</span><span className="font-bold text-gray-800">{baseCurrency.symbol}{(showReservationReceipt.balancePaid || 0).toFixed(2)}</span></div>
+                           <div className="flex justify-between mt-1"><span className="text-gray-500">Total</span><span className="font-bold text-gray-800">{baseCurrency.symbol}{showReservationReceipt.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+                           <div className="flex justify-between mt-1"><span className="text-gray-500">Abono</span><span className="font-bold text-gray-800">{baseCurrency.symbol}{(showReservationReceipt.balancePaid || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
                            <div className="flex justify-between mt-1"><span className="text-gray-500">Vence</span><span className="font-bold text-gray-800">{new Date(showReservationReceipt.expiryDate).toLocaleDateString()}</span></div>
                         </div>
                      </div>
