@@ -815,10 +815,12 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
   return (
     <div
-      className={`fixed inset-0 z-50 bg-gray-50 flex min-h-0 flex-col ${currentView === 'HOME' ? 'overflow-y-scroll overscroll-y-contain touch-pan-y' : 'overflow-hidden'}`}
+      className={`fixed inset-0 z-50 bg-gray-50 ${currentView === 'HOME' ? 'overflow-y-auto overscroll-y-contain touch-pan-y' : 'flex min-h-0 flex-col overflow-hidden'}`}
       style={currentView === 'HOME' ? { WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' } : undefined}
     >
-      {renderContent()}
+      <div className={currentView === 'HOME' ? 'min-h-[100dvh]' : 'flex min-h-0 flex-1 flex-col'}>
+        {renderContent()}
+      </div>
     </div>
   );
 };

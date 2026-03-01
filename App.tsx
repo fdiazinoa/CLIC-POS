@@ -3924,7 +3924,7 @@ const AppContent: React.FC = () => {
 
   return (
     <ErrorBoundary componentName="App Root">
-      <div className="fixed inset-0 w-full h-full overflow-hidden bg-gray-50 flex flex-col font-sans select-none text-gray-900">
+      <div className={`fixed inset-0 w-full h-full bg-gray-50 flex flex-col font-sans select-none text-gray-900 ${currentView === 'SETTINGS' ? 'overflow-y-auto overscroll-y-contain' : 'overflow-hidden'}`}>
         {renderWithLayout()}
       </div>
     </ErrorBoundary>

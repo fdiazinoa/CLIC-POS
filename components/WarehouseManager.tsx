@@ -812,8 +812,9 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
             </div>
 
             {/* Tabs */}
-            <div className="bg-white border-b border-gray-200 shrink-0 px-4 md:px-8">
-               <div className="flex flex-wrap gap-x-4 md:gap-x-8">
+            <div className="bg-white border-b border-gray-200 shrink-0">
+               <div className="overflow-x-auto no-scrollbar touch-pan-x -mx-4 px-4 md:mx-0 md:px-8">
+                  <div className="flex flex-nowrap w-max min-w-full gap-4 md:gap-8">
                      <button
                         onClick={() => setActiveTab('LOCATIONS')}
                         className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'LOCATIONS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
@@ -859,6 +860,7 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                      >
                         <ClipboardList size={18} /> Auditoría & Cierre
                      </button>
+                  </div>
                </div>
             </div>
 
