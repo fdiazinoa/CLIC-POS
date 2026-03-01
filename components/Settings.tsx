@@ -678,7 +678,10 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
       default:
         return (
-          <div className="flex-1 overflow-y-auto p-8 max-w-7xl mx-auto w-full animate-in fade-in">
+          <div
+            className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y p-4 md:p-8 pb-24 md:pb-16 max-w-7xl mx-auto w-full animate-in fade-in"
+            style={{ WebkitOverflowScrolling: 'touch' }}
+          >
             {/* ADMIN MODE BANNER */}
             {props.isAdminMode && (
               <div className="mb-6 p-4 bg-red-100 border border-red-200 rounded-xl flex items-center gap-3 animate-pulse shadow-sm">
@@ -690,12 +693,12 @@ const Settings: React.FC<SettingsProps> = (props) => {
               </div>
             )}
 
-            <div className="flex justify-between items-center mb-8">
+            <div className="flex flex-col gap-4 md:flex-row md:justify-between md:items-center mb-8">
               <div>
                 <h1 className="text-3xl font-black text-gray-800">Configuración</h1>
                 <p className="text-gray-500 mt-1">Administra todos los aspectos de tu negocio.</p>
               </div>
-              <button onClick={props.onClose} className="p-3 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors">
+              <button onClick={props.onClose} className="self-end md:self-auto p-3 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors">
                 <X size={24} className="text-gray-600" />
               </button>
             </div>
@@ -814,7 +817,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-gray-50 flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-gray-50 flex min-h-0 flex-col overflow-hidden">
       {renderContent()}
     </div>
   );

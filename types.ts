@@ -1104,6 +1104,7 @@ export interface Transaction {
 
 export type ViewState =
   // Standard views
+  | 'VERTICAL_SELECTOR'
   | 'SETUP'
   | 'WIZARD'
   | 'LOGIN'

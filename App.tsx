@@ -287,6 +287,12 @@ const AppContent: React.FC = () => {
     return standaloneBinding;
   }, [getStandalonePrimaryBinding]);
 
+  const handleVerticalSelection = React.useCallback(async (selectedConfig: BusinessConfig) => {
+    setConfig(selectedConfig);
+    await db.save('config', selectedConfig);
+    setCurrentView('SETUP');
+  }, []);
+
   // --- RECONNECTION BANNER ---
   const renderReconnectionBanner = () => {
     if (reconnectionStatus === 'idle') return null;
@@ -970,7 +976,7 @@ const AppContent: React.FC = () => {
 
           if (shouldRunInitialSetupWizard) {
             console.log('[BOOT] First installation detected. Launching setup wizard...');
-            setCurrentView('SETUP');
+            setCurrentView('VERTICAL_SELECTOR');
             setIsDataLoaded(true);
             setIsSecurityLoaded(true);
             return;
@@ -2724,6 +2730,15 @@ const AppContent: React.FC = () => {
 
   const renderView = () => {
     switch (currentView) {
+      case 'VERTICAL_SELECTOR':
+        return (
+          <VerticalSelector
+            onSelect={(selectedConfig) => {
+              void handleVerticalSelection(selectedConfig);
+            }}
+          />
+        );
+
       case 'SETUP':
       case 'WIZARD':
         return (

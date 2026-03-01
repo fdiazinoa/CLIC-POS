@@ -323,16 +323,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const gridClass = useMemo(() => {
       if (uxConfig.gridDensity === 'COMPACT') {
-         return "grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-4 pb-32";
+         return "grid [grid-template-columns:repeat(auto-fill,minmax(150px,1fr))] auto-rows-fr gap-4 pb-32";
       }
-      return "grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6 pb-32";
+      return "grid [grid-template-columns:repeat(auto-fill,minmax(180px,1fr))] auto-rows-fr gap-4 md:gap-6 pb-32";
    }, [uxConfig.gridDensity]);
 
    const categoryContainerClass = useMemo(() => {
       if (uxConfig.quickKeysLayout === 'B') {
-         return "bg-white border-b border-gray-200 px-8 py-3 flex flex-wrap gap-2 shrink-0 max-h-32 overflow-y-auto custom-scrollbar";
+         return "bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex flex-wrap gap-2 shrink-0 max-h-32 overflow-y-auto custom-scrollbar";
       }
-      return "bg-white border-b border-gray-200 px-8 py-3 flex gap-2 overflow-x-auto no-scrollbar shrink-0";
+      return "bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex gap-2 overflow-x-auto no-scrollbar shrink-0";
    }, [uxConfig.quickKeysLayout]);
 
    const allowedTariffs = useMemo(() => {

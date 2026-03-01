@@ -450,7 +450,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    }
 
    return (
-      <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300 relative">
+      <div className="flex min-h-0 flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300 relative">
 
          {/* BULK ACTION BAR */}
          {selectedIds.size > 0 && viewMode === 'PRODUCTS' && (
@@ -481,44 +481,46 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          )}
 
          {/* Header & Tabs */}
-         <div className="bg-white px-8 pt-6 pb-0 border-b border-gray-200 flex justify-between items-start shrink-0">
+         <div className="bg-white px-4 md:px-8 pt-4 md:pt-6 pb-0 border-b border-gray-200 shrink-0">
             <div className="flex flex-col gap-4 w-full">
-               <div className="flex justify-between items-center w-full">
-                  <div className="flex items-center gap-4">
+               <div className="flex flex-col gap-4 md:flex-row md:justify-between md:items-center w-full">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4 min-w-0">
                      <button
                         onClick={onClose}
                         className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-full text-gray-600 font-bold transition-all active:scale-95 z-50"
                         title="Volver al Menú Principal"
                      >
                         <ArrowLeft size={20} />
-                        <span className="hidden md:inline">Volver</span>
+                        <span className="hidden sm:inline">Volver</span>
                      </button>
-                     <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2"><Package className="text-blue-600" /> Gestión de Catálogo</h1>
+                     <h1 className="text-xl md:text-2xl font-black text-gray-800 flex items-center gap-2 min-w-0"><Package className="text-blue-600 shrink-0" /> Gestión de Catálogo</h1>
                   </div>
                   {canManage && (
-                     <button onClick={() => { if (viewMode === 'PRODUCTS') setEditingProduct('NEW'); else if (viewMode === 'TARIFFS') setEditingTariff('NEW'); else if (viewMode === 'GROUPS') setEditingGroup('NEW'); else if (viewMode === 'SEASONS') setEditingSeason('NEW'); }} className={`px-6 py-3 text-white rounded-xl font-bold shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 ${['STOCKS', 'BI_MONITOR'].includes(viewMode) ? 'opacity-0 pointer-events-none' : 'bg-blue-600'}`}><Plus size={20} /> {viewMode === 'GROUPS' ? 'Nuevo Grupo' : viewMode === 'TARIFFS' ? 'Nueva Tarifa' : viewMode === 'SEASONS' ? 'Nueva Temporada' : 'Nuevo Artículo'}</button>
+                     <button onClick={() => { if (viewMode === 'PRODUCTS') setEditingProduct('NEW'); else if (viewMode === 'TARIFFS') setEditingTariff('NEW'); else if (viewMode === 'GROUPS') setEditingGroup('NEW'); else if (viewMode === 'SEASONS') setEditingSeason('NEW'); }} className={`w-full md:w-auto justify-center px-5 md:px-6 py-3 text-white rounded-xl font-bold shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 ${['STOCKS', 'BI_MONITOR'].includes(viewMode) ? 'opacity-0 pointer-events-none' : 'bg-blue-600'}`}><Plus size={20} /> {viewMode === 'GROUPS' ? 'Nuevo Grupo' : viewMode === 'TARIFFS' ? 'Nueva Tarifa' : viewMode === 'SEASONS' ? 'Nueva Temporada' : 'Nuevo Artículo'}</button>
                   )}
                </div>
-               <div className="flex gap-8 mt-2 overflow-x-auto no-scrollbar">
-                  <button onClick={() => setViewMode('PRODUCTS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'PRODUCTS' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400'}`}><Package size={18} /> Productos</button>
-                  <button onClick={() => setViewMode('BI_MONITOR')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'BI_MONITOR' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400'}`}><Activity size={18} /> Monitor BI</button>
-                  {canManage && <button onClick={() => setViewMode('VARIANTS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${(viewMode as string) === 'VARIANTS' ? 'border-transparent text-gray-400' : 'border-transparent text-gray-400'}`}><Layers size={18} /> Variantes y Atributos</button>}
-                  <button onClick={() => setViewMode('GROUPS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'GROUPS' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400'}`}><Grid size={18} /> Grupos</button>
-                  <button onClick={() => setViewMode('SEASONS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'SEASONS' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-gray-400'}`}><Sun size={18} /> Temporadas</button>
-                  <button onClick={() => setViewMode('STOCKS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'STOCKS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-400'}`}><ClipboardList size={18} /> Stocks</button>
-                  <button onClick={() => setViewMode('TARIFFS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'TARIFFS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400'}`}><Tag size={18} /> Tarifas</button>
-                  <button onClick={() => setViewMode('CLASSIFICATIONS')} className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${(viewMode as string) === 'CLASSIFICATIONS' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400'}`}><Layers size={18} /> Clasificaciones</button>
+               <div className="overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
+                  <div className="flex w-max min-w-full gap-4 md:gap-8 mt-1">
+                     <button onClick={() => setViewMode('PRODUCTS')} className={`shrink-0 pb-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'PRODUCTS' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400'}`}><Package size={18} /> Productos</button>
+                     <button onClick={() => setViewMode('BI_MONITOR')} className={`shrink-0 pb-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'BI_MONITOR' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400'}`}><Activity size={18} /> Monitor BI</button>
+                     {canManage && <button onClick={() => setViewMode('VARIANTS')} className={`shrink-0 pb-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${(viewMode as string) === 'VARIANTS' ? 'border-fuchsia-600 text-fuchsia-600' : 'border-transparent text-gray-400'}`}><Layers size={18} /> Variantes y Atributos</button>}
+                     <button onClick={() => setViewMode('GROUPS')} className={`shrink-0 pb-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'GROUPS' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400'}`}><Grid size={18} /> Grupos</button>
+                     <button onClick={() => setViewMode('SEASONS')} className={`shrink-0 pb-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'SEASONS' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-gray-400'}`}><Sun size={18} /> Temporadas</button>
+                     <button onClick={() => setViewMode('STOCKS')} className={`shrink-0 pb-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'STOCKS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-400'}`}><ClipboardList size={18} /> Stocks</button>
+                     <button onClick={() => setViewMode('TARIFFS')} className={`shrink-0 pb-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${viewMode === 'TARIFFS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400'}`}><Tag size={18} /> Tarifas</button>
+                     <button onClick={() => setViewMode('CLASSIFICATIONS')} className={`shrink-0 pb-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${(viewMode as string) === 'CLASSIFICATIONS' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400'}`}><Layers size={18} /> Clasificaciones</button>
+                  </div>
                </div>
             </div>
          </div>
 
-         <div className="flex-1 overflow-hidden flex flex-col w-full">
+         <div className="flex-1 min-h-0 overflow-hidden flex flex-col w-full">
             {viewMode === 'PRODUCTS' && (
-               <div className="p-8 max-w-7xl mx-auto w-full flex-1 flex flex-col overflow-hidden">
-                  <div className="flex gap-4 mb-6">
+               <div className="p-4 md:p-8 max-w-7xl mx-auto w-full flex-1 min-h-0 flex flex-col overflow-hidden">
+                  <div className="flex flex-col md:flex-row gap-3 md:gap-4 mb-6">
                      <div
                         onClick={toggleAllSelection}
-                        className={`shrink-0 p-3 rounded-xl border-2 cursor-pointer transition-all flex items-center justify-center ${selectedIds.size === filteredProducts.length && filteredProducts.length > 0 ? 'bg-blue-600 border-blue-600 text-white shadow-md' : 'bg-white border-gray-200 text-gray-400 hover:border-blue-300'}`}
+                        className={`self-start shrink-0 p-3 rounded-xl border-2 cursor-pointer transition-all flex items-center justify-center ${selectedIds.size === filteredProducts.length && filteredProducts.length > 0 ? 'bg-blue-600 border-blue-600 text-white shadow-md' : 'bg-white border-gray-200 text-gray-400 hover:border-blue-300'}`}
                      >
                         {selectedIds.size === filteredProducts.length && filteredProducts.length > 0 ? <CheckSquare size={24} strokeWidth={3} /> : <Square size={24} />}
                      </div>
@@ -526,7 +528,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
                         <input type="text" placeholder="Buscar productos..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 shadow-sm" />
                      </div>
-                     <div className="relative min-w-[200px]">
+                     <div className="relative w-full md:w-auto md:min-w-[220px]">
                         <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="w-full h-full pl-4 pr-8 bg-white border border-gray-200 rounded-xl outline-none font-medium text-gray-700 shadow-sm">
                            {categories.map(c => <option key={c} value={c}>{c === 'ALL' ? 'Todas las Categorías' : c}</option>)}
                         </select>
@@ -534,7 +536,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                      </div>
                   </div>
 
-                  <div className="flex-1 overflow-y-auto">
+                  <div className="flex-1 min-h-0 overflow-y-auto">
                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-32">
                         {filteredProducts.map(product => {
                            const isSelected = selectedIds.has(product.id);
