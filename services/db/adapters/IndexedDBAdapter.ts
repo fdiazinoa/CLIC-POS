@@ -165,6 +165,64 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         localStorage.setItem(this.fallbackKey(collectionName), JSON.stringify(Array.isArray(docs) ? docs : []));
     }
 
+    private getDocTimestamp(doc: any): number {
+        const candidates = [doc?.updatedAt, doc?.createdAt, doc?.timestamp, doc?.date];
+        for (const candidate of candidates) {
+            if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate;
+            if (typeof candidate === 'string' && candidate.trim()) {
+                const parsed = new Date(candidate).getTime();
+                if (Number.isFinite(parsed)) return parsed;
+            }
+        }
+        return 0;
+    }
+
+    private mergeStoreAndFallbackDocuments(collectionName: string, storeDocs: any[], fallbackDocs: any[]): any[] {
+        if (!Array.isArray(fallbackDocs) || fallbackDocs.length === 0) return Array.isArray(storeDocs) ? storeDocs : [];
+        if (collectionName === 'config' || collectionName === 'globalSequenceCounter') {
+            return (Array.isArray(storeDocs) && storeDocs.length > 0) ? storeDocs : fallbackDocs;
+        }
+
+        const merged = new Map<string, any>();
+
+        for (const doc of (Array.isArray(storeDocs) ? storeDocs : [])) {
+            if (!doc?.id) continue;
+            merged.set(doc.id, doc);
+        }
+
+        for (const doc of fallbackDocs) {
+            if (!doc?.id) continue;
+
+            const existing = merged.get(doc.id);
+            if (!existing) {
+                merged.set(doc.id, doc);
+                continue;
+            }
+
+            const existingTs = this.getDocTimestamp(existing);
+            const fallbackTs = this.getDocTimestamp(doc);
+            if (fallbackTs >= existingTs) {
+                merged.set(doc.id, { ...existing, ...doc });
+            }
+        }
+
+        return Array.from(merged.values());
+    }
+
+    private async promoteFallbackDocuments(collectionName: string, docs: any[], fallbackDocs: any[]): Promise<void> {
+        if (!Array.isArray(fallbackDocs) || fallbackDocs.length === 0) return;
+        if (!this.hasStore(collectionName)) return;
+        if (collectionName === 'config' || collectionName === 'globalSequenceCounter') return;
+
+        try {
+            await this.bulkUpsert(collectionName, docs as any[]);
+            this.writeFallbackCollection(collectionName, []);
+            console.warn(`[IndexedDBAdapter] Reconciled ${collectionName}: promoted ${fallbackDocs.length} fallback docs into IndexedDB.`);
+        } catch (error) {
+            console.warn(`[IndexedDBAdapter] Could not promote fallback docs for ${collectionName}:`, error);
+        }
+    }
+
     private readStoreCollection(collectionName: string): Promise<any[]> {
         return new Promise((resolve, reject) => {
             if (!this.hasStore(collectionName)) return resolve([]);
@@ -265,10 +323,11 @@ export class IndexedDBAdapter implements DatabaseAdapter {
 
         return new Promise((resolve, reject) => {
             try {
+                const fallbackDocs = this.readFallbackCollection(collectionName);
+
                 // Use localStorage fallback for heavy collections to avoid IndexedDB lock contention.
                 // Self-heal: if fallback is empty but IndexedDB has rows from legacy writes, recover them.
                 if (this.isFallbackOnlyCollection(collectionName)) {
-                    const fallbackDocs = this.readFallbackCollection(collectionName);
                     const hasStore = this.hasStore(collectionName);
                     const reconcileDone = localStorage.getItem(this.reconcileFlagKey(collectionName)) === '1';
 
@@ -300,8 +359,7 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                 }
 
                 if (!this.hasStore(collectionName)) {
-                    const docs = this.readFallbackCollection(collectionName);
-                    return resolve(this.fromStoredDocuments(collectionName, docs));
+                    return resolve(this.fromStoredDocuments(collectionName, fallbackDocs));
                 }
 
                 const transaction = this.db!.transaction(collectionName, 'readonly');
@@ -309,10 +367,19 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                 const request = store.getAll();
 
                 request.onsuccess = () => {
-                    const docs = Array.isArray(request.result) ? request.result : [];
-                    resolve(this.fromStoredDocuments(collectionName, docs));
+                    const storeDocs = Array.isArray(request.result) ? request.result : [];
+                    const mergedDocs = this.mergeStoreAndFallbackDocuments(collectionName, storeDocs, fallbackDocs);
+                    void this.promoteFallbackDocuments(collectionName, mergedDocs, fallbackDocs);
+                    resolve(this.fromStoredDocuments(collectionName, mergedDocs));
                 };
-                request.onerror = () => reject(request.error);
+                request.onerror = () => {
+                    if (fallbackDocs.length > 0) {
+                        console.warn(`[IndexedDBAdapter] getCollection fallback for ${collectionName}:`, request.error);
+                        resolve(this.fromStoredDocuments(collectionName, fallbackDocs));
+                        return;
+                    }
+                    reject(request.error);
+                };
             } catch (e) {
                 console.error(`Error getting collection ${collectionName}:`, e);
                 const docs = this.readFallbackCollection(collectionName);
@@ -591,24 +658,54 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         if (!this.db && !this.storageOnlyMode) throw new Error('DB not connected');
 
         return new Promise((resolve, reject) => {
+            const fallbackDocs = this.readFallbackCollection(collectionName);
+            const fallbackMatch = fallbackDocs.find((doc: any) => doc?.id === id) || null;
+
             if (this.isFallbackOnlyCollection(collectionName)) {
-                const docs = this.readFallbackCollection(collectionName);
-                const match = docs.find((doc: any) => doc?.id === id) || null;
-                return resolve(match);
+                return resolve(fallbackMatch);
             }
 
             if (!this.hasStore(collectionName)) {
-                const docs = this.readFallbackCollection(collectionName);
-                const match = docs.find((doc: any) => doc?.id === id) || null;
-                return resolve(match);
+                return resolve(fallbackMatch);
             }
 
             const transaction = this.db!.transaction(collectionName, 'readonly');
             const store = transaction.objectStore(collectionName);
             const request = store.get(id);
 
-            request.onsuccess = () => resolve(request.result || null);
-            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+                const storeMatch = request.result || null;
+                if (!fallbackMatch) {
+                    resolve(storeMatch);
+                    return;
+                }
+
+                if (!storeMatch) {
+                    void this.promoteFallbackDocuments(collectionName, [fallbackMatch], [fallbackMatch]);
+                    resolve(fallbackMatch);
+                    return;
+                }
+
+                const storeTs = this.getDocTimestamp(storeMatch);
+                const fallbackTs = this.getDocTimestamp(fallbackMatch);
+                const resolved = fallbackTs >= storeTs
+                    ? { ...storeMatch, ...fallbackMatch }
+                    : storeMatch;
+
+                if (resolved !== storeMatch) {
+                    void this.promoteFallbackDocuments(collectionName, [resolved], [fallbackMatch]);
+                }
+
+                resolve(resolved);
+            };
+            request.onerror = () => {
+                if (fallbackMatch) {
+                    console.warn(`[IndexedDBAdapter] getDocument fallback for ${collectionName}/${id}:`, request.error);
+                    resolve(fallbackMatch);
+                    return;
+                }
+                reject(request.error);
+            };
         });
     }
 
