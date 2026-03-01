@@ -165,22 +165,20 @@ const VariantManager: React.FC<VariantManagerProps> = ({ onClose }) => {
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-gray-200 bg-white shrink-0">
-         <div className="overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-8">
-            <div className="flex w-max min-w-full gap-4 md:gap-8">
+      <div className="border-b border-gray-200 bg-white shrink-0 px-4 md:px-8">
+         <div className="flex flex-wrap gap-x-4 md:gap-x-8">
                <button 
                   onClick={() => setActiveTab('ATTRIBUTES')}
-                  className={`shrink-0 pb-4 pt-4 text-xs md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'ATTRIBUTES' ? 'border-pink-500 text-pink-600' : 'border-transparent text-gray-400'}`}
+                  className={`shrink-0 pb-4 pt-4 text-[11px] md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'ATTRIBUTES' ? 'border-pink-500 text-pink-600' : 'border-transparent text-gray-400'}`}
                >
                   Maestro de Atributos
                </button>
                <button 
                   onClick={() => setActiveTab('TEMPLATES')}
-                  className={`shrink-0 pb-4 pt-4 text-xs md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'TEMPLATES' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-400'}`}
+                  className={`shrink-0 pb-4 pt-4 text-[11px] md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'TEMPLATES' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-400'}`}
                >
                   Grupos Predefinidos (Templates)
                </button>
-            </div>
          </div>
       </div>
 

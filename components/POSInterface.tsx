@@ -323,9 +323,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const gridClass = useMemo(() => {
       if (uxConfig.gridDensity === 'COMPACT') {
-         return "grid [grid-template-columns:repeat(auto-fill,minmax(150px,1fr))] auto-rows-fr gap-4 pb-32";
+         return "grid [grid-template-columns:repeat(auto-fill,minmax(150px,1fr))] gap-4 pb-32 content-start";
       }
-      return "grid [grid-template-columns:repeat(auto-fill,minmax(180px,1fr))] auto-rows-fr gap-4 md:gap-6 pb-32";
+      return "grid [grid-template-columns:repeat(auto-fill,minmax(170px,1fr))] gap-4 md:gap-6 pb-32 content-start";
    }, [uxConfig.gridDensity]);
 
    const categoryContainerClass = useMemo(() => {
@@ -2147,11 +2147,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            }}
                            onTouchStart={handleTouchStart}
                            onTouchEnd={handleTouchEnd}
-                           className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-[2rem] p-4 shadow-sm border border-gray-100 cursor-pointer hover:shadow-xl hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group flex flex-col h-full relative overflow-hidden"
+                           className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-[2rem] p-4 shadow-sm border border-gray-100 cursor-pointer hover:shadow-xl hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group flex flex-col min-h-[250px] relative overflow-hidden"
                         >
                            {uxConfig.showProductImages && (
-                              <div className="aspect-square bg-gray-50 dark:bg-slate-800 rounded-[1.5rem] mb-4 overflow-hidden relative">
-                                 {product.image ? <img src={product.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
+                              <div className="h-32 md:h-36 bg-gray-50 dark:bg-slate-800 rounded-[1.5rem] mb-4 overflow-hidden relative flex items-center justify-center">
+                                 {product.image ? <img src={product.image} className="w-full h-full object-cover object-center" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
 
                                  {/* BADGES DE TIPO DE ARTÍCULO */}
                                  {isWeighted && (
@@ -2200,10 +2200,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
                            )}
-                           <div className="flex flex-col flex-1">
-                              <span className="text-[9px] font-bold text-purple-500 uppercase mb-1 opacity-60">{product.category}</span>
-                              <h3 className="font-bold text-gray-800 dark:text-white text-sm leading-tight mb-2 line-clamp-2 flex-1">{product.name}</h3>
-                              <div className="mt-auto pt-2 border-t border-gray-50 dark:border-slate-700"><span className="font-black text-lg text-gray-900 dark:text-white">{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+                           <div className="flex flex-col flex-1 justify-between gap-3">
+                              <div className="space-y-1.5">
+                                 <span className="block text-[9px] font-bold text-purple-500 uppercase opacity-60 line-clamp-1">{product.category}</span>
+                                 <h3 className="font-bold text-gray-800 dark:text-white text-sm leading-tight line-clamp-2 min-h-[2.75rem]">{product.name}</h3>
+                              </div>
+                              <div className="pt-2 border-t border-gray-50 dark:border-slate-700"><span className="font-black text-lg text-gray-900 dark:text-white">{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
                            </div>
                         </div>
                      );

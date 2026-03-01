@@ -397,14 +397,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
             <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors self-end md:self-auto"><X size={24} /></button>
          </div>
 
-         <div className="bg-white border-b border-gray-200 shrink-0">
-            <div className="overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-8">
-               <div className="flex w-max min-w-full gap-4 md:gap-8">
-                  <button onClick={() => setActiveSubTab('SERIES')} className={`shrink-0 py-4 text-xs md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeSubTab === 'SERIES' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>Secuencias Internas</button>
-                  <button onClick={() => setActiveSubTab('FISCAL_POOL')} className={`shrink-0 py-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeSubTab === 'FISCAL_POOL' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+         <div className="bg-white border-b border-gray-200 shrink-0 px-4 md:px-8">
+            <div className="flex flex-wrap gap-x-4 md:gap-x-8">
+                  <button onClick={() => setActiveSubTab('SERIES')} className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeSubTab === 'SERIES' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>Secuencias Internas</button>
+                  <button onClick={() => setActiveSubTab('FISCAL_POOL')} className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeSubTab === 'FISCAL_POOL' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
                      <Landmark size={16} /> Pool Fiscal DGII
                   </button>
-               </div>
             </div>
          </div>
 

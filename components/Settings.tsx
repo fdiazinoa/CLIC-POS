@@ -680,7 +680,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
         return (
           <div
             className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y p-4 md:p-8 pb-24 md:pb-16 max-w-7xl mx-auto w-full animate-in fade-in"
-            style={{ WebkitOverflowScrolling: 'touch' }}
+            style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
           >
             {/* ADMIN MODE BANNER */}
             {props.isAdminMode && (
@@ -817,7 +817,10 @@ const Settings: React.FC<SettingsProps> = (props) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-gray-50 flex min-h-0 flex-col overflow-hidden">
+    <div
+      className="fixed inset-0 z-50 bg-gray-50 flex min-h-0 flex-col overflow-hidden"
+      style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
+    >
       {renderContent()}
     </div>
   );
@@ -827,6 +830,7 @@ const SettingsCard: React.FC<{ icon: any; label: string; description: string; co
   <button
     onClick={locked ? undefined : onClick}
     className={`flex flex-col items-start p-6 bg-white rounded-3xl shadow-sm border border-slate-100 transition-all text-left group h-full relative overflow-hidden ${locked ? 'opacity-60 cursor-not-allowed grayscale' : 'hover:shadow-xl hover:border-blue-200 hover:-translate-y-1 active:scale-95'}`}
+    style={{ touchAction: 'pan-y' }}
   >
     {locked && (
       <div className="absolute inset-0 bg-gray-50/50 z-10 flex items-center justify-center">

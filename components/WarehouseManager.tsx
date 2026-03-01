@@ -812,24 +812,23 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
             </div>
 
             {/* Tabs */}
-            <div className="bg-white border-b border-gray-200 shrink-0">
-               <div className="overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-8">
-                  <div className="flex w-max min-w-full gap-4 md:gap-8">
+            <div className="bg-white border-b border-gray-200 shrink-0 px-4 md:px-8">
+               <div className="flex flex-wrap gap-x-4 md:gap-x-8">
                      <button
                         onClick={() => setActiveTab('LOCATIONS')}
-                        className={`shrink-0 py-4 text-xs md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'LOCATIONS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'LOCATIONS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                      >
                         Ubicaciones
                      </button>
                      <button
                         onClick={() => setActiveTab('TRANSFERS')}
-                        className={`shrink-0 py-4 text-xs md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'TRANSFERS' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'TRANSFERS' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                      >
                         Nuevo Traspaso
                      </button>
                      <button
                         onClick={() => setActiveTab('HISTORY')}
-                        className={`shrink-0 py-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'HISTORY' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'HISTORY' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                      >
                         Historial y Recepción
                         {pendingCount > 0 && (
@@ -838,29 +837,28 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
                      </button>
                      <button
                         onClick={() => setActiveTab('OPTIMIZER')}
-                        className={`shrink-0 py-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'OPTIMIZER' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'OPTIMIZER' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                      >
                         <Zap size={18} /> Optimización
                      </button>
                      <button
                         onClick={() => setActiveTab('FORECASTING')}
-                        className={`shrink-0 py-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'FORECASTING' ? 'border-amber-600 text-amber-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'FORECASTING' ? 'border-amber-600 text-amber-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                      >
                         <ShoppingBag size={18} /> Reabastecimiento
                      </button>
                      <button
                         onClick={() => setActiveTab('INVENTORY')}
-                        className={`shrink-0 py-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'INVENTORY' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'INVENTORY' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                      >
                         <Package size={18} /> Inventario
                      </button>
                      <button
                         onClick={() => setActiveTab('AUDIT_CLOSURE')}
-                        className={`shrink-0 py-4 text-xs md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'AUDIT_CLOSURE' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'AUDIT_CLOSURE' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                      >
                         <ClipboardList size={18} /> Auditoría & Cierre
                      </button>
-                  </div>
                </div>
             </div>
 
