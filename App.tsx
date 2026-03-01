@@ -120,6 +120,7 @@ type ReceivableRepairSummary = {
 };
 
 const CREDIT_PAYMENT_METHODS = new Set(['CREDIT', 'CREDITO', 'PENDIENTE']);
+const SETUP_WIZARD_COMPLETED_KEY = 'clic_pos_setup_wizard_completed';
 
 const normalizePaymentMethod = (method: unknown): string => {
   if (typeof method !== 'string') return '';
@@ -704,6 +705,7 @@ const AppContent: React.FC = () => {
         // Only pull remote config when this device is a SLAVE (or not yet paired locally).
         // If a MASTER keeps stale pos_master_ip, blindly pulling here corrupts local runtime config.
         const masterIp = localStorage.getItem('pos_master_ip');
+        const setupWizardCompleted = localStorage.getItem(SETUP_WIZARD_COMPLETED_KEY) === '1';
         const localTerminals = (!Array.isArray(currentConfig) && currentConfig?.terminals) ? currentConfig.terminals : [];
         const localPairedTerminal = (localTerminals || []).find(
           (t: any) => t.config?.currentDeviceId === storedDeviceId
@@ -712,7 +714,7 @@ const AppContent: React.FC = () => {
         // --- PAIRING CHECK & REDIRECT ---
         // If no local pairing exists and we have no master IP, we are definitely unpaired.
         // We must bail OUT of the loading sequence to let the user pair.
-        if (!localPairedTerminal && !masterIp) {
+        if (!localPairedTerminal && !masterIp && setupWizardCompleted) {
           console.warn('[BOOT] Dispositivo no vinculado. Redirigiendo a pantalla de vinculación...');
           setIsDataLoaded(true); // Stop "Loading CLIC POS..."
           setIsSecurityLoaded(true); // Bypass "Loading Security..."
@@ -872,6 +874,20 @@ const AppContent: React.FC = () => {
 
           // CRITICAL FIX: Check URL params directly here as well to avoid closure staleness
           const isVisorMode = new URLSearchParams(window.location.search).get('view') === 'VISOR';
+
+          const shouldRunInitialSetupWizard =
+            !setupWizardCompleted &&
+            !masterIp &&
+            !pairedTerminal &&
+            !isVisorMode;
+
+          if (shouldRunInitialSetupWizard) {
+            console.log('[BOOT] First installation detected. Launching setup wizard...');
+            setCurrentView('SETUP');
+            setIsDataLoaded(true);
+            setIsSecurityLoaded(true);
+            return;
+          }
 
           if (!pairedTerminal && !isVisorMode && currentView !== 'VISOR') {
             setCurrentView('DEVICE_UNAUTHORIZED');
@@ -1399,6 +1415,28 @@ const AppContent: React.FC = () => {
       alert('No se pudo tomar control de la terminal. Revisa conexión y vuelve a intentar.');
     } finally {
       setRestoringHistory(false);
+    }
+  };
+
+  const handleSetupWizardComplete = async (finalConfig: BusinessConfig) => {
+    try {
+      const nextConfig = {
+        ...config,
+        ...finalConfig
+      };
+
+      setConfig(nextConfig);
+      await db.save('config', nextConfig);
+      localStorage.setItem(SETUP_WIZARD_COMPLETED_KEY, '1');
+
+      const hasPairedTerminal = (nextConfig.terminals || []).some(
+        terminal => terminal.config?.currentDeviceId === deviceId
+      );
+
+      setCurrentView(hasPairedTerminal ? 'LOGIN' : 'TERMINAL_PAIRING');
+    } catch (error) {
+      console.error('❌ Failed to complete setup wizard:', error);
+      alert('No se pudo guardar la configuración inicial. Intenta nuevamente.');
     }
   };
 
@@ -2588,6 +2626,15 @@ const AppContent: React.FC = () => {
 
   const renderView = () => {
     switch (currentView) {
+      case 'SETUP':
+      case 'WIZARD':
+        return (
+          <SetupWizard
+            initialConfig={config}
+            onComplete={handleSetupWizardComplete}
+          />
+        );
+
       case 'TERMINAL_PAIRING':
       case 'DEVICE_UNAUTHORIZED':
         return (
