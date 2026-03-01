@@ -239,13 +239,13 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
             const trackingHtml = [];
             if (item.trackingData && item.trackingData.length > 0) {
                 if (receiptConfig?.showSerialNumbers) {
-                    const serials = item.trackingData.filter(t => t.type === 'SERIAL').map(t => t.trackingCode);
+                    const serials = item.trackingData.filter(t => t.type === 'SERIE' || t.type === 'SERIAL').map(t => t.trackingCode);
                     if (serials.length > 0) {
                         trackingHtml.push(`No. Serie: ${serials.join(', ')}`);
                     }
                 }
                 if (receiptConfig?.showLotNumbers) {
-                    const lots = item.trackingData.filter(t => t.type === 'LOT').map(t => t.trackingCode);
+                    const lots = item.trackingData.filter(t => t.type === 'LOTE' || t.type === 'LOT').map(t => t.trackingCode);
                     if (lots.length > 0) {
                         trackingHtml.push(`Lote: ${lots.join(', ')}`);
                     }
