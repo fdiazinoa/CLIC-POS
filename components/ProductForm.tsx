@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { calculateOptimalInventoryLevels, InventoryCalculation } from '../utils/inventoryEngine';
 import {
-  Product, ProductAttribute, ProductVariant, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse, ProductOperationalFlags, InventoryLedgerEntry, ProductStock, StockTransfer, Season, Supplier
+  Product, ProductAttribute, ProductVariant, BusinessConfig, Tariff, TariffPrice, TaxDefinition, Warehouse, ProductOperationalFlags, InventoryLedgerEntry, ProductStock, StockTransfer, Season, Supplier, InventoryTracking
 } from '../types';
 import ProfitCalculator from './ProfitCalculator';
 import RecipeManager from './RecipeManager';
@@ -125,6 +125,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   // Kardex Ledger Data (Fetched from DB)
   const [productLedger, setProductLedger] = useState<InventoryLedgerEntry[]>([]);
   const [detailedStocks, setDetailedStocks] = useState<ProductStock[]>([]);
+  const [productTrackingRecords, setProductTrackingRecords] = useState<InventoryTracking[]>([]);
   const [productionAreas, setProductionAreas] = useState<any[]>([]);
   const [productionAreasLoaded, setProductionAreasLoaded] = useState(false);
 
@@ -184,8 +185,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     loadLedger();
 
     // Listen for sync events to refresh Kardex in real-time
+    const handleTrackingSync = async () => {
+      const allTracking = await db.get('inventoryTracking') as InventoryTracking[] || [];
+      const myTracking = allTracking
+        .filter(t => t.productId === formData.id)
+        .filter(t => kardexWarehouse === 'ALL' || t.warehouseId === kardexWarehouse);
+      setProductTrackingRecords(myTracking);
+    };
+
     const handleSync = () => {
       loadLedger();
+      handleTrackingSync();
     };
     window.addEventListener('ledgerSynced', handleSync);
     window.addEventListener('transactionSynced', handleSync);
@@ -196,10 +206,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       const myStocks = allStocks.filter(s => s.productId === formData.id);
       setDetailedStocks(myStocks);
     };
+
     window.addEventListener('productStocksUpdated', handleStockSync);
 
     // Initial fetch of detailed stocks
     handleStockSync();
+    handleTrackingSync();
 
     return () => {
       window.removeEventListener('ledgerSynced', handleSync);
@@ -236,30 +248,29 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
   const groupedLedger = useMemo(() => {
     const groups: any[] = [];
-    const groupMap = new Map();
+    const groupMap = new Map<string, any>();
+    const trackingByDocumentRef = new Map<string, string[]>();
+
+    productTrackingRecords.forEach(track => {
+      const ref = track.receptionId || track.saleId;
+      if (!ref || !track.trackingCode) return;
+
+      const existing = trackingByDocumentRef.get(ref) || [];
+      if (!existing.includes(track.trackingCode)) {
+        existing.push(track.trackingCode);
+        trackingByDocumentRef.set(ref, existing);
+      }
+    });
 
     entriesWithDynamicBalance.forEach(entry => {
-      // Key: Group by DocumentRef. If empty/initial, don't group.
       const isGroupable = entry.documentRef && entry.documentRef !== 'INITIAL' && !entry.documentRef.startsWith('SINGLE');
       const key = isGroupable ? entry.documentRef : `_SINGLE_${entry.id}`;
 
       if (!groupMap.has(key)) {
-        // Initialize Group Master
         const group = {
-          id: key,
-          isGroup: isGroupable,
+          key,
+          isGroupable,
           entries: [],
-          master: {
-            ...entry,
-            qtyIn: 0,
-            qtyOut: 0,
-            // Keep latest balance (since entries are sorted Newest -> Oldest, first seen is latest)
-            dynamicBalance: entry.dynamicBalance,
-            trackingCode: entry.trackingCode, // Ensure tracking info is pulled into master when group has 1 item
-            trackingId: entry.trackingId,
-            variantName: entry.variantName,
-            variantId: entry.variantId
-          }
         };
         groups.push(group);
         groupMap.set(key, group);
@@ -267,12 +278,49 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
       const group = groupMap.get(key);
       group.entries.push(entry);
-      group.master.qtyIn += entry.qtyIn;
-      group.master.qtyOut += entry.qtyOut;
     });
 
-    return groups;
-  }, [entriesWithDynamicBalance]);
+    return groups.map(group => {
+      const isGroup = group.isGroupable && group.entries.length > 1;
+      const fallbackTrackingCodes = (trackingByDocumentRef.get(group.key) || []).filter(code =>
+        !group.entries.some((entry: any) => entry.trackingCode === code)
+      );
+
+      let fallbackIndex = 0;
+      const displayEntries = group.entries.map((entry: any) => {
+        if (entry.trackingCode) return entry;
+
+        const resolvedTrackingCode = fallbackTrackingCodes[fallbackIndex];
+        if (!resolvedTrackingCode) return entry;
+
+        fallbackIndex += 1;
+        return { ...entry, resolvedTrackingCode };
+      });
+
+      const latestEntry = displayEntries[0];
+      const master = displayEntries.reduce((acc: any, entry: any) => {
+        acc.qtyIn += entry.qtyIn;
+        acc.qtyOut += entry.qtyOut;
+        return acc;
+      }, {
+        ...latestEntry,
+        qtyIn: 0,
+        qtyOut: 0,
+        dynamicBalance: latestEntry.dynamicBalance,
+        trackingCode: latestEntry.trackingCode || latestEntry.resolvedTrackingCode,
+        trackingId: latestEntry.trackingId,
+        variantName: latestEntry.variantName,
+        variantId: latestEntry.variantId
+      });
+
+      return {
+        id: isGroup ? group.key : `_SINGLE_${latestEntry.id}`,
+        isGroup,
+        entries: displayEntries,
+        master
+      };
+    });
+  }, [entriesWithDynamicBalance, productTrackingRecords]);
 
   const toggleGroup = (id: string) => {
     const next = new Set(expandedGroupIds);
@@ -763,7 +811,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                 </span>
                                 {group.isGroup && (
                                   <span className="text-[9px] font-bold text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded-full flex items-center gap-1">
-                                    {group.entries.length} vars
+                                    {group.entries.length} movs
                                   </span>
                                 )}
                               </div>
@@ -771,14 +819,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                 {group.isGroup && (isExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />)}
                                 {entry.documentRef}
                               </span>
-                              {!group.isGroup && (entry.trackingCode || entry.variantName) && (
+                              {!group.isGroup && ((entry.trackingCode || entry.resolvedTrackingCode) || entry.variantName) && (
                                 <span className="text-[10px] font-bold text-gray-600 flex items-center gap-1 mt-0.5">
-                                  {entry.trackingCode ? (
+                                  {(entry.trackingCode || entry.resolvedTrackingCode) ? (
                                     <span className="flex items-center gap-1">
                                       <span className="text-[8px] bg-indigo-50 text-indigo-600 px-1 py-0.5 rounded font-black uppercase tracking-tighter">
                                         {formData.operationalFlags?.usesLots && !formData.operationalFlags?.usesSerial ? 'Lote' : 'Serie'}
                                       </span>
-                                      {entry.trackingCode}
+                                      {entry.trackingCode || entry.resolvedTrackingCode}
                                     </span>
                                   ) : (
                                     <span className="text-[9px] text-gray-500">{entry.variantName}</span>
@@ -845,16 +893,16 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                   <div className="w-1.5 h-1.5 rounded-full bg-gray-300"></div>
                                   <div className="flex flex-col">
                                     <span className="font-bold text-gray-700 text-xs">
-                                      {child.trackingCode ? (
+                                      {(child.trackingCode || child.resolvedTrackingCode) ? (
                                         <span className="flex items-center gap-1.5">
                                           <span className="text-[9px] bg-indigo-50 text-indigo-600 px-1 py-0.5 rounded font-black uppercase tracking-tighter">
                                             {formData.operationalFlags?.usesLots && !formData.operationalFlags?.usesSerial ? 'Lote' : 'Serie'}
                                           </span>
-                                          {child.trackingCode}
+                                          {child.trackingCode || child.resolvedTrackingCode}
                                         </span>
-                                      ) : (child.variantName || 'Principal')}
+                                      ) : (child.variantName || (formData.operationalFlags?.usesLots || formData.operationalFlags?.usesSerial ? 'Sin serie/lote' : 'Principal'))}
                                     </span>
-                                    {(child.variantId && !child.trackingCode) && (
+                                    {(child.variantId && !(child.trackingCode || child.resolvedTrackingCode)) && (
                                       <span className="text-[9px] text-gray-400 font-mono scale-90 origin-left">
                                         ID: {child.variantId}
                                       </span>

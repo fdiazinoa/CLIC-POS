@@ -86,7 +86,7 @@ interface POSInterfaceProps {
    onOpenAudit?: () => void;
    onOpenTableMap?: () => void;
    onOpenAgenda?: () => void;
-   onTransactionComplete: (txn: Transaction) => void;
+   onTransactionComplete: (txn: Transaction) => Promise<void> | void;
    onAddCustomer: (customer: Customer) => void;
    onUpdateConfig: (newConfig: BusinessConfig) => void;
    activeTerminalId: string;
@@ -1518,7 +1518,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   seriesId: txn.seriesId || assignedSequenceId
                };
 
-               onTransactionComplete(finalTxn);
+               await onTransactionComplete(finalTxn);
 
                if (activeRecoveredReservation) {
                   const warehouseId = activeRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
@@ -1875,7 +1875,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // Don't block the UI, the refund itself is valid.
       }
 
-      onTransactionComplete(refundTxn);
+      await onTransactionComplete(refundTxn);
       alert(`Devolución registrada: ${config.currencySymbol}${refundTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\nTicket original (${originalTransaction.displayId}) marcado como REEMBOLSADO.`);
    };
 

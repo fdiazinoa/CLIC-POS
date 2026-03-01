@@ -35,6 +35,30 @@ const REASONS: { id: ReturnReason; label: string }[] = [
    { id: 'EXPIRED', label: 'Producto Vencido' },
 ];
 
+const getTrackingDetails = (item: CartItem): Array<{ code: string; type: string }> => {
+   const details: Array<{ code: string; type: string }> = [];
+   const rawTracking = Array.isArray(item.trackingData) ? item.trackingData : [];
+
+   for (const tracking of rawTracking) {
+      const code = String(tracking?.trackingCode || tracking?.code || '').trim();
+      if (!code || details.some(detail => detail.code === code)) continue;
+
+      details.push({
+         code,
+         type: String(tracking?.type || '').toUpperCase()
+      });
+   }
+
+   if (details.length === 0) {
+      const fallbackCode = String(item.trackingCode || '').trim();
+      if (fallbackCode) {
+         details.push({ code: fallbackCode, type: '' });
+      }
+   }
+
+   return details;
+};
+
 // --- SUB-COMPONENTS ---
 
 const SalesSummaryBar: React.FC<{ kpis: any; config: BusinessConfig }> = ({ kpis, config }) => (
@@ -393,15 +417,31 @@ const TicketDetailDrawer: React.FC<{
                <section>
                   <h4 className="text-[10px] font-black uppercase text-gray-400 tracking-widest mb-3">Artículos del Ticket</h4>
                   <div className="space-y-2">
-                     {tx.items.map((item, i) => (
-                        <div key={i} className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
-                           <div className="flex-1">
-                              <p className="text-sm font-bold text-gray-800">{item.name}</p>
-                              <p className="text-xs text-gray-400 font-medium">{item.quantity} x {config.currencySymbol}{item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                     {tx.items.map((item, i) => {
+                        const trackingDetails = getTrackingDetails(item);
+
+                        return (
+                           <div key={i} className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
+                              <div className="flex-1">
+                                 <p className="text-sm font-bold text-gray-800">{item.name}</p>
+                                 <p className="text-xs text-gray-400 font-medium">{item.quantity} x {config.currencySymbol}{item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                                 {trackingDetails.length > 0 && (
+                                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                       {trackingDetails.map((tracking, trackingIndex) => (
+                                          <span
+                                             key={`${i}-tracking-${trackingIndex}`}
+                                             className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-black text-blue-700"
+                                          >
+                                             {(tracking.type === 'LOTE' || tracking.type === 'LOT') ? 'Lote' : 'Serie'}: {tracking.code}
+                                          </span>
+                                       ))}
+                                    </div>
+                                 )}
+                              </div>
+                              <p className="text-sm font-black text-gray-900">{config.currencySymbol}{(item.price * item.quantity).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                            </div>
-                           <p className="text-sm font-black text-gray-900">{config.currencySymbol}{(item.price * item.quantity).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                        </div>
-                     ))}
+                        );
+                     })}
                   </div>
                </section>
 

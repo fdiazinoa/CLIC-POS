@@ -66,6 +66,7 @@ interface ProcessReceiptItem {
   cost?: number;
   variantSku?: string;
   variantInfo?: string;
+  trackingData?: PurchaseOrderItem['trackingData'];
 }
 
 interface ProcessReceiptPayload {
@@ -704,7 +705,15 @@ export const db = {
       .map(item => ({
         ...item,
         expectedQty: Math.max(0, Number(item.expectedQty || 0)),
-        receivedQty: Math.max(0, Number(item.receivedQty || 0))
+        receivedQty: Math.max(0, Number(item.receivedQty || 0)),
+        trackingData: Array.isArray(item.trackingData)
+          ? item.trackingData
+            .map(track => ({
+              ...track,
+              trackingCode: String(track?.trackingCode || '').trim()
+            }))
+            .filter(track => track.trackingCode)
+          : undefined
       }))
       .filter(item => item.expectedQty > 0 || item.receivedQty > 0);
 
@@ -786,18 +795,79 @@ export const db = {
     const movementConcept: LedgerConcept = payload.documentType === 'PURCHASE_ORDER' ? 'COMPRA' : 'TRASPASO_ENTRADA';
     const movementRef = payload.documentId;
 
-    await db.recordInventoryMovements(linesWithReception.map(item => ({
-      warehouseId: payload.warehouseId,
-      productId: item.productId,
-      concept: movementConcept,
-      documentRef: movementRef,
-      qty: item.receivedQty,
-      movementCost: Number(item.cost || productMap.get(item.productId)?.cost || 0),
-      terminalId,
-      variantId: item.variantSku,
-      variantName: item.variantInfo,
-      effectiveDate: now
-    })));
+    const movements: Array<{
+      warehouseId: string;
+      productId: string;
+      concept: LedgerConcept;
+      documentRef: string;
+      qty: number;
+      movementCost?: number;
+      terminalId?: string;
+      variantId?: string;
+      variantName?: string;
+      trackingId?: string;
+      trackingCode?: string;
+      effectiveDate?: string;
+    }> = linesWithReception.flatMap(item => {
+      const baseMovement = {
+        warehouseId: payload.warehouseId,
+        productId: item.productId,
+        concept: movementConcept,
+        documentRef: movementRef,
+        movementCost: Number(item.cost || productMap.get(item.productId)?.cost || 0),
+        terminalId,
+        variantId: item.variantSku,
+        variantName: item.variantInfo,
+        effectiveDate: now
+      };
+
+      const trackingData = item.trackingData || [];
+      if (trackingData.length === 0) {
+        return [{ ...baseMovement, qty: item.receivedQty }];
+      }
+
+      if (trackingData.length === 1 && item.receivedQty > 1) {
+        return [{
+          ...baseMovement,
+          qty: item.receivedQty,
+          trackingId: trackingData[0].id,
+          trackingCode: trackingData[0].trackingCode
+        }];
+      }
+
+      const trackedUnitCount = Math.min(Math.max(0, Math.floor(item.receivedQty)), trackingData.length);
+      const trackedMovements: Array<{
+        warehouseId: string;
+        productId: string;
+        concept: LedgerConcept;
+        documentRef: string;
+        qty: number;
+        movementCost?: number;
+        terminalId?: string;
+        variantId?: string;
+        variantName?: string;
+        trackingId?: string;
+        trackingCode?: string;
+        effectiveDate?: string;
+      }> = trackingData.slice(0, trackedUnitCount).map(track => ({
+        ...baseMovement,
+        qty: 1,
+        trackingId: track.id,
+        trackingCode: track.trackingCode
+      }));
+
+      const remainder = item.receivedQty - trackedUnitCount;
+      if (remainder > 0) {
+        trackedMovements.push({
+          ...baseMovement,
+          qty: remainder
+        });
+      }
+
+      return trackedMovements;
+    });
+
+    await db.recordInventoryMovements(movements);
 
     const receptionItems: PurchaseOrderItem[] = linesWithReception.map(item => ({
       productId: item.productId,
@@ -806,7 +876,8 @@ export const db = {
       quantityReceived: item.receivedQty,
       cost: Number(item.cost || productMap.get(item.productId)?.cost || 0),
       variantSku: item.variantSku,
-      variantInfo: item.variantInfo
+      variantInfo: item.variantInfo,
+      trackingData: item.trackingData
     }));
 
     const reception: Reception = {
@@ -824,6 +895,32 @@ export const db = {
     };
 
     await dbAdapter.saveDocument('receptions', reception);
+
+    const trackingRecords = linesWithReception.flatMap(item => {
+      const product = productMap.get(item.productId);
+      const trackingData = item.trackingData || [];
+      const usesTracking = product?.operationalFlags?.usesLots || product?.operationalFlags?.usesSerial;
+      if (trackingData.length === 0 || !product || !usesTracking) return [];
+
+      const trackingType: InventoryTracking['type'] = product.operationalFlags?.usesLots ? 'LOTE' : 'SERIE';
+
+      return trackingData.map(track => ({
+        id: track.id || `TRK-${payload.documentId}-${item.productId}-${item.variantSku || 'base'}-${track.trackingCode}`,
+        productId: item.productId,
+        variantId: item.variantSku,
+        warehouseId: payload.warehouseId,
+        type: trackingType,
+        trackingCode: track.trackingCode,
+        expirationDate: track.expirationDate,
+        status: 'AVAILABLE' as const,
+        receivedAt: now,
+        receptionId: payload.documentId
+      }));
+    });
+
+    for (const trackingRecord of trackingRecords) {
+      await dbAdapter.saveDocument('inventoryTracking', trackingRecord);
+    }
 
     const autoPrintItems = linesWithReception
       .filter(item => productMap.get(item.productId)?.operationalFlags?.autoPrintLabel)

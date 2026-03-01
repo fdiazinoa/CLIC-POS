@@ -22,6 +22,7 @@ import {
   DeviceRole,
   Reception,
   ProductStock,
+  InventoryLedgerEntry,
   InventoryCountSession,
   LedgerConcept,
   DocumentSeries,
@@ -167,6 +168,7 @@ const AppContent: React.FC = () => {
   const [failedMasterIp, setFailedMasterIp] = useState<string>('');
   const initLoadStartedRef = useRef(false);
   const forceSyncHandledRef = useRef(false);
+  const salesLedgerRepairHandledRef = useRef(false);
   const [reconnectionStatus, setReconnectionStatus] = useState<'idle' | 'searching' | 'connected' | 'failed'>('idle');
 
   // --- SECURITY BOOTSTRAP STATE ---
@@ -810,7 +812,8 @@ const AppContent: React.FC = () => {
               // ------------------------------------------------
 
               if (Array.isArray(activeTxns) && activeTxns.length > 0) {
-                setTransactions(activeTxns.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+                activeTxns = activeTxns.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                setTransactions(activeTxns);
               } else {
                 setTransactions([]);
               }
@@ -818,6 +821,21 @@ const AppContent: React.FC = () => {
               const txHistory = await db.get('transactionHistory') as Transaction[];
               if (Array.isArray(txHistory) && txHistory.length > 0) {
                 console.log(`📦 Deferred load: transactionHistory=${txHistory.length}`);
+              }
+
+              if (!salesLedgerRepairHandledRef.current) {
+                salesLedgerRepairHandledRef.current = true;
+                const currentProducts = await db.get('products') as Product[] || [];
+                const repairedMovements = await repairMissingSalesLedgerEntries(
+                  [...(Array.isArray(activeTxns) ? activeTxns : []), ...(Array.isArray(txHistory) ? txHistory : [])],
+                  currentProducts,
+                  finalConfig
+                );
+
+                if (repairedMovements > 0) {
+                  const refreshedProducts = await db.get('products') as Product[] || [];
+                  setProducts(refreshedProducts);
+                }
               }
             } catch (error) {
               console.info('ℹ️ Deferred hydration partial failure:', error);
@@ -1862,6 +1880,128 @@ const AppContent: React.FC = () => {
     };
   }, [customers, transactions]);
 
+  const repairMissingSalesLedgerEntries = useCallback(async (
+    transactionCandidates: Transaction[],
+    productCatalog: Product[],
+    configSnapshot: BusinessConfig
+  ): Promise<number> => {
+    if (!Array.isArray(transactionCandidates) || transactionCandidates.length === 0) return 0;
+    if (!Array.isArray(productCatalog) || productCatalog.length === 0) return 0;
+
+    const persistedLedger = await db.get('inventoryLedger') as InventoryLedgerEntry[] || [];
+    const persistedTracking = await db.get('inventoryTracking' as any) as any[] || [];
+
+    const normalizeDocRef = (value?: string) => (value || '').trim().toUpperCase();
+    const normalizeQty = (value: unknown) => Number(Number(value || 0).toFixed(6));
+    const buildLedgerKey = (entry: Partial<InventoryLedgerEntry>) => ([
+      normalizeDocRef(entry.documentRef),
+      entry.productId || '',
+      entry.warehouseId || '',
+      normalizeQty(entry.qtyIn),
+      normalizeQty(entry.qtyOut),
+      entry.trackingCode || '',
+      entry.variantId || '',
+      entry.concept || ''
+    ].join('|'));
+
+    const existingLedgerKeys = new Set((persistedLedger || []).map(entry => buildLedgerKey(entry)));
+    const trackingById = new Map<string, any>();
+    for (const tracking of persistedTracking) {
+      if (tracking?.id) trackingById.set(String(tracking.id), tracking);
+    }
+
+    const terminalWarehouseById = new Map(
+      (configSnapshot.terminals || []).map(terminal => [
+        terminal.id,
+        terminal.config?.inventoryScope?.defaultSalesWarehouseId || ''
+      ])
+    );
+    const fallbackWarehouseId = configSnapshot.terminals?.[0]?.config?.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
+
+    const transactionsById = new Map<string, Transaction>();
+    for (const tx of transactionCandidates) {
+      if (!tx?.id || transactionsById.has(tx.id)) continue;
+      transactionsById.set(tx.id, tx);
+    }
+
+    const missingEntries: InventoryLedgerEntry[] = [];
+    const touchedPairs = new Set<string>();
+    let trackingChanged = false;
+
+    for (const tx of transactionsById.values()) {
+      const docType = typeof tx.documentType === 'string' ? tx.documentType.trim().toUpperCase() : '';
+      const ncfType = typeof tx.ncfType === 'string' ? tx.ncfType.trim().toUpperCase() : '';
+      if (docType === 'REFUND' || ncfType === 'B04') continue;
+
+      const positiveItems = (Array.isArray(tx.items) ? tx.items : []).filter(item => Number(item?.quantity || 0) > 0);
+      if (positiveItems.length === 0) continue;
+
+      const documentRef = tx.displayId || tx.id;
+      const warehouseId = terminalWarehouseById.get(tx.terminalId || '') || fallbackWarehouseId;
+      const terminalId = tx.terminalId || 'LOCAL';
+
+      for (const item of positiveItems) {
+        const expectedEntries = await processInventoryDeduction(
+          documentRef,
+          item,
+          warehouseId,
+          terminalId,
+          productCatalog
+        );
+
+        for (const entry of expectedEntries) {
+          const entryKey = buildLedgerKey(entry);
+          if (existingLedgerKeys.has(entryKey)) continue;
+
+          const repairedEntry: InventoryLedgerEntry = {
+            ...entry,
+            createdAt: tx.date || entry.createdAt,
+            syncStatus: 'PENDING'
+          };
+
+          missingEntries.push(repairedEntry);
+          existingLedgerKeys.add(entryKey);
+          touchedPairs.add(`${repairedEntry.productId}|${repairedEntry.warehouseId}`);
+        }
+
+        for (const tracking of Array.isArray(item.trackingData) ? item.trackingData : []) {
+          if (!tracking?.id) continue;
+          const persistedTrack = trackingById.get(String(tracking.id));
+          if (!persistedTrack) continue;
+
+          if (persistedTrack.status !== 'SOLD' || persistedTrack.saleId !== documentRef) {
+            trackingById.set(String(tracking.id), {
+              ...persistedTrack,
+              status: 'SOLD',
+              saleId: documentRef
+            });
+            trackingChanged = true;
+          }
+        }
+      }
+    }
+
+    if (missingEntries.length === 0 && !trackingChanged) return 0;
+
+    for (const entry of missingEntries) {
+      await db.saveDocument('inventoryLedger', entry);
+    }
+
+    if (trackingChanged) {
+      await db.save('inventoryTracking' as any, Array.from(trackingById.values()));
+    }
+
+    for (const pair of touchedPairs) {
+      const [productId, warehouseId] = pair.split('|');
+      await db.recalculateProductStock(productId, warehouseId);
+    }
+
+    window.dispatchEvent(new CustomEvent('ledgerSynced'));
+    window.dispatchEvent(new CustomEvent('productStocksUpdated'));
+
+    return missingEntries.length;
+  }, []);
+
   const handleTransactionComplete = async (txn: Transaction) => {
     // Get current terminal ID before persisting.
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
@@ -1891,7 +2031,7 @@ const AppContent: React.FC = () => {
         const allTracking = await db.get('inventoryTracking') as any[] || [];
         const updatedTracking = allTracking.map((t: any) => {
           if (item.trackingData?.some((sel: any) => sel.id === t.id)) {
-            return { ...t, status: 'SOLD', saleId: txn.id };
+            return { ...t, status: 'SOLD', saleId: txn.displayId || txn.id };
           }
           return t;
         });
@@ -1927,6 +2067,8 @@ const AppContent: React.FC = () => {
     // Refresh products to reflect changes made by recordInventoryMovement
     const refreshedDb = await db.init();
     setProducts(refreshedDb.products || []);
+    window.dispatchEvent(new CustomEvent('ledgerSynced'));
+    window.dispatchEvent(new CustomEvent('productStocksUpdated'));
 
     // --- CRITICAL: Increment Document Series Sequence in Internal Sequences ---
     // This is the global source of truth for sequences, synced with Settings.
