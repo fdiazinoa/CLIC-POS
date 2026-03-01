@@ -121,6 +121,7 @@ type ReceivableRepairSummary = {
 
 const CREDIT_PAYMENT_METHODS = new Set(['CREDIT', 'CREDITO', 'PENDIENTE']);
 const SETUP_WIZARD_COMPLETED_KEY = 'clic_pos_setup_wizard_completed';
+const buildRuntimeMasterUrl = () => `${window.location.protocol}//${window.location.hostname}:3001`;
 
 const normalizePaymentMethod = (method: unknown): string => {
   if (typeof method !== 'string') return '';
@@ -207,6 +208,84 @@ const AppContent: React.FC = () => {
     const terminal = getCurrentTerminal();
     return terminal?.config?.deviceRole?.role || DeviceRole.STANDARD_POS;
   }, [getCurrentTerminal]);
+
+  const getStandalonePrimaryBinding = React.useCallback((sourceConfig: BusinessConfig, targetDeviceId: string) => {
+    if (!targetDeviceId) return null;
+
+    const terminals = Array.isArray(sourceConfig?.terminals) ? sourceConfig.terminals : [];
+    if (terminals.length === 0) return null;
+
+    const existingBinding = terminals.find(t => t.config?.currentDeviceId === targetDeviceId);
+    if (existingBinding) {
+      return {
+        terminalId: existingBinding.id,
+        nextConfig: sourceConfig,
+        wasAutoBound: false
+      };
+    }
+
+    const primaryTerminal = terminals.find(t => t.config?.isPrimaryNode) || terminals[0];
+    const occupiedByAnotherDevice = primaryTerminal?.config?.currentDeviceId;
+    if (!primaryTerminal || (occupiedByAnotherDevice && occupiedByAnotherDevice !== targetDeviceId)) {
+      return null;
+    }
+
+    const nextConfig: BusinessConfig = {
+      ...sourceConfig,
+      terminals: terminals.map(terminal => {
+        if (terminal.config?.currentDeviceId === targetDeviceId) {
+          return {
+            ...terminal,
+            config: {
+              ...terminal.config,
+              currentDeviceId: undefined
+            }
+          };
+        }
+
+        if (terminal.id !== primaryTerminal.id) {
+          return terminal;
+        }
+
+        return {
+          ...terminal,
+          config: {
+            ...terminal.config,
+            isPrimaryNode: true,
+            currentDeviceId: targetDeviceId,
+            lastPairingDate: new Date().toISOString()
+          }
+        };
+      })
+    };
+
+    return {
+      terminalId: primaryTerminal.id,
+      nextConfig,
+      wasAutoBound: true
+    };
+  }, []);
+
+  const activateLocalPrimaryTerminal = React.useCallback(async (sourceConfig: BusinessConfig, targetDeviceId: string) => {
+    const standaloneBinding = getStandalonePrimaryBinding(sourceConfig, targetDeviceId);
+    if (!standaloneBinding) return null;
+
+    const { nextConfig, terminalId } = standaloneBinding;
+    const activeTerminal = (nextConfig.terminals || []).find(t => t.id === terminalId);
+
+    setConfig(nextConfig);
+    await db.save('config', nextConfig);
+
+    localStorage.removeItem('pos_master_ip');
+    localStorage.setItem('CLIC_POS_MASTER_URL', buildRuntimeMasterUrl());
+
+    permissionService.initialize(nextConfig, terminalId);
+    authLevelService.init(nextConfig, terminalId);
+    terminalRouter.init(nextConfig, terminalId, activeTerminal?.config?.deviceRole || null);
+    await syncManager.initialize(nextConfig, terminalId);
+
+    return standaloneBinding;
+  }, [getStandalonePrimaryBinding]);
 
   // --- RECONNECTION BANNER ---
   const renderReconnectionBanner = () => {
@@ -715,11 +794,19 @@ const AppContent: React.FC = () => {
         // If no local pairing exists and we have no master IP, we are definitely unpaired.
         // We must bail OUT of the loading sequence to let the user pair.
         if (!localPairedTerminal && !masterIp && setupWizardCompleted) {
-          console.warn('[BOOT] Dispositivo no vinculado. Redirigiendo a pantalla de vinculación...');
-          setIsDataLoaded(true); // Stop "Loading CLIC POS..."
-          setIsSecurityLoaded(true); // Bypass "Loading Security..."
-          setCurrentView('TERMINAL_PAIRING');
-          return;
+          const standaloneBinding = getStandalonePrimaryBinding(currentConfig, storedDeviceId);
+
+          if (standaloneBinding?.wasAutoBound) {
+            console.log(`[BOOT] Standalone install detected. Auto-binding ${standaloneBinding.terminalId} to ${storedDeviceId}...`);
+            currentConfig = standaloneBinding.nextConfig;
+            await db.save('config', currentConfig);
+          } else {
+            console.warn('[BOOT] Dispositivo no vinculado. Redirigiendo a pantalla de vinculación...');
+            setIsDataLoaded(true); // Stop "Loading CLIC POS..."
+            setIsSecurityLoaded(true); // Bypass "Loading Security..."
+            setCurrentView('TERMINAL_PAIRING');
+            return;
+          }
         }
 
         // --- AGENDA STARTUP CHECK ---
@@ -1424,13 +1511,24 @@ const AppContent: React.FC = () => {
         ...config,
         ...finalConfig
       };
+      const effectiveDeviceId = deviceId || localStorage.getItem('pos_device_id') || '';
+
+      localStorage.setItem(SETUP_WIZARD_COMPLETED_KEY, '1');
+
+      const standaloneBinding = !localStorage.getItem('pos_master_ip')
+        ? await activateLocalPrimaryTerminal(nextConfig, effectiveDeviceId)
+        : null;
+
+      if (standaloneBinding) {
+        setCurrentView('LOGIN');
+        return;
+      }
 
       setConfig(nextConfig);
       await db.save('config', nextConfig);
-      localStorage.setItem(SETUP_WIZARD_COMPLETED_KEY, '1');
 
       const hasPairedTerminal = (nextConfig.terminals || []).some(
-        terminal => terminal.config?.currentDeviceId === deviceId
+        terminal => terminal.config?.currentDeviceId === effectiveDeviceId
       );
 
       setCurrentView(hasPairedTerminal ? 'LOGIN' : 'TERMINAL_PAIRING');
