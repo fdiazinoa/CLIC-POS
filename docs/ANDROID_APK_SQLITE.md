@@ -36,6 +36,18 @@ APK generado en:
 
 `android/app/build/outputs/apk/debug/app-debug.apk`
 
+## Generar APK release firmado
+
+Este flujo usa un keystore local en `android/keys/` y un `android/key.properties` ignorado por Git.
+
+```bash
+npm run android:apk:release
+```
+
+APK generado en:
+
+`android/app/build/outputs/apk/release/app-release.apk`
+
 ## Release
 
 Para un APK o AAB de release, abre Android Studio y configura firma:
