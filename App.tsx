@@ -2022,62 +2022,87 @@ const AppContent: React.FC = () => {
     backgroundSyncManager.triggerSync().catch(console.error);
 
     // Update inventory locally (simple stock tracking) AND Record Ledger
-    const defaultWarehouseId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
+    const defaultWarehouseId = currentTerminal?.config?.inventoryScope?.defaultSalesWarehouseId
+      || config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId
+      || 'wh_central';
 
-    // Calculate and Record Inventory Deductions (Recursive & UOM Aware)
-    for (const item of txn.items) {
-      // 1. Traceability Status Update (Mark as SOLD)
-      if (item.trackingData && item.trackingData.length > 0) {
-        const allTracking = await db.get('inventoryTracking') as any[] || [];
-        const updatedTracking = allTracking.map((t: any) => {
-          if (item.trackingData?.some((sel: any) => sel.id === t.id)) {
-            return { ...t, status: 'SOLD', saleId: txn.displayId || txn.id };
-          }
-          return t;
-        });
-        await db.save('inventoryTracking', updatedTracking);
-      }
+    const currentProducts = await db.get('products') as Product[] || products;
+    const trackingItems = txn.items.filter(item => Array.isArray(item.trackingData) && item.trackingData.length > 0);
 
-      // 2. Process Deduction (Handles Recipes, Yields, and Simple Items)
-      const ledgerEntries = await processInventoryDeduction(
-        txn.displayId || txn.id,
-        item,
-        defaultWarehouseId,
-        terminalId,
-        products // Pass current products list for recipe lookups
+    if (trackingItems.length > 0) {
+      const allTracking = await db.get('inventoryTracking') as any[] || [];
+      const soldTrackingIds = new Set(
+        trackingItems.flatMap(item => (item.trackingData || []).map((track: any) => String(track?.id || '')).filter(Boolean))
       );
 
-      // 3. Save Entries
-      // 3. Save Entries
-      for (const entry of ledgerEntries) {
-        await db.saveDocument('inventoryLedger', entry);
-      }
-
-      // 4. Recalculate Stock for affected products immediately
-      // This ensures the product document Is updated before we refresh the UI
-      const affectedPairs = new Set<string>();
-      ledgerEntries.forEach(e => affectedPairs.add(`${e.productId}|${e.warehouseId}`));
-
-      for (const pair of affectedPairs) {
-        const [pId, wId] = pair.split('|');
-        await db.recalculateProductStock(pId, wId);
+      if (soldTrackingIds.size > 0) {
+        const updatedTracking = allTracking.map((tracking: any) => (
+          soldTrackingIds.has(String(tracking?.id || ''))
+            ? { ...tracking, status: 'SOLD', saleId: txn.displayId || txn.id }
+            : tracking
+        ));
+        await db.save('inventoryTracking', updatedTracking);
       }
     }
 
-    const repairedCurrentSaleEntries = await repairMissingSalesLedgerEntries(
-      [txn],
-      await db.get('products') as Product[] || products,
-      config
-    );
+    const ledgerEntries = (
+      await Promise.all(
+        txn.items.map(item => processInventoryDeduction(
+          txn.displayId || txn.id,
+          item,
+          defaultWarehouseId,
+          terminalId,
+          currentProducts
+        ))
+      )
+    ).flat();
 
-    // Refresh products to reflect changes made by recordInventoryMovement
-    const refreshedDb = await db.init();
-    setProducts(refreshedDb.products || []);
+    if (ledgerEntries.length > 0) {
+      await db.recordInventoryMovements(ledgerEntries.map(entry => ({
+        warehouseId: entry.warehouseId,
+        productId: entry.productId,
+        concept: entry.concept,
+        documentRef: entry.documentRef,
+        qty: (entry.qtyIn || 0) - (entry.qtyOut || 0),
+        movementCost: entry.unitCost,
+        terminalId: entry.terminalId,
+        variantId: entry.variantId,
+        variantName: entry.variantName,
+        trackingId: entry.trackingId,
+        trackingCode: entry.trackingCode,
+        effectiveDate: txn.date
+      })));
+
+      const affectedProductIds = Array.from(new Set(ledgerEntries.map(entry => entry.productId)));
+      const refreshedProducts = (
+        await Promise.all(
+          affectedProductIds.map(productId => db.getDocument('products', productId) as Promise<Product | null>)
+        )
+      ).filter(Boolean) as Product[];
+
+      if (refreshedProducts.length > 0) {
+        const refreshedProductMap = new Map(refreshedProducts.map(product => [product.id, product]));
+        setProducts(prev => prev.map(product => refreshedProductMap.get(product.id) || product));
+      }
+
+      const affectedStockIds = Array.from(new Set(ledgerEntries.map(entry => `${entry.productId}_${entry.warehouseId}`)));
+      const refreshedStocks = (
+        await Promise.all(
+          affectedStockIds.map(stockId => db.getDocument('productStocks', stockId) as Promise<ProductStock | null>)
+        )
+      ).filter(Boolean) as ProductStock[];
+
+      if (refreshedStocks.length > 0) {
+        const refreshedStockMap = new Map(refreshedStocks.map(stock => [stock.id, stock]));
+        setProductStocks(prev => {
+          const merged = new Map(prev.map(stock => [stock.id, stock]));
+          refreshedStocks.forEach(stock => merged.set(stock.id, refreshedStockMap.get(stock.id)!));
+          return Array.from(merged.values());
+        });
+      }
+    }
+
     window.dispatchEvent(new CustomEvent('ledgerSynced'));
-    window.dispatchEvent(new CustomEvent('productStocksUpdated'));
-    if (repairedCurrentSaleEntries > 0) {
-      console.warn(`🩹 Rebuilt ${repairedCurrentSaleEntries} missing sales ledger entries for ${txn.displayId || txn.id}`);
-    }
 
     // --- CRITICAL: Increment Document Series Sequence in Internal Sequences ---
     // This is the global source of truth for sequences, synced with Settings.
