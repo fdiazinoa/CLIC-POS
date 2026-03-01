@@ -121,7 +121,21 @@ type ReceivableRepairSummary = {
 
 const CREDIT_PAYMENT_METHODS = new Set(['CREDIT', 'CREDITO', 'PENDIENTE']);
 const SETUP_WIZARD_COMPLETED_KEY = 'clic_pos_setup_wizard_completed';
+const SETUP_FLOW_STAGE_KEY = 'clic_pos_setup_flow_stage';
+const SETUP_FLOW_VERSION_KEY = 'clic_pos_setup_flow_version';
+const SETUP_FLOW_VERSION = '2';
 const buildRuntimeMasterUrl = () => `${window.location.protocol}//${window.location.hostname}:3001`;
+
+const isSeedSetupBusinessConfig = (config: BusinessConfig | null | undefined): boolean => {
+  if (!config?.companyInfo) return false;
+
+  return (
+    config.companyInfo.name === 'CLIC POS DEMO' &&
+    config.companyInfo.rnc === '131-12345-1' &&
+    config.companyInfo.phone === '809-555-POS1' &&
+    config.companyInfo.address === 'Av. Principal #1, Santo Domingo'
+  );
+};
 
 const normalizePaymentMethod = (method: unknown): string => {
   if (typeof method !== 'string') return '';
@@ -288,6 +302,8 @@ const AppContent: React.FC = () => {
   }, [getStandalonePrimaryBinding]);
 
   const handleVerticalSelection = React.useCallback(async (selectedConfig: BusinessConfig) => {
+    localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'VERTICAL_SELECTED');
+    localStorage.setItem(SETUP_FLOW_VERSION_KEY, SETUP_FLOW_VERSION);
     setConfig(selectedConfig);
     await db.save('config', selectedConfig);
     setCurrentView('SETUP');
@@ -791,10 +807,36 @@ const AppContent: React.FC = () => {
         // If a MASTER keeps stale pos_master_ip, blindly pulling here corrupts local runtime config.
         const masterIp = localStorage.getItem('pos_master_ip');
         const setupWizardCompleted = localStorage.getItem(SETUP_WIZARD_COMPLETED_KEY) === '1';
+        const setupFlowStage = localStorage.getItem(SETUP_FLOW_STAGE_KEY);
+        const setupFlowVersion = localStorage.getItem(SETUP_FLOW_VERSION_KEY);
         const localTerminals = (!Array.isArray(currentConfig) && currentConfig?.terminals) ? currentConfig.terminals : [];
         const localPairedTerminal = (localTerminals || []).find(
           (t: any) => t.config?.currentDeviceId === storedDeviceId
         );
+        const isVisorMode = new URLSearchParams(window.location.search).get('view') === 'VISOR';
+        const hasStartupTransactions = Array.isArray(data.transactions) && data.transactions.length > 0;
+        const shouldResumeSetupWizard =
+          setupFlowStage === 'VERTICAL_SELECTED' &&
+          !masterIp &&
+          !localPairedTerminal &&
+          !isVisorMode;
+        const shouldReplayLegacySetupFlow =
+          setupWizardCompleted &&
+          setupFlowVersion !== SETUP_FLOW_VERSION &&
+          !masterIp &&
+          !localPairedTerminal &&
+          !isVisorMode &&
+          !hasStartupTransactions &&
+          isSeedSetupBusinessConfig(currentConfig);
+
+        if (shouldResumeSetupWizard || shouldReplayLegacySetupFlow) {
+          const resumeView = shouldResumeSetupWizard ? 'SETUP' : 'VERTICAL_SELECTOR';
+          console.log(`[BOOT] Resuming initial setup flow in ${resumeView} mode...`);
+          setCurrentView(resumeView);
+          setIsDataLoaded(true);
+          setIsSecurityLoaded(true);
+          return;
+        }
 
         // --- PAIRING CHECK & REDIRECT ---
         // If no local pairing exists and we have no master IP, we are definitely unpaired.
@@ -964,9 +1006,6 @@ const AppContent: React.FC = () => {
           const pairedTerminal = terminals.find(
             (t: any) => t.config?.currentDeviceId === storedDeviceId
           );
-
-          // CRITICAL FIX: Check URL params directly here as well to avoid closure staleness
-          const isVisorMode = new URLSearchParams(window.location.search).get('view') === 'VISOR';
 
           const shouldRunInitialSetupWizard =
             !setupWizardCompleted &&
@@ -1520,6 +1559,8 @@ const AppContent: React.FC = () => {
       const effectiveDeviceId = deviceId || localStorage.getItem('pos_device_id') || '';
 
       localStorage.setItem(SETUP_WIZARD_COMPLETED_KEY, '1');
+      localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'COMPLETE');
+      localStorage.setItem(SETUP_FLOW_VERSION_KEY, SETUP_FLOW_VERSION);
 
       const standaloneBinding = !localStorage.getItem('pos_master_ip')
         ? await activateLocalPrimaryTerminal(nextConfig, effectiveDeviceId)

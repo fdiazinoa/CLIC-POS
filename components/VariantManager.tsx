@@ -152,35 +152,39 @@ const VariantManager: React.FC<VariantManagerProps> = ({ onClose }) => {
     <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">
       
       {/* Header */}
-      <div className="bg-white px-8 py-6 border-b border-gray-200 flex justify-between items-center shrink-0">
+      <div className="bg-white px-4 md:px-8 py-4 md:py-6 border-b border-gray-200 flex flex-col gap-4 md:flex-row md:justify-between md:items-center shrink-0">
         <div>
-          <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2">
+          <h1 className="text-xl md:text-2xl font-black text-gray-800 flex items-center gap-2">
              <Layers className="text-pink-600" /> Configuración de Variantes
           </h1>
           <p className="text-sm text-gray-500">Define atributos maestros (Talla, Color) y crea grupos de uso rápido.</p>
         </div>
-        <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
+        <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-gray-600 transition-colors self-end md:self-auto">
            <X size={24} />
         </button>
       </div>
 
       {/* Tabs */}
-      <div className="px-8 border-b border-gray-200 bg-white flex gap-8">
-         <button 
-            onClick={() => setActiveTab('ATTRIBUTES')}
-            className={`pb-4 text-sm font-bold border-b-4 transition-all ${activeTab === 'ATTRIBUTES' ? 'border-pink-500 text-pink-600' : 'border-transparent text-gray-400'}`}
-         >
-            Maestro de Atributos
-         </button>
-         <button 
-            onClick={() => setActiveTab('TEMPLATES')}
-            className={`pb-4 text-sm font-bold border-b-4 transition-all ${activeTab === 'TEMPLATES' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-400'}`}
-         >
-            Grupos Predefinidos (Templates)
-         </button>
+      <div className="border-b border-gray-200 bg-white shrink-0">
+         <div className="overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-8">
+            <div className="flex w-max min-w-full gap-4 md:gap-8">
+               <button 
+                  onClick={() => setActiveTab('ATTRIBUTES')}
+                  className={`shrink-0 pb-4 pt-4 text-xs md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'ATTRIBUTES' ? 'border-pink-500 text-pink-600' : 'border-transparent text-gray-400'}`}
+               >
+                  Maestro de Atributos
+               </button>
+               <button 
+                  onClick={() => setActiveTab('TEMPLATES')}
+                  className={`shrink-0 pb-4 pt-4 text-xs md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'TEMPLATES' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-400'}`}
+               >
+                  Grupos Predefinidos (Templates)
+               </button>
+            </div>
+         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden p-8">
+      <div className="flex-1 overflow-hidden p-4 md:p-8">
          
          {/* === ATTRIBUTES VIEW === */}
          {activeTab === 'ATTRIBUTES' && (
