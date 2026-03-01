@@ -260,7 +260,7 @@ const SalesHistoryTable: React.FC<{
                               )}
                            </td>
                            <td className="px-4 py-3 text-right font-mono font-bold text-gray-900">
-                              {config.currencySymbol}{tx.total.toFixed(2)}
+                              {config.currencySymbol}{tx.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                            </td>
                            <td className="px-4 py-3 text-right">
                               <button className="p-1 hover:bg-gray-200 rounded-md transition-colors text-gray-400">
@@ -360,7 +360,7 @@ const TicketDetailDrawer: React.FC<{
                   <div className="flex justify-between items-start p-4 rounded-2xl bg-gray-50 border border-gray-100">
                      <div>
                         <p className="text-[10px] font-bold text-gray-400 uppercase">Total Venta</p>
-                        <p className="text-3xl font-black text-gray-900">{config.currencySymbol}{tx.total.toFixed(2)}</p>
+                        <p className="text-3xl font-black text-gray-900">{config.currencySymbol}{tx.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                      </div>
                      <div className="text-right">
                         <p className="text-[10px] font-bold text-gray-400 uppercase">Estado</p>
@@ -397,9 +397,9 @@ const TicketDetailDrawer: React.FC<{
                         <div key={i} className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
                            <div className="flex-1">
                               <p className="text-sm font-bold text-gray-800">{item.name}</p>
-                              <p className="text-xs text-gray-400 font-medium">{item.quantity} x {config.currencySymbol}{item.price.toFixed(2)}</p>
+                              <p className="text-xs text-gray-400 font-medium">{item.quantity} x {config.currencySymbol}{item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                            </div>
-                           <p className="text-sm font-black text-gray-900">{config.currencySymbol}{(item.price * item.quantity).toFixed(2)}</p>
+                           <p className="text-sm font-black text-gray-900">{config.currencySymbol}{(item.price * item.quantity).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                         </div>
                      ))}
                   </div>
@@ -408,15 +408,15 @@ const TicketDetailDrawer: React.FC<{
                <section className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-2">
                   <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
                      <span>Subtotal</span>
-                     <span>{config.currencySymbol}{(tx.total / (1 + config.taxRate)).toFixed(2)}</span>
+                     <span>{config.currencySymbol}{(tx.total / (1 + config.taxRate)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                   <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
                      <span>Impuestos ({config.taxRate * 100}%)</span>
-                     <span>{config.currencySymbol}{(tx.total - (tx.total / (1 + config.taxRate))).toFixed(2)}</span>
+                     <span>{config.currencySymbol}{(tx.total - (tx.total / (1 + config.taxRate))).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                   <div className="flex justify-between text-lg font-black text-blue-900 border-t border-blue-100 pt-2 mt-2">
                      <span>Total Final</span>
-                     <span>{config.currencySymbol}{tx.total.toFixed(2)}</span>
+                     <span>{config.currencySymbol}{tx.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                </section>
 
@@ -476,14 +476,14 @@ const TicketDetailDrawer: React.FC<{
                                     <span className="text-xs font-bold text-gray-700">{getPaymentMethodLabel(payment)}</span>
                                  </div>
                                  <span className="text-xs font-black text-gray-900">
-                                    {config.currencySymbol}{Number(payment?.amount || 0).toFixed(2)}
+                                    {config.currencySymbol}{Number(payment?.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                  </span>
                               </div>
                            ))
                         )}
                         <div className="flex items-center justify-between pt-2 border-t border-gray-100">
                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Total Recibido</span>
-                           <span className="text-sm font-black text-gray-900">{config.currencySymbol}{paymentTotal.toFixed(2)}</span>
+                           <span className="text-sm font-black text-gray-900">{config.currencySymbol}{paymentTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                      </div>
                   </div>

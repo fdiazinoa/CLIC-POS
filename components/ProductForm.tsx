@@ -775,7 +775,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                 <span className="text-[10px] font-bold text-gray-600 flex items-center gap-1 mt-0.5">
                                   {entry.trackingCode ? (
                                     <span className="flex items-center gap-1">
-                                      <span className="text-[8px] bg-indigo-50 text-indigo-600 px-1 py-0.5 rounded font-black uppercase tracking-tighter">Serie</span>
+                                      <span className="text-[8px] bg-indigo-50 text-indigo-600 px-1 py-0.5 rounded font-black uppercase tracking-tighter">
+                                        {formData.operationalFlags?.usesLots && !formData.operationalFlags?.usesSerial ? 'Lote' : 'Serie'}
+                                      </span>
                                       {entry.trackingCode}
                                     </span>
                                   ) : (
@@ -845,7 +847,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                                     <span className="font-bold text-gray-700 text-xs">
                                       {child.trackingCode ? (
                                         <span className="flex items-center gap-1.5">
-                                          <span className="text-[9px] bg-indigo-50 text-indigo-600 px-1 py-0.5 rounded font-black uppercase tracking-tighter">Serie</span>
+                                          <span className="text-[9px] bg-indigo-50 text-indigo-600 px-1 py-0.5 rounded font-black uppercase tracking-tighter">
+                                            {formData.operationalFlags?.usesLots && !formData.operationalFlags?.usesSerial ? 'Lote' : 'Serie'}
+                                          </span>
                                           {child.trackingCode}
                                         </span>
                                       ) : (child.variantName || 'Principal')}

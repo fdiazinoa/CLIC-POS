@@ -1,8 +1,10 @@
 import { Transaction, BusinessConfig, Reservation } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
+import { dbAdapter } from '../services/db';
 
 export const printTicket = async (transaction: Transaction, config: BusinessConfig) => {
     const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
+    const users = ((await dbAdapter.getCollection('users')) || []) as any[];
     const dateStr = new Date(transaction.date).toLocaleDateString();
     const timeStr = new Date(transaction.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -252,6 +254,8 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 }
             }
             const hasTrackingHtml = trackingHtml.length > 0;
+            const sellerUser = users.find((u: any) => u.id === item.salespersonId);
+            const sellerName = sellerUser ? sellerUser.name.split(' ')[0] : (transaction.userName || 'Vendedor');
 
             return `
                         <tr>
@@ -261,8 +265,9 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                                     ${item.quantity} x ${currencySymbol}${item.price.toFixed(2)}
                                     ${hasDiscount ? `<span style="text-decoration: line-through; color: #999; margin-left: 5px;">${currencySymbol}${originalPrice.toFixed(2)}</span>` : ''}
                                     ${item.modifiers ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
-                                    ${hasTrackingHtml ? `<br/>${trackingHtml.join('<br/>')}` : ''}
                                     <br/>ITBIS: ${currencySymbol}${iTax.toFixed(2)}
+                                    <br/>Vendedor: ${sellerName}
+                                    ${hasTrackingHtml ? `<br/>${trackingHtml.join('<br/>')}` : ''}
                                 </span>
                             </td>
                             <td class="item-price">

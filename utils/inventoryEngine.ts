@@ -84,49 +84,78 @@ export async function processInventoryDeduction(
         const isDirectDeduction = productId === item.id;
 
         if (isDirectDeduction && item.trackingData && item.trackingData.length > 0) {
-            // Create one ledger entry per selected serial number
-            for (const tracking of item.trackingData) {
-                entries.push({
-                    id: `INV-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-                    createdAt: new Date().toISOString(),
-                    warehouseId,
-                    productId,
-                    concept: 'VENTA',
-                    documentRef: transactionId,
-                    qtyIn: 0,
-                    qtyOut: 1, // Deduct 1 per serial
-                    unitCost: cost,
-                    balanceQty: 0,
-                    balanceAvgCost: cost,
-                    terminalId,
-                    variantId: item.variantSku,
-                    variantName: item.variantInfo,
-                    trackingId: tracking.id,
-                    trackingCode: tracking.code || tracking.trackingCode, // Support both common shapes
-                });
-            }
+            const hasLot = item.trackingData.some(t => t.type === 'LOTE' || t.type === 'LOT');
 
-            // If for some reason the total sold quantity is greater than the selected serials,
-            // we deduct the remainder as a bulk untracked operation.
-            const remainder = qty - item.trackingData.length;
-            if (remainder > 0) {
-                entries.push({
-                    id: `INV-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-                    createdAt: new Date().toISOString(),
-                    warehouseId,
-                    productId,
-                    concept: 'VENTA',
-                    documentRef: transactionId,
-                    qtyIn: 0,
-                    qtyOut: remainder,
-                    unitCost: cost,
-                    balanceQty: 0,
-                    balanceAvgCost: cost,
-                    terminalId,
-                    variantId: item.variantSku,
-                    variantName: item.variantInfo,
-                    // Remaining items have no specific tracking info
-                });
+            if (hasLot) {
+                // For LOTS, the selected lot(s) apply to the total quantity. 
+                // Currently, the UI only allows selecting 1 lot per cart line.
+                // We'll distribute the total qty equally (typically 100% to the single lot).
+                const qtyPerLot = qty / item.trackingData.length;
+                for (const tracking of item.trackingData) {
+                    entries.push({
+                        id: `INV-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                        createdAt: new Date().toISOString(),
+                        warehouseId,
+                        productId,
+                        concept: 'VENTA',
+                        documentRef: transactionId,
+                        qtyIn: 0,
+                        qtyOut: qtyPerLot,
+                        unitCost: cost,
+                        balanceQty: 0,
+                        balanceAvgCost: cost,
+                        terminalId,
+                        variantId: item.variantSku,
+                        variantName: item.variantInfo,
+                        trackingId: tracking.id,
+                        trackingCode: tracking.code || tracking.trackingCode,
+                    });
+                }
+            } else {
+                // For SERIALS, create one ledger entry per selected serial number
+                for (const tracking of item.trackingData) {
+                    entries.push({
+                        id: `INV-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                        createdAt: new Date().toISOString(),
+                        warehouseId,
+                        productId,
+                        concept: 'VENTA',
+                        documentRef: transactionId,
+                        qtyIn: 0,
+                        qtyOut: 1, // Deduct 1 per serial
+                        unitCost: cost,
+                        balanceQty: 0,
+                        balanceAvgCost: cost,
+                        terminalId,
+                        variantId: item.variantSku,
+                        variantName: item.variantInfo,
+                        trackingId: tracking.id,
+                        trackingCode: tracking.code || tracking.trackingCode,
+                    });
+                }
+
+                // If for some reason the total sold quantity is greater than the selected serials,
+                // we deduct the remainder as a bulk untracked operation.
+                const remainder = qty - item.trackingData.length;
+                if (remainder > 0) {
+                    entries.push({
+                        id: `INV-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                        createdAt: new Date().toISOString(),
+                        warehouseId,
+                        productId,
+                        concept: 'VENTA',
+                        documentRef: transactionId,
+                        qtyIn: 0,
+                        qtyOut: remainder,
+                        unitCost: cost,
+                        balanceQty: 0,
+                        balanceAvgCost: cost,
+                        terminalId,
+                        variantId: item.variantSku,
+                        variantName: item.variantInfo,
+                        // Remaining items have no specific tracking info
+                    });
+                }
             }
         } else {
             // Standard bulk deduction (no serials selected OR it's an ingredient)

@@ -266,6 +266,10 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                               </div>
                            )}
 
+                           <div className="text-[10px]">
+                              Vendedor: {item.seller}
+                           </div>
+
                            {localReceipt.showSerialNumbers && idx === 0 && (
                               <div className="text-[10px] text-gray-600 font-mono">
                                  S/N: 987654321
@@ -277,10 +281,6 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                                  Lote: L-202405
                               </div>
                            )}
-
-                           <div className="text-[10px]">
-                              Vendedor: {item.seller}
-                           </div>
                         </div>
                      ))}
                   </div>
