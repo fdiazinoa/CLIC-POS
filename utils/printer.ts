@@ -254,8 +254,12 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 }
             }
             const hasTrackingHtml = trackingHtml.length > 0;
-            const sellerUser = users.find((u: any) => u.id === item.salespersonId);
-            const sellerName = sellerUser ? sellerUser.name.split(' ')[0] : (transaction.userName || 'Vendedor');
+            let sellerNameHtml = '';
+            if (item.salespersonId) {
+                const sellerUser = users.find((u: any) => u.id === item.salespersonId);
+                const sellerName = sellerUser ? sellerUser.name.split(' ')[0] : 'Vendedor';
+                sellerNameHtml = `<br/>Vendedor: ${sellerName}`;
+            }
 
             return `
                         <tr>
@@ -266,7 +270,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                                     ${hasDiscount ? `<span style="text-decoration: line-through; color: #999; margin-left: 5px;">${currencySymbol}${originalPrice.toFixed(2)}</span>` : ''}
                                     ${item.modifiers ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
                                     <br/>ITBIS: ${currencySymbol}${iTax.toFixed(2)}
-                                    <br/>Vendedor: ${sellerName}
+                                    ${sellerNameHtml}
                                     ${hasTrackingHtml ? `<br/>${trackingHtml.join('<br/>')}` : ''}
                                 </span>
                             </td>

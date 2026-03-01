@@ -266,9 +266,11 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                               </div>
                            )}
 
-                           <div className="text-[10px]">
-                              Vendedor: {item.seller}
-                           </div>
+                           {item.seller && (
+                              <div className="text-[10px]">
+                                 Vendedor: {item.seller}
+                              </div>
+                           )}
 
                            {localReceipt.showSerialNumbers && idx === 0 && (
                               <div className="text-[10px] text-gray-600 font-mono">
