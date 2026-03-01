@@ -46,7 +46,7 @@ npm run android:apk:release
 
 APK generado en:
 
-`android/app/build/outputs/apk/release/app-release.apk`
+`android/app/build/outputs/apk/release/Clic-Pos-1.0-release.apk`
 
 ## Release
 

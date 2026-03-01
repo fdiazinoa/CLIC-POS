@@ -50,6 +50,15 @@ android {
     }
 }
 
+android.applicationVariants.configureEach { variant ->
+    variant.outputs.configureEach { output ->
+        def apkBaseName = 'Clic-Pos'
+        def apkVersionName = variant.versionName ?: '1.0'
+        def apkBuildType = variant.buildType.name
+        output.outputFileName = "${apkBaseName}-${apkVersionName}-${apkBuildType}.apk"
+    }
+}
+
 repositories {
     flatDir{
         dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'

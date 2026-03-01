@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.clicpos.app',
-  appName: 'CLIC POS',
+  appName: 'Clic-Pos',
   webDir: 'dist',
   server: {
     androidScheme: 'https'
