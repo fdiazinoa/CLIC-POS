@@ -678,10 +678,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
       default:
         return (
-          <div
-            className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y p-4 md:p-8 pb-24 md:pb-16 max-w-7xl mx-auto w-full animate-in fade-in"
-            style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
-          >
+          <div className="max-w-7xl mx-auto w-full p-4 md:p-8 pb-24 md:pb-16 animate-in fade-in">
             {/* ADMIN MODE BANNER */}
             {props.isAdminMode && (
               <div className="mb-6 p-4 bg-red-100 border border-red-200 rounded-xl flex items-center gap-3 animate-pulse shadow-sm">
@@ -818,8 +815,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-gray-50 flex min-h-0 flex-col overflow-hidden"
-      style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
+      className={`fixed inset-0 z-50 bg-gray-50 flex min-h-0 flex-col ${currentView === 'HOME' ? 'overflow-y-scroll overscroll-y-contain touch-pan-y' : 'overflow-hidden'}`}
+      style={currentView === 'HOME' ? { WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' } : undefined}
     >
       {renderContent()}
     </div>
