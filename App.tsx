@@ -2064,11 +2064,20 @@ const AppContent: React.FC = () => {
       }
     }
 
+    const repairedCurrentSaleEntries = await repairMissingSalesLedgerEntries(
+      [txn],
+      await db.get('products') as Product[] || products,
+      config
+    );
+
     // Refresh products to reflect changes made by recordInventoryMovement
     const refreshedDb = await db.init();
     setProducts(refreshedDb.products || []);
     window.dispatchEvent(new CustomEvent('ledgerSynced'));
     window.dispatchEvent(new CustomEvent('productStocksUpdated'));
+    if (repairedCurrentSaleEntries > 0) {
+      console.warn(`🩹 Rebuilt ${repairedCurrentSaleEntries} missing sales ledger entries for ${txn.displayId || txn.id}`);
+    }
 
     // --- CRITICAL: Increment Document Series Sequence in Internal Sequences ---
     // This is the global source of truth for sequences, synced with Settings.
