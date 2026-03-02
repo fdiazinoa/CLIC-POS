@@ -119,6 +119,9 @@ const size = (value: number): Uint8Array => bytes(GS, 0x21, value);
 const initPrinter = (): Uint8Array => bytes(ESC, 0x40);
 const openDrawer = (): Uint8Array => bytes(ESC, 0x70, 0x00, 25, 250);
 const fullCut = (): Uint8Array => bytes(GS, 0x56, 66, 0);
+const encodeQrModel = (): Uint8Array => bytes(GS, 0x28, 0x6B, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00);
+const encodeQrSize = (sizeValue = 6): Uint8Array => bytes(GS, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, Math.max(3, Math.min(8, sizeValue)));
+const encodeQrErrorCorrection = (): Uint8Array => bytes(GS, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x31);
 
 const pushTextLines = (chunks: Uint8Array[], lines: string[]) => {
   lines.forEach(line => chunks.push(text(line)));
@@ -126,6 +129,25 @@ const pushTextLines = (chunks: Uint8Array[], lines: string[]) => {
 
 const pushPair = (chunks: Uint8Array[], left: string, right: string, width: number) => {
   pushTextLines(chunks, linePair(left, right, width));
+};
+
+const pushQrCode = (chunks: Uint8Array[], payload: string) => {
+  const normalizedPayload = toAscii(payload);
+  if (!normalizedPayload) return;
+
+  const encodedPayload = new TextEncoder().encode(normalizedPayload);
+  const storeLength = encodedPayload.length + 3;
+  const pL = storeLength % 256;
+  const pH = Math.floor(storeLength / 256);
+
+  chunks.push(align(1));
+  chunks.push(encodeQrModel());
+  chunks.push(encodeQrSize());
+  chunks.push(encodeQrErrorCorrection());
+  chunks.push(bytes(GS, 0x28, 0x6B, pL, pH, 0x31, 0x50, 0x30));
+  chunks.push(encodedPayload);
+  chunks.push(bytes(GS, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30));
+  chunks.push(align(0));
 };
 
 const formatMoney = (currencySymbol: string, value: number): string => {
@@ -399,6 +421,15 @@ export const buildEscPosReservationPayload = (reservation: Reservation, config: 
   if (reservation.notes) {
     chunks.push(divider(width));
     pushTextLines(chunks, splitLines(`Nota: ${reservation.notes}`, width));
+  }
+
+  if (reservation.qrPayload) {
+    chunks.push(divider(width));
+    pushTextLines(chunks, splitLines('ESCANEA PARA RECUPERAR ESTA RESERVA', width));
+    pushQrCode(chunks, reservation.qrPayload);
+    chunks.push(align(1));
+    pushTextLines(chunks, splitLines(reservation.code || reservation.qrPayload, width));
+    chunks.push(align(0));
   }
 
   chunks.push(divider(width));

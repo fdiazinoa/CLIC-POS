@@ -503,6 +503,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [reservations, setReservations] = useState<Reservation[]>([]);
    const [showReservationModal, setShowReservationModal] = useState(false);
    const [showReservationReceipt, setShowReservationReceipt] = useState<Reservation | null>(null);
+   const [isPrintingReservationReceipt, setIsPrintingReservationReceipt] = useState(false);
    const [showRecoverReservationModal, setShowRecoverReservationModal] = useState(false);
    const [reservationCustomerId, setReservationCustomerId] = useState<string>('');
    const [reservationAdvanceInput, setReservationAdvanceInput] = useState<string>('0');
@@ -3228,10 +3229,29 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                      <div className="px-6 pb-6 flex justify-between items-center gap-3">
                         <button
-                           onClick={() => printReservation(showReservationReceipt, config)}
+                           onClick={async () => {
+                              if (isPrintingReservationReceipt) return;
+                              setIsPrintingReservationReceipt(true);
+                              try {
+                                 const printed = await printReservation(showReservationReceipt, config);
+                                 if (printed) {
+                                    setSuccessToast(`Reserva ${showReservationReceipt.code} enviada a impresión`);
+                                 } else {
+                                    setErrorToast('No se pudo imprimir la nota de reserva. Verifica la impresora configurada.');
+                                    setTimeout(() => setErrorToast(null), 3500);
+                                 }
+                              } catch (error) {
+                                 console.error('Reservation print failed:', error);
+                                 setErrorToast('Error al imprimir la nota de reserva.');
+                                 setTimeout(() => setErrorToast(null), 3500);
+                              } finally {
+                                 setIsPrintingReservationReceipt(false);
+                              }
+                           }}
+                           disabled={isPrintingReservationReceipt}
                            className="flex-1 px-5 py-2.5 rounded-xl bg-blue-600 text-white font-black hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-100"
                         >
-                           <Printer size={18} /> Imprimir
+                           <Printer size={18} /> {isPrintingReservationReceipt ? 'Imprimiendo...' : 'Imprimir'}
                         </button>
                         <button
                            onClick={() => setShowReservationReceipt(null)}

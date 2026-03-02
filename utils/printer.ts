@@ -457,7 +457,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
     }
 };
 
-export const printReservation = async (reservation: Reservation, config: BusinessConfig) => {
+export const printReservation = async (reservation: Reservation, config: BusinessConfig): Promise<boolean> => {
     const { companyInfo, currencySymbol, receiptConfig } = config;
     const dateStr = new Date(reservation.createdAt).toLocaleDateString();
     const timeStr = new Date(reservation.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -600,7 +600,7 @@ export const printReservation = async (reservation: Reservation, config: Busines
         });
     }
 
-    if (printedSilently) return;
+    if (printedSilently) return true;
 
     if (!shouldSuppressBrowserPrintFallback()) {
         printedSilently = await PrintRouterService.routeAndPrintHtml({
@@ -612,16 +612,19 @@ export const printReservation = async (reservation: Reservation, config: Busines
         });
     }
 
-    if (printedSilently) return;
+    if (printedSilently) return true;
 
     if (shouldSuppressBrowserPrintFallback()) {
         console.warn('Silent native reservation print failed; browser print fallback suppressed.');
-        return;
+        return false;
     }
 
     const printWindow = window.open('', '_blank', 'width=400,height=600');
     if (printWindow) {
         printWindow.document.write(receiptHtml);
         printWindow.document.close();
+        return true;
     }
+
+    return false;
 };
