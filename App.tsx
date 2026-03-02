@@ -220,6 +220,57 @@ const AppContent: React.FC = () => {
       return;
     }
 
+    const installAndroidPrinterShim = (): boolean => {
+      const runtimeWindow = window as any;
+      if (runtimeWindow.ClicPOSNativePrinter || !runtimeWindow.AndroidPrinter) {
+        return Boolean(runtimeWindow.ClicPOSNativePrinter);
+      }
+
+      const parseResult = (value: any) => {
+        if (!value) {
+          return { status: 'error', success: false, printed: false, message: 'Empty native response' };
+        }
+
+        if (typeof value === 'string') {
+          try {
+            return JSON.parse(value);
+          } catch (error) {
+            return { status: 'error', success: false, printed: false, message: String(value) };
+          }
+        }
+
+        return value;
+      };
+
+      const call = (method: string, payload?: unknown) => {
+        if (!runtimeWindow.AndroidPrinter || typeof runtimeWindow.AndroidPrinter[method] !== 'function') {
+          return Promise.resolve({ status: 'error', success: false, printed: false, message: `Missing native method: ${method}` });
+        }
+
+        const raw = runtimeWindow.AndroidPrinter[method](JSON.stringify(payload || {}));
+        return Promise.resolve(parseResult(raw));
+      };
+
+      runtimeWindow.ClicPOSNativePrinter = {
+        platform: 'android',
+        printEscPos: (payload: unknown) => call('printEscPos', payload),
+        printEscpos: (payload: unknown) => call('printEscpos', payload),
+        printRaw: (payload: unknown) => call('printRaw', payload),
+        printHtml: (payload: unknown) => call('printHtml', payload),
+        print: (payload: unknown) => call('print', payload),
+        discoverPrinters: (payload: unknown) => call('discoverPrinters', payload),
+        scanPrinters: (payload: unknown) => call('scanPrinters', payload),
+        listPrinters: (payload: unknown) => call('listPrinters', payload),
+        pairPrinter: (payload: unknown) => call('pairPrinter', payload),
+        connectPrinter: (payload: unknown) => call('connectPrinter', payload),
+        bindPrinter: (payload: unknown) => call('bindPrinter', payload),
+        getDeviceProfile: () => Promise.resolve(parseResult(runtimeWindow.AndroidPrinter.getDeviceProfile?.())),
+        getDeviceInfo: () => Promise.resolve(parseResult(runtimeWindow.AndroidPrinter.getDeviceInfo?.()))
+      };
+
+      return true;
+    };
+
     const applyInputRuntimeHints = (target: EventTarget | null) => {
       if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
         return;
@@ -241,10 +292,18 @@ const AppContent: React.FC = () => {
       applyInputRuntimeHints(event.target);
     };
 
+    installAndroidPrinterShim();
+    const printerShimPoll = window.setInterval(() => {
+      if (installAndroidPrinterShim()) {
+        window.clearInterval(printerShimPoll);
+      }
+    }, 1000);
+
     seedExistingInputs();
     document.addEventListener('focusin', handleFocusIn, true);
 
     return () => {
+      window.clearInterval(printerShimPoll);
       document.removeEventListener('focusin', handleFocusIn, true);
     };
   }, []);
