@@ -2150,7 +2150,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-[2rem] p-4 shadow-sm border border-gray-100 cursor-pointer hover:shadow-xl hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group flex flex-col h-full relative overflow-hidden"
                         >
                            {uxConfig.showProductImages && (
-                              <div className="aspect-square bg-gray-50 dark:bg-slate-800 rounded-[1.5rem] mb-4 overflow-hidden relative">
+                              <div className="aspect-square bg-gray-50 dark:bg-slate-800 rounded-[1.5rem] mb-3 overflow-hidden relative">
                                  {product.image ? <img src={product.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
 
                                  {/* BADGES DE TIPO DE ARTÍCULO */}
@@ -2200,10 +2200,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
                            )}
-                           <div className="flex flex-col flex-1">
-                              <span className="text-[9px] font-bold text-purple-500 uppercase mb-1 opacity-60">{product.category}</span>
-                              <h3 className="font-bold text-gray-800 dark:text-white text-sm leading-tight mb-2 line-clamp-2 flex-1">{product.name}</h3>
-                              <div className="mt-auto pt-2 border-t border-gray-50 dark:border-slate-700"><span className="font-black text-lg text-gray-900 dark:text-white">{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+                           <div className="flex flex-col flex-1 min-h-0">
+                              <span className="text-[9px] font-bold text-purple-500 uppercase mb-0.5 opacity-60">{product.category}</span>
+                              <h3
+                                 className="font-bold text-gray-800 dark:text-white text-sm leading-tight line-clamp-1 truncate"
+                                 title={product.name}
+                              >
+                                 {product.name}
+                              </h3>
+                              <div className="mt-2 pt-2 border-t border-gray-50 dark:border-slate-700">
+                                 <span className="font-black text-lg text-gray-900 dark:text-white">{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              </div>
                            </div>
                         </div>
                      );
