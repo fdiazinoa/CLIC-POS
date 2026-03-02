@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { CSSProperties, useEffect, useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { CartItem, BusinessConfig } from '../types';
 
@@ -8,6 +8,7 @@ interface ProductTableSupermarketProps {
     currencySymbol: string;
     lastAddedCartId: string | null;
     onRemoveItem: (cartId: string) => void;
+    containerStyle?: CSSProperties;
 }
 
 const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
@@ -15,7 +16,8 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
     config,
     currencySymbol,
     lastAddedCartId,
-    onRemoveItem
+    onRemoveItem,
+    containerStyle
 }) => {
     const [highlightedId, setHighlightedId] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -35,7 +37,11 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
     }, [lastAddedCartId]);
 
     return (
-        <div ref={containerRef} className="flex-1 overflow-y-auto custom-scrollbar bg-white scroll-smooth relative">
+        <div
+            ref={containerRef}
+            className="flex-1 min-h-0 overflow-y-auto custom-scrollbar bg-white scroll-smooth relative"
+            style={containerStyle}
+        >
             <table className="w-full text-left border-collapse table-fixed">
                 <thead className="bg-gray-50 sticky top-0 z-10 text-[9px] uppercase text-gray-400 font-bold tracking-wider shadow-sm">
                     <tr>
