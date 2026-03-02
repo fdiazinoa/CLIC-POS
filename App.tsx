@@ -216,6 +216,40 @@ const AppContent: React.FC = () => {
   // Security bootstrap logic moved to loadData
 
   useEffect(() => {
+    if (!isNativeAndroidRuntime()) {
+      return;
+    }
+
+    const applyInputRuntimeHints = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+        return;
+      }
+
+      target.setAttribute('autocomplete', 'off');
+      target.setAttribute('autocorrect', 'off');
+      target.setAttribute('autocapitalize', 'off');
+      target.spellcheck = false;
+    };
+
+    const seedExistingInputs = () => {
+      document.querySelectorAll('input, textarea').forEach((node) => {
+        applyInputRuntimeHints(node);
+      });
+    };
+
+    const handleFocusIn = (event: FocusEvent) => {
+      applyInputRuntimeHints(event.target);
+    };
+
+    seedExistingInputs();
+    document.addEventListener('focusin', handleFocusIn, true);
+
+    return () => {
+      document.removeEventListener('focusin', handleFocusIn, true);
+    };
+  }, []);
+
+  useEffect(() => {
     const handleReconnection = (e: CustomEvent) => {
       setReconnectionStatus(e.detail.status);
       if (e.detail.status === 'connected') {
