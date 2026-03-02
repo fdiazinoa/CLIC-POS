@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { Layout } from 'lucide-react';
 import {
   User,
@@ -125,6 +126,29 @@ const SETUP_FLOW_STAGE_KEY = 'clic_pos_setup_flow_stage';
 const SETUP_FLOW_VERSION_KEY = 'clic_pos_setup_flow_version';
 const SETUP_FLOW_VERSION = '2';
 const buildRuntimeMasterUrl = () => `${window.location.protocol}//${window.location.hostname}:3001`;
+const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+const normalizeMasterHost = (value: string | null | undefined) =>
+  (value || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/.*$/, '');
+
+const buildConfigSyncUrl = (): string | null => {
+  const currentProtocol = window.location.protocol;
+  const masterHost = normalizeMasterHost(localStorage.getItem('pos_master_ip'));
+  const isLoopbackMaster = masterHost === 'localhost' || masterHost === '127.0.0.1';
+
+  if (masterHost && !isLoopbackMaster) {
+    const hostWithPort = masterHost.includes(':') ? masterHost : `${masterHost}:3001`;
+    return `${currentProtocol}//${hostWithPort}/api/config`;
+  }
+
+  if (isNativeAndroidRuntime()) {
+    return null;
+  }
+
+  return `${currentProtocol}//${window.location.hostname}:3001/api/config`;
+};
 
 const isSeedSetupBusinessConfig = (config: BusinessConfig | null | undefined): boolean => {
   if (!config?.companyInfo) return false;
@@ -1489,26 +1513,26 @@ const AppContent: React.FC = () => {
 
       // Always persist binding to backend before re-initializing sync.
       // This prevents pulling old config right after takeover.
-      const currentProtocol = window.location.protocol;
-      const masterIp = localStorage.getItem('pos_master_ip');
-      const targetUrl = masterIp
-        ? `${currentProtocol}//${masterIp}:3001/api/config`
-        : `${currentProtocol}//${window.location.hostname}:3001/api/config`;
+      const targetUrl = buildConfigSyncUrl();
 
-      try {
-        const res = await fetch(targetUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updatedConfig)
-        });
-        if (!res.ok) {
-          const detail = await res.text().catch(() => '');
-          throw new Error(`HTTP ${res.status} ${detail}`.trim());
+      if (targetUrl) {
+        try {
+          const res = await fetch(targetUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatedConfig)
+          });
+          if (!res.ok) {
+            const detail = await res.text().catch(() => '');
+            throw new Error(`HTTP ${res.status} ${detail}`.trim());
+          }
+          console.log(`✅ Binding synced to backend at ${targetUrl}`);
+        } catch (e) {
+          console.error("❌ Failed to sync binding to backend:", e);
+          // We continue; local binding is already saved.
         }
-        console.log(`✅ Binding synced to backend at ${targetUrl}`);
-      } catch (e) {
-        console.error("❌ Failed to sync binding to backend:", e);
-        // We continue; local binding is already saved.
+      } else {
+        console.log('ℹ️ Native standalone runtime detected. Skipping backend binding sync.');
       }
 
       // If it's a slave terminal, restore history
@@ -1616,8 +1640,13 @@ const AppContent: React.FC = () => {
 
     // REAL SYNC: Push to json-server on the same host (via proxy to avoid Mixed Content)
     // We use the current protocol/port because the frontend proxies /api to the backend
-    const currentProtocol = window.location.protocol;
-    const serverUrl = `${currentProtocol}//${window.location.hostname}:3001/api/config`;
+    const serverUrl = buildConfigSyncUrl();
+    const shouldSurfaceSyncErrors = !isNativeAndroidRuntime();
+
+    if (!serverUrl) {
+      console.log('ℹ️ Skipping remote config sync: native standalone runtime without remote master.');
+      return;
+    }
 
     console.log(`Attempting to sync to: ${serverUrl}`);
 
@@ -1633,11 +1662,15 @@ const AppContent: React.FC = () => {
       } else {
         const errorText = await res.text();
         console.error("Sync failed:", res.status, res.statusText, errorText);
-        alert(`Error al sincronizar: El servidor respondió ${res.status}\nDetalle: ${errorText}`);
+        if (shouldSurfaceSyncErrors) {
+          alert(`Error al sincronizar: El servidor respondió ${res.status}\nDetalle: ${errorText}`);
+        }
       }
     } catch (e) {
       console.warn("Could not sync config to local server", e);
-      alert(`Error de conexión con ${serverUrl}. Asegúrate de que 'npm run server' esté corriendo.`);
+      if (shouldSurfaceSyncErrors) {
+        alert(`Error de conexión con ${serverUrl}. Asegúrate de que 'npm run server' esté corriendo.`);
+      }
     }
   };
 
