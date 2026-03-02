@@ -43,6 +43,7 @@ import { transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useBottomSafeOffset } from '../hooks/useBottomSafeOffset';
 import MobileConfigModal from './MobileConfigModal';
 import ReturnModal from './ReturnModal';
 import PromoBottomSheet from './PromoBottomSheet';
@@ -145,6 +146,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    rooms = []
 }) => {
    const cartEndRef = useRef<HTMLDivElement>(null);
+   const posRootRef = useRef<HTMLDivElement>(null);
+   const mobileFooterRef = useRef<HTMLDivElement>(null);
+   const mobileCartButtonRef = useRef<HTMLButtonElement>(null);
    const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
    const isMaster = useMemo(() => {
       const terminal = config.terminals?.find(t => t.id === activeTerminalId);
@@ -323,9 +327,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const gridClass = useMemo(() => {
       if (uxConfig.gridDensity === 'COMPACT') {
-         return "grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-4 pb-32";
+         return "grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-4";
       }
-      return "grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6 pb-32";
+      return "grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6";
    }, [uxConfig.gridDensity]);
 
    const categoryContainerClass = useMemo(() => {
@@ -445,6 +449,44 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    // --- MOBILE ADAPTATION ---
    const isMobile = useIsMobile();
+   const bottomOverlayRefs = useMemo(
+      () => [mobileFooterRef, mobileCartButtonRef],
+      []
+   );
+   const posShellStyle = useMemo(
+      () =>
+         ({
+            ['--bottom-bar-height' as string]: '0px',
+            ['--bottom-safe-offset' as string]: '12px',
+            ['--viewport-bottom-inset' as string]: '0px',
+            ['--pos-viewport-height' as string]: '100dvh',
+            height: 'var(--pos-viewport-height, 100dvh)',
+            maxHeight: 'var(--pos-viewport-height, 100dvh)',
+         }) as React.CSSProperties,
+      []
+   );
+   const bottomAwareScrollStyle = useMemo(
+      () =>
+         ({
+            paddingBottom: 'calc(var(--bottom-safe-offset, 12px) + env(safe-area-inset-bottom))',
+         }) as React.CSSProperties,
+      []
+   );
+   const mobileFooterStyle = useMemo(
+      () =>
+         ({
+            bottom: 'var(--viewport-bottom-inset, 0px)',
+            paddingBottom: 'calc(env(safe-area-inset-bottom) + 1rem)',
+         }) as React.CSSProperties,
+      []
+   );
+   const mobileCartButtonStyle = useMemo(
+      () =>
+         ({
+            bottom: 'calc(var(--viewport-bottom-inset, 0px) + env(safe-area-inset-bottom) + 1.5rem)',
+         }) as React.CSSProperties,
+      []
+   );
    const [showMobileConfigModal, setShowMobileConfigModal] = useState(false);
    const [pendingProductToAdd, setPendingProductToAdd] = useState<Product | null>(null);
    const [pendingTrackingProduct, setPendingTrackingProduct] = useState<{ product: Product, quantity: number, price?: number, modifiers?: string[] } | null>(null);
@@ -469,6 +511,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [reservationCustomerFilterId, setReservationCustomerFilterId] = useState<string | null>(null);
    const [activeRecoveredReservation, setActiveRecoveredReservation] = useState<Reservation | null>(null);
    const [committedByProduct, setCommittedByProduct] = useState<Record<string, number>>({});
+
+   useBottomSafeOffset({
+      rootRef: posRootRef,
+      overlayRefs: bottomOverlayRefs,
+      dependencyKey: `${isMobile}-${mobileView}`,
+   });
 
    // --- SUPERVISOR AUTH ---
    const { requestApproval, supervisorModalProps } = useSupervisorAuth({
@@ -1922,7 +1970,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    return (
-      <div className="fixed inset-0 w-full h-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900">
+      <div
+         ref={posRootRef}
+         className="fixed inset-0 w-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900"
+         style={posShellStyle}
+      >
          {errorToast && (
             <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
                <div className="bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border-2 border-red-400">
@@ -2012,13 +2064,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          {mobileView === 'PRODUCTS' && (
             <MobileCartButton
+               buttonRef={mobileCartButtonRef}
                itemCount={cart.length}
                onClick={() => setMobileView('TICKET')}
+               style={mobileCartButtonStyle}
             />
          )}
 
          {/* LEFT AREA: PRODUCTS */}
-         <div className={`flex-1 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
+         <div className={`flex-1 min-h-0 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
             <header className="bg-white px-4 md:px-8 py-3 md:py-4 border-b border-gray-200 flex items-center gap-3 md:gap-6 shadow-sm z-10 shrink-0">
                <div className="flex items-center gap-3 pr-4 border-r border-gray-100">
                   <div className="w-10 h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
@@ -2113,7 +2167,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                ))}
             </div>
 
-            <div className={`flex-1 overflow-y-auto ${isMobile ? 'p-4' : 'p-8'} custom-scrollbar dark:bg-slate-900`}>
+            <div
+               className={`flex-1 min-h-0 overflow-y-auto ${isMobile ? 'p-4' : 'p-8'} custom-scrollbar dark:bg-slate-900`}
+               style={bottomAwareScrollStyle}
+            >
                <div className={gridClass}>
                   {filteredProducts.map((product, idx) => {
                      const productName = product.name || '';
@@ -2240,7 +2297,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          </div >
 
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
-         <div className={`w-full ${isRetailMode ? '' : 'md:w-96'} h-full bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
+         <div className={`w-full ${isRetailMode ? '' : 'md:w-96'} h-full min-h-0 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
 
             {/* MOBILE HEADER */}
             < div className="md:hidden p-4 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
@@ -2492,10 +2549,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   currencySymbol={baseCurrency.symbol}
                   lastAddedCartId={lastAddedCartId}
                   onRemoveItem={(cartId) => updateCartItem(null, cartId)}
+                  containerStyle={isMobile ? bottomAwareScrollStyle : undefined}
                />
             ) : (
                // STANDARD RESTAURANT/RETAIL LIST
-               <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-gray-50/50" >
+               <div
+                  className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-gray-50/50"
+                  style={isMobile ? bottomAwareScrollStyle : undefined}
+               >
                   {
                      processedCart.map((item, idx) => {
                         const hasDiscount = item.originalPrice && item.price < item.originalPrice;
@@ -2819,7 +2880,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {/* MOBILE STICKY FOOTER */}
          {
             isMobile && mobileView === 'TICKET' && (
-               <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5">
+               <div
+                  ref={mobileFooterRef}
+                  className="md:hidden fixed left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5"
+                  style={mobileFooterStyle}
+               >
                   <div className="flex justify-between items-center mb-4 px-2">
                      <div className="flex gap-4">
                         <button onClick={() => setShowGlobalDiscount(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-pink-500">
