@@ -651,7 +651,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         </div>
 
         {/* Tabs Navigation */}
-        <div className="flex flex-wrap px-4 border-b bg-white shrink-0 gap-1 overflow-x-auto no-scrollbar">
+        <div className="mobile-tab-scroller no-scrollbar px-4 border-b bg-white shrink-0">
           {[
             { id: 'GENERAL', label: 'General', icon: Info },
             { id: 'CLASSIFICATION', label: 'Clasificación', icon: ListTree },
@@ -668,7 +668,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as ProductTab)}
-              className={`flex items-center gap-2 py-4 px-4 font-bold text-xs transition-all border-b-4 whitespace-nowrap shrink-0 ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+              className={`mobile-tab-item flex items-center gap-2 py-4 font-bold text-xs transition-all border-b-4 ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
             >
               <tab.icon size={14} /> {tab.label}
             </button>

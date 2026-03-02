@@ -384,7 +384,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
    };
 
    return (
-      <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">
+      <div className="responsive-shell flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">
 
          {/* Header */}
          <div className="bg-white px-4 md:px-8 py-4 md:py-6 border-b border-gray-200 flex flex-col gap-4 md:flex-row md:justify-between md:items-center shrink-0">
@@ -397,16 +397,16 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
             <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors self-end md:self-auto"><X size={24} /></button>
          </div>
 
-         <div className="bg-white border-b border-gray-200 shrink-0 px-4 md:px-8">
-            <div className="flex flex-wrap gap-x-4 md:gap-x-8">
-                  <button onClick={() => setActiveSubTab('SERIES')} className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeSubTab === 'SERIES' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>Secuencias Internas</button>
-                  <button onClick={() => setActiveSubTab('FISCAL_POOL')} className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeSubTab === 'FISCAL_POOL' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+         <div className="bg-white border-b border-gray-200 shrink-0 px-4 md:px-8 overflow-hidden">
+            <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
+                  <button onClick={() => setActiveSubTab('SERIES')} className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all ${activeSubTab === 'SERIES' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>Secuencias Internas</button>
+                  <button onClick={() => setActiveSubTab('FISCAL_POOL')} className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeSubTab === 'FISCAL_POOL' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
                      <Landmark size={16} /> Pool Fiscal DGII
                   </button>
             </div>
          </div>
 
-         <div className="flex-1 overflow-hidden p-4 md:p-8">
+         <div className="responsive-content flex-1 overflow-hidden p-4 md:p-8">
             <div className="max-w-6xl mx-auto h-full overflow-y-auto custom-scrollbar">
 
                {activeSubTab === 'SERIES' && (

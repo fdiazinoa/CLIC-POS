@@ -339,7 +339,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    );
 
    return (
-      <div className="flex h-full bg-gray-50 animate-in fade-in overflow-hidden relative">
+      <div className="responsive-shell flex h-full bg-gray-50 animate-in fade-in overflow-hidden relative">
          {/* ADMIN MODE BANNER */}
          {isAdminMode && (
             <div className="absolute top-0 left-0 right-0 bg-red-600 text-white text-center py-2 text-sm font-bold z-50 shadow-md flex items-center justify-center gap-2 animate-pulse">
@@ -393,7 +393,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
             </header>
 
             {/* TABS NAVIGATION */}
-            <div className="relative bg-white border-b border-gray-100 shrink-0 overflow-x-auto no-scrollbar flex px-4">
+            <div className="relative bg-white border-b border-gray-100 shrink-0 overflow-hidden px-4">
+               <div className="mobile-tab-scroller no-scrollbar">
                {[
                   { id: 'OPERATIONAL', label: 'Operativa', icon: Database },
                   { id: 'FISCAL', label: 'Lotes Fiscales', icon: Landmark },
@@ -409,11 +410,12 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                   <button
                      key={tab.id}
                      onClick={() => setActiveTab(tab.id as TerminalTab)}
-                     className={`pb-4 pt-4 px-4 text-sm font-bold flex items-center gap-2 border-b-4 transition-all whitespace-nowrap ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                     className={`mobile-tab-item pb-4 pt-4 text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                   >
                      <tab.icon size={18} /> {tab.label}
                   </button>
                ))}
+               </div>
             </div>
 
             {/* TAB CONTENT */}

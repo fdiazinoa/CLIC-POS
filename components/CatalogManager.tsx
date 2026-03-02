@@ -450,7 +450,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    }
 
    return (
-      <div className="flex min-h-0 flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300 relative">
+      <div className="responsive-shell flex min-h-0 flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300 relative">
 
          {/* BULK ACTION BAR */}
          {selectedIds.size > 0 && viewMode === 'PRODUCTS' && (
@@ -499,31 +499,20 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                      <button onClick={() => { if (viewMode === 'PRODUCTS') setEditingProduct('NEW'); else if (viewMode === 'TARIFFS') setEditingTariff('NEW'); else if (viewMode === 'GROUPS') setEditingGroup('NEW'); else if (viewMode === 'SEASONS') setEditingSeason('NEW'); }} className={`w-full md:w-auto justify-center px-5 md:px-6 py-3 text-white rounded-xl font-bold shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 ${['STOCKS', 'BI_MONITOR'].includes(viewMode) ? 'opacity-0 pointer-events-none' : 'bg-blue-600'}`}><Plus size={20} /> {viewMode === 'GROUPS' ? 'Nuevo Grupo' : viewMode === 'TARIFFS' ? 'Nueva Tarifa' : viewMode === 'SEASONS' ? 'Nueva Temporada' : 'Nuevo Artículo'}</button>
                   )}
                </div>
-               <div
-                  className="no-scrollbar -mx-4 px-4 md:mx-0 md:px-0"
-                  style={{
-                     display: 'flex',
-                     flexWrap: 'nowrap',
-                     overflowX: 'auto',
-                     width: '100%',
-                     gap: '15px',
-                     WebkitOverflowScrolling: 'touch',
-                     touchAction: 'pan-x'
-                  }}
-               >
-                     <button onClick={() => setViewMode('PRODUCTS')} className={`pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${viewMode === 'PRODUCTS' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400'}`} style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}><Package size={18} /> Productos</button>
-                     <button onClick={() => setViewMode('BI_MONITOR')} className={`pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${viewMode === 'BI_MONITOR' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400'}`} style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}><Activity size={18} /> Monitor BI</button>
-                     {canManage && <button onClick={() => setViewMode('VARIANTS')} className={`pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${(viewMode as string) === 'VARIANTS' ? 'border-fuchsia-600 text-fuchsia-600' : 'border-transparent text-gray-400'}`} style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}><Layers size={18} /> Variantes y Atributos</button>}
-                     <button onClick={() => setViewMode('GROUPS')} className={`pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${viewMode === 'GROUPS' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400'}`} style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}><Grid size={18} /> Grupos</button>
-                     <button onClick={() => setViewMode('SEASONS')} className={`pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${viewMode === 'SEASONS' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-gray-400'}`} style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}><Sun size={18} /> Temporadas</button>
-                     <button onClick={() => setViewMode('STOCKS')} className={`pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${viewMode === 'STOCKS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-400'}`} style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}><ClipboardList size={18} /> Stocks</button>
-                     <button onClick={() => setViewMode('TARIFFS')} className={`pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${viewMode === 'TARIFFS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400'}`} style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}><Tag size={18} /> Tarifas</button>
-                     <button onClick={() => setViewMode('CLASSIFICATIONS')} className={`pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${(viewMode as string) === 'CLASSIFICATIONS' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400'}`} style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}><Layers size={18} /> Clasificaciones</button>
+               <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
+                     <button onClick={() => setViewMode('PRODUCTS')} className={`mobile-tab-item pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${viewMode === 'PRODUCTS' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400'}`}><Package size={18} /> Productos</button>
+                     <button onClick={() => setViewMode('BI_MONITOR')} className={`mobile-tab-item pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${viewMode === 'BI_MONITOR' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400'}`}><Activity size={18} /> Monitor BI</button>
+                     {canManage && <button onClick={() => setViewMode('VARIANTS')} className={`mobile-tab-item pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${(viewMode as string) === 'VARIANTS' ? 'border-fuchsia-600 text-fuchsia-600' : 'border-transparent text-gray-400'}`}><Layers size={18} /> Variantes y Atributos</button>}
+                     <button onClick={() => setViewMode('GROUPS')} className={`mobile-tab-item pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${viewMode === 'GROUPS' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400'}`}><Grid size={18} /> Grupos</button>
+                     <button onClick={() => setViewMode('SEASONS')} className={`mobile-tab-item pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${viewMode === 'SEASONS' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-gray-400'}`}><Sun size={18} /> Temporadas</button>
+                     <button onClick={() => setViewMode('STOCKS')} className={`mobile-tab-item pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${viewMode === 'STOCKS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-400'}`}><ClipboardList size={18} /> Stocks</button>
+                     <button onClick={() => setViewMode('TARIFFS')} className={`mobile-tab-item pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${viewMode === 'TARIFFS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400'}`}><Tag size={18} /> Tarifas</button>
+                     <button onClick={() => setViewMode('CLASSIFICATIONS')} className={`mobile-tab-item pb-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${(viewMode as string) === 'CLASSIFICATIONS' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400'}`}><Layers size={18} /> Clasificaciones</button>
                </div>
             </div>
          </div>
 
-         <div className="flex-1 min-h-0 overflow-hidden flex flex-col w-full">
+         <div className="responsive-content flex-1 min-h-0 overflow-hidden flex flex-col w-full">
             {viewMode === 'PRODUCTS' && (
                <div className="p-4 md:p-8 max-w-7xl mx-auto w-full flex-1 min-h-0 flex flex-col overflow-hidden">
                   <div className="flex flex-col md:flex-row gap-3 md:gap-4 mb-6">

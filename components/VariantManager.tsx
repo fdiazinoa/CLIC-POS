@@ -149,7 +149,7 @@ const VariantManager: React.FC<VariantManagerProps> = ({ onClose }) => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">
+    <div className="responsive-shell flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">
       
       {/* Header */}
       <div className="bg-white px-4 md:px-8 py-4 md:py-6 border-b border-gray-200 flex flex-col gap-4 md:flex-row md:justify-between md:items-center shrink-0">
@@ -165,24 +165,24 @@ const VariantManager: React.FC<VariantManagerProps> = ({ onClose }) => {
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-gray-200 bg-white shrink-0 px-4 md:px-8">
-         <div className="flex flex-wrap gap-x-4 md:gap-x-8">
+      <div className="border-b border-gray-200 bg-white shrink-0 px-4 md:px-8 overflow-hidden">
+         <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
                <button 
                   onClick={() => setActiveTab('ATTRIBUTES')}
-                  className={`shrink-0 pb-4 pt-4 text-[11px] md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'ATTRIBUTES' ? 'border-pink-500 text-pink-600' : 'border-transparent text-gray-400'}`}
+                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold border-b-4 transition-all ${activeTab === 'ATTRIBUTES' ? 'border-pink-500 text-pink-600' : 'border-transparent text-gray-400'}`}
                >
                   Maestro de Atributos
                </button>
                <button 
                   onClick={() => setActiveTab('TEMPLATES')}
-                  className={`shrink-0 pb-4 pt-4 text-[11px] md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'TEMPLATES' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-400'}`}
+                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold border-b-4 transition-all ${activeTab === 'TEMPLATES' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-400'}`}
                >
                   Grupos Predefinidos (Templates)
                </button>
          </div>
       </div>
 
-      <div className="flex-1 overflow-hidden p-4 md:p-8">
+      <div className="responsive-content flex-1 overflow-hidden p-4 md:p-8">
          
          {/* === ATTRIBUTES VIEW === */}
          {activeTab === 'ATTRIBUTES' && (

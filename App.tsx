@@ -3926,12 +3926,18 @@ const AppContent: React.FC = () => {
     <ErrorBoundary componentName="App Root">
       <div
         className={`fixed inset-0 w-full h-full bg-gray-50 flex flex-col font-sans select-none text-gray-900 ${currentView === 'SETTINGS' ? '' : 'overflow-hidden'}`}
-        style={currentView === 'SETTINGS'
-          ? {
-              overflowY: 'scroll',
-              WebkitOverflowScrolling: 'touch'
-            }
-          : undefined}
+        style={{
+          width: '100%',
+          maxWidth: '100%',
+          minWidth: 0,
+          overflowX: 'hidden',
+          ...(currentView === 'SETTINGS'
+            ? {
+                overflowY: 'scroll',
+                WebkitOverflowScrolling: 'touch'
+              }
+            : {})
+        }}
       >
         {renderWithLayout()}
       </div>
