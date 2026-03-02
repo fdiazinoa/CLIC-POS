@@ -17,6 +17,9 @@ export const calculateZReportStats = (transactions: Transaction[], collections: 
         };
     }
 
+    // Calcular el total recolectado en CXC (Collections)
+    const collectionsTotal = collections.reduce((acc, c) => acc + (c.totalAmount || 0), 0);
+
     // Filter valid sales (completed) vs refunds
     // Requirement: totalDevoluciones should be specifically documentType === 'REFUND' or ncfType === 'B04'
     const refunds = transactions.filter(t =>
@@ -88,7 +91,7 @@ export const calculateZReportStats = (transactions: Transaction[], collections: 
     const returnsCount = refunds.length;
     const returnsTotal = refunds.reduce((acc, t) => acc + Math.abs(t.total), 0);
 
-    // 6. Gross & Net Sales
+    // 6. Gross & Net Sales (NO INCLUYE RECAUDO CxC - Esto se maneja aparte en el Z)
     const grossSales = totalSalesAmount;
     const netSales = grossSales - returnsTotal;
 
@@ -98,8 +101,7 @@ export const calculateZReportStats = (transactions: Transaction[], collections: 
     // 8. Advancements (Gift Cards / Wallet Deposits)
     const advancementsTotal = transactions.reduce((acc, t) => acc + (t.walletDepositAmount || 0), 0);
 
-    // 9. Collections (CxC Payments)
-    const collectionsTotal = collections.reduce((acc, c) => acc + c.totalAmount, 0);
+
 
     return {
         averageTicket,

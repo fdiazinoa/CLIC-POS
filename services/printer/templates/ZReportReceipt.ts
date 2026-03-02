@@ -94,8 +94,12 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
         <span>Recaud. Anticipos:</span>
         <span>${formatCurrency(report.stats?.advancementsTotal || 0, report.baseCurrency)}</span>
       </div>
+      <div class="row">
+        <span>Ingreso x Cobros:</span>
+        <span>${formatCurrency(report.stats?.collectionsTotal || 0, report.baseCurrency)}</span>
+      </div>
       <div class="row total-row">
-        <span>TOTAL REBROCADO:</span>
+        <span>TOTAL RECAUDADO:</span>
         <span>${formatCurrency(Object.values(report.totalsByMethod).reduce((a, b) => a + b, 0), report.baseCurrency)}</span>
       </div>
       <div class="row">

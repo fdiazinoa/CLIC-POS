@@ -106,6 +106,7 @@ import { useOfflineInventoryCountSync } from './hooks/useOfflineInventoryCountSy
 import { printLabelsFromTemplate } from './utils/labelPrinter';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
+import { checkLicenseStatus } from './utils/licenseGuard';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -174,6 +175,7 @@ const AppContent: React.FC = () => {
   // --- SECURITY BOOTSTRAP STATE ---
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [licenseError, setLicenseError] = useState<string | null>(null);
 
   // Security bootstrap logic moved to loadData
 
@@ -710,6 +712,14 @@ const AppContent: React.FC = () => {
         const localPairedTerminal = (localTerminals || []).find(
           (t: any) => t.config?.currentDeviceId === storedDeviceId
         );
+
+        // --- LICENSE / KILL-SWITCH VALIDATION ---
+        const tenantId = (currentConfig as any)?.companyInfo?.rnc || 'DEFAULT-TENANT'; // We use RNC as generic tenant identifier for mapping if explicit ID is missing
+        const license = await checkLicenseStatus(tenantId, storedDeviceId);
+        if (!license.isValid) {
+          setLicenseError(license.reason || 'Servicio Suspendido.');
+          return;
+        }
 
         // --- PAIRING CHECK & REDIRECT ---
         // If no local pairing exists and we have no master IP, we are definitely unpaired.
@@ -1893,18 +1903,64 @@ const AppContent: React.FC = () => {
 
     const normalizeDocRef = (value?: string) => (value || '').trim().toUpperCase();
     const normalizeQty = (value: unknown) => Number(Number(value || 0).toFixed(6));
-    const buildLedgerKey = (entry: Partial<InventoryLedgerEntry>) => ([
-      normalizeDocRef(entry.documentRef),
+    const buildBucketKey = (entry: Partial<InventoryLedgerEntry>) => ([
       entry.productId || '',
       entry.warehouseId || '',
-      normalizeQty(entry.qtyIn),
-      normalizeQty(entry.qtyOut),
-      entry.trackingCode || '',
+      entry.terminalId || '',
       entry.variantId || '',
+      entry.trackingId || '',
+      entry.trackingCode || '',
       entry.concept || ''
     ].join('|'));
+    const buildEntrySignature = (entry: Partial<InventoryLedgerEntry>) => ([
+      buildBucketKey(entry),
+      normalizeQty(entry.qtyIn),
+      normalizeQty(entry.qtyOut)
+    ].join('|'));
+    const buildEntryMultiset = (entries: Partial<InventoryLedgerEntry>[]) => {
+      const counts = new Map<string, number>();
+      for (const entry of entries) {
+        const key = buildEntrySignature(entry);
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      return counts;
+    };
+    const sameEntryMultiset = (left: Partial<InventoryLedgerEntry>[], right: Partial<InventoryLedgerEntry>[]) => {
+      const leftCounts = buildEntryMultiset(left);
+      const rightCounts = buildEntryMultiset(right);
+      if (leftCounts.size !== rightCounts.size) return false;
 
-    const existingLedgerKeys = new Set((persistedLedger || []).map(entry => buildLedgerKey(entry)));
+      for (const [key, count] of leftCounts.entries()) {
+        if ((rightCounts.get(key) || 0) !== count) return false;
+      }
+
+      return true;
+    };
+    const groupEntriesByBucket = <T extends Partial<InventoryLedgerEntry>>(entries: T[]) => {
+      const buckets = new Map<string, T[]>();
+
+      for (const entry of entries) {
+        const key = buildBucketKey(entry);
+        const existing = buckets.get(key) || [];
+        existing.push(entry);
+        buckets.set(key, existing);
+      }
+
+      return buckets;
+    };
+
+    const persistedSalesByDocRef = new Map<string, InventoryLedgerEntry[]>();
+    for (const entry of persistedLedger || []) {
+      if ((entry?.concept || '').toUpperCase() !== 'VENTA') continue;
+
+      const docRef = normalizeDocRef(entry.documentRef);
+      if (!docRef) continue;
+
+      const existing = persistedSalesByDocRef.get(docRef) || [];
+      existing.push(entry);
+      persistedSalesByDocRef.set(docRef, existing);
+    }
+
     const trackingById = new Map<string, any>();
     for (const tracking of persistedTracking) {
       if (tracking?.id) trackingById.set(String(tracking.id), tracking);
@@ -1925,6 +1981,7 @@ const AppContent: React.FC = () => {
     }
 
     const missingEntries: InventoryLedgerEntry[] = [];
+    const staleEntryIds = new Set<string>();
     const touchedPairs = new Set<string>();
     let trackingChanged = false;
 
@@ -1937,33 +1994,54 @@ const AppContent: React.FC = () => {
       if (positiveItems.length === 0) continue;
 
       const documentRef = tx.displayId || tx.id;
+      const documentKey = normalizeDocRef(documentRef);
       const warehouseId = terminalWarehouseById.get(tx.terminalId || '') || fallbackWarehouseId;
       const terminalId = tx.terminalId || 'LOCAL';
+      const expectedEntries = (
+        await Promise.all(
+          positiveItems.map(item => processInventoryDeduction(
+            documentRef,
+            item,
+            warehouseId,
+            terminalId,
+            productCatalog
+          ))
+        )
+      ).flat().map(entry => ({
+        ...entry,
+        createdAt: tx.date || entry.createdAt,
+        syncStatus: 'PENDING' as const
+      }));
+      const persistedEntries = persistedSalesByDocRef.get(documentKey) || [];
+      const expectedBuckets = groupEntriesByBucket(expectedEntries);
+      const persistedBuckets = groupEntriesByBucket(persistedEntries);
+      const bucketKeys = new Set([...expectedBuckets.keys(), ...persistedBuckets.keys()]);
 
-      for (const item of positiveItems) {
-        const expectedEntries = await processInventoryDeduction(
-          documentRef,
-          item,
-          warehouseId,
-          terminalId,
-          productCatalog
-        );
+      for (const bucketKey of bucketKeys) {
+        const expectedBucketEntries = expectedBuckets.get(bucketKey) || [];
+        const persistedBucketEntries = persistedBuckets.get(bucketKey) || [];
+        if (sameEntryMultiset(expectedBucketEntries, persistedBucketEntries)) continue;
 
-        for (const entry of expectedEntries) {
-          const entryKey = buildLedgerKey(entry);
-          if (existingLedgerKeys.has(entryKey)) continue;
+        for (const entry of persistedBucketEntries) {
+          if (!entry?.id) continue;
+          staleEntryIds.add(entry.id);
+          touchedPairs.add(`${entry.productId}|${entry.warehouseId}`);
+        }
 
+        const fallbackUnitCost = persistedBucketEntries.find(entry => Number(entry.unitCost || 0) > 0)?.unitCost;
+        for (const entry of expectedBucketEntries) {
           const repairedEntry: InventoryLedgerEntry = {
             ...entry,
             createdAt: tx.date || entry.createdAt,
+            unitCost: Number(entry.unitCost || 0) > 0 ? entry.unitCost : (fallbackUnitCost || 0),
             syncStatus: 'PENDING'
           };
-
           missingEntries.push(repairedEntry);
-          existingLedgerKeys.add(entryKey);
           touchedPairs.add(`${repairedEntry.productId}|${repairedEntry.warehouseId}`);
         }
+      }
 
+      for (const item of positiveItems) {
         for (const tracking of Array.isArray(item.trackingData) ? item.trackingData : []) {
           if (!tracking?.id) continue;
           const persistedTrack = trackingById.get(String(tracking.id));
@@ -1981,7 +2059,11 @@ const AppContent: React.FC = () => {
       }
     }
 
-    if (missingEntries.length === 0 && !trackingChanged) return 0;
+    if (missingEntries.length === 0 && staleEntryIds.size === 0 && !trackingChanged) return 0;
+
+    for (const entryId of staleEntryIds) {
+      await db.deleteDocument('inventoryLedger', entryId);
+    }
 
     for (const entry of missingEntries) {
       await db.saveDocument('inventoryLedger', entry);
@@ -1999,7 +2081,7 @@ const AppContent: React.FC = () => {
     window.dispatchEvent(new CustomEvent('ledgerSynced'));
     window.dispatchEvent(new CustomEvent('productStocksUpdated'));
 
-    return missingEntries.length;
+    return missingEntries.length + staleEntryIds.size;
   }, []);
 
   const handleTransactionComplete = async (txn: Transaction) => {
@@ -2550,6 +2632,33 @@ const AppContent: React.FC = () => {
   };
 
   // --- VIEW RENDERING LOGIC ---
+  if (licenseError) {
+    return (
+      <div className="h-screen w-screen bg-red-50 flex flex-col items-center justify-center p-6 text-center">
+        <div className="bg-white p-10 rounded-3xl shadow-2xl border border-red-100 max-w-lg z-50">
+          <div className="w-24 h-24 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <h1 className="text-3xl font-black text-slate-800 mb-4 tracking-tight">Acceso Bloqueado</h1>
+          <p className="text-lg text-slate-600 font-medium mb-8 leading-relaxed">
+            {licenseError}
+          </p>
+          <div className="p-4 bg-slate-50 rounded-xl text-sm font-mono text-slate-500 font-bold border border-slate-200">
+            Terminal Token: {deviceId}
+          </div>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-8 w-full py-4 bg-slate-900 hover:bg-black text-white rounded-xl font-bold transition-transform active:scale-95"
+          >
+            Reintentar Conexión
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!isDataLoaded || restoringHistory) {
     if (initialConnError && !restoringHistory) {
       return (

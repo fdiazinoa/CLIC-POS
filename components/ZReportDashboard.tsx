@@ -115,11 +115,13 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    );
 
    const handleStartClosing = () => {
-      // Check if at least one currency amount is entered
-      const hasAnyCashCounted = Object.values(cashCountedByCurrency).some(val => val && parseFloat(val) >= 0);
-      if (!hasAnyCashCounted) {
-         alert("Por favor, ingresa el conteo físico antes de cerrar.");
-         return;
+      // Check if at least one currency amount is entered, ONLY if there are currencies to count
+      if (allCurrenciesInUse.size > 0) {
+         const hasAnyCashCounted = Object.values(cashCountedByCurrency).some(val => val && parseFloat(val) >= 0);
+         if (!hasAnyCashCounted) {
+            alert("Por favor, ingresa el conteo físico de efectivo antes de cerrar.");
+            return;
+         }
       }
 
       setIsProcessing(true);
@@ -149,7 +151,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                   stats: calculateZReportStats(filteredTransactions, filteredCollections)
                };
 
-               // Calculate totals by method
+               // Calculate totals by method (Sales)
                const totalsByMethod: Record<string, number> = {};
                filteredTransactions.forEach(t => {
                   (t?.payments || []).forEach(p => {
@@ -157,6 +159,12 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                         totalsByMethod[p.method] = (totalsByMethod[p.method] || 0) + p.amount;
                      }
                   });
+               });
+
+               // Calculate totals by method (Collections / Recibos)
+               filteredCollections.forEach(c => {
+                  const method = c.method || 'CASH';
+                  totalsByMethod[method] = (totalsByMethod[method] || 0) + (c.totalAmount || 0);
                });
                tempReport.totalsByMethod = totalsByMethod;
 
@@ -194,6 +202,10 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                      finalTotalsByMethod[p.method] = (finalTotalsByMethod[p.method] || 0) + p.amount;
                   }
                });
+            });
+            filteredCollections.forEach(c => {
+               const method = c.method || 'CASH';
+               finalTotalsByMethod[method] = (finalTotalsByMethod[method] || 0) + (c.totalAmount || 0);
             });
             const finalStats = calculateZReportStats(filteredTransactions, filteredCollections);
             const finalTxCount = filteredTransactions.length;
@@ -296,6 +308,15 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
       if (p.method === 'CASH') {
          const currency = (p as any).currencyCode || baseCurrencyCode;
          cashSalesByCurrency[currency] = (cashSalesByCurrency[currency] || 0) + p.amount;
+      }
+   });
+
+   // Include Cash Collections in cash sales / cash in to affect the Expected Cash Drawer
+   filteredCollections.forEach(c => {
+      if (c.method === 'CASH' || !c.method) { // Asume CASH por defecto
+         const currency = baseCurrencyCode; // Collections no traen currency, se asume base
+         // Treating collection cash as sales conceptually for the cash drawer balance
+         cashSalesByCurrency[currency] = (cashSalesByCurrency[currency] || 0) + (c.totalAmount || 0);
       }
    });
 
@@ -613,7 +634,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
          <div className="p-6 bg-white border-t border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] flex flex-col items-center">
             <SlideButton
                label="Desliza para Cerrar Caja"
-               disabled={!Object.values(cashCountedByCurrency).some(val => val && parseFloat(val) >= 0)}
+               disabled={allCurrenciesInUse.size > 0 && !Object.values(cashCountedByCurrency).some(val => val && parseFloat(val) >= 0)}
                colorClass={config.themeColor === 'orange' ? 'bg-orange-500' : 'bg-blue-500'}
                onComplete={handleStartClosing}
             />
