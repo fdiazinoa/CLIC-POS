@@ -3,6 +3,7 @@ import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { buildEscPosLabelPayload } from '../services/printer/EscPosFormatter';
 import { nativePrintBridge } from '../services/printer/NativePrintBridge';
 import { offlinePrintQueueService } from '../services/printer/OfflinePrintQueueService';
+import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 
 const MM_TO_PX = 3.78;
 
@@ -240,6 +241,14 @@ export const printLabelsFromTemplate = async ({
       printed: true,
       method: 'queued',
       message: 'Impresion en cola. Se enviara automaticamente cuando la impresora este disponible.'
+    };
+  }
+
+  if (shouldSuppressBrowserPrintFallback()) {
+    return {
+      printed: false,
+      method: 'none',
+      message: 'No se pudo enviar la impresion silenciosa a la impresora configurada.'
     };
   }
 

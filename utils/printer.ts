@@ -1,5 +1,7 @@
 import { Transaction, BusinessConfig, Reservation } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
+import { buildEscPosReservationPayload, buildEscPosTicketPayload } from '../services/printer/EscPosFormatter';
+import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 import { dbAdapter } from '../services/db';
 
 export const printTicket = async (transaction: Transaction, config: BusinessConfig) => {
@@ -412,16 +414,39 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
         ''
     );
 
-    const printedSilently = await PrintRouterService.routeAndPrintHtml({
-        config,
-        html: silentHtml,
-        role: 'TICKET',
-        terminalId: transaction.terminalId,
-        jobType: 'TICKET',
-        referenceId: transaction.id,
-    });
+    const escPosBase64 = buildEscPosTicketPayload(transaction, config, users);
+    let printedSilently = false;
+
+    if (escPosBase64) {
+        printedSilently = await PrintRouterService.routeAndPrintEscPos({
+            config,
+            escPosBase64,
+            role: 'TICKET',
+            terminalId: transaction.terminalId,
+            jobType: 'TICKET',
+            referenceId: transaction.id,
+        });
+    }
 
     if (printedSilently) return;
+
+    if (!shouldSuppressBrowserPrintFallback()) {
+        printedSilently = await PrintRouterService.routeAndPrintHtml({
+            config,
+            html: silentHtml,
+            role: 'TICKET',
+            terminalId: transaction.terminalId,
+            jobType: 'TICKET',
+            referenceId: transaction.id,
+        });
+    }
+
+    if (printedSilently) return;
+
+    if (shouldSuppressBrowserPrintFallback()) {
+        console.warn('Silent native ticket print failed; browser print fallback suppressed.');
+        return;
+    }
 
     const printWindow = window.open('', '_blank', 'width=400,height=600');
     if (printWindow) {
@@ -561,15 +586,38 @@ export const printReservation = async (reservation: Reservation, config: Busines
     `;
 
     const silentHtml = receiptHtml.replace(/<script>[\s\S]*?window\.onload[\s\S]*?<\/script>/, '');
-    const printedSilently = await PrintRouterService.routeAndPrintHtml({
-        config,
-        html: silentHtml,
-        role: 'TICKET',
-        jobType: 'TICKET',
-        referenceId: reservation.id,
-    });
+    const escPosBase64 = buildEscPosReservationPayload(reservation, config);
+    let printedSilently = false;
+
+    if (escPosBase64) {
+        printedSilently = await PrintRouterService.routeAndPrintEscPos({
+            config,
+            escPosBase64,
+            role: 'TICKET',
+            terminalId: reservation.terminalId,
+            jobType: 'TICKET',
+            referenceId: reservation.id,
+        });
+    }
 
     if (printedSilently) return;
+
+    if (!shouldSuppressBrowserPrintFallback()) {
+        printedSilently = await PrintRouterService.routeAndPrintHtml({
+            config,
+            html: silentHtml,
+            role: 'TICKET',
+            jobType: 'TICKET',
+            referenceId: reservation.id,
+        });
+    }
+
+    if (printedSilently) return;
+
+    if (shouldSuppressBrowserPrintFallback()) {
+        console.warn('Silent native reservation print failed; browser print fallback suppressed.');
+        return;
+    }
 
     const printWindow = window.open('', '_blank', 'width=400,height=600');
     if (printWindow) {
