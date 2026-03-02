@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Settings as SettingsIcon, X, CreditCard, Receipt,
   Monitor, Users, Truck, ShieldCheck, FileText,
@@ -144,6 +144,40 @@ const Settings: React.FC<SettingsProps> = (props) => {
   const [fiscalPurchaseOrders, setFiscalPurchaseOrders] = useState<PurchaseOrder[]>(props.purchaseOrders || []);
   const [fiscalReceptions, setFiscalReceptions] = useState<Reception[]>(props.receptions || []);
   const [fiscalSuppliers, setFiscalSuppliers] = useState<Supplier[]>(props.suppliers || []);
+
+  useEffect(() => {
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousBodyOverflowY = document.body.style.overflowY;
+    const previousBodyHeight = document.body.style.height;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    const previousHtmlOverflowY = document.documentElement.style.overflowY;
+    const previousHtmlHeight = document.documentElement.style.height;
+    const bodyHadOverflowHiddenClass = document.body.classList.contains('overflow-hidden');
+
+    document.body.style.overflow = 'auto';
+    document.body.style.overflowY = 'auto';
+    document.body.style.height = '100%';
+    document.documentElement.style.overflow = 'auto';
+    document.documentElement.style.overflowY = 'auto';
+    document.documentElement.style.height = '100%';
+
+    if (bodyHadOverflowHiddenClass) {
+      document.body.classList.remove('overflow-hidden');
+    }
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.body.style.overflowY = previousBodyOverflowY;
+      document.body.style.height = previousBodyHeight;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+      document.documentElement.style.overflowY = previousHtmlOverflowY;
+      document.documentElement.style.height = previousHtmlHeight;
+
+      if (bodyHadOverflowHiddenClass) {
+        document.body.classList.add('overflow-hidden');
+      }
+    };
+  }, []);
 
 
   const hasPermission = (permission: string): boolean => {
@@ -678,7 +712,10 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
       default:
         return (
-          <div className="max-w-7xl mx-auto w-full p-4 md:p-8 pb-24 md:pb-16 animate-in fade-in">
+          <div
+            className="max-w-7xl mx-auto w-full p-4 md:p-8 pb-24 md:pb-16 animate-in fade-in"
+            style={{ flex: '1 1 auto', minHeight: '100%' }}
+          >
             {/* ADMIN MODE BANNER */}
             {props.isAdminMode && (
               <div className="mb-6 p-4 bg-red-100 border border-red-200 rounded-xl flex items-center gap-3 animate-pulse shadow-sm">
@@ -815,10 +852,20 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
   return (
     <div
-      className={`fixed inset-0 z-50 bg-gray-50 ${currentView === 'HOME' ? 'overflow-y-auto overscroll-y-contain touch-pan-y' : 'flex min-h-0 flex-col overflow-hidden'}`}
-      style={currentView === 'HOME' ? { WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' } : undefined}
+      className={`z-50 bg-gray-50 ${currentView === 'HOME' ? '' : 'fixed inset-0 flex min-h-0 flex-col overflow-hidden'}`}
+      style={currentView === 'HOME'
+        ? {
+            height: '100%',
+            overflowY: 'scroll',
+            WebkitOverflowScrolling: 'touch',
+            touchAction: 'pan-y'
+          }
+        : undefined}
     >
-      <div className={currentView === 'HOME' ? 'min-h-[100dvh]' : 'flex min-h-0 flex-1 flex-col'}>
+      <div
+        className={currentView === 'HOME' ? 'min-h-[100dvh]' : 'flex min-h-0 flex-1 flex-col'}
+        style={currentView === 'HOME' ? { minHeight: '100dvh' } : undefined}
+      >
         {renderContent()}
       </div>
     </div>

@@ -812,55 +812,71 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
             </div>
 
             {/* Tabs */}
-            <div className="bg-white border-b border-gray-200 shrink-0">
-               <div className="overflow-x-auto no-scrollbar touch-pan-x -mx-4 px-4 md:mx-0 md:px-8">
-                  <div className="flex flex-nowrap w-max min-w-full gap-4 md:gap-8">
-                     <button
-                        onClick={() => setActiveTab('LOCATIONS')}
-                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'LOCATIONS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-                     >
-                        Ubicaciones
-                     </button>
-                     <button
-                        onClick={() => setActiveTab('TRANSFERS')}
-                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all whitespace-nowrap ${activeTab === 'TRANSFERS' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-                     >
-                        Nuevo Traspaso
-                     </button>
-                     <button
-                        onClick={() => setActiveTab('HISTORY')}
-                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'HISTORY' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-                     >
-                        Historial y Recepción
-                        {pendingCount > 0 && (
-                           <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">{pendingCount}</span>
-                        )}
-                     </button>
-                     <button
-                        onClick={() => setActiveTab('OPTIMIZER')}
-                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'OPTIMIZER' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-                     >
-                        <Zap size={18} /> Optimización
-                     </button>
-                     <button
-                        onClick={() => setActiveTab('FORECASTING')}
-                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'FORECASTING' ? 'border-amber-600 text-amber-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-                     >
-                        <ShoppingBag size={18} /> Reabastecimiento
-                     </button>
-                     <button
-                        onClick={() => setActiveTab('INVENTORY')}
-                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'INVENTORY' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-                     >
-                        <Package size={18} /> Inventario
-                     </button>
-                     <button
-                        onClick={() => setActiveTab('AUDIT_CLOSURE')}
-                        className={`shrink-0 py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'AUDIT_CLOSURE' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-                     >
-                        <ClipboardList size={18} /> Auditoría & Cierre
-                     </button>
-                  </div>
+            <div className="bg-white border-b border-gray-200 shrink-0 px-4 md:px-8">
+               <div
+                  className="no-scrollbar"
+                  style={{
+                     display: 'flex',
+                     flexWrap: 'nowrap',
+                     overflowX: 'auto',
+                     width: '100%',
+                     gap: '15px',
+                     WebkitOverflowScrolling: 'touch',
+                     touchAction: 'pan-x'
+                  }}
+               >
+                  <button
+                     onClick={() => setActiveTab('LOCATIONS')}
+                     className={`py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all ${activeTab === 'LOCATIONS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                     style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}
+                  >
+                     Ubicaciones
+                  </button>
+                  <button
+                     onClick={() => setActiveTab('TRANSFERS')}
+                     className={`py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all ${activeTab === 'TRANSFERS' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                     style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}
+                  >
+                     Nuevo Traspaso
+                  </button>
+                  <button
+                     onClick={() => setActiveTab('HISTORY')}
+                     className={`py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'HISTORY' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                     style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}
+                  >
+                     Historial y Recepción
+                     {pendingCount > 0 && (
+                        <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">{pendingCount}</span>
+                     )}
+                  </button>
+                  <button
+                     onClick={() => setActiveTab('OPTIMIZER')}
+                     className={`py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'OPTIMIZER' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                     style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}
+                  >
+                     <Zap size={18} /> Optimización
+                  </button>
+                  <button
+                     onClick={() => setActiveTab('FORECASTING')}
+                     className={`py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'FORECASTING' ? 'border-amber-600 text-amber-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                     style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}
+                  >
+                     <ShoppingBag size={18} /> Reabastecimiento
+                  </button>
+                  <button
+                     onClick={() => setActiveTab('INVENTORY')}
+                     className={`py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'INVENTORY' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                     style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}
+                  >
+                     <Package size={18} /> Inventario
+                  </button>
+                  <button
+                     onClick={() => setActiveTab('AUDIT_CLOSURE')}
+                     className={`py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'AUDIT_CLOSURE' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                     style={{ flexShrink: 0, whiteSpace: 'nowrap', minWidth: 'fit-content' }}
+                  >
+                     <ClipboardList size={18} /> Auditoría & Cierre
+                  </button>
                </div>
             </div>
 
