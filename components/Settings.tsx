@@ -852,8 +852,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
   return (
     <div
-      className={`z-50 bg-gray-50 ${currentView === 'HOME' ? '' : 'fixed inset-0 flex min-h-0 flex-col overflow-hidden'}`}
-      style={currentView === 'HOME'
+      className={`z-50 bg-gray-50 ${currentView === 'HOME' ? '' : `fixed inset-0 flex min-h-0 flex-col ${currentView === 'TERMINALS' ? '' : 'overflow-hidden'}`}`}
+      style={currentView === 'HOME' || currentView === 'TERMINALS'
         ? {
             height: '100%',
             overflowY: 'scroll',
@@ -863,8 +863,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
         : undefined}
     >
       <div
-        className={currentView === 'HOME' ? 'min-h-[100dvh]' : 'flex min-h-0 flex-1 flex-col'}
-        style={currentView === 'HOME' ? { minHeight: '100dvh' } : undefined}
+        className={currentView === 'HOME' || currentView === 'TERMINALS' ? 'min-h-[100dvh] flex flex-1 flex-col' : 'flex min-h-0 flex-1 flex-col'}
+        style={currentView === 'HOME' || currentView === 'TERMINALS' ? { minHeight: '100dvh' } : undefined}
       >
         {renderContent()}
       </div>

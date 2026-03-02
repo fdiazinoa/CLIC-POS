@@ -1,5 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
 import {
    Database, Clock, WifiOff, X, Save, Image as ImageIcon,
    Receipt, Monitor, Plus, Trash2, Smartphone, CheckCircle2,
@@ -81,6 +82,7 @@ const NCF_LABELS: Record<NCFType, string> = {
 };
 
 const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [], isAdminMode = false, currentDeviceId }) => {
+   const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
    // ... existing state ...
    const [terminals, setTerminals] = useState(config.terminals || []);
 
@@ -339,7 +341,10 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    );
 
    return (
-      <div className="responsive-shell flex h-full flex-col lg:flex-row bg-gray-50 animate-in fade-in overflow-hidden relative">
+      <div
+         className={`responsive-shell flex h-full bg-gray-50 animate-in fade-in overflow-hidden relative ${isNativeAndroid ? 'flex-col' : 'flex-col lg:flex-row'}`}
+         style={isNativeAndroid ? { height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' } : undefined}
+      >
          {/* ADMIN MODE BANNER */}
          {isAdminMode && (
             <div className="absolute top-0 left-0 right-0 bg-red-600 text-white text-center py-2 text-sm font-bold z-50 shadow-md flex items-center justify-center gap-2 animate-pulse">
@@ -349,7 +354,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
          )}
 
          {/* SIDEBAR */}
-         <aside className="w-full lg:w-80 lg:max-w-[320px] bg-white border-b lg:border-b-0 lg:border-r border-gray-200 flex flex-col shrink-0 z-20 shadow-sm max-h-[42vh] lg:max-h-none">
+         <aside className={`bg-white border-gray-200 flex flex-col shrink-0 z-20 shadow-sm ${isNativeAndroid ? 'w-full border-b max-h-none' : 'w-full lg:w-80 lg:max-w-[320px] border-b lg:border-b-0 lg:border-r max-h-[42vh] lg:max-h-none'}`}>
             <div className="p-4 md:p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                <div>
                   <h2 className="text-xl font-black text-slate-800">Terminales</h2>
@@ -362,10 +367,13 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                   <Plus size={20} />
                </button>
             </div>
-            <div className="flex-1 overflow-x-auto lg:overflow-y-auto p-4 no-scrollbar">
-               <div className="flex gap-3 lg:flex-col lg:gap-2 min-w-max lg:min-w-0">
+            <div
+               className={`flex-1 p-4 no-scrollbar ${isNativeAndroid ? 'overflow-x-auto overflow-y-hidden' : 'overflow-x-auto lg:overflow-y-auto'}`}
+               style={isNativeAndroid ? { WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' } : undefined}
+            >
+               <div className={`flex gap-3 ${isNativeAndroid ? 'min-w-max flex-row' : 'lg:flex-col lg:gap-2 min-w-max lg:min-w-0'}`}>
                {terminals.map((t) => (
-                  <div key={t.id} onClick={() => setSelectedTerminalId(t.id)} className={`group min-w-[220px] lg:min-w-0 lg:w-full p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between ${selectedTerminalId === t.id ? 'bg-blue-50 border-blue-500 shadow-md ring-4 ring-blue-50' : 'bg-white border-transparent hover:border-gray-200'}`}>
+                  <div key={t.id} onClick={() => setSelectedTerminalId(t.id)} className={`group p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between ${isNativeAndroid ? 'min-w-[220px]' : 'min-w-[220px] lg:min-w-0 lg:w-full'} ${selectedTerminalId === t.id ? 'bg-blue-50 border-blue-500 shadow-md ring-4 ring-blue-50' : 'bg-white border-transparent hover:border-gray-200'}`}>
                      <div className="flex items-center gap-3 min-w-0">
                         <div className={`p-2.5 rounded-xl shrink-0 ${selectedTerminalId === t.id ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100 text-gray-400'}`}><Monitor size={20} /></div>
                         <div className="min-w-0">
@@ -386,17 +394,17 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
 
          {/* MAIN AREA */}
          <div className="responsive-content flex-1 flex flex-col min-w-0 h-full">
-            <header className="bg-white px-4 md:px-8 py-4 md:py-5 border-b border-gray-200 flex flex-col gap-4 lg:flex-row lg:justify-between lg:items-center shrink-0 z-10">
+            <header className={`bg-white px-4 md:px-8 py-4 md:py-5 border-b border-gray-200 flex flex-col gap-4 shrink-0 z-10 ${isNativeAndroid ? '' : 'lg:flex-row lg:justify-between lg:items-center'}`}>
                <h2 className="text-xl md:text-2xl font-black text-gray-800 flex items-center gap-3 min-w-0"><SettingsIcon className="text-blue-600 shrink-0" /> <span className="truncate">Terminal: <span className="text-blue-600">{selectedTerminalId}</span></span></h2>
-               <div className="flex w-full lg:w-auto gap-3">
-                  <button onClick={handleSave} className="flex-1 lg:flex-none justify-center px-5 md:px-8 py-3 bg-blue-600 text-white rounded-xl font-bold flex items-center gap-2 shadow-xl hover:bg-blue-700 transition-all"><Save size={20} /> Guardar Cambios</button>
+               <div className={`flex w-full gap-3 ${isNativeAndroid ? '' : 'lg:w-auto'}`}>
+                  <button onClick={handleSave} className="flex-1 justify-center px-5 md:px-8 py-3 bg-blue-600 text-white rounded-xl font-bold flex items-center gap-2 shadow-xl hover:bg-blue-700 transition-all"><Save size={20} /> Guardar Cambios</button>
                   <button onClick={onClose} className="p-3 bg-gray-100 text-gray-500 hover:bg-gray-200 rounded-xl transition-colors shrink-0"><X size={20} /></button>
                </div>
             </header>
 
             {/* TABS NAVIGATION */}
             <div className="relative bg-white border-b border-gray-100 shrink-0 overflow-hidden px-4 md:px-6">
-               <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
+               <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 md:mx-0 md:px-0" style={{ overflowX: 'scroll', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}>
                {[
                   { id: 'OPERATIONAL', label: 'Operativa', icon: Database },
                   { id: 'FISCAL', label: 'Lotes Fiscales', icon: Landmark },
@@ -421,7 +429,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
             </div>
 
             {/* TAB CONTENT */}
-            <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-slate-50/50 custom-scrollbar">
+            <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-slate-50/50 custom-scrollbar" style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}>
                {activeTerminal ? (
                   <div className="w-full max-w-4xl mx-auto space-y-6 md:space-y-8 animate-in slide-in-from-right-4">
 
