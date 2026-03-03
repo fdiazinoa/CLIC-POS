@@ -107,6 +107,7 @@ import { useOfflineInventoryCountSync } from './hooks/useOfflineInventoryCountSy
 import { printLabelsFromTemplate } from './utils/labelPrinter';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
+import { persistStandaloneRefundTransaction } from './services/localRefundPersistence';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -2766,15 +2767,27 @@ const AppContent: React.FC = () => {
   ) => {
     console.log("🔄 Procesando Devolución Integral:", { originalTx, items: itemsToRefund.length, reason });
 
+    const normalizedRefundItems = (itemsToRefund || [])
+      .map(item => ({
+        ...item,
+        quantity: Math.abs(Number(item.quantity || 0))
+      }))
+      .filter(item => item.quantity > 0);
+
+    if (normalizedRefundItems.length === 0) {
+      alert('No hay artículos válidos para procesar la devolución.');
+      return;
+    }
+
     // 1. Calculations
-    const refundSubtotalRaw = itemsToRefund.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+    const refundSubtotalRaw = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
     const refundTotal = originalTx.isTaxIncluded
       ? refundSubtotalRaw
       : refundSubtotalRaw * (1 + (config.taxRate || 0));
 
     // Check if full refund
-    const totalOriginalQty = originalTx.items.reduce((acc, i) => acc + i.quantity, 0);
-    const totalRefundedQty = itemsToRefund.reduce((acc, i) => acc + i.quantity, 0);
+    const totalOriginalQty = originalTx.items.reduce((acc, i) => acc + Math.abs(Number(i.quantity || 0)), 0);
+    const totalRefundedQty = normalizedRefundItems.reduce((acc, i) => acc + Math.abs(Number(i.quantity || 0)), 0);
     const isFullRefund = totalRefundedQty >= totalOriginalQty;
     const newStatus = isFullRefund ? 'REFUNDED' : 'PARTIAL_REFUND';
 
@@ -2789,7 +2802,7 @@ const AppContent: React.FC = () => {
     const resolvedCustomerName = originalTx.customerName || matchedCustomer?.name;
 
     // 2. NCF B04 Generation
-    const currentTerminalId = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
+    const currentTerminalId = getCurrentTerminal()?.id || config.terminals?.[0]?.id || 't1';
     let ncfB04: string | null = null;
     try {
       ncfB04 = await db.getNextNCF('B04', currentTerminalId);
@@ -2814,7 +2827,7 @@ const AppContent: React.FC = () => {
       displayId: displayId,
       documentType: 'REFUND',
       date: new Date().toISOString(),
-      items: itemsToRefund,
+      items: normalizedRefundItems,
       total: refundTotal,
       payments: [{ method: 'STORE_CREDIT', amount: refundTotal, currency: config.currencySymbol }],
       userId: currentUser?.id || 'sys',
@@ -2833,37 +2846,28 @@ const AppContent: React.FC = () => {
       syncStatus: 'PENDING'
     };
 
-    // 5. Inventory & Kardex Updates
-    const defaultWarehouseId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
+    // 5. Persist refund, history mirror and Kardex through the standalone helper
+    const currentTerminal = getCurrentTerminal();
+    const defaultWarehouseId =
+      currentTerminal?.config?.inventoryScope?.defaultSalesWarehouseId ||
+      (config.terminals || []).find(t => t.id === currentTerminalId)?.config?.inventoryScope?.defaultSalesWarehouseId ||
+      config.terminals?.[0]?.config.inventoryScope?.defaultSalesWarehouseId ||
+      'wh_central';
 
-    for (const item of itemsToRefund) {
-      const condition = conditions.get(item.cartId) || 'SELLABLE';
-      const isDamaged = condition === 'DAMAGED';
-
-      // KARDEX: Always "DEVOLUCIÓN_VENTA" (Input)
-      await db.recordInventoryMovement(
-        defaultWarehouseId,
-        item.id,
-        'DEVOLUCIÓN_VENTA',
-        `Devolución Ticket #${originalTx.displayId} (${condition})`,
-        item.quantity,
-        undefined,
-        currentTerminalId
-      );
-
-      // Waste Logic (If Damaged)
-      if (isDamaged) {
-        await db.recordInventoryMovement(
-          defaultWarehouseId,
-          item.id,
-          'AJUSTE_SALIDA',
-          'MERMA_POR_DEVOLUCION',
-          item.quantity,
-          undefined,
-          currentTerminalId
-        );
+    const refundPersistenceResult = await persistStandaloneRefundTransaction(
+      creditNote,
+      {
+        warehouseId: defaultWarehouseId,
+        terminalId: currentTerminalId,
+        originalTransaction: {
+          ...originalTx,
+          customerId: resolvedCustomerId,
+          customerName: resolvedCustomerName,
+          status: newStatus as any
+        },
+        conditions
       }
-    }
+    );
 
     // 6. Financial Update (Customer Account & Wallet)
     if (resolvedCustomerId) {
@@ -2881,17 +2885,21 @@ const AppContent: React.FC = () => {
 
         // Step B: If there is still a refund amount (Scenario B - pure credit or surplus), add to Wallet
         if (remainingRefund > 0.01) {
-          await transactionService.applyRefundToWallet(
-            resolvedCustomerId,
-            remainingRefund,
-            displayId
-          );
+          try {
+            await transactionService.applyRefundToWallet(
+              resolvedCustomerId,
+              remainingRefund,
+              displayId
+            );
 
-          // Re-fetch wallets to get the updated balance for the customer nested object
-          const wallets = await (await import('./utils/db')).db.get('wallets' as any) as any[] || [];
-          const updatedWallet = wallets.find(w => w.customerId === resolvedCustomerId);
-          if (updatedWallet) {
-            customer.wallet = updatedWallet;
+            // Re-fetch wallets to get the updated balance for the customer nested object
+            const wallets = await (await import('./utils/db')).db.get('wallets' as any) as any[] || [];
+            const updatedWallet = wallets.find(w => w.customerId === resolvedCustomerId);
+            if (updatedWallet) {
+              customer.wallet = updatedWallet;
+            }
+          } catch (walletRefundError) {
+            console.error('⚠️ Refund wallet update failed after persistence:', walletRefundError);
           }
         }
 
@@ -2901,43 +2909,47 @@ const AppContent: React.FC = () => {
       }
     }
 
-    // 7. Update Original Transaction
-    const updatedOriginalTx = {
-      ...originalTx,
-      customerId: resolvedCustomerId,
-      customerName: resolvedCustomerName,
-      status: newStatus as any,
-      relatedTransactions: [...(originalTx.relatedTransactions || []), creditNote.id],
-      updatedAt: new Date().toISOString(),
-      syncStatus: 'PENDING' as const
-    };
-
-    // 8. Save Everything Atomically
-    await db.saveDocument('transactions', updatedOriginalTx);
-    await db.saveDocument('transactions', creditNote);
-
-    // Keep history mirror in sync so legacy/history views always include credit notes.
+    // 7. Refresh local state from storage so APK runtime never stays stale in-memory.
     try {
-      await db.saveDocument('transactionHistory', updatedOriginalTx as any);
-      await db.saveDocument('transactionHistory', creditNote as any);
-    } catch (historyMirrorError) {
-      console.warn('⚠️ Refund history mirror update skipped:', historyMirrorError);
-    }
+      const [persistedTransactions, freshProducts] = await Promise.all([
+        db.get('transactions') as Promise<Transaction[]>,
+        db.get('products') as Promise<Product[]>
+      ]);
 
-    // Update local state
-    setTransactions(prev => {
-      const filtered = prev.filter(t => t.id !== updatedOriginalTx.id && t.id !== creditNote.id);
-      return [updatedOriginalTx, ...filtered, creditNote].sort((a, b) =>
-        new Date(b.date).getTime() - new Date(a.date).getTime()
-      );
-    });
+      if (Array.isArray(persistedTransactions)) {
+        setTransactions(
+          [...persistedTransactions].sort((a, b) =>
+            new Date(b.date).getTime() - new Date(a.date).getTime()
+          )
+        );
+      } else {
+        const updatedOriginalTx = refundPersistenceResult.updatedOriginal || {
+          ...originalTx,
+          customerId: resolvedCustomerId,
+          customerName: resolvedCustomerName,
+          status: newStatus as any,
+          relatedTransactions: [...(originalTx.relatedTransactions || []), creditNote.id],
+          updatedAt: new Date().toISOString(),
+          syncStatus: 'PENDING' as const
+        };
+        const persistedCreditNote = refundPersistenceResult.refund || creditNote;
+        setTransactions(prev => {
+          const filtered = prev.filter(t => t.id !== updatedOriginalTx.id && t.id !== persistedCreditNote.id);
+          return [updatedOriginalTx, ...filtered, persistedCreditNote].sort((a, b) =>
+            new Date(b.date).getTime() - new Date(a.date).getTime()
+          );
+        });
+      }
+
+      if (Array.isArray(freshProducts)) {
+        setProducts(freshProducts);
+      }
+    } catch (refreshError) {
+      console.warn('⚠️ Refund state refresh fallback:', refreshError);
+    }
 
     // Sync
     backgroundSyncManager.triggerSync().catch(console.error);
-
-    // Refresh products to show updated stock
-    const freshData = await db.init();
-    setProducts(freshData.products);
 
     alert(`Devolución procesada correctamente.\nDocumento: ${displayId}\n${ncfB04 ? 'NCF: ' + ncfB04 : ''}`);
   };
