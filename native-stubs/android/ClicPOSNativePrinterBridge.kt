@@ -1,6 +1,9 @@
 package com.clicpos.nativeprinter
 
+import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
 import android.util.Base64
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -17,8 +20,10 @@ import org.json.JSONObject
  * 4) AndroidPrinterBridge.injectContractShim(webView)
  */
 class AndroidPrinterBridge(context: Context) {
+    private val appContext = context.applicationContext
+    private val clipboardManager = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
 
-    private val manager = ClicPOSBluetoothPrinterManager(context.applicationContext)
+    private val manager = ClicPOSBluetoothPrinterManager(appContext)
 
     @JavascriptInterface
     fun printEscPos(payloadJson: String?): String {
@@ -159,9 +164,84 @@ class AndroidPrinterBridge(context: Context) {
     fun getDeviceInfo(): String = getDeviceProfile()
 
     @JavascriptInterface
+    fun readClipboard(): String {
+        return try {
+            if (!clipboardManager.hasPrimaryClip()) {
+                return error("Portapapeles vacío.", "CLIPBOARD_EMPTY")
+            }
+
+            val clip = clipboardManager.primaryClip
+                ?: return error("Portapapeles vacío.", "CLIPBOARD_EMPTY")
+
+            if (clip.itemCount <= 0) {
+                return error("Portapapeles vacío.", "CLIPBOARD_EMPTY")
+            }
+
+            val item = clip.getItemAt(0)
+            val uri = item.uri
+            if (uri != null) {
+                val imageDataUrl = readImageDataUrlFromUri(uri)
+                if (imageDataUrl != null) {
+                    return JSONObject()
+                        .put("success", true)
+                        .put("source", "uri")
+                        .put("imageDataUrl", imageDataUrl)
+                        .toString()
+                }
+            }
+
+            val html = item.htmlText?.takeIf { it.isNotBlank() }
+            val text = item.coerceToText(appContext)?.toString()?.trim()?.takeIf { it.isNotBlank() }
+
+            if (html != null || text != null) {
+                return JSONObject()
+                    .put("success", true)
+                    .put("source", "text")
+                    .put("html", html)
+                    .put("text", text)
+                    .toString()
+            }
+
+            val description = clip.description
+            if (description != null && hasImageMimeType(description)) {
+                return error("La imagen del portapapeles no se pudo leer desde Android.", "CLIPBOARD_IMAGE_UNREADABLE")
+            }
+
+            error("Contenido del portapapeles no soportado.", "CLIPBOARD_UNSUPPORTED")
+        } catch (e: SecurityException) {
+            error(e.message ?: "Android bloqueó el acceso al portapapeles.", "CLIPBOARD_SECURITY")
+        } catch (e: Exception) {
+            error(e.message ?: "Error leyendo portapapeles.", "CLIPBOARD_ERROR")
+        }
+    }
+
+    @JavascriptInterface
     fun closeBridge(): String {
         manager.close()
         return JSONObject().put("status", "success").toString()
+    }
+
+    private fun hasImageMimeType(description: ClipDescription): Boolean {
+        for (index in 0 until description.mimeTypeCount) {
+            val mime = description.getMimeType(index) ?: continue
+            if (mime.startsWith("image/")) return true
+        }
+        return false
+    }
+
+    private fun readImageDataUrlFromUri(uri: Uri): String? {
+        val contentResolver = appContext.contentResolver
+        val mimeType = contentResolver.getType(uri) ?: return null
+        if (!mimeType.startsWith("image/")) return null
+
+        contentResolver.openInputStream(uri)?.use { input ->
+            val bytes = input.readBytes()
+            if (bytes.isEmpty()) return null
+            val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
+            return "data:$mimeType;base64,$encoded"
+        }
+
+        return null
     }
 
     private fun toJson(result: ClicPOSBluetoothPrinterManager.PrintResult): String {
