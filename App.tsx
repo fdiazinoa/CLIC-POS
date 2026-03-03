@@ -161,6 +161,19 @@ const normalizeTerminalDocumentAssignments = (
   };
 };
 
+const createRuntimeId = (prefix: string): string => {
+  const hasRandomUuid =
+    typeof globalThis !== 'undefined' &&
+    typeof globalThis.crypto !== 'undefined' &&
+    typeof globalThis.crypto.randomUUID === 'function';
+
+  if (hasRandomUuid) {
+    return `${prefix}-${globalThis.crypto.randomUUID()}`;
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
 const CREDIT_PAYMENT_METHODS = new Set(['CREDIT', 'CREDITO', 'PENDIENTE']);
 const SETUP_WIZARD_COMPLETED_KEY = 'clic_pos_setup_wizard_completed';
 const SETUP_FLOW_STAGE_KEY = 'clic_pos_setup_flow_stage';
@@ -2823,7 +2836,7 @@ const AppContent: React.FC = () => {
 
     // 4. Create Credit Note Record
     const creditNote: Transaction = {
-      id: crypto.randomUUID(),
+      id: createRuntimeId('NC'),
       displayId: displayId,
       documentType: 'REFUND',
       date: new Date().toISOString(),
@@ -3388,7 +3401,12 @@ const AppContent: React.FC = () => {
               // If legacy call passed reason as 3rd arg (and conditions was undefined/string)
               const actualReason = typeof conditions === 'string' ? conditions : reason;
 
-              await handleProcessRefund(tx, items || [], validConditions, actualReason);
+              try {
+                await handleProcessRefund(tx, items || [], validConditions, actualReason);
+              } catch (refundError: any) {
+                console.error('❌ Refund flow failed:', refundError);
+                alert(`Error procesando devolución: ${refundError?.message || 'Error desconocido'}`);
+              }
             }}
           />
         );
