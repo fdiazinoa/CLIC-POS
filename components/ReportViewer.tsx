@@ -19,6 +19,7 @@ import {
     Reception,
     Supplier,
     Transaction,
+    User,
     Warehouse,
     ZReport
 } from '../types';
@@ -29,7 +30,8 @@ import {
     queryInventoryAnalytics
 } from './AnalyticsLogic';
 import { useCustomerAnalytics } from '../hooks/useCustomerAnalytics';
-import { formatFiscalExcel } from '../utils/fiscalExcel';
+import { db } from '../utils/db';
+import { Fiscal607RepairCandidate, findFiscal607RepairCandidates, formatFiscalExcel } from '../utils/fiscalExcel';
 
 interface InventoryReportContext {
     products: Product[];
@@ -68,6 +70,7 @@ interface ReportViewerProps {
     customerContext?: CustomerReportContext;
     operationsContext?: OperationsReportContext;
     fiscalContext?: FiscalReportContext;
+    currentUser?: User | null;
     onBack: () => void;
 }
 
@@ -235,6 +238,14 @@ interface FiscalExportFeedback {
     isError?: boolean;
 }
 
+interface FiscalRepairDraft {
+    total: number;
+    netAmount: number;
+    taxAmount: number;
+    payments: any[];
+    reason: string;
+}
+
 const FISCAL_EXPORT_OPTIONS: Array<{ value: FiscalExportFormatOption; label: string }> = [
     { value: '607', label: '607 - Ventas' },
     { value: '606', label: '606 - Compras' },
@@ -270,6 +281,87 @@ const formatTaxRateLabel = (ratePercent: number): string => {
     return `${ratePercent.toFixed(2)}%`;
 };
 
+const sumPayments = (payments: any[]): number =>
+    round2((payments || []).reduce((sum, payment) => sum + Math.abs(toNumber(payment?.amount)), 0));
+
+const cloneRepairPayments = (payments: any[]): any[] => (payments || []).map(payment => ({ ...payment }));
+
+const alignPaymentsToTotal = (payments: any[], expectedTotal: number): any[] => {
+    const normalizedExpectedTotal = round2(Math.abs(toNumber(expectedTotal)));
+    const clonedPayments = cloneRepairPayments(payments);
+
+    if (normalizedExpectedTotal <= EPSILON) return clonedPayments;
+    if (clonedPayments.length === 0) {
+        return [{
+            id: `FISCAL-REPAIR-${Date.now()}`,
+            method: 'CASH',
+            amount: normalizedExpectedTotal,
+            amountOriginal: normalizedExpectedTotal,
+            exchangeRate: 1,
+            currencyCode: 'DOP',
+            timestamp: new Date().toISOString()
+        }];
+    }
+
+    const currentTotal = sumPayments(clonedPayments);
+    if (Math.abs(currentTotal - normalizedExpectedTotal) <= EPSILON) return clonedPayments;
+
+    if (clonedPayments.length === 1) {
+        const payment = { ...clonedPayments[0] };
+        payment.amount = normalizedExpectedTotal;
+        if (payment.amountOriginal != null) {
+            const exchangeRate = toNumber(payment.exchangeRate);
+            payment.amountOriginal = exchangeRate > EPSILON
+                ? round2(normalizedExpectedTotal / exchangeRate)
+                : normalizedExpectedTotal;
+        }
+        return [payment];
+    }
+
+    let remaining = normalizedExpectedTotal;
+    return clonedPayments.map((payment, index) => {
+        const nextPayment = { ...payment };
+        if (index === clonedPayments.length - 1) {
+            nextPayment.amount = round2(Math.max(0, remaining));
+        } else {
+            const originalAmount = Math.abs(toNumber(payment?.amount));
+            const proportionalAmount = currentTotal > EPSILON
+                ? round2((originalAmount / currentTotal) * normalizedExpectedTotal)
+                : 0;
+            nextPayment.amount = proportionalAmount;
+            remaining = round2(Math.max(0, remaining - proportionalAmount));
+        }
+
+        if (nextPayment.amountOriginal != null) {
+            const exchangeRate = toNumber(nextPayment.exchangeRate);
+            nextPayment.amountOriginal = exchangeRate > EPSILON
+                ? round2(nextPayment.amount / exchangeRate)
+                : nextPayment.amount;
+        }
+
+        return nextPayment;
+    });
+};
+
+const resolvePaymentLabel = (payment: any): string => {
+    if (payment?.methodLabel) return String(payment.methodLabel);
+    const normalizedMethod = normalizePaymentMethod(payment?.method);
+    if (normalizedMethod) return PAYMENT_METHOD_LABELS[normalizedMethod];
+    return String(payment?.method || 'Pago');
+};
+
+const buildRepairDrafts = (candidates: Fiscal607RepairCandidate[]): Record<string, FiscalRepairDraft> =>
+    candidates.reduce<Record<string, FiscalRepairDraft>>((acc, candidate) => {
+        acc[candidate.sourceId] = {
+            total: round2(candidate.persistedTotal || candidate.suggestedTotal),
+            netAmount: round2(candidate.suggestedNetAmount || candidate.currentNetAmount),
+            taxAmount: round2(candidate.suggestedTaxAmount || candidate.currentTaxAmount),
+            payments: cloneRepairPayments(candidate.payments.length > 0 ? candidate.payments : candidate.suggestedPayments),
+            reason: ''
+        };
+        return acc;
+    }, {});
+
 const SALES_NCF_REGEX = /^B(01|02|04|14|15)/;
 
 const ReportViewer: React.FC<ReportViewerProps> = ({
@@ -280,6 +372,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
     customerContext,
     operationsContext,
     fiscalContext,
+    currentUser,
     onBack
 }) => {
     const [searchTerm, setSearchTerm] = useState('');
@@ -312,6 +405,13 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
     const [isFiscalExporting, setIsFiscalExporting] = useState(false);
     const [fiscalExportFeedback, setFiscalExportFeedback] = useState<FiscalExportFeedback | null>(null);
     const [fiscalReportMode, setFiscalReportMode] = useState<FiscalReportMode>('NCF_DETAIL');
+    const [localFiscalTransactions, setLocalFiscalTransactions] = useState<Transaction[]>([]);
+    const [localFiscalTransactionHistory, setLocalFiscalTransactionHistory] = useState<Transaction[]>([]);
+    const [isFiscalRepairModalOpen, setIsFiscalRepairModalOpen] = useState(false);
+    const [fiscalRepairCandidates, setFiscalRepairCandidates] = useState<Fiscal607RepairCandidate[]>([]);
+    const [fiscalRepairDrafts, setFiscalRepairDrafts] = useState<Record<string, FiscalRepairDraft>>({});
+    const [fiscalRepairError, setFiscalRepairError] = useState('');
+    const [isSavingFiscalRepair, setIsSavingFiscalRepair] = useState(false);
 
     const isInventoryView = category === 'INVENTORY' && !!inventoryContext;
     const isCustomersView = category === 'CUSTOMERS' && !!customerContext;
@@ -324,12 +424,32 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
     const operationsTransactions = operationsContext?.transactions || [];
     const operationsCashMovements = operationsContext?.cashMovements || [];
     const operationsZReports = operationsContext?.zReports || [];
+    const fiscalTransactionsSource = isFiscalView
+        ? ((localFiscalTransactions.length > 0 || (fiscalContext?.transactions || []).length === 0)
+            ? localFiscalTransactions
+            : (fiscalContext?.transactions || []))
+        : [];
+    const fiscalTransactionHistorySource = isFiscalView
+        ? ((localFiscalTransactionHistory.length > 0 || (fiscalContext?.transactionHistory || []).length === 0)
+            ? localFiscalTransactionHistory
+            : (fiscalContext?.transactionHistory || []))
+        : [];
 
     useEffect(() => {
         if (category !== 'OPERATIONS') return;
         setOperationsTab('Z_HISTORY');
         setSelectedCashierId(null);
     }, [category]);
+
+    useEffect(() => {
+        if (!fiscalContext) {
+            setLocalFiscalTransactions([]);
+            setLocalFiscalTransactionHistory([]);
+            return;
+        }
+        setLocalFiscalTransactions(fiscalContext.transactions || []);
+        setLocalFiscalTransactionHistory(fiscalContext.transactionHistory || []);
+    }, [fiscalContext]);
 
     const datePresetOptions: Array<{ value: DatePreset; label: string }> = [
         { value: 'LAST_7_DAYS', label: 'Últimos 7 días' },
@@ -679,7 +799,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
         if (!isFiscalView || !fiscalContext || fiscalReportMode !== 'TAX_SUMMARY') return [];
 
         const dedupedTransactions = new Map<string, Transaction>();
-        [...fiscalContext.transactions, ...fiscalContext.transactionHistory].forEach(tx => {
+        [...fiscalTransactionsSource, ...fiscalTransactionHistorySource].forEach(tx => {
             if (!tx?.id) return;
             dedupedTransactions.set(tx.id, tx);
         });
@@ -803,7 +923,9 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
         dateRange.endMs,
         fiscalTerminalFilter,
         searchTerm,
-        sortConfig
+        sortConfig,
+        fiscalTransactionsSource,
+        fiscalTransactionHistorySource
     ]);
 
     const operationsSearch = searchTerm.trim().toLowerCase();
@@ -1291,7 +1413,22 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
         });
     };
 
-    const handleRunFiscalExport = () => {
+    const loadLatestFiscalCollections = async (): Promise<{ transactions: Transaction[]; transactionHistory: Transaction[] }> => {
+        const [activeTransactions, historyTransactions] = await Promise.all([
+            db.get('transactions' as any) as Promise<Transaction[]>,
+            db.get('transactionHistory' as any) as Promise<Transaction[]>
+        ]);
+        const nextTransactions = (activeTransactions || []);
+        const nextTransactionHistory = (historyTransactions || []);
+        setLocalFiscalTransactions(nextTransactions);
+        setLocalFiscalTransactionHistory(nextTransactionHistory);
+        return {
+            transactions: nextTransactions,
+            transactionHistory: nextTransactionHistory
+        };
+    };
+
+    const runFiscalExport = async (overrideSources?: { transactions: Transaction[]; transactionHistory: Transaction[] }) => {
         if (!isFiscalView || !fiscalContext) return;
 
         setFiscalExportError('');
@@ -1301,19 +1438,18 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
             const selectedFormats = resolveFiscalFormats(fiscalExportFormat);
             if (selectedFormats.length === 0) {
                 setFiscalExportError('Debe seleccionar al menos un formato.');
-                setIsFiscalExporting(false);
                 return;
             }
 
             const consolidateB02 = false;
-
             const periodDate = dateRange.endMs !== null ? new Date(dateRange.endMs) : new Date();
             const period = `${periodDate.getFullYear()}${String(periodDate.getMonth() + 1).padStart(2, '0')}`;
-
-            const txInRange = fiscalContext.transactions.filter(tx =>
+            const transactionsSource = overrideSources?.transactions || fiscalTransactionsSource;
+            const historySource = overrideSources?.transactionHistory || fiscalTransactionHistorySource;
+            const txInRange = transactionsSource.filter(tx =>
                 isWithinDateRange(tx.date) && isFiscalTerminalMatch(tx.terminalId)
             );
-            const historyInRange = fiscalContext.transactionHistory.filter(tx =>
+            const historyInRange = historySource.filter(tx =>
                 isWithinDateRange(tx.date) && isFiscalTerminalMatch(tx.terminalId)
             );
             const purchaseOrdersInRange = fiscalContext.purchaseOrders.filter(order =>
@@ -1322,6 +1458,23 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
             const receptionsInRange = fiscalContext.receptions.filter(reception =>
                 isWithinDateRange(reception.date) && isFiscalTerminalMatch(reception.terminalId)
             );
+
+            if (selectedFormats.includes('607')) {
+                const repairCandidates = findFiscal607RepairCandidates({
+                    config,
+                    transactions: txInRange,
+                    transactionHistory: historyInRange
+                });
+
+                if (repairCandidates.length > 0) {
+                    setIsFiscalExportModalOpen(false);
+                    setFiscalRepairCandidates(repairCandidates);
+                    setFiscalRepairDrafts(buildRepairDrafts(repairCandidates));
+                    setFiscalRepairError('');
+                    setIsFiscalRepairModalOpen(true);
+                    return;
+                }
+            }
 
             const exportSummaries: string[] = [];
             const allWarnings: string[] = [];
@@ -1371,6 +1524,161 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
             });
         } finally {
             setIsFiscalExporting(false);
+        }
+    };
+
+    const handleRunFiscalExport = async () => {
+        await runFiscalExport();
+    };
+
+    const handleRepairDraftFieldChange = (sourceId: string, field: keyof FiscalRepairDraft, value: string) => {
+        setFiscalRepairDrafts(prev => ({
+            ...prev,
+            [sourceId]: {
+                ...prev[sourceId],
+                [field]: field === 'reason' ? value : round2(Math.max(0, toNumber(value)))
+            }
+        }));
+    };
+
+    const handleRepairPaymentChange = (sourceId: string, paymentIndex: number, value: string) => {
+        setFiscalRepairDrafts(prev => {
+            const draft = prev[sourceId];
+            if (!draft) return prev;
+            const nextPayments = cloneRepairPayments(draft.payments);
+            const nextAmount = round2(Math.max(0, toNumber(value)));
+            nextPayments[paymentIndex] = {
+                ...nextPayments[paymentIndex],
+                amount: nextAmount
+            };
+            if (nextPayments[paymentIndex]?.amountOriginal != null) {
+                const exchangeRate = toNumber(nextPayments[paymentIndex]?.exchangeRate);
+                nextPayments[paymentIndex].amountOriginal = exchangeRate > EPSILON
+                    ? round2(nextAmount / exchangeRate)
+                    : nextAmount;
+            }
+            return {
+                ...prev,
+                [sourceId]: {
+                    ...draft,
+                    payments: nextPayments
+                }
+            };
+        });
+    };
+
+    const handleUseSuggestedFiscalValues = (candidate: Fiscal607RepairCandidate) => {
+        setFiscalRepairDrafts(prev => ({
+            ...prev,
+            [candidate.sourceId]: {
+                ...prev[candidate.sourceId],
+                total: round2(candidate.suggestedTotal),
+                netAmount: round2(candidate.suggestedNetAmount),
+                taxAmount: round2(candidate.suggestedTaxAmount)
+            }
+        }));
+    };
+
+    const handleAlignRepairPayments = (candidate: Fiscal607RepairCandidate) => {
+        setFiscalRepairDrafts(prev => {
+            const draft = prev[candidate.sourceId];
+            if (!draft) return prev;
+            return {
+                ...prev,
+                [candidate.sourceId]: {
+                    ...draft,
+                    payments: alignPaymentsToTotal(draft.payments, draft.total)
+                }
+            };
+        });
+    };
+
+    const handleSaveFiscalRepairs = async () => {
+        if (!isFiscalView || !fiscalContext) return;
+
+        setFiscalRepairError('');
+        setIsSavingFiscalRepair(true);
+
+        try {
+            const [activeTransactions, historyTransactions] = await Promise.all([
+                db.get('transactions' as any) as Promise<Transaction[]>,
+                db.get('transactionHistory' as any) as Promise<Transaction[]>
+            ]);
+            const activeIds = new Set((activeTransactions || []).map(tx => tx.id));
+            const historyIds = new Set((historyTransactions || []).map(tx => tx.id));
+            const transactionMap = new Map<string, Transaction>();
+            [...(historyTransactions || []), ...(activeTransactions || [])].forEach(tx => {
+                if (tx?.id) transactionMap.set(tx.id, tx);
+            });
+
+            for (const candidate of fiscalRepairCandidates) {
+                const draft = fiscalRepairDrafts[candidate.sourceId];
+                const sourceTransaction = transactionMap.get(candidate.sourceId);
+                if (!draft || !sourceTransaction) {
+                    throw new Error(`No se encontró la factura ${candidate.displayId} para aplicar la corrección.`);
+                }
+
+                const staticCharges = round2(
+                    candidate.impuestoSelectivoConsumo + candidate.otrosImpuestosTasas + candidate.montoPropinaLegal
+                );
+                const fiscalTotal = round2(draft.netAmount + draft.taxAmount + staticCharges);
+                const paymentsTotal = sumPayments(draft.payments);
+
+                if (!draft.reason.trim()) {
+                    throw new Error(`Indique un motivo de corrección para la factura ${candidate.displayId}.`);
+                }
+                if (Math.abs(fiscalTotal - draft.total) > 0.02) {
+                    throw new Error(`La factura ${candidate.displayId} sigue descuadrada: neto + ITBIS + cargos = ${fiscalTotal.toFixed(2)} y total = ${draft.total.toFixed(2)}.`);
+                }
+                if (Math.abs(paymentsTotal - draft.total) > 0.02) {
+                    throw new Error(`La factura ${candidate.displayId} sigue descuadrada: pagos = ${paymentsTotal.toFixed(2)} y total = ${draft.total.toFixed(2)}.`);
+                }
+
+                const now = new Date().toISOString();
+                const normalizedPayments = cloneRepairPayments(draft.payments).map(payment => {
+                    const amount = round2(Math.abs(toNumber(payment?.amount)));
+                    const exchangeRate = toNumber(payment?.exchangeRate);
+                    const amountOriginal = payment?.amountOriginal != null
+                        ? (exchangeRate > EPSILON ? round2(amount / exchangeRate) : amount)
+                        : payment?.amountOriginal;
+                    return {
+                        ...payment,
+                        amount,
+                        amountOriginal,
+                        timestamp: payment?.timestamp || now
+                    };
+                });
+                const auditNote = `[REPARACION 607 ${now}] ${currentUser?.id || 'sistema'} / ${currentUser?.name || 'Sistema'}: ${draft.reason.trim()} | total ${round2(Math.abs(toNumber(sourceTransaction.total))).toFixed(2)} -> ${draft.total.toFixed(2)} | neto ${round2(Math.abs(toNumber(sourceTransaction.netAmount))).toFixed(2)} -> ${draft.netAmount.toFixed(2)} | itbis ${round2(Math.abs(toNumber(sourceTransaction.taxAmount))).toFixed(2)} -> ${draft.taxAmount.toFixed(2)} | pagos ${sumPayments(sourceTransaction.payments || []).toFixed(2)} -> ${paymentsTotal.toFixed(2)}`;
+                const updatedTx = {
+                    ...sourceTransaction,
+                    total: round2(draft.total),
+                    netAmount: round2(draft.netAmount),
+                    taxAmount: round2(draft.taxAmount),
+                    payments: normalizedPayments,
+                    observations: sourceTransaction.observations
+                        ? `${sourceTransaction.observations}\n${auditNote}`
+                        : auditNote,
+                    updatedAt: now,
+                    syncStatus: 'PENDING' as const
+                };
+
+                if (activeIds.has(sourceTransaction.id)) {
+                    await db.saveDocument('transactions', updatedTx);
+                }
+                if (historyIds.has(sourceTransaction.id)) {
+                    await db.saveDocument('transactionHistory', updatedTx);
+                }
+            }
+
+            const refreshedFiscalData = await loadLatestFiscalCollections();
+            setIsFiscalRepairModalOpen(false);
+            setFiscalRepairCandidates([]);
+            setFiscalRepairDrafts({});
+            await runFiscalExport(refreshedFiscalData);
+        } catch (error: any) {
+            setFiscalRepairError(error?.message || 'No se pudieron guardar las correcciones fiscales.');
+        } finally {
+            setIsSavingFiscalRepair(false);
         }
     };
 
@@ -2022,14 +2330,14 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
         if (!isFiscalView || !fiscalContext) return [];
         const terminalMap = new Map<string, string>();
         (config.terminals || []).forEach(terminal => terminalMap.set(terminal.id, terminal.id));
-        [...fiscalContext.transactions, ...fiscalContext.transactionHistory].forEach(tx => {
+        [...fiscalTransactionsSource, ...fiscalTransactionHistorySource].forEach(tx => {
             if (tx.terminalId) terminalMap.set(tx.terminalId, tx.terminalId);
         });
         fiscalContext.receptions.forEach(reception => {
             if (reception.terminalId) terminalMap.set(reception.terminalId, reception.terminalId);
         });
         return Array.from(terminalMap.values()).sort((a, b) => a.localeCompare(b));
-    }, [isFiscalView, fiscalContext, config.terminals]);
+    }, [isFiscalView, fiscalContext, config.terminals, fiscalTransactionsSource, fiscalTransactionHistorySource]);
     const tableRows = isInventoryView
         ? sortedInventoryRows
         : isCustomersView
@@ -2615,6 +2923,198 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                                 className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-black hover:bg-emerald-700 transition-colors disabled:opacity-60"
                             >
                                 {isFiscalExporting ? 'Exportando...' : 'Exportar'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {isFiscalRepairModalOpen && (
+                <div className="fixed inset-0 z-[72] no-print flex items-center justify-center p-4">
+                    <button
+                        type="button"
+                        aria-label="Cerrar modal"
+                        onClick={() => !isSavingFiscalRepair && setIsFiscalRepairModalOpen(false)}
+                        className="absolute inset-0 bg-slate-900/55"
+                    />
+                    <div className="relative w-full max-w-5xl bg-white rounded-3xl border border-gray-100 shadow-2xl p-6 sm:p-7">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                                <h3 className="text-lg font-black text-slate-900">Corregir Facturas para Exportar 607</h3>
+                                <p className="mt-1 text-sm font-bold text-slate-500">
+                                    El 607 encontró facturas con total fiscal y pagos descuadrados. Corrija el monto fiscal o los pagos, guarde, y el sistema reintentará la exportación.
+                                </p>
+                            </div>
+                            <div className="px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-[11px] font-black text-amber-700 uppercase tracking-wider">
+                                {fiscalRepairCandidates.length} factura(s)
+                            </div>
+                        </div>
+
+                        {fiscalRepairError && (
+                            <div className="mt-4 p-3 rounded-2xl border border-red-200 bg-red-50 text-sm font-bold text-red-700">
+                                {fiscalRepairError}
+                            </div>
+                        )}
+
+                        <div className="mt-5 max-h-[68vh] overflow-y-auto pr-1 space-y-4">
+                            {fiscalRepairCandidates.map(candidate => {
+                                const draft = fiscalRepairDrafts[candidate.sourceId];
+                                if (!draft) return null;
+
+                                const staticCharges = round2(
+                                    candidate.impuestoSelectivoConsumo + candidate.otrosImpuestosTasas + candidate.montoPropinaLegal
+                                );
+                                const fiscalTotal = round2(draft.netAmount + draft.taxAmount + staticCharges);
+                                const paymentsTotal = sumPayments(draft.payments);
+                                const isDraftBalanced = Math.abs(fiscalTotal - draft.total) <= 0.02
+                                    && Math.abs(paymentsTotal - draft.total) <= 0.02
+                                    && draft.reason.trim().length > 0;
+
+                                return (
+                                    <div key={candidate.sourceId} className="border border-slate-200 rounded-3xl p-4 sm:p-5 bg-slate-50/70">
+                                        <div className="flex flex-wrap items-start justify-between gap-3">
+                                            <div>
+                                                <p className="text-sm font-black text-slate-900">{candidate.displayId}</p>
+                                                <p className="text-xs font-bold text-slate-500 mt-1">
+                                                    NCF {candidate.ncf || 'Sin NCF'} · {formatDateTime(candidate.date)} · {candidate.terminalId || 'Sin terminal'}
+                                                </p>
+                                            </div>
+                                            <div className={`px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-wider ${isDraftBalanced ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                                                {isDraftBalanced ? 'Lista para guardar' : 'Pendiente de cuadrar'}
+                                            </div>
+                                        </div>
+
+                                        <div className="mt-4 grid md:grid-cols-3 gap-3">
+                                            <div className="rounded-2xl bg-white border border-slate-200 p-3">
+                                                <p className="text-[11px] font-black text-slate-500 uppercase tracking-wider">Actual</p>
+                                                <p className="mt-2 text-sm font-bold text-slate-700">Total factura: {config.currencySymbol}{candidate.persistedTotal.toFixed(2)}</p>
+                                                <p className="text-sm font-bold text-slate-700">Neto: {config.currencySymbol}{candidate.currentNetAmount.toFixed(2)}</p>
+                                                <p className="text-sm font-bold text-slate-700">ITBIS: {config.currencySymbol}{candidate.currentTaxAmount.toFixed(2)}</p>
+                                                <p className="text-sm font-bold text-slate-700">Pagos: {config.currencySymbol}{candidate.currentPaymentsTotal.toFixed(2)}</p>
+                                            </div>
+                                            <div className="rounded-2xl bg-white border border-slate-200 p-3">
+                                                <p className="text-[11px] font-black text-slate-500 uppercase tracking-wider">Sugerido</p>
+                                                <p className="mt-2 text-sm font-bold text-slate-700">Total factura: {config.currencySymbol}{candidate.suggestedTotal.toFixed(2)}</p>
+                                                <p className="text-sm font-bold text-slate-700">Neto: {config.currencySymbol}{candidate.suggestedNetAmount.toFixed(2)}</p>
+                                                <p className="text-sm font-bold text-slate-700">ITBIS: {config.currencySymbol}{candidate.suggestedTaxAmount.toFixed(2)}</p>
+                                            </div>
+                                            <div className="rounded-2xl bg-white border border-slate-200 p-3">
+                                                <p className="text-[11px] font-black text-slate-500 uppercase tracking-wider">Chequeo</p>
+                                                <p className={`mt-2 text-sm font-bold ${Math.abs(fiscalTotal - draft.total) <= 0.02 ? 'text-emerald-700' : 'text-red-700'}`}>
+                                                    Fiscal: {config.currencySymbol}{fiscalTotal.toFixed(2)} / Total: {config.currencySymbol}{draft.total.toFixed(2)}
+                                                </p>
+                                                <p className={`text-sm font-bold ${Math.abs(paymentsTotal - draft.total) <= 0.02 ? 'text-emerald-700' : 'text-red-700'}`}>
+                                                    Pagos: {config.currencySymbol}{paymentsTotal.toFixed(2)} / Total: {config.currencySymbol}{draft.total.toFixed(2)}
+                                                </p>
+                                                {staticCharges > 0 && (
+                                                    <p className="text-xs font-bold text-slate-500 mt-1">
+                                                        Cargos fijos: {config.currencySymbol}{staticCharges.toFixed(2)}
+                                                    </p>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="mt-4 grid md:grid-cols-3 gap-3">
+                                            <label className="space-y-1.5">
+                                                <span className="text-[11px] font-black text-slate-500 uppercase tracking-wider">Monto total</span>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    step="0.01"
+                                                    value={draft.total}
+                                                    onChange={(e) => handleRepairDraftFieldChange(candidate.sourceId, 'total', e.target.value)}
+                                                    className="w-full h-[44px] px-3 bg-white border border-slate-200 rounded-xl text-sm font-black text-slate-700 outline-none focus:border-blue-400"
+                                                />
+                                            </label>
+                                            <label className="space-y-1.5">
+                                                <span className="text-[11px] font-black text-slate-500 uppercase tracking-wider">Monto neto</span>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    step="0.01"
+                                                    value={draft.netAmount}
+                                                    onChange={(e) => handleRepairDraftFieldChange(candidate.sourceId, 'netAmount', e.target.value)}
+                                                    className="w-full h-[44px] px-3 bg-white border border-slate-200 rounded-xl text-sm font-black text-slate-700 outline-none focus:border-blue-400"
+                                                />
+                                            </label>
+                                            <label className="space-y-1.5">
+                                                <span className="text-[11px] font-black text-slate-500 uppercase tracking-wider">ITBIS</span>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    step="0.01"
+                                                    value={draft.taxAmount}
+                                                    onChange={(e) => handleRepairDraftFieldChange(candidate.sourceId, 'taxAmount', e.target.value)}
+                                                    className="w-full h-[44px] px-3 bg-white border border-slate-200 rounded-xl text-sm font-black text-slate-700 outline-none focus:border-blue-400"
+                                                />
+                                            </label>
+                                        </div>
+
+                                        <div className="mt-3 flex flex-wrap gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => handleUseSuggestedFiscalValues(candidate)}
+                                                className="px-3 py-2 rounded-xl border border-blue-200 bg-blue-50 text-xs font-black text-blue-700 hover:bg-blue-100 transition-colors"
+                                            >
+                                                Usar cálculo sugerido
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleAlignRepairPayments(candidate)}
+                                                className="px-3 py-2 rounded-xl border border-emerald-200 bg-emerald-50 text-xs font-black text-emerald-700 hover:bg-emerald-100 transition-colors"
+                                            >
+                                                Cuadrar pagos al total
+                                            </button>
+                                        </div>
+
+                                        <div className="mt-4 space-y-2">
+                                            <p className="text-[11px] font-black text-slate-500 uppercase tracking-wider">Pagos</p>
+                                            {draft.payments.map((payment, paymentIndex) => (
+                                                <div key={`${candidate.sourceId}-payment-${paymentIndex}`} className="grid md:grid-cols-[1.5fr,1fr] gap-2">
+                                                    <div className="h-[44px] px-3 flex items-center rounded-xl bg-white border border-slate-200 text-sm font-black text-slate-700">
+                                                        {resolvePaymentLabel(payment)}
+                                                    </div>
+                                                    <input
+                                                        type="number"
+                                                        min="0"
+                                                        step="0.01"
+                                                        value={round2(Math.abs(toNumber(payment?.amount)))}
+                                                        onChange={(e) => handleRepairPaymentChange(candidate.sourceId, paymentIndex, e.target.value)}
+                                                        className="w-full h-[44px] px-3 bg-white border border-slate-200 rounded-xl text-sm font-black text-slate-700 outline-none focus:border-blue-400"
+                                                    />
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        <label className="mt-4 block space-y-1.5">
+                                            <span className="text-[11px] font-black text-slate-500 uppercase tracking-wider">Motivo de corrección</span>
+                                            <textarea
+                                                value={draft.reason}
+                                                onChange={(e) => handleRepairDraftFieldChange(candidate.sourceId, 'reason', e.target.value)}
+                                                rows={3}
+                                                className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-2xl text-sm font-bold text-slate-700 outline-none focus:border-blue-400 resize-none"
+                                                placeholder="Explique por qué se corrige esta factura."
+                                            />
+                                        </label>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        <div className="mt-6 flex justify-end gap-2.5">
+                            <button
+                                onClick={() => setIsFiscalRepairModalOpen(false)}
+                                disabled={isSavingFiscalRepair}
+                                className="px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-black text-slate-600 hover:bg-gray-50 transition-colors disabled:opacity-60"
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                onClick={handleSaveFiscalRepairs}
+                                disabled={isSavingFiscalRepair}
+                                className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-black hover:bg-emerald-700 transition-colors disabled:opacity-60"
+                            >
+                                {isSavingFiscalRepair ? 'Guardando...' : 'Guardar y reintentar 607'}
                             </button>
                         </div>
                     </div>

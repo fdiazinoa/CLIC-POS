@@ -114,6 +114,28 @@ export interface FiscalExcelResult {
     warnings: string[];
 }
 
+export interface Fiscal607RepairCandidate {
+    sourceId: string;
+    sourceCollection: 'transactions' | 'transactionHistory';
+    displayId: string;
+    ncf: string;
+    date: string;
+    terminalId: string;
+    persistedTotal: number;
+    currentNetAmount: number;
+    currentTaxAmount: number;
+    impuestoSelectivoConsumo: number;
+    otrosImpuestosTasas: number;
+    montoPropinaLegal: number;
+    currentPaymentsTotal: number;
+    computedFiscalTotal: number;
+    suggestedTotal: number;
+    suggestedNetAmount: number;
+    suggestedTaxAmount: number;
+    payments: any[];
+    suggestedPayments: any[];
+}
+
 const EPSILON = 0.01;
 const B02_CONSOLIDATION_LIMIT = 250000;
 const DEFAULT_TIPO_INGRESO = '01';
@@ -213,6 +235,8 @@ const toNumber = (value: unknown): number => {
     return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const clonePayments = (payments: any[]): any[] => (payments || []).map(payment => ({ ...payment }));
+
 const normalizeTextKey = (value: unknown): string =>
     String(value || '')
         .normalize('NFD')
@@ -225,6 +249,63 @@ const onlyDigits = (value: unknown): string => String(value || '').replace(/\D/g
 const sanitizeTaxId = (value: unknown): string => String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
 const normalizeNcf = (value: unknown): string => String(value || '').trim().toUpperCase();
+
+const resolveCurrentConfig = (config: BusinessConfig): BusinessConfig => config || ({} as BusinessConfig);
+
+const getItemTaxRate = (item: any, taxesById: Map<string, any>): number => {
+    const taxIds = Array.isArray(item?.appliedTaxIds) ? item.appliedTaxIds : [];
+    return taxIds.reduce((sum: number, taxId: string) => {
+        const tax = taxesById.get(taxId);
+        return sum + Math.max(0, toNumber(tax?.rate));
+    }, 0);
+};
+
+const deriveFiscalAmountsFromItems = (tx: Transaction, config: BusinessConfig): { total: number; netAmount: number; taxAmount: number } | null => {
+    const items = Array.isArray(tx.items) ? tx.items : [];
+    if (items.length === 0) return null;
+
+    const grossLineTotal = round2(items.reduce((sum, item: any) => {
+        const price = Math.abs(toNumber(item?.price));
+        const quantity = Math.abs(toNumber(item?.quantity));
+        return sum + (price * quantity);
+    }, 0));
+    const discountAmount = round2(Math.abs(toNumber((tx as any).discountAmount)));
+    const totalAfterDiscount = round2(Math.max(0, grossLineTotal - discountAmount));
+    if (totalAfterDiscount <= EPSILON) return null;
+
+    const taxesById = new Map<string, any>(
+        (Array.isArray(resolveCurrentConfig(config)?.taxes) ? resolveCurrentConfig(config).taxes : []).map((tax: any) => [tax.id, tax])
+    );
+
+    let netAmount = 0;
+    let taxAmount = 0;
+
+    items.forEach((item: any) => {
+        const lineGross = Math.abs(toNumber(item?.price)) * Math.abs(toNumber(item?.quantity));
+        if (lineGross <= EPSILON) return;
+
+        const itemRatio = lineGross / (grossLineTotal || 1);
+        const lineDiscount = discountAmount * itemRatio;
+        const lineBaseAfterDiscount = round2(Math.max(0, lineGross - lineDiscount));
+        const itemTaxRate = getItemTaxRate(item, taxesById);
+        const lineNet = tx.isTaxIncluded
+            ? round2(lineBaseAfterDiscount / (1 + itemTaxRate))
+            : lineBaseAfterDiscount;
+        const lineTax = round2(Math.max(0, lineBaseAfterDiscount - lineNet));
+
+        netAmount += lineNet;
+        taxAmount += lineTax;
+    });
+
+    netAmount = round2(netAmount);
+    taxAmount = round2(taxAmount);
+
+    return {
+        total: round2(tx.isTaxIncluded ? totalAfterDiscount : netAmount + taxAmount),
+        netAmount,
+        taxAmount
+    };
+};
 
 const pad2 = (value: number): string => String(value).padStart(2, '0');
 
@@ -415,6 +496,63 @@ const aggregatePayments = (payments: any[], expectedTotal: number): PaymentBucke
     return buckets;
 };
 
+const buildSuggestedPayments = (payments: any[], expectedTotal: number): any[] => {
+    const normalizedExpectedTotal = round2(Math.abs(toNumber(expectedTotal)));
+    const clonedPayments = clonePayments(payments);
+
+    if (normalizedExpectedTotal <= EPSILON) return clonedPayments;
+    if (clonedPayments.length === 0) {
+        return [{
+            id: `FISCAL-REPAIR-${Date.now()}`,
+            method: 'CASH',
+            amount: normalizedExpectedTotal,
+            amountOriginal: normalizedExpectedTotal,
+            exchangeRate: 1,
+            currencyCode: 'DOP',
+            timestamp: new Date().toISOString()
+        }];
+    }
+
+    const currentTotal = round2(clonedPayments.reduce((sum, payment) => sum + Math.abs(toNumber(payment?.amount)), 0));
+    if (Math.abs(currentTotal - normalizedExpectedTotal) <= EPSILON) return clonedPayments;
+
+    if (clonedPayments.length === 1) {
+        const payment = { ...clonedPayments[0] };
+        payment.amount = normalizedExpectedTotal;
+        if (payment.amountOriginal != null) {
+            const exchangeRate = toNumber(payment.exchangeRate);
+            payment.amountOriginal = exchangeRate > EPSILON
+                ? round2(normalizedExpectedTotal / exchangeRate)
+                : normalizedExpectedTotal;
+        }
+        return [payment];
+    }
+
+    let remaining = normalizedExpectedTotal;
+    return clonedPayments.map((payment, index) => {
+        const nextPayment = { ...payment };
+        if (index === clonedPayments.length - 1) {
+            nextPayment.amount = round2(Math.max(0, remaining));
+        } else {
+            const originalAmount = Math.abs(toNumber(payment?.amount));
+            const proportionalAmount = currentTotal > EPSILON
+                ? round2((originalAmount / currentTotal) * normalizedExpectedTotal)
+                : 0;
+            nextPayment.amount = proportionalAmount;
+            remaining = round2(Math.max(0, remaining - proportionalAmount));
+        }
+
+        if (nextPayment.amountOriginal != null) {
+            const exchangeRate = toNumber(nextPayment.exchangeRate);
+            nextPayment.amountOriginal = exchangeRate > EPSILON
+                ? round2(nextPayment.amount / exchangeRate)
+                : nextPayment.amount;
+        }
+
+        return nextPayment;
+    });
+};
+
 const extract607Totals = (tx: Transaction): {
     montoFacturado: number;
     itbisFacturado: number;
@@ -516,6 +654,103 @@ const normalizeForm607Row = (tx: Transaction): Form607Row | null => {
         permuta: payments.permuta,
         otrasFormasVentas: payments.otrasFormasVentas
     };
+};
+
+type TransactionSourceRecord = {
+    tx: Transaction;
+    sourceCollection: 'transactions' | 'transactionHistory';
+};
+
+const dedupeTransactionSources = (transactions: Transaction[], transactionHistory: Transaction[]): TransactionSourceRecord[] => {
+    const records = new Map<string, TransactionSourceRecord>();
+
+    (transactionHistory || []).forEach((tx) => {
+        if (!tx?.id) return;
+        records.set(tx.id, { tx, sourceCollection: 'transactionHistory' });
+    });
+
+    (transactions || []).forEach((tx) => {
+        if (!tx?.id) return;
+        records.set(tx.id, { tx, sourceCollection: 'transactions' });
+    });
+
+    return Array.from(records.values());
+};
+
+const buildFiscal607RepairCandidate = (
+    tx: Transaction,
+    sourceCollection: 'transactions' | 'transactionHistory',
+    config: BusinessConfig
+): Fiscal607RepairCandidate | null => {
+    const normalizedRow = normalizeForm607Row(tx);
+    if (!normalizedRow) return null;
+
+    const totals = extract607Totals(tx);
+    const reportablePayments = aggregatePayments(tx.payments || [], totals.totalFacturado);
+    const reportablePaymentsTotal = sumPaymentBuckets(reportablePayments);
+    if (Math.abs(reportablePaymentsTotal - totals.totalFacturado) <= EPSILON) return null;
+
+    const staticCharges = round2(
+        totals.impuestoSelectivoConsumo + totals.otrosImpuestosTasas + totals.montoPropinaLegal
+    );
+    const persistedTotal = round2(Math.abs(toNumber(tx.total)));
+    const baseTarget = round2(Math.max(0, (persistedTotal || totals.totalFacturado) - staticCharges));
+    const currentTaxAmount = round2(Math.abs(toNumber(tx.taxAmount)));
+    const derived = deriveFiscalAmountsFromItems(tx, config);
+
+    let suggestedNetAmount = derived?.netAmount ?? 0;
+    let suggestedTaxAmount = derived?.taxAmount ?? 0;
+
+    if (baseTarget > EPSILON) {
+        if (suggestedNetAmount <= EPSILON && currentTaxAmount > EPSILON && currentTaxAmount < baseTarget) {
+            suggestedTaxAmount = currentTaxAmount;
+            suggestedNetAmount = round2(baseTarget - currentTaxAmount);
+        } else if (suggestedNetAmount <= EPSILON && tx.isTaxIncluded) {
+            suggestedTaxAmount = round2(Math.max(0, baseTarget - (baseTarget / 1.18)));
+            suggestedNetAmount = round2(baseTarget - suggestedTaxAmount);
+        } else {
+            suggestedNetAmount = round2(Math.max(0, suggestedNetAmount));
+            suggestedTaxAmount = round2(Math.max(0, baseTarget - suggestedNetAmount));
+        }
+    }
+
+    const suggestedTotal = round2(
+        (persistedTotal || round2(suggestedNetAmount + suggestedTaxAmount + staticCharges))
+    );
+
+    return {
+        sourceId: tx.id,
+        sourceCollection,
+        displayId: String(tx.displayId || tx.id),
+        ncf: normalizeNcf(tx.ncf),
+        date: tx.date,
+        terminalId: String(tx.terminalId || ''),
+        persistedTotal,
+        currentNetAmount: round2(Math.abs(toNumber(tx.netAmount))),
+        currentTaxAmount,
+        impuestoSelectivoConsumo: totals.impuestoSelectivoConsumo,
+        otrosImpuestosTasas: totals.otrosImpuestosTasas,
+        montoPropinaLegal: totals.montoPropinaLegal,
+        currentPaymentsTotal: reportablePaymentsTotal,
+        computedFiscalTotal: totals.totalFacturado,
+        suggestedTotal,
+        suggestedNetAmount,
+        suggestedTaxAmount,
+        payments: clonePayments(tx.payments || []),
+        suggestedPayments: buildSuggestedPayments(tx.payments || [], suggestedTotal)
+    };
+};
+
+export const findFiscal607RepairCandidates = (
+    options: Pick<FiscalExcelOptions, 'config' | 'transactions' | 'transactionHistory'>
+): Fiscal607RepairCandidate[] => {
+    const transactionSources = dedupeTransactionSources(options.transactions || [], options.transactionHistory || []);
+
+    return transactionSources
+        .filter(({ tx }) => SALES_NCF_PREFIXES.some(prefix => normalizeNcf(tx.ncf).startsWith(prefix)))
+        .map(({ tx, sourceCollection }) => buildFiscal607RepairCandidate(tx, sourceCollection, options.config))
+        .filter(Boolean)
+        .sort((a, b) => String(a?.date || '').localeCompare(String(b?.date || ''))) as Fiscal607RepairCandidate[];
 };
 
 const consolidateB02Rows = (rows: Form607Row[]): Form607Row[] => {

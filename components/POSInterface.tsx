@@ -1398,6 +1398,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                // Calculate totals for each part
                const saleTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
                const returnTotal = returnItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               const saleTaxAmount = isTaxIncluded
+                  ? Math.round(((saleTotal - (saleTotal / 1.18)) + Number.EPSILON) * 100) / 100
+                  : 0;
+               const saleNetAmount = isTaxIncluded
+                  ? Math.round(((saleTotal - saleTaxAmount) + Number.EPSILON) * 100) / 100
+                  : saleTotal;
 
                // Prepare wallet operations
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
@@ -1420,8 +1426,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         customerName: selectedCustomer?.name,
                         ncf: finalNcf,
                         ncfType: fiscalStatus.type,
-                        taxAmount: isTaxIncluded ? saleTotal * 0.18 : 0,
-                        netAmount: isTaxIncluded ? saleTotal / 1.18 : saleTotal,
+                        taxAmount: saleTaxAmount,
+                        netAmount: saleNetAmount,
                         pendingBalance: payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0) || undefined,
                         dueDate: payments.some(p => p.method === 'CREDIT') ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined,
                         customerSnapshot: selectedCustomer ? {
