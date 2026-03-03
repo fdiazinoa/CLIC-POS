@@ -107,6 +107,16 @@ try {
 } catch (e) {
     // Column already exists
 }
+try {
+    db.exec(`ALTER TABLE transactions ADD COLUMN taxBreakdown TEXT`);
+} catch (e) {
+    // Column already exists
+}
+try {
+    db.exec(`ALTER TABLE transaction_history ADD COLUMN taxBreakdown TEXT`);
+} catch (e) {
+    // Column already exists
+}
 
 /**
  * Helper to get a collection (mimics lowdb .get().value())
@@ -124,11 +134,11 @@ export const getCollection = (name: string): any[] => {
                 products: ['images', 'attributes', 'variants', 'tariffs', 'stockBalances', 'activeInWarehouses', 'appliedTaxIds', 'warehouseSettings', 'availableModifiers', 'operationalFlags', 'recipeDetails'],
                 roles: ['permissions', 'zReportConfig'],
                 customers: ['tags', 'addresses'],
-                transactions: ['items', 'payments', 'customerSnapshot', 'relatedTransactions'],
+                transactions: ['items', 'payments', 'customerSnapshot', 'relatedTransactions', 'taxBreakdown'],
                 receptions: ['items'],
                 z_reports: ['totalsByMethod', 'cashExpected', 'cashCounted', 'cashDiscrepancy', 'stats'],
                 users: [], // No JSON fields
-                transaction_history: ['items', 'payments', 'customerSnapshot', 'relatedTransactions'],
+                transaction_history: ['items', 'payments', 'customerSnapshot', 'relatedTransactions', 'taxBreakdown'],
                 rooms: ['data'],
                 tables: ['data']
             };

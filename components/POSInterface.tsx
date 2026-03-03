@@ -58,6 +58,12 @@ import VirtualKeyboard from './VirtualKeyboard';
 import SafetyGateModal from './SafetyGateModal';
 import { printReservation } from '../utils/printer';
 import MobileCartButton from './MobileCartButton';
+import {
+   calculateTaxBreakdown,
+   calculateTransactionSummary,
+   calculateItemTaxBreakdown,
+   formatTaxLineLabel
+} from '../utils/tax';
 
 // ... existing imports
 
@@ -1050,33 +1056,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const discountAmount = globalDiscount.type === 'PERCENT' ? grossLineTotal * (globalDiscount.value / 100) : Math.min(globalDiscount.value, grossLineTotal);
 
-   const taxBreakdown = useMemo(() => {
-      const breakdown: Record<string, { name: string, amount: number }> = {};
-
-      processedCart.forEach(item => {
-         const lineGross = item.price * item.quantity;
-         const itemRatio = lineGross / (grossLineTotal || 1);
-         const lineDiscount = discountAmount * itemRatio;
-         const lineBaseAfterDiscount = lineGross - lineDiscount;
-
-         let itemTaxRate = 0;
-         const itemTaxes = (item.appliedTaxIds || []).map(id => (config.taxes || []).find(t => t.id === id)).filter(Boolean);
-         itemTaxes.forEach(t => itemTaxRate += t!.rate);
-
-         let lineNet = 0;
-         if (isTaxIncluded) {
-            lineNet = lineBaseAfterDiscount / (1 + itemTaxRate);
-         } else {
-            lineNet = lineBaseAfterDiscount;
-         }
-
-         itemTaxes.forEach(t => {
-            if (!breakdown[t!.id]) breakdown[t!.id] = { name: t!.name, amount: 0 };
-            breakdown[t!.id].amount += lineNet * t!.rate;
-         });
-      });
-      return Object.values(breakdown);
-   }, [processedCart, grossLineTotal, config.taxes, discountAmount, isTaxIncluded]);
+   const taxBreakdown = useMemo(() => calculateTaxBreakdown({
+      items: processedCart,
+      config,
+      discountAmount,
+      isTaxIncluded,
+   }), [processedCart, config, discountAmount, isTaxIncluded]);
 
    const cartTax = taxBreakdown.reduce((sum, t) => sum + t.amount, 0);
 
@@ -1396,8 +1381,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const returnItems = processedCart.filter(i => i.quantity < 0);
 
                // Calculate totals for each part
-               const saleTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-               const returnTotal = returnItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               const positiveGrossTotal = processedCart
+                  .filter(i => i.quantity > 0)
+                  .reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               const saleGrossTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               const saleDiscountAmount = positiveGrossTotal > 0
+                  ? discountAmount * (saleGrossTotal / positiveGrossTotal)
+                  : 0;
+               const saleSummary = calculateTransactionSummary({
+                  items: saleItems,
+                  discountAmount: saleDiscountAmount,
+                  isTaxIncluded,
+                  total: 0,
+               }, config);
+               const returnSummary = calculateTransactionSummary({
+                  items: returnItems,
+                  discountAmount: 0,
+                  isTaxIncluded,
+                  total: 0,
+               }, config);
+               const saleTotal = saleSummary.total;
+               const returnTotal = returnSummary.total;
 
                // Prepare wallet operations
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
@@ -1420,8 +1424,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         customerName: selectedCustomer?.name,
                         ncf: finalNcf,
                         ncfType: fiscalStatus.type,
-                        taxAmount: isTaxIncluded ? saleTotal * 0.18 : 0,
-                        netAmount: isTaxIncluded ? saleTotal / 1.18 : saleTotal,
+                        taxAmount: saleSummary.taxTotal,
+                        taxBreakdown: saleSummary.taxBreakdown,
+                        netAmount: saleSummary.subtotal,
+                        discountAmount: saleDiscountAmount,
+                        isTaxIncluded,
                         pendingBalance: payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0) || undefined,
                         dueDate: payments.some(p => p.method === 'CREDIT') ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined,
                         customerSnapshot: selectedCustomer ? {
@@ -1435,6 +1442,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         seriesId: activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC',
                         items: returnItems,
                         total: returnTotal,
+                        taxAmount: returnSummary.taxTotal,
+                        taxBreakdown: returnSummary.taxBreakdown,
+                        netAmount: returnSummary.subtotal,
+                        discountAmount: 0,
+                        isTaxIncluded,
                         userId: currentUser.id,
                         userName: currentUser.name,
                         terminalId: terminalId,
@@ -1492,6 +1504,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ncf: finalNcf,
                   ncfType: fiscalStatus.type,
                   taxAmount: taxAmount,
+                  taxBreakdown: taxBreakdown,
                   netAmount: netAmount,
                   discountAmount: discountAmount,
                   customerSnapshot: selectedCustomer ? {
@@ -1830,6 +1843,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
       });
 
+      const refundSummary = calculateTransactionSummary({
+         items: returnItems,
+         discountAmount: 0,
+         isTaxIncluded: !!originalTransaction.isTaxIncluded,
+         total: 0,
+      }, config);
+
+      refundTotal = refundSummary.total;
+
       // 2. Create Refund Transaction
       const refundTxn = await transactionService.createTransaction({
          documentType: 'REFUND',
@@ -1837,6 +1859,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          date: new Date().toISOString(),
          items: returnItems,
          total: refundTotal,
+         taxAmount: refundSummary.taxTotal,
+         taxBreakdown: refundSummary.taxBreakdown,
+         netAmount: refundSummary.subtotal,
+         discountAmount: 0,
          payments: [],
          userId: currentUser.id,
          userName: currentUser.name,
@@ -2501,6 +2527,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         const hasDiscount = item.originalPrice && item.price < item.originalPrice;
                         const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
                         const lineNet = item.price * item.quantity;
+                        const itemTaxSummary = calculateItemTaxBreakdown(item, {
+                           config,
+                           isTaxIncluded
+                        }).map(tax => `${formatTaxLineLabel(tax)} (${baseCurrency.symbol}${tax.amount.toLocaleString('en-US', {
+                           minimumFractionDigits: 2,
+                           maximumFractionDigits: 2
+                        })})`).join(' | ');
 
                         // MOBILE CARD DESIGN
                         if (isMobile) {
@@ -2520,9 +2553,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                              {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
                                           </div>
-                                          <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">
-                                             ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
-                                          </span>
+                                          {itemTaxSummary && (
+                                             <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">
+                                                {itemTaxSummary}
+                                             </span>
+                                          )}
                                        </div>
                                        {item.salespersonId && (
                                           <div className="mt-1 flex items-center gap-1 text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-md w-fit">
@@ -2579,9 +2614,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 <span>{item.quantity} x {baseCurrency.symbol}{item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                                 {item.modifiers && item.modifiers.length > 0 && <span className="text-blue-600 font-bold ml-1">+{item.modifiers.length} mod</span>}
                                              </div>
-                                             <div className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">
-                                                ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
-                                             </div>
+                                             {itemTaxSummary && (
+                                                <div className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">
+                                                   {itemTaxSummary}
+                                                </div>
+                                             )}
                                           </div>
                                           {/* Salesperson Badge */}
                                           {item.salespersonId && (

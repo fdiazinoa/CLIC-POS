@@ -100,6 +100,7 @@ class TransactionService {
             customerName: data.customerName,
             customerSnapshot: data.customerSnapshot,
             taxAmount: data.taxAmount,
+            taxBreakdown: data.taxBreakdown,
             netAmount: data.netAmount,
             discountAmount: data.discountAmount,
             isTaxIncluded: data.isTaxIncluded,

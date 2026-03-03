@@ -864,8 +864,8 @@ router.post('/transactions', async (req, res) => {
         let conflictResolvedCount = 0;
         const now = new Date().toISOString();
         db.transaction(() => {
-            const stmt = db.prepare(`INSERT OR IGNORE INTO transactions (id, globalSequence, displayId, documentType, seriesId, seriesNumber, date, items, total, payments, userId, userName, terminalId, status, customerId, customerName, customerSnapshot, taxAmount, netAmount, discountAmount, isTaxIncluded, ncf, ncfType, relatedTransactions, originalTransactionId, refundReason, affectedInvoiceNumber, affectedNCF, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-            const updateStmt = db.prepare(`UPDATE transactions SET globalSequence = ?, displayId = ?, documentType = ?, seriesId = ?, seriesNumber = ?, date = ?, items = ?, total = ?, payments = ?, userId = ?, userName = ?, terminalId = ?, status = ?, customerId = ?, customerName = ?, customerSnapshot = ?, taxAmount = ?, netAmount = ?, discountAmount = ?, isTaxIncluded = ?, ncf = ?, ncfType = ?, relatedTransactions = ?, originalTransactionId = ?, refundReason = ?, affectedInvoiceNumber = ?, affectedNCF = ?, syncStatus = ?, syncError = ? WHERE id = ?`);
+            const stmt = db.prepare(`INSERT OR IGNORE INTO transactions (id, globalSequence, displayId, documentType, seriesId, seriesNumber, date, items, total, payments, userId, userName, terminalId, status, customerId, customerName, customerSnapshot, taxAmount, taxBreakdown, netAmount, discountAmount, isTaxIncluded, ncf, ncfType, relatedTransactions, originalTransactionId, refundReason, affectedInvoiceNumber, affectedNCF, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            const updateStmt = db.prepare(`UPDATE transactions SET globalSequence = ?, displayId = ?, documentType = ?, seriesId = ?, seriesNumber = ?, date = ?, items = ?, total = ?, payments = ?, userId = ?, userName = ?, terminalId = ?, status = ?, customerId = ?, customerName = ?, customerSnapshot = ?, taxAmount = ?, taxBreakdown = ?, netAmount = ?, discountAmount = ?, isTaxIncluded = ?, ncf = ?, ncfType = ?, relatedTransactions = ?, originalTransactionId = ?, refundReason = ?, affectedInvoiceNumber = ?, affectedNCF = ?, syncStatus = ?, syncError = ? WHERE id = ?`);
             const byIdStmt = db.prepare(`SELECT id, displayId, terminalId FROM transactions WHERE id = ?`);
             const byDisplayIdStmt = db.prepare(`SELECT id, displayId, terminalId FROM transactions WHERE displayId = ?`);
 
@@ -889,6 +889,7 @@ router.post('/transactions', async (req, res) => {
                     txn.customerName,
                     JSON.stringify(txn.customerSnapshot),
                     txn.taxAmount,
+                    JSON.stringify(txn.taxBreakdown),
                     txn.netAmount,
                     txn.discountAmount,
                     txn.isTaxIncluded ? 1 : 0,
@@ -922,6 +923,7 @@ router.post('/transactions', async (req, res) => {
                     txn.customerName,
                     JSON.stringify(txn.customerSnapshot),
                     txn.taxAmount,
+                    JSON.stringify(txn.taxBreakdown),
                     txn.netAmount,
                     txn.discountAmount,
                     txn.isTaxIncluded ? 1 : 0,

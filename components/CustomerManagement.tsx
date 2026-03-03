@@ -16,6 +16,7 @@ import CreditAccountDashboard from './CreditAccountDashboard';
 import { agendaService } from '../services/AgendaService';
 import ActivityModal from './ActivityModal';
 import LoyaltyDashboard from './LoyaltyDashboard';
+import { calculateTransactionSummary, formatTaxLineLabel } from '../utils/tax';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -1683,6 +1684,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
          {selectedTransactionId && (() => {
             const tx = customerTransactions.find(t => t.id === selectedTransactionId);
             if (!tx) return null;
+            const txSummary = calculateTransactionSummary(tx, config);
 
             const getPaymentMethodLabel = (payment: any): string => {
                const method = (payment?.method || '').toString().toUpperCase();
@@ -1793,15 +1795,27 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                         <section className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-2">
                            <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
                               <span>Subtotal</span>
-                              <span>{config.currencySymbol}{(tx.total / (1 + config.taxRate)).toFixed(2)}</span>
+                              <span>{config.currencySymbol}{txSummary.subtotal.toFixed(2)}</span>
                            </div>
+                           {txSummary.discountTotal > 0 && (
+                              <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                                 <span>Descuento</span>
+                                 <span>-{config.currencySymbol}{txSummary.discountTotal.toFixed(2)}</span>
+                              </div>
+                           )}
+                           {txSummary.taxBreakdown.map((tax) => (
+                              <div key={`${tax.taxId}-${tax.rate}`} className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                                 <span>{formatTaxLineLabel(tax)}</span>
+                                 <span>{config.currencySymbol}{tax.amount.toFixed(2)}</span>
+                              </div>
+                           ))}
                            <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
-                              <span>Impuestos ({config.taxRate * 100}%)</span>
-                              <span>{config.currencySymbol}{(tx.total - (tx.total / (1 + config.taxRate))).toFixed(2)}</span>
+                              <span>Total Impuestos</span>
+                              <span>{config.currencySymbol}{txSummary.taxTotal.toFixed(2)}</span>
                            </div>
                            <div className="flex justify-between text-lg font-black text-blue-900 border-t border-blue-100 pt-2 mt-2">
                               <span>Total Final</span>
-                              <span>{config.currencySymbol}{tx.total.toFixed(2)}</span>
+                              <span>{config.currencySymbol}{txSummary.total.toFixed(2)}</span>
                            </div>
                         </section>
 

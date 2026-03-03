@@ -6,6 +6,7 @@ import {
     Transaction
 } from '../types';
 import * as XLSX from 'xlsx';
+import { getTransactionTaxBreakdown, sumTaxBreakdown } from './tax';
 
 type ExcelCellType = 'String' | 'Number';
 
@@ -415,7 +416,7 @@ const aggregatePayments = (payments: any[], expectedTotal: number): PaymentBucke
     return buckets;
 };
 
-const extract607Totals = (tx: Transaction): {
+const extract607Totals = (tx: Transaction, config: BusinessConfig): {
     montoFacturado: number;
     itbisFacturado: number;
     impuestoSelectivoConsumo: number;
@@ -426,18 +427,30 @@ const extract607Totals = (tx: Transaction): {
     const anyTx = tx as any;
     const total = Math.abs(toNumber(tx.total));
     const net = Math.abs(toNumber(tx.netAmount));
-    const tax = Math.abs(toNumber(tx.taxAmount));
+    const taxBreakdown = getTransactionTaxBreakdown(tx, config);
+    const tax = Math.abs(sumTaxBreakdown(taxBreakdown) || toNumber(tx.taxAmount));
+    const derivedItbis = round2(taxBreakdown
+        .filter(line => line.type === 'VAT')
+        .reduce((sum, line) => sum + Math.abs(toNumber(line.amount)), 0));
+    const derivedOtros = round2(taxBreakdown
+        .filter(line => line.type === 'OTHER')
+        .reduce((sum, line) => sum + Math.abs(toNumber(line.amount)), 0));
+    const derivedPropina = round2(taxBreakdown
+        .filter(line => line.type === 'SERVICE_CHARGE')
+        .reduce((sum, line) => sum + Math.abs(toNumber(line.amount)), 0));
     const impuestoSelectivoConsumo = Math.abs(
         toNumber(anyTx.impuestoSelectivoConsumo ?? anyTx.iscAmount ?? anyTx.selectiveTaxAmount)
     );
     const otrosImpuestosTasas = Math.abs(
         toNumber(anyTx.otrosImpuestosTasas ?? anyTx.otherTaxes ?? anyTx.otherTaxAmount)
-    );
+    ) || derivedOtros;
     const montoPropinaLegal = Math.abs(
         toNumber(anyTx.montoPropinaLegal ?? anyTx.tipAmount ?? anyTx.legalTipAmount ?? anyTx.serviceChargeAmount)
-    );
+    ) || derivedPropina;
 
-    let itbisFacturado = tax;
+    let itbisFacturado = derivedItbis > 0
+        ? derivedItbis
+        : Math.max(0, tax - otrosImpuestosTasas - montoPropinaLegal);
     let montoFacturado = net;
 
     if (montoFacturado <= 0 && total > 0) {
@@ -471,7 +484,7 @@ const extract607Totals = (tx: Transaction): {
     };
 };
 
-const normalizeForm607Row = (tx: Transaction): Form607Row | null => {
+const normalizeForm607Row = (tx: Transaction, config: BusinessConfig): Form607Row | null => {
     const ncf = normalizeNcf(tx.ncf);
     if (!ncf) return null;
 
@@ -484,7 +497,7 @@ const normalizeForm607Row = (tx: Transaction): Form607Row | null => {
     );
     const tipoIdentificacion = rawTaxId ? detectTipoIdentificacion(rawTaxId) : '';
 
-    const totals = extract607Totals(tx);
+    const totals = extract607Totals(tx, config);
     const payments = aggregatePayments(tx.payments || [], totals.totalFacturado);
     const ncfModificado = tx.ncfType === 'B04'
         ? normalizeNcf(tx.affectedNCF ?? anyTx.ncfModificado)
@@ -603,6 +616,7 @@ const build606Rows = (
     purchaseOrders: PurchaseOrder[],
     receptions: Reception[],
     suppliers: Supplier[],
+    config: BusinessConfig,
     warnings: string[]
 ): Form606Row[] => {
     const rows: Form606Row[] = [];
@@ -628,7 +642,7 @@ const build606Rows = (
             return;
         }
 
-        const totals = extract607Totals(tx);
+        const totals = extract607Totals(tx, config);
         const montoServicios = round2(
             (tx.items || [])
                 .filter(item => normalizeTextKey((item as any)?.type).includes('SERVICE'))
@@ -1110,7 +1124,7 @@ export const formatFiscalExcel = (options: FiscalExcelOptions): FiscalExcelResul
             const ncf = normalizeNcf(tx.ncf);
             return SALES_NCF_PREFIXES.some(prefix => ncf.startsWith(prefix));
         })
-        .map(normalizeForm607Row)
+        .map(tx => normalizeForm607Row(tx, options.config))
         .filter(Boolean) as Form607Row[];
 
     const rows607 = options.consolidateB02 ? consolidateB02Rows(raw607Rows) : raw607Rows;
@@ -1119,6 +1133,7 @@ export const formatFiscalExcel = (options: FiscalExcelOptions): FiscalExcelResul
         options.purchaseOrders || [],
         options.receptions || [],
         options.suppliers || [],
+        options.config,
         warnings
     );
     const rows608 = build608Rows(allTransactions);

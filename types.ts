@@ -1024,6 +1024,15 @@ export interface CartItem extends Product {
   variantInfo?: string; // NEW: Human readable variant detail
 }
 
+export interface TransactionTaxLine {
+  taxId: string;
+  name: string;
+  type: TaxDefinition['type'];
+  rate: number;
+  taxableBase: number;
+  amount: number;
+}
+
 export interface Transaction {
   // Identifiers
   id: string;
@@ -1066,6 +1075,7 @@ export interface Transaction {
 
   // Accounting
   taxAmount?: number;               // Total tax amount
+  taxBreakdown?: TransactionTaxLine[];
   netAmount?: number;               // Net amount (before tax)
   discountAmount?: number;
   isTaxIncluded?: boolean;

@@ -220,6 +220,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     customerName TEXT,
     customerSnapshot TEXT, -- JSON object
     taxAmount REAL DEFAULT 0,
+    taxBreakdown TEXT, -- JSON array
     netAmount REAL DEFAULT 0,
     discountAmount REAL DEFAULT 0,
     isTaxIncluded INTEGER DEFAULT 0,
@@ -257,6 +258,7 @@ CREATE TABLE IF NOT EXISTS transaction_history (
     customerName TEXT,
     customerSnapshot TEXT, -- JSON object
     taxAmount REAL DEFAULT 0,
+    taxBreakdown TEXT, -- JSON array
     netAmount REAL DEFAULT 0,
     discountAmount REAL DEFAULT 0,
     isTaxIncluded INTEGER DEFAULT 0,

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { CartItem, BusinessConfig } from '../types';
+import { calculateItemTaxBreakdown, formatTaxLineLabel } from '../utils/tax';
 
 interface ProductTableSupermarketProps {
     cart: CartItem[];
@@ -41,7 +42,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                     <tr>
                         <th className="px-1 py-1 text-center w-12 text-gray-600">Cant</th>
                         <th className="px-2 py-1 w-auto">Descripción</th>
-                        <th className="px-2 py-1 text-right w-20 hidden sm:table-cell">ITBIS</th>
+                        <th className="px-2 py-1 text-right w-20 hidden sm:table-cell">Impuestos</th>
                         <th className="px-2 py-1 text-right w-24">Precio</th>
                         <th className="px-2 py-1 text-right pr-4 w-28 text-gray-800">Total</th>
                         <th className="w-8"></th>
@@ -50,7 +51,9 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                 <tbody className="text-xs divide-y divide-gray-50">
                     {cart.map((item) => {
                         const isHighlighted = highlightedId === item.cartId;
-                        const taxAmount = item.price * item.quantity * (config.taxRate || 0.18);
+                        const itemTaxLines = calculateItemTaxBreakdown(item, { config });
+                        const taxAmount = itemTaxLines.reduce((sum, tax) => sum + tax.amount, 0);
+                        const taxTitle = itemTaxLines.map(tax => formatTaxLineLabel(tax)).join(', ');
                         const total = item.price * item.quantity;
                         const hasDiscount = item.originalPrice && item.price < item.originalPrice;
                         const displayCode = item.barcode || item.variantSku || item.id;
@@ -92,7 +95,7 @@ const ProductTableSupermarket: React.FC<ProductTableSupermarketProps> = ({
                                 </td>
 
                                 {/* ITBIS */}
-                                <td className="px-2 py-1 text-right font-mono text-gray-400 text-[10px] tabular-nums hidden sm:table-cell">
+                                <td className="px-2 py-1 text-right font-mono text-gray-400 text-[10px] tabular-nums hidden sm:table-cell" title={taxTitle || 'Sin impuestos'}>
                                     {currencySymbol}{taxAmount.toFixed(2)}
                                 </td>
 

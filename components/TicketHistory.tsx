@@ -13,6 +13,7 @@ import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
 import { User, DeviceRole } from '../types';
 import { RefundModal } from './RefundModal';
+import { calculateTransactionSummary, formatTaxLineLabel } from '../utils/tax';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -293,6 +294,7 @@ const TicketDetailDrawer: React.FC<{
 
 
    if (!tx) return null;
+   const txSummary = calculateTransactionSummary(tx, config);
    const cashierName = tx.userName || users.find(u => u.id === tx.userId)?.name || 'Sistema';
    const supervisorName = tx.authorizedByName || users.find(u => u.id === tx.authorizedById)?.name || null;
    const payments = Array.isArray(tx.payments) ? tx.payments : [];
@@ -408,15 +410,27 @@ const TicketDetailDrawer: React.FC<{
                <section className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-2">
                   <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
                      <span>Subtotal</span>
-                     <span>{config.currencySymbol}{(tx.total / (1 + config.taxRate)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     <span>{config.currencySymbol}{txSummary.subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
+                  {txSummary.discountTotal > 0 && (
+                     <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                        <span>Descuento</span>
+                        <span>-{config.currencySymbol}{txSummary.discountTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     </div>
+                  )}
+                  {txSummary.taxBreakdown.map((tax) => (
+                     <div key={`${tax.taxId}-${tax.rate}`} className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                        <span>{formatTaxLineLabel(tax)}</span>
+                        <span>{config.currencySymbol}{tax.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     </div>
+                  ))}
                   <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
-                     <span>Impuestos ({config.taxRate * 100}%)</span>
-                     <span>{config.currencySymbol}{(tx.total - (tx.total / (1 + config.taxRate))).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     <span>Total Impuestos</span>
+                     <span>{config.currencySymbol}{txSummary.taxTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                   <div className="flex justify-between text-lg font-black text-blue-900 border-t border-blue-100 pt-2 mt-2">
                      <span>Total Final</span>
-                     <span>{config.currencySymbol}{tx.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     <span>{config.currencySymbol}{txSummary.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                </section>
 
@@ -1047,10 +1061,13 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          return;
       }
 
-      const refundSubtotal = refundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-      const refundTotal = originalTx.isTaxIncluded
-         ? refundSubtotal
-         : refundSubtotal * (1 + (config.taxRate || 0));
+      const refundSummary = calculateTransactionSummary({
+         items: refundItems,
+         discountAmount: 0,
+         isTaxIncluded: !!originalTx.isTaxIncluded,
+         total: 0
+      }, config);
+      const refundTotal = refundSummary.total;
 
       const authorized = await requestApproval({
          permission: 'POS_VOID_PAID_TICKET',
@@ -1075,13 +1092,20 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       const tx = transactions.find(t => t.id === returnModeId);
       if (!tx) return 0;
 
-      return tx.items
+      const refundItems = tx.items
          .filter(item => selectedItemsQty.has(item.cartId))
-         .reduce((acc, item) => {
-            const qtyToReturn = selectedItemsQty.get(item.cartId) || 0;
-            return acc + (item.price * qtyToReturn);
-         }, 0) * (1 + config.taxRate);
-   }, [returnModeId, selectedItemsQty, transactions, config.taxRate]);
+         .map(item => ({
+            ...item,
+            quantity: selectedItemsQty.get(item.cartId) || 0
+         }));
+
+      return calculateTransactionSummary({
+         items: refundItems,
+         discountAmount: 0,
+         isTaxIncluded: !!tx.isTaxIncluded,
+         total: 0
+      }, config).total;
+   }, [returnModeId, selectedItemsQty, transactions, config]);
 
 
    // --- RENDER HELPERS ---

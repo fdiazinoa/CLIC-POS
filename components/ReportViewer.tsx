@@ -30,6 +30,12 @@ import {
 } from './AnalyticsLogic';
 import { useCustomerAnalytics } from '../hooks/useCustomerAnalytics';
 import { formatFiscalExcel } from '../utils/fiscalExcel';
+import {
+    calculateItemTaxBreakdown,
+    formatTaxLineLabel,
+    getTransactionTaxBreakdown,
+    sumTaxBreakdown
+} from '../utils/tax';
 
 interface InventoryReportContext {
     products: Product[];
@@ -148,8 +154,12 @@ const isRefundLikeTransaction = (tx: Transaction): boolean => {
         || toNumber(tx.total) < 0;
 };
 
-const getSignedTaxAmount = (tx: Transaction, taxRate: number): number => {
-    const storedTax = toNumber(tx.taxAmount);
+const getSignedTaxAmount = (
+    tx: Transaction,
+    config: Pick<BusinessConfig, 'taxRate' | 'taxes'>
+): number => {
+    const breakdownTax = sumTaxBreakdown(getTransactionTaxBreakdown(tx, config));
+    const storedTax = Math.abs(breakdownTax) > EPSILON ? breakdownTax : toNumber(tx.taxAmount);
     const net = toNumber(tx.netAmount);
     const total = toNumber(tx.total);
 
@@ -159,7 +169,7 @@ const getSignedTaxAmount = (tx: Transaction, taxRate: number): number => {
     } else if (net > 0 && total > 0 && total >= net) {
         tax = total - net;
     } else if (tx.isTaxIncluded && total > 0) {
-        const normalizedRate = taxRate > 0 ? taxRate : 0.18;
+        const normalizedRate = toNumber(config.taxRate) > 0 ? toNumber(config.taxRate) : 0.18;
         tax = total - (total / (1 + normalizedRate));
     }
 
@@ -248,6 +258,7 @@ const resolveFiscalFormats = (selection: FiscalExportFormatOption): FiscalExport
 };
 
 interface FiscalTaxSummaryRow {
+    taxId: string;
     taxLabel: string;
     taxRatePercent: number;
     lineCount: number;
@@ -257,18 +268,6 @@ interface FiscalTaxSummaryRow {
 }
 
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
-
-const normalizeTaxRatePercent = (rawRate: unknown): number => {
-    const rate = toNumber(rawRate);
-    if (rate <= 0) return 0;
-    return rate <= 1 ? rate * 100 : rate;
-};
-
-const formatTaxRateLabel = (ratePercent: number): string => {
-    if (Math.abs(ratePercent) <= EPSILON) return '0% (Exento)';
-    if (Number.isInteger(ratePercent)) return `${ratePercent}%`;
-    return `${ratePercent.toFixed(2)}%`;
-};
 
 const SALES_NCF_REGEX = /^B(01|02|04|14|15)/;
 
@@ -397,7 +396,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
             case 'FISCAL':
                 if (fiscalReportMode === 'TAX_SUMMARY') {
                     return [
-                        { key: 'taxLabel', label: 'Tasa Impuesto', type: 'text' },
+                        { key: 'taxLabel', label: 'Impuesto', type: 'text' },
                         { key: 'lineCount', label: 'Líneas', type: 'number' },
                         { key: 'taxableBase', label: 'Base Imponible', type: 'currency' },
                         { key: 'taxAmount', label: 'Impuesto', type: 'currency' },
@@ -690,14 +689,15 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
             return SALES_NCF_REGEX.test(String(tx.ncf || '').toUpperCase());
         });
 
-        const taxesById = new Map((config.taxes || []).map(tax => [tax.id, tax]));
         const buckets = new Map<string, FiscalTaxSummaryRow>();
 
-        const ensureBucket = (taxRatePercent: number): FiscalTaxSummaryRow => {
-            const key = taxRatePercent.toFixed(4);
+        const ensureBucket = (taxLine: { taxId: string; name: string; rate: number }): FiscalTaxSummaryRow => {
+            const taxRatePercent = round2((taxLine.rate || 0) * 100);
+            const key = `${taxLine.taxId}:${taxRatePercent.toFixed(4)}`;
             if (!buckets.has(key)) {
                 buckets.set(key, {
-                    taxLabel: formatTaxRateLabel(taxRatePercent),
+                    taxId: taxLine.taxId,
+                    taxLabel: formatTaxLineLabel({ name: taxLine.name, rate: taxLine.rate }),
                     taxRatePercent,
                     lineCount: 0,
                     taxableBase: 0,
@@ -729,38 +729,30 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                 const lineDiscount = discountAmount * itemRatio;
                 const lineBaseAfterDiscount = Math.max(0, lineGross - lineDiscount);
 
-                const taxIds = Array.isArray((item as any).appliedTaxIds)
-                    ? ((item as any).appliedTaxIds as string[])
-                    : [];
-                const taxes = taxIds.map(taxId => taxesById.get(taxId)).filter(Boolean);
+                const itemTaxLines = calculateItemTaxBreakdown(item, {
+                    config,
+                    isTaxIncluded: !!tx.isTaxIncluded,
+                    lineBaseAfterDiscount
+                });
 
-                if (taxes.length === 0) {
-                    const bucket = ensureBucket(0);
+                if (itemTaxLines.length === 0) {
+                    const bucket = ensureBucket({
+                        taxId: 'EXEMPT',
+                        name: 'Exento 0%',
+                        rate: 0
+                    });
                     bucket.lineCount += 1;
                     bucket.taxableBase += sign * lineBaseAfterDiscount;
                     bucket.total += sign * lineBaseAfterDiscount;
                     return;
                 }
 
-                const totalTaxRatePercent = taxes.reduce(
-                    (sum, tax) => sum + normalizeTaxRatePercent(tax?.rate),
-                    0
-                );
-                const totalTaxRate = totalTaxRatePercent / 100;
-                const lineNet = tx.isTaxIncluded && totalTaxRate > 0
-                    ? lineBaseAfterDiscount / (1 + totalTaxRate)
-                    : lineBaseAfterDiscount;
-
-                taxes.forEach((tax) => {
-                    const taxRatePercent = normalizeTaxRatePercent(tax?.rate);
-                    const taxRate = taxRatePercent / 100;
-                    const taxAmount = lineNet * taxRate;
-
-                    const bucket = ensureBucket(taxRatePercent);
+                itemTaxLines.forEach((taxLine) => {
+                    const bucket = ensureBucket(taxLine);
                     bucket.lineCount += 1;
-                    bucket.taxableBase += sign * lineNet;
-                    bucket.taxAmount += sign * taxAmount;
-                    bucket.total += sign * (lineNet + taxAmount);
+                    bucket.taxableBase += sign * taxLine.taxableBase;
+                    bucket.taxAmount += sign * taxLine.amount;
+                    bucket.total += sign * (taxLine.taxableBase + taxLine.amount);
                 });
             });
         });
@@ -807,7 +799,6 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
     ]);
 
     const operationsSearch = searchTerm.trim().toLowerCase();
-    const taxRate = toNumber((config as any).taxRate) || 0.18;
     const matchesOperationsSearch = (values: unknown[]): boolean => {
         if (!operationsSearch) return true;
         return values.some(value => String(value ?? '').toLowerCase().includes(operationsSearch));
@@ -863,7 +854,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                 difference,
                 status: 'CERRADO' as const,
                 totalSales: sumRecordValues(report.totalsByMethod),
-                totalTax: reportTransactions.reduce((sum, tx) => sum + getSignedTaxAmount(tx, taxRate), 0),
+                totalTax: reportTransactions.reduce((sum, tx) => sum + getSignedTaxAmount(tx, config), 0),
                 transactionCount: toNumber(report.transactionCount) || reportTransactions.length,
                 note: report.notes || ''
             };
@@ -949,7 +940,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                 totalSales: pendingTransactions
                     .filter(tx => !isRefundLikeTransaction(tx))
                     .reduce((sum, tx) => sum + toNumber(tx.total), 0),
-                totalTax: pendingTransactions.reduce((sum, tx) => sum + getSignedTaxAmount(tx, taxRate), 0),
+                totalTax: pendingTransactions.reduce((sum, tx) => sum + getSignedTaxAmount(tx, config), 0),
                 transactionCount: pendingTransactions.length,
                 note: 'Turno abierto en curso'
             });
@@ -966,7 +957,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
         config.terminals,
         dateRange.startMs,
         dateRange.endMs,
-        taxRate
+        config
     ]);
 
     const operationsClosureRowsFiltered = useMemo(() => {
@@ -1065,7 +1056,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
 
             if (scopedPayments.length === 0) return;
             const paymentTotal = scopedPayments.reduce((sum, payment) => sum + payment.amount, 0);
-            const signedTax = getSignedTaxAmount(tx, taxRate);
+            const signedTax = getSignedTaxAmount(tx, config);
 
             scopedPayments.forEach(payment => {
                 buckets[payment.method].total += payment.amount;
@@ -1084,7 +1075,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
             tax: buckets[method].tax,
             share: grandTotal > 0 ? (buckets[method].total / grandTotal) * 100 : 0
         })).filter(row => matchesOperationsSearch([row.label, row.method]));
-    }, [operationsTransactionsInRange, operationsSearch, taxRate]);
+    }, [operationsTransactionsInRange, operationsSearch, config]);
 
     const operationsHourlyRows = useMemo<HourlyBehaviorRow[]>(() => {
         const rows = Array.from({ length: 24 }, (_, index) => ({
