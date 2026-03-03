@@ -118,6 +118,14 @@ class TransactionService {
 
         // Save only the new document to avoid full-collection rewrites that can block checkout.
         await db.saveDocument('transactions', transaction);
+        try {
+            await db.saveDocument('transactionHistory', {
+                ...transaction,
+                syncStatus: transaction.syncStatus || 'PENDING'
+            } as any);
+        } catch (historyMirrorError) {
+            console.warn('⚠️ Transaction history mirror skipped:', historyMirrorError);
+        }
 
         return transaction;
     }
