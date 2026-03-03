@@ -60,6 +60,7 @@ import VirtualKeyboard from './VirtualKeyboard';
 import SafetyGateModal from './SafetyGateModal';
 import { printReservation } from '../utils/printer';
 import MobileCartButton from './MobileCartButton';
+import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from '../services/localRefundPersistence';
 
 // ... existing imports
 
@@ -1395,8 +1396,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       try {
+         const terminalId = activeTerminalId || 't1';
+         const hasReturns = processedCart.some(i => i.quantity < 0);
+         const hasSales = processedCart.some(i => i.quantity > 0);
+         const isRefundOnly = hasReturns && !hasSales;
+         const refundSeriesId = activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND';
+         const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
+         const normalizedRefundItems = processedCart
+            .filter(i => i.quantity < 0)
+            .map(item => ({ ...item, quantity: Math.abs(item.quantity) }));
+         const sellableConditions = new Map<string, 'SELLABLE' | 'DAMAGED'>();
+         normalizedRefundItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
+
          // --- FISCAL COMPLIANCE CHECK (DGII RNC VALIDATION) ---
-         if (fiscalStatus && fiscalStatus.type === 'B01' && selectedCustomer) {
+         if (!isRefundOnly && fiscalStatus && fiscalStatus.type === 'B01' && selectedCustomer) {
             if (selectedCustomer.fiscalStatus && selectedCustomer.fiscalStatus !== 'ACTIVO') {
                alert(
                   `⛔ COMPROBANTE BLOQUEADO\n\n` +
@@ -1408,27 +1421,49 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
 
-         const terminalId = activeTerminalId || 't1';
-         const finalNcf = await withTimeout(
-            db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100),
-            8000,
-            'TIMEOUT_GET_NCF'
-         );
-
-         if (!finalNcf) {
-            alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
-            return null;
-         }
-
-         const validation = validateTerminalSeries(activeTerminalConfig, 'TICKET');
+         const validation = validateTerminalSeries(activeTerminalConfig, isRefundOnly ? 'REFUND' : 'TICKET');
          if (!validation.isValid) {
             alert(validation.message);
             return null;
          }
 
-         const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
-         const hasReturns = processedCart.some(i => i.quantity < 0);
-         const hasSales = processedCart.some(i => i.quantity > 0);
+         if (hasReturns && hasSales) {
+            const refundValidation = validateTerminalSeries(activeTerminalConfig, 'REFUND');
+            if (!refundValidation.isValid) {
+               alert(refundValidation.message);
+               return null;
+            }
+         }
+
+         let finalNcf: string | undefined;
+         let finalNcfType: NCFType | undefined;
+
+         if (isRefundOnly) {
+            try {
+               finalNcf = await withTimeout(
+                  db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50),
+                  8000,
+                  'TIMEOUT_GET_REFUND_ONLY_NCF'
+               );
+               finalNcfType = finalNcf ? 'B04' : undefined;
+            } catch (refundNcfError) {
+               console.warn('No se pudo generar NCF B04 para devolución:', refundNcfError);
+            }
+         } else {
+            finalNcf = await withTimeout(
+               db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100),
+               8000,
+               'TIMEOUT_GET_NCF'
+            );
+
+            if (!finalNcf) {
+               alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
+               return null;
+            }
+
+            finalNcfType = fiscalStatus.type;
+         }
+
          const reservationAdvance = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
          const paymentsForTransaction = reservationAdvance > 0
             ? [...payments, { id: `ADV-${Date.now()}`, method: 'ADVANCE', amount: reservationAdvance, timestamp: new Date() }]
@@ -1447,12 +1482,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                // Calculate totals for each part
                const saleTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-               const returnTotal = returnItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               const normalizedSplitRefundItems = returnItems.map(item => ({ ...item, quantity: Math.abs(item.quantity) }));
+               const returnTotal = normalizedSplitRefundItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
 
                // Prepare wallet operations
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
-               const refundSeriesId = activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND';
                let refundNcf: string | undefined;
 
                if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
@@ -1494,7 +1529,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      refundTransaction: {
                         documentType: 'REFUND' as const,
                         seriesId: refundSeriesId,
-                        items: returnItems,
+                        items: normalizedSplitRefundItems,
                         total: returnTotal,
                         userId: currentUser.id,
                         userName: currentUser.name,
@@ -1518,6 +1553,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      25000,
                      'TIMEOUT_SPLIT_LOCAL'
                   );
+
+                  if (result.sale) {
+                     await persistStandaloneSaleHistory({
+                        ...result.sale,
+                        syncStatus: 'PENDING'
+                     });
+                  }
+
+                  if (result.refund) {
+                     await persistStandaloneRefundTransaction(
+                        {
+                           ...result.refund,
+                           items: normalizedSplitRefundItems,
+                           total: returnTotal,
+                           ncf: refundNcf,
+                           ncfType: refundNcf ? 'B04' : undefined,
+                           status: 'REFUNDED',
+                           refundReason: 'Devolución en transacción mixta',
+                           authorizedById: refundAuthorizedBy?.id,
+                           authorizedByName: refundAuthorizedBy?.name,
+                           syncStatus: 'PENDING'
+                        },
+                        {
+                           warehouseId: defaultSalesWarehouseId || 'wh_central',
+                           terminalId
+                        }
+                     );
+                  }
 
                   onUpdateCart([]);
                   onSelectCustomer(null);
@@ -1553,6 +1616,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
                const creditAmount = payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0);
+               const refundDocumentTotal = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+               const documentItems = isRefundOnly ? normalizedRefundItems : processedCart;
 
                const txn = await withTimeout(transactionService.createTransaction({
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
@@ -1560,8 +1625,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      ? (activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC')
                      : assignedSequenceId,
                   date: new Date().toISOString(),
-                  items: processedCart,
-                  total: cartTotal,
+                  items: documentItems,
+                  total: isRefundOnly ? refundDocumentTotal : cartTotal,
                   payments: paymentsForTransaction,
                   userId: currentUser.id,
                   userName: currentUser.name,
@@ -1572,7 +1637,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   pendingBalance: creditAmount > 0 ? creditAmount : undefined,
                   dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined, // Default 30 days
                   ncf: finalNcf,
-                  ncfType: fiscalStatus.type,
+                  ncfType: finalNcfType,
                   taxAmount: taxAmount,
                   netAmount: netAmount,
                   discountAmount: discountAmount,
@@ -1597,10 +1662,32 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                // Ensure seriesId is preserved (Backend might not return it in the root object)
                const finalTxn = {
                   ...txn,
-                  seriesId: txn.seriesId || assignedSequenceId
+                  seriesId: txn.seriesId || (isRefundOnly ? refundSeriesId : assignedSequenceId)
                };
 
-               onTransactionComplete(finalTxn);
+               if (isRefundOnly) {
+                  await persistStandaloneRefundTransaction(
+                     {
+                        ...finalTxn,
+                        items: normalizedRefundItems,
+                        total: refundDocumentTotal,
+                        status: 'REFUNDED',
+                        ncf: finalNcf,
+                        ncfType: finalNcfType,
+                        refundReason: 'Devolución POS',
+                        authorizedById: refundAuthorizedBy?.id,
+                        authorizedByName: refundAuthorizedBy?.name,
+                        syncStatus: 'PENDING'
+                     },
+                     {
+                        warehouseId: defaultSalesWarehouseId || 'wh_central',
+                        terminalId,
+                        conditions: sellableConditions
+                     }
+                  );
+               } else {
+                  onTransactionComplete(finalTxn);
+               }
 
                if (activeRecoveredReservation) {
                   const warehouseId = activeRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
@@ -1906,11 +1993,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             returnItems.push({
                ...originalItem,
-               quantity: returnItem.quantity,
+               quantity: Math.abs(returnItem.quantity),
                cartId: `RET-${Date.now()}-${returnItem.itemId}`
             });
          }
       });
+
+      let refundNcf: string | undefined;
+      try {
+         refundNcf = await db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50);
+      } catch (refundNcfError) {
+         console.warn('No se pudo generar NCF B04 para devolución QR:', refundNcfError);
+      }
 
       // 2. Create Refund Transaction
       const refundTxn = await transactionService.createTransaction({
@@ -1923,41 +2017,50 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          userId: currentUser.id,
          userName: currentUser.name,
          terminalId: terminalId,
-         status: 'COMPLETED',
+         status: 'REFUNDED',
          customerId: originalTransaction.customerId,
          customerName: originalTransaction.customerName,
          originalTransactionId: originalTransaction.id,
+         affectedInvoiceNumber: originalTransaction.displayId || originalTransaction.id,
+         affectedNCF: originalTransaction.ncf,
+         ncf: refundNcf,
+         ncfType: refundNcf ? 'B04' : undefined,
          refundReason: 'Smart QR Return',
          isTaxIncluded: originalTransaction.isTaxIncluded
       });
 
+      const sellableConditions = new Map<string, 'SELLABLE' | 'DAMAGED'>();
+      returnItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
 
-
-      // 3. Update Original Transaction Status (Global & Local)
-      try {
-         // Global/Server Update
-         await fetch(`/api/transactions/${originalTransaction.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: 'REFUNDED' })
-         });
-
-         // Local Update (if exists in current view)
-         const localExists = transactions.find(t => t.id === originalTransaction.id);
-         if (localExists) {
-            // Use a custom event or callback?
-            // Since transactions prop is passed down, we might not be able to set it directly if onTransactionComplete handles addition only.
-            // Ideally we should reload transactions or optimistically update.
-            // Given the architecture, onTransactionComplete usually refreshes or adds.
-            // For now, let's just log success.
-            console.log('✅ Original transaction marked as REFUNDED remotely.');
+      await persistStandaloneRefundTransaction(
+         {
+            ...refundTxn,
+            items: returnItems,
+            total: refundTotal,
+            status: 'REFUNDED',
+            refundReason: 'Smart QR Return',
+            syncStatus: 'PENDING'
+         },
+         {
+            warehouseId: defaultSalesWarehouseId || 'wh_central',
+            terminalId,
+            originalTransaction,
+            conditions: sellableConditions
          }
-      } catch (e) {
-         console.error("Failed to update original transaction status:", e);
-         // Don't block the UI, the refund itself is valid.
+      );
+
+      if (!(Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android')) {
+         try {
+            await fetch(`/api/transactions/${originalTransaction.id}`, {
+               method: 'PUT',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ status: 'REFUNDED' })
+            });
+         } catch (e) {
+            console.error("Failed to update original transaction status:", e);
+         }
       }
 
-      onTransactionComplete(refundTxn);
       alert(`Devolución registrada: ${config.currencySymbol}${refundTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\nTicket original (${originalTransaction.displayId}) marcado como REEMBOLSADO.`);
    };
 
