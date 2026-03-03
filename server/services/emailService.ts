@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Resend } from 'resend';
-import { Customer, EmailConfig } from '../../types';
+import { Customer, EmailConfig, TransactionTaxLine } from '../../types';
 import { db, getSetting } from '../db.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -20,6 +20,17 @@ export class EmailService {
         this.zReportTemplatePath = path.join(__dirname, '../templates/z_report.html');
         this.receiptTemplatePath = path.join(__dirname, '../templates/digital_receipt.html');
         this.loadConfig();
+    }
+
+    private formatTaxLineLabel(tax: Partial<TransactionTaxLine>): string {
+        const name = String(tax.name || '').trim();
+        const rate = Number(tax.rate || 0);
+        const ratePercent = rate <= 1 ? rate * 100 : rate;
+        const formattedRate = Number.isInteger(ratePercent) ? `${ratePercent}%` : `${ratePercent.toFixed(2)}%`;
+
+        if (!name) return `Impuesto ${formattedRate}`;
+        if (name.includes('%') || ratePercent <= 0) return name;
+        return `${name} (${formattedRate})`;
     }
 
     private loadConfig() {
@@ -223,6 +234,7 @@ export class EmailService {
         const {
             items, total, paymentMethod, companyInfo, transactionId,
             ncf, date, cashierName, tax, subtotal, discount,
+            taxBreakdown = [],
             currencySymbol = '$', logoUrl = 'https://clicpos.com/logo.png',
             totalSavings = 0, showSavings = false
         } = receiptData;
@@ -290,6 +302,21 @@ export class EmailService {
         html = html.replace(/{{paymentMethod}}/g, paymentMethod || 'Efectivo');
         html = html.replace(/{{itemsHtml}}/g, itemsHtml);
         html = html.replace(/{{qrUrl}}/g, qrUrl);
+
+        const taxBreakdownRows = Array.isArray(taxBreakdown)
+            ? taxBreakdown
+                .filter((line: TransactionTaxLine) => Math.abs(Number(line?.amount || 0)) > 0.0001)
+                .map((line: TransactionTaxLine) => `
+                    <tr>
+                        <td style="font-size: 14px; color: #64748B; padding: 4px 0;">${this.formatTaxLineLabel(line)}</td>
+                        <td align="right" style="font-size: 14px; color: #1E293B; font-weight: 600; padding: 4px 0;">
+                            ${currencySymbol}${Number(line.amount || 0).toFixed(2)}
+                        </td>
+                    </tr>
+                `)
+                .join('')
+            : '';
+        html = html.replace(/{{taxBreakdownRows}}/g, taxBreakdownRows);
 
         // NCF Row
         if (ncf) {

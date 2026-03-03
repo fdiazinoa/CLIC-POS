@@ -8,6 +8,7 @@ import {
 import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem, Transaction, Customer, User, Permission, RoleDefinition } from '../types';
 import { printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
+import { calculateTransactionSummary } from '../utils/tax';
 
 interface PaymentModalProps {
    total: number;
@@ -409,6 +410,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       setIsSendingEmail(true);
       console.log('Sending Receipt Email. Transaction:', completedTransaction);
       try {
+         const txSummary = completedTransaction && config
+            ? calculateTransactionSummary(completedTransaction, config)
+            : null;
          const response = await fetch('/api/email/receipt', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -424,9 +428,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                customerName: completedTransaction?.customerSnapshot?.name || completedTransaction?.customerName,
                companyInfo: config?.companyInfo,
                currencySymbol: currencySymbol,
-               subtotal: (completedTransaction?.netAmount || 0) + (completedTransaction?.discountAmount || 0),
-               tax: completedTransaction?.taxAmount,
-               discount: completedTransaction?.discountAmount,
+               subtotal: txSummary?.subtotal ?? completedTransaction?.netAmount ?? 0,
+               tax: txSummary?.taxTotal ?? completedTransaction?.taxAmount ?? 0,
+               taxBreakdown: txSummary?.taxBreakdown || completedTransaction?.taxBreakdown || [],
+               discount: txSummary?.discountTotal ?? completedTransaction?.discountAmount ?? 0,
                totalSavings: (completedTransaction?.items || []).reduce((sum, item) =>
                   sum + ((item.originalPrice || item.price) - item.price) * item.quantity, 0) + (completedTransaction?.discountAmount || 0),
                showSavings: config?.receiptConfig?.showSavings || false
