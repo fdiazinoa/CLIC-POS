@@ -36,7 +36,7 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
     const [tempName, setTempName] = useState(product.name);
     const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
     const menuRef = useRef<HTMLDivElement>(null);
-    const panelWidth = 250;
+    const panelWidth = 220;
     const safeLeft = Math.max(16, Math.min(position.x, window.innerWidth - panelWidth - 16));
     const safeTop = Math.max(16, Math.min(position.y, window.innerHeight - 520));
 
@@ -132,28 +132,28 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
         >
             <div
                 ref={menuRef}
-                className="absolute bg-white rounded-[1.75rem] shadow-[0_22px_60px_rgba(15,23,42,0.18)] border border-gray-100 w-[250px] max-w-[calc(100vw-2rem)] overflow-hidden animate-in zoom-in-95 duration-100"
+                className="absolute bg-white rounded-[1.35rem] shadow-[0_22px_60px_rgba(15,23,42,0.18)] border border-gray-100 w-[220px] max-w-[calc(100vw-2rem)] overflow-hidden animate-in zoom-in-95 duration-100"
                 style={{ top: safeTop, left: safeLeft }}
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Header */}
-                <div className="px-5 pt-5 pb-4 bg-white">
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.24em] mb-2">Acciones Rápidas</p>
-                    <h4 className="font-black text-gray-800 text-[13px] leading-tight line-clamp-2">{product.name}</h4>
+                <div className="px-4 pt-4 pb-3 bg-white">
+                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-[0.22em] mb-2">Acciones Rápidas</p>
+                    <h4 className="font-black text-gray-800 text-[11px] leading-tight line-clamp-2">{product.name}</h4>
                 </div>
 
                 {/* Action Groups */}
-                <div className="px-3 pb-4">
+                <div className="px-3 pb-3">
                     {/* Grupo A: Edición Rápida */}
                     <div className="space-y-0.5">
-                        <button onClick={() => setActiveModal('PRICE')} className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-bold text-gray-700 hover:bg-gray-50 rounded-2xl transition-colors">
-                            <DollarSign size={16} strokeWidth={2.2} /> Modificar Precio Base
+                        <button onClick={() => setActiveModal('PRICE')} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-gray-700 bg-white hover:bg-gray-50 rounded-xl transition-colors">
+                            <DollarSign size={15} strokeWidth={2.2} /> Modificar Precio Base
                         </button>
-                        <button onClick={() => setActiveModal('NAME')} className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-bold text-gray-700 hover:bg-gray-50 rounded-2xl transition-colors">
-                            <Edit3 size={16} strokeWidth={2.2} /> Renombrar Producto
+                        <button onClick={() => setActiveModal('NAME')} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-gray-700 bg-white hover:bg-gray-50 rounded-xl transition-colors">
+                            <Edit3 size={15} strokeWidth={2.2} /> Renombrar Producto
                         </button>
-                        <button onClick={() => setActiveModal('WAREHOUSE')} className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-bold text-gray-700 hover:bg-gray-50 rounded-2xl transition-colors">
-                            <Box size={16} strokeWidth={2.2} /> Asignar Almacenes
+                        <button onClick={() => setActiveModal('WAREHOUSE')} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-gray-700 bg-white hover:bg-gray-50 rounded-xl transition-colors">
+                            <Box size={15} strokeWidth={2.2} /> Asignar Almacenes
                         </button>
                     </div>
 
@@ -161,18 +161,18 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
 
                     {/* Grupo B: Operatividad */}
                     <div className="space-y-0.5">
-                        <button onClick={() => setActiveModal('STOCK')} className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-bold text-gray-700 hover:bg-gray-50 rounded-2xl transition-colors">
-                            <Globe size={16} strokeWidth={2.2} /> Ver Stock Global
+                        <button onClick={() => setActiveModal('STOCK')} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-gray-700 bg-white hover:bg-gray-50 rounded-xl transition-colors">
+                            <Globe size={15} strokeWidth={2.2} /> Ver Stock Global
                         </button>
-                        <button onClick={() => { onViewHistory(product); onClose(); }} className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-bold text-gray-700 hover:bg-gray-50 rounded-2xl transition-colors">
-                            <Box size={16} strokeWidth={2.2} /> Ver Historial
+                        <button onClick={() => { onViewHistory(product); onClose(); }} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-gray-700 bg-white hover:bg-gray-50 rounded-xl transition-colors">
+                            <Box size={15} strokeWidth={2.2} /> Ver Historial
                         </button>
-                        <button className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-bold text-gray-300 rounded-2xl transition-colors opacity-80 cursor-not-allowed">
-                            <Printer size={16} strokeWidth={2.2} /> Imprimir Etiqueta
+                        <button className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-gray-300 bg-white rounded-xl transition-colors opacity-80 cursor-not-allowed">
+                            <Printer size={15} strokeWidth={2.2} /> Imprimir Etiqueta
                         </button>
-                        <button onClick={toggleStatus} className={`w-full flex items-center justify-between gap-3 px-4 py-2.5 text-[13px] font-bold rounded-2xl transition-colors ${(product as any).isPaused ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
+                        <button onClick={toggleStatus} className={`w-full flex items-center justify-between gap-3 px-3 py-2 text-[12px] font-bold rounded-xl transition-colors ${(product as any).isPaused ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
                             <div className="flex items-center gap-3">
-                                {(product as any).isPaused ? <PlayCircle size={16} strokeWidth={2.2} /> : <PauseCircle size={16} strokeWidth={2.2} />}
+                                {(product as any).isPaused ? <PlayCircle size={15} strokeWidth={2.2} /> : <PauseCircle size={15} strokeWidth={2.2} />}
                                 <span>{(product as any).isPaused ? 'Reactivar Venta' : 'Pausar Venta'}</span>
                             </div>
                         </button>
@@ -184,9 +184,9 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
                     <div className="space-y-0.5">
                         <button
                             onClick={() => onAdvancedEdit(product)}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-bold text-purple-600 hover:bg-purple-50 rounded-2xl transition-colors"
+                            className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-purple-600 bg-white hover:bg-purple-50 rounded-xl transition-colors"
                         >
-                            <Settings size={16} strokeWidth={2.2} /> Edición Avanzada
+                            <Settings size={15} strokeWidth={2.2} /> Edición Avanzada
                         </button>
                     </div>
                 </div>
