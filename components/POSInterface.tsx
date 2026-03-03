@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { Capacitor } from '@capacitor/core';
 import {
    Search, ShoppingCart, Trash2, MoreVertical,
    CreditCard, User, Tag, Grid, Save,
@@ -1451,13 +1452,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                // Prepare wallet operations
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
+               const refundSeriesId = activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND';
+               let refundNcf: string | undefined;
 
-               const response = await withTimeout(fetch('/api/transactions/split', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
+               if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+                  try {
+                     refundNcf = await withTimeout(
+                        db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50),
+                        8000,
+                        'TIMEOUT_GET_REFUND_NCF'
+                     );
+                  } catch (refundNcfError) {
+                     console.warn('No se pudo generar NCF B04 para devolución mixta:', refundNcfError);
+                  }
+               }
+
+               const splitPayload: Parameters<typeof transactionService.createSplitTransaction>[0] = {
                      saleTransaction: {
-                        documentType: 'TICKET',
+                        documentType: 'TICKET' as const,
                         seriesId: assignedSequenceId,
                         items: saleItems,
                         total: saleTotal,
@@ -1480,8 +1492,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined
                      },
                      refundTransaction: {
-                        documentType: 'REFUND',
-                        seriesId: activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC',
+                        documentType: 'REFUND' as const,
+                        seriesId: refundSeriesId,
                         items: returnItems,
                         total: returnTotal,
                         userId: currentUser.id,
@@ -1490,13 +1502,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         customerId: selectedCustomer?.id,
                         customerName: selectedCustomer?.name,
                         status: 'COMPLETED',
+                        ncf: refundNcf,
+                        ncfType: refundNcf ? 'B04' : undefined,
                         walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
                         authorizedById: refundAuthorizedBy?.id,
                         authorizedByName: refundAuthorizedBy?.name
                      },
-                     walletDeposit: walletDepositAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletDepositAmount } : undefined,
-                     walletPayment: walletPaymentAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletPaymentAmount } : undefined
-                  })
+                     walletDeposit: selectedCustomer?.id && walletDepositAmount > 0 ? { customerId: selectedCustomer.id, amount: walletDepositAmount } : undefined,
+                     walletPayment: selectedCustomer?.id && walletPaymentAmount > 0 ? { customerId: selectedCustomer.id, amount: walletPaymentAmount } : undefined
+                  };
+
+               if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+                  const result = await withTimeout(
+                     transactionService.createSplitTransaction(splitPayload),
+                     25000,
+                     'TIMEOUT_SPLIT_LOCAL'
+                  );
+
+                  onUpdateCart([]);
+                  onSelectCustomer(null);
+                  setIsReturnMode(false);
+                  setRefundAuthorizedBy(null);
+                  return result.sale || result.refund || null;
+               }
+
+               const response = await withTimeout(fetch('/api/transactions/split', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(splitPayload)
                }), 25000, 'TIMEOUT_SPLIT_FETCH');
 
                const data = await withTimeout(response.json(), 4000, 'TIMEOUT_SPLIT_PARSE');
@@ -2022,6 +2055,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      newConfig.terminals[terminalIndex].config.documentAssignments = {};
                   }
                   newConfig.terminals[terminalIndex].config.documentAssignments!['TICKET'] = mobileConfig.seriesId;
+                  newConfig.terminals[terminalIndex].config.documentAssignments!['REFUND'] =
+                     newConfig.terminals[terminalIndex].config.documentAssignments!['REFUND'] || 'REFUND';
+                  newConfig.terminals[terminalIndex].config.documentAssignments!['TRANSFER'] =
+                     newConfig.terminals[terminalIndex].config.documentAssignments!['TRANSFER'] || 'TRANSFER';
 
                   onUpdateConfig(newConfig);
                   setActiveTariffId(mobileConfig.tariffId);

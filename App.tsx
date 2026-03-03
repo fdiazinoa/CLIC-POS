@@ -32,6 +32,7 @@ import {
 } from './types';
 import {
   DEFAULT_ROLES,
+  DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS,
   DEFAULT_LABEL_TEMPLATES,
   FOOD_PRODUCTS,
   RETAIL_PRODUCTS,
@@ -118,6 +119,45 @@ type ReceivableRepairSummary = {
   totalPendingAfter: number;
   transactionIds: string[];
   creditNoteIds: string[];
+};
+
+const normalizeTerminalDocumentAssignments = (
+  sourceConfig: BusinessConfig | null | undefined
+): { config: BusinessConfig | null | undefined; changed: boolean } => {
+  if (!sourceConfig || Array.isArray(sourceConfig) || !Array.isArray(sourceConfig.terminals)) {
+    return { config: sourceConfig, changed: false };
+  }
+
+  let changed = false;
+  const terminals = sourceConfig.terminals.map((terminal) => {
+    const currentAssignments = terminal.config?.documentAssignments || {};
+    const nextAssignments = {
+      ...DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS,
+      ...currentAssignments
+    };
+
+    const assignmentsChanged = Object.entries(DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS).some(
+      ([key, value]) => currentAssignments[key as keyof typeof DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS] !== value
+    );
+
+    if (!assignmentsChanged) {
+      return terminal;
+    }
+
+    changed = true;
+    return {
+      ...terminal,
+      config: {
+        ...terminal.config,
+        documentAssignments: nextAssignments
+      }
+    };
+  });
+
+  return {
+    config: changed ? { ...sourceConfig, terminals } : sourceConfig,
+    changed
+  };
 };
 
 const CREDIT_PAYMENT_METHODS = new Set(['CREDIT', 'CREDITO', 'PENDIENTE']);
@@ -910,6 +950,11 @@ const AppContent: React.FC = () => {
           .catch((recoveryError) => console.warn('⚠️ Startup Z-report recovery skipped:', recoveryError));
 
         let currentConfig = data.config;
+        const normalizedBootConfig = normalizeTerminalDocumentAssignments(currentConfig);
+        if (normalizedBootConfig.changed && normalizedBootConfig.config) {
+          currentConfig = normalizedBootConfig.config;
+          await db.save('config', currentConfig);
+        }
 
         // 2. Gestión de Identidad de Dispositivo (early, used for safe config source selection)
         let storedDeviceId = localStorage.getItem('pos_device_id');
@@ -1006,10 +1051,12 @@ const AppContent: React.FC = () => {
 
             if (res.ok) {
               const fetchedConfig = await res.json();
-              if (fetchedConfig && fetchedConfig.terminals) {
+              const normalizedFetchedConfig = normalizeTerminalDocumentAssignments(fetchedConfig);
+              const configFromMaster = normalizedFetchedConfig.config;
+              if (configFromMaster && !Array.isArray(configFromMaster) && configFromMaster.terminals) {
                 console.log("✅ Config fetched from Master. Saving to local DB...");
-                await db.save('config', fetchedConfig);
-                currentConfig = fetchedConfig;
+                await db.save('config', configFromMaster);
+                currentConfig = configFromMaster;
               }
             }
           } catch (e: any) {

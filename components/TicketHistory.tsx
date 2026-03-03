@@ -990,7 +990,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       if (selectedItemsQty.size === 0) return;
 
       // Validation: Check if terminal has REFUND document series assigned
-      const terminalId = config.terminals?.[0]?.id || 'T1';
+      const terminalId = transaction.terminalId || config.terminals?.[0]?.id || 'T1';
       const validation = validateTerminalDocument(config, terminalId, 'REFUND');
       if (!validation.isValid) {
          alert(validation.error);
