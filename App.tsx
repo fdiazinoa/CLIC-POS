@@ -107,7 +107,7 @@ import { useOfflineInventoryCountSync } from './hooks/useOfflineInventoryCountSy
 import { printLabelsFromTemplate } from './utils/labelPrinter';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
-import { checkLicenseStatus } from './utils/licenseGuard';
+import { checkLicenseStatus, clearTenantIdentity, resolveTenantId } from './utils/licenseGuard';
 import { supabase } from './utils/supabase';
 
 type ReceivableRepairSummary = {
@@ -172,6 +172,7 @@ const AppContent: React.FC = () => {
   const initLoadStartedRef = useRef(false);
   const forceSyncHandledRef = useRef(false);
   const salesLedgerRepairHandledRef = useRef(false);
+  const lockdownHandledRef = useRef(false);
   const [reconnectionStatus, setReconnectionStatus] = useState<'idle' | 'searching' | 'connected' | 'failed'>('idle');
 
   // --- SECURITY BOOTSTRAP STATE ---
@@ -194,59 +195,73 @@ const AppContent: React.FC = () => {
 
   // --- REALTIME KILL SWITCH (FALLBACK: SMART POLLING) ---
   useEffect(() => {
-    const tenantId = localStorage.getItem('clic_tenant_id');
-    if (!tenantId || !isDataLoaded) return;
+    if (!isDataLoaded) return;
 
-    console.log('📡 Starting Kill Switch Monitoring for tenant:', tenantId);
-
-    // Initial check right after load
-    checkLicenseStatus(tenantId, deviceId).then(res => {
-      if (!res.isValid) {
-        triggerLockdown(res.reason || 'Servicio Suspendido.');
+    const runLicenseCheck = async (fallbackMessage: string) => {
+      try {
+        const res = await checkLicenseStatus(localStorage.getItem('clic_tenant_id') || '', deviceId);
+        if (!res.isValid) {
+          triggerLockdown(res.reason || fallbackMessage);
+        }
+      } catch (e) {
+        /* Ignore network slips to avoid false positives */
       }
-    });
+    };
+
+    console.log('📡 Starting Kill Switch Monitoring for tenant:', localStorage.getItem('clic_tenant_id'));
+
+    void runLicenseCheck('Servicio Suspendido.');
 
     // Subsequence checks every 30 seconds
     const intervalId = setInterval(async () => {
-      const currentTenant = localStorage.getItem('clic_tenant_id');
-      if (!currentTenant) return; // Wait until they log in again
-
-      try {
-        const res = await checkLicenseStatus(currentTenant, deviceId);
-        if (!res.isValid) {
-          triggerLockdown(res.reason || 'Servicio Suspendido por el Administrador.');
-        }
-      } catch (e) { /* Ignore network slips to avoid false positives */ }
+      await runLicenseCheck('Servicio Suspendido por el Administrador.');
     }, 30000);
 
     return () => clearInterval(intervalId);
   }, [isDataLoaded, deviceId]);
 
   const triggerLockdown = (message: string) => {
+    if (lockdownHandledRef.current) return;
+    lockdownHandledRef.current = true;
     setLicenseError(message);
-    // Clear tenant ID to force re-activation if they refresh
-    localStorage.removeItem('clic_tenant_id');
-    // We set current view after a small delay to let the error screen show up if it's already rendered
-    setTimeout(() => {
+    setIsDataLoaded(true);
+    setIsSecurityLoaded(true);
+    setCurrentUser(null);
+    clearTenantIdentity();
+    void supabase.auth.signOut().catch(error => {
+      console.warn('Failed to clear Supabase session during lockdown', error);
+    });
+    window.setTimeout(() => {
+      setLicenseError(null);
       setCurrentView('ACTIVATION');
+      lockdownHandledRef.current = false;
     }, 3000);
   };
 
   // --- TENANT ID SELF-CORRECTION ---
   useEffect(() => {
-    if (isDataLoaded && (currentUser as any)?.user_metadata?.tenant_id) {
-      const metadataId = (currentUser as any).user_metadata.tenant_id;
-      const currentId = localStorage.getItem('clic_tenant_id');
-      if (metadataId !== currentId) {
-        console.log('🔄 Syncing local tenant ID with metadata:', metadataId);
-        localStorage.setItem('clic_tenant_id', metadataId);
-        // Trigger a re-check if we just found the true ID
-        checkLicenseStatus(metadataId, deviceId).then(res => {
-          if (!res.isValid) setLicenseError(res.reason || 'Servicio Suspendido');
+    if (!isDataLoaded) return;
+
+    resolveTenantId(localStorage.getItem('clic_tenant_id') || '')
+      .then((resolvedTenantId) => {
+        if (!resolvedTenantId) return;
+
+        const currentId = localStorage.getItem('clic_tenant_id');
+        if (resolvedTenantId !== currentId) {
+          console.log('🔄 Syncing local tenant ID with cloud session:', resolvedTenantId);
+          localStorage.setItem('clic_tenant_id', resolvedTenantId);
+        }
+
+        return checkLicenseStatus(resolvedTenantId, deviceId).then(res => {
+          if (!res.isValid) {
+            triggerLockdown(res.reason || 'Servicio Suspendido');
+          }
         });
-      }
-    }
-  }, [isDataLoaded, currentUser, deviceId]);
+      })
+      .catch(error => {
+        console.warn('Tenant self-correction skipped:', error);
+      });
+  }, [isDataLoaded, deviceId]);
 
   // --- AUTO-RETRY ON BOOT ERROR ---
   useEffect(() => {
@@ -773,7 +788,7 @@ const AppContent: React.FC = () => {
         );
 
         // --- ACTIVATION CHECK ---
-        const localTenantId = localStorage.getItem('clic_tenant_id');
+        const localTenantId = await resolveTenantId(localStorage.getItem('clic_tenant_id') || '');
         if (!localTenantId && !masterIp) {
           console.warn('[BOOT] Sistema no activado. Redirigiendo a pantalla de activación...');
           setIsDataLoaded(true);
@@ -783,10 +798,10 @@ const AppContent: React.FC = () => {
         }
 
         // --- LICENSE / KILL-SWITCH VALIDATION ---
-        const activeTenantId = localStorage.getItem('clic_tenant_id') || (currentConfig as any)?.companyInfo?.rnc || 'DEFAULT-TENANT';
+        const activeTenantId = localTenantId || (currentConfig as any)?.companyInfo?.rnc || 'DEFAULT-TENANT';
         const license = await checkLicenseStatus(activeTenantId, storedDeviceId);
         if (!license.isValid) {
-          setLicenseError(license.reason || 'Servicio Suspendido.');
+          triggerLockdown(license.reason || 'Servicio Suspendido.');
           return;
         }
 
