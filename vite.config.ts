@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
+  const localApiTarget = process.env.API_PROXY_TARGET || 'http://127.0.0.1:3001';
 
   // Read certificates if they exist
   // Read certificates if they exist and USE_HTTPS is true
@@ -23,17 +24,17 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       strictPort: true,
-      host: '0.0.0.0',
+      host: true,
       https: httpsConfig,
       proxy: {
         '/api': {
-          target: 'http://localhost:3001',
+          target: localApiTarget,
           changeOrigin: true,
           secure: false, // Don't verify self-signed certs for proxy
           xfwd: true
         },
         '/smtp': {
-          target: 'http://localhost:3001',
+          target: localApiTarget,
           changeOrigin: true,
           secure: false,
           xfwd: true

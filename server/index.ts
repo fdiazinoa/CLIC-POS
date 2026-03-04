@@ -777,9 +777,10 @@ if (CLOUD_MODE) {
     console.log('🚀 Starting in LOCAL MODE (HTTP)...');
 
     const httpServer = createServer(server);
+    const localHost = process.env.HOST || '::';
     initSocket(httpServer);
 
-    httpServer.listen(PORT, '0.0.0.0', () => {
+    httpServer.listen(PORT, localHost, () => {
         const interfaces = os.networkInterfaces();
         let lanIp = 'UNKNOWN';
 
