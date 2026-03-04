@@ -15,9 +15,10 @@ const LANDLORD_PROFILE = 'landlord';
 
 const getCloudConfig = () => {
     const _meta = import.meta as any;
+    const env = _meta?.env || {};
     return {
-        supabaseUrl: _meta.env.VITE_SUPABASE_URL || localStorage.getItem('CLIC_POS_MASTER_URL'),
-        supabaseKey: _meta.env.VITE_SUPABASE_ANON_KEY,
+        supabaseUrl: env.VITE_SUPABASE_URL || localStorage.getItem('CLIC_POS_MASTER_URL'),
+        supabaseKey: env.VITE_SUPABASE_ANON_KEY,
     };
 };
 
