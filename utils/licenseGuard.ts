@@ -9,6 +9,7 @@ export interface LicenseStatus {
 interface TenantRecord {
     id: string;
     status: string;
+    slug?: string;
 }
 
 const LANDLORD_PROFILE = 'landlord';
@@ -33,8 +34,9 @@ const normalizeValue = (value?: string | null) => (typeof value === 'string' ? v
 
 const persistTenantIdentity = (tenant: TenantRecord, slug?: string) => {
     localStorage.setItem('clic_tenant_id', tenant.id);
-    if (slug) {
-        localStorage.setItem('clic_tenant_slug', slug);
+    const resolvedSlug = slug || tenant.slug;
+    if (resolvedSlug) {
+        localStorage.setItem('clic_tenant_slug', resolvedSlug);
     }
 };
 
@@ -43,7 +45,7 @@ const fetchTenantRecord = async (
     supabaseKey: string,
     filter: string
 ): Promise<TenantRecord | null> => {
-    const res = await fetch(`${supabaseUrl}/rest/v1/tenants?${filter}&select=id,status&limit=1`, {
+    const res = await fetch(`${supabaseUrl}/rest/v1/tenants?${filter}&select=id,status,slug&limit=1`, {
         headers: buildHeaders(supabaseKey),
         signal: AbortSignal.timeout(5000),
     });
@@ -77,7 +79,9 @@ export const resolveTenantRecord = async (preferredTenantId?: string): Promise<T
     const sessionUser = sessionData.session?.user;
     const metadataTenantId = normalizeValue(sessionUser?.user_metadata?.tenant_id);
     const metadataSlug = normalizeValue(sessionUser?.user_metadata?.slug);
+    const sessionEmail = normalizeValue(sessionUser?.email);
     const storedSlug = normalizeValue(localStorage.getItem('clic_tenant_slug'));
+    const storedEmail = normalizeValue(localStorage.getItem('clic_tenant_email'));
 
     const candidateIds = Array.from(
         new Set(
@@ -110,6 +114,21 @@ export const resolveTenantRecord = async (preferredTenantId?: string): Promise<T
 
         if (tenant) {
             persistTenantIdentity(tenant, candidateSlug);
+            return tenant;
+        }
+    }
+
+    const candidateEmails = Array.from(new Set([sessionEmail, storedEmail].filter(Boolean)));
+
+    for (const candidateEmail of candidateEmails) {
+        const tenant = await fetchTenantRecord(
+            supabaseUrl,
+            supabaseKey,
+            `email=eq.${encodeURIComponent(candidateEmail)}`
+        );
+
+        if (tenant) {
+            persistTenantIdentity(tenant);
             return tenant;
         }
     }

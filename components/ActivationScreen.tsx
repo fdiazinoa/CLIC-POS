@@ -88,6 +88,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         if (!resolvedTenantId) {
             throw new Error('No se pudo resolver la licencia de esta empresa. Solicite reprovisionar el tenant en Cloud Admin.');
         }
+        const resolvedSlug = user?.user_metadata?.slug || localStorage.getItem('clic_tenant_slug');
 
         // Save tenant session info
         const tenantData = {
@@ -95,7 +96,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             email: user.email,
             name: user.user_metadata?.full_name || user.email.split('@')[0],
             tenantId: resolvedTenantId,
-            slug: user.user_metadata?.slug || null,
+            slug: resolvedSlug || null,
         };
 
         // Save locally for persistence
