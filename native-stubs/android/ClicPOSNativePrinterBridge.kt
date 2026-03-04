@@ -3,7 +3,9 @@ package com.clicpos.nativeprinter
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.util.Base64
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -161,7 +163,42 @@ class AndroidPrinterBridge(context: Context) {
     }
 
     @JavascriptInterface
-    fun getDeviceInfo(): String = getDeviceProfile()
+    fun getDeviceInfo(): String {
+        val packageInfo = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                appContext.packageManager.getPackageInfo(
+                    appContext.packageName,
+                    PackageManager.PackageInfoFlags.of(0)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                appContext.packageManager.getPackageInfo(appContext.packageName, 0)
+            }
+        } catch (_: Exception) {
+            null
+        }
+
+        val versionName = packageInfo?.versionName ?: "0.0.0"
+        val versionCode = if (packageInfo != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                packageInfo.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                packageInfo.versionCode.toLong()
+            }
+        } else {
+            0L
+        }
+
+        return JSONObject()
+            .put("profile", "HANDHELD")
+            .put("integratedPrinter", false)
+            .put("platform", "android")
+            .put("packageName", appContext.packageName)
+            .put("versionName", versionName)
+            .put("versionCode", versionCode)
+            .toString()
+    }
 
     @JavascriptInterface
     fun readClipboard(): String {

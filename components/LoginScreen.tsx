@@ -19,6 +19,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
   const [biometricError, setBiometricError] = useState(false);
   const [biometricFailCount, setBiometricFailCount] = useState(0);
   const [isHardwareAvailable, setIsHardwareAvailable] = useState(false);
+  const [buildVersion, setBuildVersion] = useState<string>('');
 
   // Check availability on mount
   React.useEffect(() => {
@@ -32,6 +33,36 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
     };
     initBiometrics();
   }, [config.security?.allowBiometrics, biometricFailCount]);
+
+  React.useEffect(() => {
+    const loadBuildVersion = async () => {
+      try {
+        const runtimeWindow = window as any;
+        let deviceInfo: { versionName?: string; versionCode?: number } | null = null;
+
+        if (typeof runtimeWindow.ClicPOSNativePrinter?.getDeviceInfo === 'function') {
+          deviceInfo = await runtimeWindow.ClicPOSNativePrinter.getDeviceInfo();
+        } else if (typeof runtimeWindow.AndroidPrinter?.getDeviceInfo === 'function') {
+          const raw = runtimeWindow.AndroidPrinter.getDeviceInfo();
+          deviceInfo = raw ? JSON.parse(raw) : null;
+        }
+
+        if (deviceInfo?.versionName) {
+          const versionLabel = deviceInfo.versionCode
+            ? `APK v${deviceInfo.versionName} (${deviceInfo.versionCode})`
+            : `APK v${deviceInfo.versionName}`;
+          setBuildVersion(versionLabel);
+          return;
+        }
+      } catch (error) {
+        console.warn('No se pudo leer la versión del compilado:', error);
+      }
+
+      setBuildVersion('Web');
+    };
+
+    void loadBuildVersion();
+  }, []);
 
   const checkLogin = React.useCallback((inputPin: string) => {
     console.log(`🔐 Login Attempt: PIN=${inputPin}, AvailableUsers=${availableUsers.length}`);
@@ -261,6 +292,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
 
         <div className="text-center text-gray-500 text-xs">
           <p>Terminal ID: POS-001</p>
+          {buildVersion && <p className="mt-1">Versión: {buildVersion}</p>}
         </div>
 
       </div>
