@@ -12,25 +12,35 @@ interface TenantRecord {
     slug?: string;
 }
 
+interface TenantIdentity {
+    tenantId?: string;
+    slug?: string;
+    email?: string;
+}
+
 const LANDLORD_PROFILE = 'landlord';
 
 const getCloudConfig = () => {
-    const _meta = import.meta as any;
-    const env = _meta?.env || {};
+    const env = import.meta.env as Record<string, string | boolean | undefined>;
     return {
-        supabaseUrl: env.VITE_SUPABASE_URL || localStorage.getItem('CLIC_POS_MASTER_URL'),
-        supabaseKey: env.VITE_SUPABASE_ANON_KEY,
+        supabaseUrl: (env['VITE_SUPABASE_URL'] as string | undefined) || localStorage.getItem('CLIC_POS_MASTER_URL'),
+        supabaseKey: env['VITE_SUPABASE_ANON_KEY'] as string | undefined,
     };
 };
 
 const buildHeaders = (supabaseKey: string, includeJson = false) => ({
     apikey: supabaseKey,
     Authorization: `Bearer ${supabaseKey}`,
-    'Accept-Profile': LANDLORD_PROFILE,
     ...(includeJson ? { 'Content-Type': 'application/json' } : {}),
 });
 
+const buildLandlordHeaders = (supabaseKey: string) => ({
+    ...buildHeaders(supabaseKey),
+    'Accept-Profile': LANDLORD_PROFILE,
+});
+
 const normalizeValue = (value?: string | null) => (typeof value === 'string' ? value.trim() : '');
+const normalizeEmail = (value?: string | null) => normalizeValue(value).toLowerCase();
 
 const persistTenantIdentity = (tenant: TenantRecord, slug?: string) => {
     localStorage.setItem('clic_tenant_id', tenant.id);
@@ -46,12 +56,37 @@ const fetchTenantRecord = async (
     filter: string
 ): Promise<TenantRecord | null> => {
     const res = await fetch(`${supabaseUrl}/rest/v1/tenants?${filter}&select=id,status,slug&limit=1`, {
-        headers: buildHeaders(supabaseKey),
+        headers: buildLandlordHeaders(supabaseKey),
         signal: AbortSignal.timeout(5000),
     });
 
     if (!res.ok) {
         throw new Error(`Failed to resolve tenant record (${res.status})`);
+    }
+
+    const tenants = await res.json();
+    if (!Array.isArray(tenants) || tenants.length === 0) {
+        return null;
+    }
+
+    return tenants[0] as TenantRecord;
+};
+
+const invokeRpc = async (
+    supabaseUrl: string,
+    supabaseKey: string,
+    rpcName: 'get_tenant_status' | 'resolve_tenant_license',
+    payload: Record<string, string | null>
+): Promise<TenantRecord | null> => {
+    const res = await fetch(`${supabaseUrl}/rest/v1/rpc/${rpcName}`, {
+        method: 'POST',
+        headers: buildHeaders(supabaseKey, true),
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(5000),
+    });
+
+    if (!res.ok) {
+        throw new Error(`Failed to resolve tenant via ${rpcName} (${res.status})`);
     }
 
     const tenants = await res.json();
@@ -68,30 +103,51 @@ export const clearTenantIdentity = () => {
     localStorage.removeItem('clic_tenant_slug');
 };
 
-export const resolveTenantRecord = async (preferredTenantId?: string): Promise<TenantRecord | null> => {
+export const resolveTenantRecord = async (identity?: string | TenantIdentity): Promise<TenantRecord | null> => {
     const { supabaseUrl, supabaseKey } = getCloudConfig();
 
     if (!supabaseUrl || !supabaseKey) {
         return null;
     }
 
+    const preferredIdentity = typeof identity === 'string'
+        ? { tenantId: identity }
+        : (identity || {});
+
     const { data: sessionData } = await supabase.auth.getSession();
     const sessionUser = sessionData.session?.user;
     const metadataTenantId = normalizeValue(sessionUser?.user_metadata?.tenant_id);
     const metadataSlug = normalizeValue(sessionUser?.user_metadata?.slug);
-    const sessionEmail = normalizeValue(sessionUser?.email);
+    const sessionEmail = normalizeEmail(sessionUser?.email);
     const storedSlug = normalizeValue(localStorage.getItem('clic_tenant_slug'));
-    const storedEmail = normalizeValue(localStorage.getItem('clic_tenant_email'));
+    const storedEmail = normalizeEmail(localStorage.getItem('clic_tenant_email'));
+
+    const resolveViaRpc = async (payload: TenantIdentity): Promise<TenantRecord | null> => {
+        try {
+            return await invokeRpc(supabaseUrl, supabaseKey, 'resolve_tenant_license', {
+                p_tenant_id: payload.tenantId || null,
+                p_slug: payload.slug || null,
+                p_email: payload.email || null,
+            });
+        } catch (error) {
+            console.warn('resolve_tenant_license RPC unavailable, falling back to landlord query', error);
+            return null;
+        }
+    };
 
     const candidateIds = Array.from(
         new Set(
-            [metadataTenantId, normalizeValue(preferredTenantId), normalizeValue(localStorage.getItem('clic_tenant_id'))]
+            [
+                metadataTenantId,
+                normalizeValue(preferredIdentity.tenantId),
+                normalizeValue(localStorage.getItem('clic_tenant_id'))
+            ]
                 .filter(Boolean)
         )
     );
 
     for (const candidateId of candidateIds) {
-        const tenant = await fetchTenantRecord(
+        const tenant = await resolveViaRpc({ tenantId: candidateId }) || await fetchTenantRecord(
             supabaseUrl,
             supabaseKey,
             `id=eq.${encodeURIComponent(candidateId)}`
@@ -103,10 +159,12 @@ export const resolveTenantRecord = async (preferredTenantId?: string): Promise<T
         }
     }
 
-    const candidateSlugs = Array.from(new Set([metadataSlug, storedSlug].filter(Boolean)));
+    const candidateSlugs = Array.from(
+        new Set([normalizeValue(preferredIdentity.slug), metadataSlug, storedSlug].filter(Boolean))
+    );
 
     for (const candidateSlug of candidateSlugs) {
-        const tenant = await fetchTenantRecord(
+        const tenant = await resolveViaRpc({ slug: candidateSlug }) || await fetchTenantRecord(
             supabaseUrl,
             supabaseKey,
             `slug=eq.${encodeURIComponent(candidateSlug)}`
@@ -118,10 +176,12 @@ export const resolveTenantRecord = async (preferredTenantId?: string): Promise<T
         }
     }
 
-    const candidateEmails = Array.from(new Set([sessionEmail, storedEmail].filter(Boolean)));
+    const candidateEmails = Array.from(
+        new Set([normalizeEmail(preferredIdentity.email), sessionEmail, storedEmail].filter(Boolean))
+    );
 
     for (const candidateEmail of candidateEmails) {
-        const tenant = await fetchTenantRecord(
+        const tenant = await resolveViaRpc({ email: candidateEmail }) || await fetchTenantRecord(
             supabaseUrl,
             supabaseKey,
             `email=eq.${encodeURIComponent(candidateEmail)}`
@@ -154,7 +214,19 @@ export const checkLicenseStatus = async (
             return { isValid: true };
         }
 
-        const tenant = await resolveTenantRecord(tenantId);
+        let tenant = tenantId
+            ? await invokeRpc(supabaseUrl, supabaseKey, 'get_tenant_status', {
+                p_tenant_id: tenantId || null,
+            }).catch(async (error) => {
+                console.warn('get_tenant_status RPC unavailable, falling back to resolveTenantRecord', error);
+                return resolveTenantRecord(tenantId);
+            })
+            : null;
+
+        if (!tenant) {
+            tenant = await resolveTenantRecord(tenantId);
+        }
+
         if (!tenant) {
             return { isValid: true };
         }

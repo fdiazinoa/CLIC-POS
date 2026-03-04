@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { supabase } from '../utils/supabase';
-import { resolveTenantId } from '../utils/licenseGuard';
+import { resolveTenantRecord } from '../utils/licenseGuard';
 import { Rocket, Lock, Mail, CheckCircle, AlertCircle, ShieldCheck, ArrowRight, Loader2 } from 'lucide-react';
 
 interface ActivationScreenProps {
@@ -38,7 +38,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             if (isNewUser) {
                 setStep('CHANGE_PASSWORD');
             } else {
-                await completeActivation(data.user);
+                await completeActivation(data.user, email);
             }
         } catch (err: any) {
             setError(err.message || 'Error al iniciar sesión. Verifique sus credenciales.');
@@ -71,7 +71,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
 
             setStep('SUCCESS');
             setTimeout(() => {
-                void completeActivation(data.user).catch((err: any) => {
+                void completeActivation(data.user, email).catch((err: any) => {
                     setStep('CHANGE_PASSWORD');
                     setError(err.message || 'No se pudo completar la activacion.');
                 });
@@ -83,19 +83,24 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         }
     };
 
-    const completeActivation = async (user: any) => {
-        const resolvedTenantId = user?.user_metadata?.tenant_id || await resolveTenantId();
-        if (!resolvedTenantId) {
-            throw new Error('No se pudo resolver la licencia de esta empresa. Solicite reprovisionar el tenant en Cloud Admin.');
+    const completeActivation = async (user: any, fallbackEmail?: string) => {
+        const resolvedTenant = await resolveTenantRecord({
+            tenantId: user?.user_metadata?.tenant_id,
+            slug: user?.user_metadata?.slug,
+            email: fallbackEmail || user?.email,
+        });
+
+        if (!resolvedTenant?.id) {
+            throw new Error(`No se pudo resolver la licencia para ${fallbackEmail || user?.email || 'este usuario'}. Solicite reprovisionar el tenant en Cloud Admin.`);
         }
-        const resolvedSlug = user?.user_metadata?.slug || localStorage.getItem('clic_tenant_slug');
+        const resolvedSlug = user?.user_metadata?.slug || resolvedTenant.slug || localStorage.getItem('clic_tenant_slug');
 
         // Save tenant session info
         const tenantData = {
             id: user.id,
             email: user.email,
             name: user.user_metadata?.full_name || user.email.split('@')[0],
-            tenantId: resolvedTenantId,
+            tenantId: resolvedTenant.id,
             slug: resolvedSlug || null,
         };
 
