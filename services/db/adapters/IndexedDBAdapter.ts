@@ -1,7 +1,7 @@
 import { DatabaseAdapter } from '../DatabaseAdapter';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 14; // Incremented to add activities for CRM & Booking
+const DB_VERSION = 15; // Incremented to add collections
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
@@ -18,7 +18,7 @@ const STORES = [
     'watchlists', 'syncMetadata', 'inventorySnapshots', 'inventoryAuditLogs', 'inventoryCounts',
     'offline_receptions', 'offline_reception_queue', 'offline_reception_conflicts',
     'offline_inventory_counts', 'offline_inventory_count_queue', 'offline_inventory_count_conflicts',
-    'offline_print_queue', 'reservations', 'inventoryCommitments', 'activities'
+    'offline_print_queue', 'reservations', 'inventoryCommitments', 'activities', 'collections'
 ];
 
 export class IndexedDBAdapter implements DatabaseAdapter {

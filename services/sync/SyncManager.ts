@@ -1087,11 +1087,9 @@ class SyncManager {
             'paymentMethods',
             'productStocks',
             ...(isMaster || permissionService.shouldShowGlobalSales() ? ['inventoryLedger' as SyncableCollection] : []),
-            ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection] : []),
-            'transfers',
-            'receptions'
+            ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection, 'collections' as SyncableCollection] : []),
+            'cashMovements'
         ];
-
         // Operations: Master PULLS, Slaves PUSH (via separate methods, but we sync here for visibility)
         const operations: SyncableCollection[] = ['inventoryLedger', 'zReports'];
 
@@ -1253,7 +1251,8 @@ class SyncManager {
             'productStocks',
             'transfers',
             'receptions',
-            ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection] : [])
+            'cashMovements',
+            ...(permissionService.shouldShowGlobalSales() ? ['transactions' as SyncableCollection, 'collections' as SyncableCollection] : [])
         ];
         const updatesAvailable: string[] = [];
 
@@ -1334,6 +1333,7 @@ class SyncManager {
         if (permissionService.isMasterTerminal()) {
             modules.push(
                 { id: 'transactions', label: 'Historial de Ventas' },
+                { id: 'collections', label: 'Abonos de Crédito' },
                 { id: 'zReports', label: 'Cierres de Caja (Z)' },
                 { id: 'inventoryLedger', label: 'Movimientos de Inventario' },
                 { id: 'cashMovements', label: 'Movimientos de Efectivo' }

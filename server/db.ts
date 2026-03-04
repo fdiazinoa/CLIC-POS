@@ -35,6 +35,11 @@ db.exec(`
         timestamp TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS collections (
+        id TEXT PRIMARY KEY,
+        data TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS inventory_ledger (
         id TEXT PRIMARY KEY,
         createdAt TEXT NOT NULL,
@@ -130,7 +135,8 @@ export const getCollection = (name: string): any[] => {
                 users: [], // No JSON fields
                 transaction_history: ['items', 'payments', 'customerSnapshot', 'relatedTransactions'],
                 rooms: ['data'],
-                tables: ['data']
+                tables: ['data'],
+                collections: ['data']
             };
 
             // Boolean conversion for dedicated tables

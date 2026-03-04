@@ -62,6 +62,7 @@ import ZReportDashboard from './components/ZReportDashboard';
 import SupplyChainManager from './components/SupplyChainManager';
 import VerticalSelector from './components/VerticalSelector';
 import SetupWizard from './components/SetupWizard';
+import ActivationScreen from './components/ActivationScreen';
 import FranchiseDashboard from './components/FranchiseDashboard';
 import TerminalBindingScreen from './components/TerminalBindingScreen';
 import { TerminalPairingView } from './components/TerminalPairingView';
@@ -107,6 +108,7 @@ import { printLabelsFromTemplate } from './utils/labelPrinter';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { checkLicenseStatus } from './utils/licenseGuard';
+import { supabase } from './utils/supabase';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -190,12 +192,69 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('sync:reconnecting', handleReconnection as any);
   }, []);
 
+  // --- REALTIME KILL SWITCH (FALLBACK: SMART POLLING) ---
+  useEffect(() => {
+    const tenantId = localStorage.getItem('clic_tenant_id');
+    if (!tenantId || !isDataLoaded) return;
+
+    console.log('📡 Starting Kill Switch Monitoring for tenant:', tenantId);
+
+    // Initial check right after load
+    checkLicenseStatus(tenantId, deviceId).then(res => {
+      if (!res.isValid) {
+        triggerLockdown(res.reason || 'Servicio Suspendido.');
+      }
+    });
+
+    // Subsequence checks every 30 seconds
+    const intervalId = setInterval(async () => {
+      const currentTenant = localStorage.getItem('clic_tenant_id');
+      if (!currentTenant) return; // Wait until they log in again
+
+      try {
+        const res = await checkLicenseStatus(currentTenant, deviceId);
+        if (!res.isValid) {
+          triggerLockdown(res.reason || 'Servicio Suspendido por el Administrador.');
+        }
+      } catch (e) { /* Ignore network slips to avoid false positives */ }
+    }, 30000);
+
+    return () => clearInterval(intervalId);
+  }, [isDataLoaded, deviceId]);
+
+  const triggerLockdown = (message: string) => {
+    setLicenseError(message);
+    // Clear tenant ID to force re-activation if they refresh
+    localStorage.removeItem('clic_tenant_id');
+    // We set current view after a small delay to let the error screen show up if it's already rendered
+    setTimeout(() => {
+      setCurrentView('ACTIVATION');
+    }, 3000);
+  };
+
+  // --- TENANT ID SELF-CORRECTION ---
+  useEffect(() => {
+    if (isDataLoaded && (currentUser as any)?.user_metadata?.tenant_id) {
+      const metadataId = (currentUser as any).user_metadata.tenant_id;
+      const currentId = localStorage.getItem('clic_tenant_id');
+      if (metadataId !== currentId) {
+        console.log('🔄 Syncing local tenant ID with metadata:', metadataId);
+        localStorage.setItem('clic_tenant_id', metadataId);
+        // Trigger a re-check if we just found the true ID
+        checkLicenseStatus(metadataId, deviceId).then(res => {
+          if (!res.isValid) setLicenseError(res.reason || 'Servicio Suspendido');
+        });
+      }
+    }
+  }, [isDataLoaded, currentUser, deviceId]);
+
   // --- AUTO-RETRY ON BOOT ERROR ---
   useEffect(() => {
     if (initialConnError || bootstrapError) {
+      console.error('🛑 BOOT ERROR DETECTED:', { initialConnError, bootstrapError });
       const timer = setTimeout(() => {
         window.location.reload();
-      }, 3000);
+      }, 5000); // 5s retry for resilience
       return () => clearTimeout(timer);
     }
   }, [initialConnError, bootstrapError]);
@@ -713,9 +772,19 @@ const AppContent: React.FC = () => {
           (t: any) => t.config?.currentDeviceId === storedDeviceId
         );
 
+        // --- ACTIVATION CHECK ---
+        const localTenantId = localStorage.getItem('clic_tenant_id');
+        if (!localTenantId && !masterIp) {
+          console.warn('[BOOT] Sistema no activado. Redirigiendo a pantalla de activación...');
+          setIsDataLoaded(true);
+          setIsSecurityLoaded(true);
+          setCurrentView('ACTIVATION');
+          return;
+        }
+
         // --- LICENSE / KILL-SWITCH VALIDATION ---
-        const tenantId = (currentConfig as any)?.companyInfo?.rnc || 'DEFAULT-TENANT'; // We use RNC as generic tenant identifier for mapping if explicit ID is missing
-        const license = await checkLicenseStatus(tenantId, storedDeviceId);
+        const activeTenantId = localStorage.getItem('clic_tenant_id') || (currentConfig as any)?.companyInfo?.rnc || 'DEFAULT-TENANT';
+        const license = await checkLicenseStatus(activeTenantId, storedDeviceId);
         if (!license.isValid) {
           setLicenseError(license.reason || 'Servicio Suspendido.');
           return;
@@ -2873,6 +2942,25 @@ const AppContent: React.FC = () => {
 
   const renderView = () => {
     switch (currentView) {
+      case 'ACTIVATION':
+        return (
+          <ActivationScreen
+            onActivationComplete={(tenantData) => {
+              console.log('✅ Sistema activado para:', tenantData.name);
+              // After activation, we must have a base config or start the wizard
+              // If we have no categories/products, WIZARD is the way to go
+              if (products.length === 0) {
+                setCurrentView('WIZARD');
+              } else {
+                // If somehow they activated an existing DB (rare), go to LOGIN
+                setCurrentView('LOGIN');
+              }
+              // Force a reload of license status now that we have a tenantId
+              window.location.reload();
+            }}
+          />
+        );
+
       case 'TERMINAL_PAIRING':
       case 'DEVICE_UNAUTHORIZED':
         return (
@@ -3875,6 +3963,11 @@ const AppContent: React.FC = () => {
 
   // Render with appropriate layout based on device role
   const renderWithLayout = () => {
+    // Escape hatch for activation flow
+    if (currentView === 'ACTIVATION') {
+      return renderView();
+    }
+
     const role = getCurrentDeviceRole();
     const content = renderView();
 

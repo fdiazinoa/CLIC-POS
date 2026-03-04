@@ -409,6 +409,52 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       setIsSendingEmail(true);
       console.log('Sending Receipt Email. Transaction:', completedTransaction);
       try {
+         const emailTaxBreakdown = (() => {
+            if (!completedTransaction || !config) return [];
+
+            const breakdown: Record<string, { taxId: string; name: string; rate: number; amount: number }> = {};
+            const items = completedTransaction.items || [];
+            const grossLineTotal = items.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 0)), 0);
+            const discountAmount = Number(completedTransaction.discountAmount || 0);
+            const isTaxIncluded = !!completedTransaction.isTaxIncluded;
+
+            items.forEach(item => {
+               const lineGross = (item.price || 0) * (item.quantity || 0);
+               const itemRatio = grossLineTotal !== 0 ? lineGross / grossLineTotal : 0;
+               const lineDiscount = discountAmount * itemRatio;
+               const lineBaseAfterDiscount = lineGross - lineDiscount;
+               const itemTaxes = (item.appliedTaxIds || [])
+                  .map(id => (config.taxes || []).find(t => t.id === id))
+                  .filter(Boolean);
+
+               const totalTaxRate = itemTaxes.reduce((sum, tax) => sum + Number(tax?.rate || 0), 0);
+               const lineNet = isTaxIncluded && totalTaxRate > 0
+                  ? lineBaseAfterDiscount / (1 + totalTaxRate)
+                  : lineBaseAfterDiscount;
+
+               itemTaxes.forEach(tax => {
+                  if (!tax) return;
+                  if (!breakdown[tax.id]) {
+                     breakdown[tax.id] = {
+                        taxId: tax.id,
+                        name: tax.name,
+                        rate: Number(tax.rate || 0),
+                        amount: 0
+                     };
+                  }
+                  breakdown[tax.id].amount += lineNet * Number(tax.rate || 0);
+               });
+            });
+
+            return Object.values(breakdown)
+               .map(tax => ({
+                  ...tax,
+                  amount: Math.round((tax.amount + Number.EPSILON) * 100) / 100
+               }))
+               .filter(tax => Math.abs(tax.amount) > 0.0001)
+               .sort((a, b) => b.rate - a.rate);
+         })();
+
          const response = await fetch('/api/email/receipt', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -426,6 +472,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                currencySymbol: currencySymbol,
                subtotal: (completedTransaction?.netAmount || 0) + (completedTransaction?.discountAmount || 0),
                tax: completedTransaction?.taxAmount,
+               taxBreakdown: emailTaxBreakdown,
                discount: completedTransaction?.discountAmount,
                totalSavings: (completedTransaction?.items || []).reduce((sum, item) =>
                   sum + ((item.originalPrice || item.price) - item.price) * item.quantity, 0) + (completedTransaction?.discountAmount || 0),

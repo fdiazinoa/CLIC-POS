@@ -1104,6 +1104,7 @@ export interface Transaction {
 
 export type ViewState =
   // Standard views
+  | 'ACTIVATION'
   | 'SETUP'
   | 'WIZARD'
   | 'LOGIN'

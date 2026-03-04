@@ -13,6 +13,43 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
     let discountTotal = 0;
     let taxTotal = 0;
     const isTaxIncluded = transaction.isTaxIncluded || false;
+    const globalDiscount = Number(transaction.discountAmount || 0);
+    const grossLineTotal = (transaction.items || []).reduce(
+        (sum, item) => sum + ((item.price || 0) * (item.quantity || 0)),
+        0,
+    );
+    const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+    const formatTaxLineLabel = (tax: { name: string; rate: number }) => {
+        const ratePercent = tax.rate <= 1 ? tax.rate * 100 : tax.rate;
+        const formattedRate = Number.isInteger(ratePercent) ? `${ratePercent}%` : `${ratePercent.toFixed(2)}%`;
+        return tax.name.includes('%') ? tax.name : `${tax.name} ${formattedRate}`;
+    };
+    const calculateItemTaxBreakdown = (item: any, lineBaseAfterDiscount: number) => {
+        const resolvedTaxes = ((item.appliedTaxIds || []) as string[])
+            .map(id => (config.taxes || []).find(tax => tax.id === id))
+            .filter(Boolean) as Array<{ id: string; name: string; rate: number }>;
+
+        const fallbackRate = Number(config.taxRate || 0);
+        const taxesForItem = resolvedTaxes.length > 0
+            ? resolvedTaxes
+            : (fallbackRate > 0 ? [{ id: 'default-tax', name: 'Impuesto', rate: fallbackRate }] : []);
+        const combinedRate = taxesForItem.reduce((sum, tax) => sum + Number(tax.rate || 0), 0);
+
+        if (combinedRate <= 0) return [];
+
+        const lineNet = isTaxIncluded
+            ? lineBaseAfterDiscount / (1 + combinedRate)
+            : lineBaseAfterDiscount;
+
+        return taxesForItem
+            .map(tax => ({
+                id: tax.id,
+                name: tax.name,
+                rate: Number(tax.rate || 0),
+                amount: round2(lineNet * Number(tax.rate || 0)),
+            }))
+            .filter(tax => Math.abs(tax.amount) > 0.0001);
+    };
 
     // 1. Calculate Raw Totals
     let rawNetTotal = 0;
@@ -70,6 +107,26 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
         subtotal = rawNetTotal;
         taxTotal = rawTaxTotal;
     }
+
+    const taxBreakdownMap: Record<string, { id: string; name: string; rate: number; amount: number }> = {};
+    transaction.items.forEach(item => {
+        const lineGross = (item.price || 0) * (item.quantity || 0);
+        const itemRatio = lineGross / (grossLineTotal || 1);
+        const lineDiscount = globalDiscount * itemRatio;
+        const itemTaxLines = calculateItemTaxBreakdown(item, lineGross - lineDiscount);
+
+        itemTaxLines.forEach(tax => {
+            if (!taxBreakdownMap[tax.id]) {
+                taxBreakdownMap[tax.id] = { ...tax, amount: 0 };
+            }
+            taxBreakdownMap[tax.id].amount += tax.amount;
+        });
+    });
+
+    const taxBreakdown = Object.values(taxBreakdownMap)
+        .map(tax => ({ ...tax, amount: round2(tax.amount) }))
+        .filter(tax => Math.abs(tax.amount) > 0.0001)
+        .sort((a, b) => b.rate - a.rate);
 
     const finalTotal = transaction.total || (subtotal + taxTotal);
     const savings = discountTotal;
@@ -217,23 +274,13 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
             <table class="items-table">
                 <tbody>
                     ${transaction.items.map(item => {
-            let itemTaxRate = 0;
-            if (item.appliedTaxIds && item.appliedTaxIds.length > 0) {
-                item.appliedTaxIds.forEach(id => {
-                    const t = (config.taxes || []).find(tax => tax.id === id);
-                    if (t) itemTaxRate += t.rate;
-                });
-            } else {
-                itemTaxRate = config.taxRate || 0;
-            }
-
             const lineVal = item.price * item.quantity;
-            let iTax = 0;
-            if (isTaxIncluded) {
-                iTax = lineVal - (lineVal / (1 + itemTaxRate));
-            } else {
-                iTax = lineVal * itemTaxRate;
-            }
+            const itemRatio = lineVal / (grossLineTotal || 1);
+            const lineDiscount = globalDiscount * itemRatio;
+            const itemTaxLines = calculateItemTaxBreakdown(item, lineVal - lineDiscount);
+            const itemTaxHtml = itemTaxLines
+                .map(tax => `${formatTaxLineLabel(tax)}: ${currencySymbol}${tax.amount.toFixed(2)}`)
+                .join('<br/>');
 
             const originalPrice = item.originalPrice || item.price;
             const hasDiscount = originalPrice > item.price;
@@ -269,7 +316,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                                     ${item.quantity} x ${currencySymbol}${item.price.toFixed(2)}
                                     ${hasDiscount ? `<span style="text-decoration: line-through; color: #999; margin-left: 5px;">${currencySymbol}${originalPrice.toFixed(2)}</span>` : ''}
                                     ${item.modifiers ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
-                                    <br/>ITBIS: ${currencySymbol}${iTax.toFixed(2)}
+                                    ${itemTaxHtml ? `<br/>${itemTaxHtml}` : ''}
                                     ${sellerNameHtml}
                                     ${hasTrackingHtml ? `<br/>${trackingHtml.join('<br/>')}` : ''}
                                 </span>
@@ -294,10 +341,18 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                     <span>DESCUENTO TOTAL</span>
                     <span>-${currencySymbol}${(discountTotal || 0).toFixed(2)}</span>
                 </div>` : ''}
+                ${taxBreakdown.length > 0
+                    ? taxBreakdown.map(tax => `
+                <div class="total-row">
+                    <span>${formatTaxLineLabel(tax).toUpperCase()}</span>
+                    <span>${currencySymbol}${tax.amount.toFixed(2)}</span>
+                </div>`).join('')
+                    : (Math.abs(taxTotal || 0) > 0.0001 ? `
                 <div class="total-row">
                     <span>TOTAL IMPUESTOS</span>
                     <span>${currencySymbol}${(taxTotal || 0).toFixed(2)}</span>
-                </div>
+                </div>` : '')
+                }
                 
                 <div class="total-row total-final">
                     <span>TOTAL</span>

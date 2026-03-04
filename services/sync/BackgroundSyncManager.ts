@@ -250,7 +250,7 @@ class BackgroundSyncManager {
 
     private async updatePendingCount() {
         let count = 0;
-        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions'];
+        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'collections'];
 
         for (const col of collections) {
             const data = await db.get(col as any) || [];
@@ -298,7 +298,7 @@ class BackgroundSyncManager {
      * This handles abrupt browser/tab shutdowns during sync.
      */
     private async recoverStuckSyncItems() {
-        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions'];
+        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'collections'];
         for (const colName of collections) {
             try {
                 const data = await db.get(colName as any) as any[];
@@ -390,7 +390,7 @@ class BackgroundSyncManager {
 
         console.log(`🧹 BackgroundSyncManager: Pruning synced items older than ${RETENTION_DAYS} days (Cutoff: ${cutoff.toISOString()})`);
 
-        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions'];
+        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'collections'];
 
         for (const colName of collections) {
             try {

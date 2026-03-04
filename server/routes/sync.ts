@@ -32,12 +32,25 @@ const getConnectedTerminals = () => {
 
 // --- Sync Versioning & Change Log Helpers ---
 const collectionAliasMap: Record<string, string> = {
-    inventoryLedger: 'inventory_ledger',
-    cashMovements: 'cash_movements',
-    zReports: 'z_reports',
-    productStocks: 'product_stocks',
-    purchaseOrders: 'purchase_orders',
-    supplierProductPrices: 'supplier_product_prices'
+    'users': 'users',
+    'roles': 'roles',
+    'products': 'products',
+    'customers': 'customers',
+    'warehouses': 'warehouses',
+    'inventoryLedger': 'inventory_ledger',
+    'transactions': 'transactions',
+    'zReports': 'z_reports',
+    'cashMovements': 'cashMovements', // Optional, if using flat table
+    'productStocks': 'product_stocks',
+    'receptions': 'receptions',
+    'suppliers': 'suppliers',
+    'purchaseOrders': 'purchase_orders',
+    'supplierProductPrices': 'supplier_product_prices',
+    'internalSequences': 'internal_sequences',
+    'fiscalRanges': 'fiscal_ranges',
+    'paymentMethods': 'payment_methods',
+    'activities': 'activities',
+    'collections': 'collections'
 };
 
 const resolveCollectionName = (collection: string) => collectionAliasMap[collection] || collection;

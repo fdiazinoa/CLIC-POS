@@ -223,6 +223,7 @@ export class EmailService {
         const {
             items, total, paymentMethod, companyInfo, transactionId,
             ncf, date, cashierName, tax, subtotal, discount,
+            taxBreakdown = [],
             currencySymbol = '$', logoUrl = 'https://clicpos.com/logo.png',
             totalSavings = 0, showSavings = false
         } = receiptData;
@@ -290,6 +291,40 @@ export class EmailService {
         html = html.replace(/{{paymentMethod}}/g, paymentMethod || 'Efectivo');
         html = html.replace(/{{itemsHtml}}/g, itemsHtml);
         html = html.replace(/{{qrUrl}}/g, qrUrl);
+
+        const taxBreakdownRows = Array.isArray(taxBreakdown)
+            ? taxBreakdown
+                .filter((line: any) => Math.abs(Number(line?.amount || 0)) > 0.0001)
+                .map((line: any) => {
+                    const rate = Number(line?.rate || 0);
+                    const ratePercent = rate <= 1 ? rate * 100 : rate;
+                    const formattedRate = Number.isInteger(ratePercent) ? `${ratePercent}%` : `${ratePercent.toFixed(2)}%`;
+                    const label = line?.name
+                        ? (String(line.name).includes('%') ? String(line.name) : `${line.name} (${formattedRate})`)
+                        : `Impuesto ${formattedRate}`;
+
+                    return `
+                        <tr>
+                            <td style="font-size: 14px; color: #64748B; padding: 4px 0;">${label}</td>
+                            <td align="right" style="font-size: 14px; color: #1E293B; font-weight: 600; padding: 4px 0;">
+                                ${currencySymbol}${Number(line.amount || 0).toFixed(2)}
+                            </td>
+                        </tr>
+                    `;
+                })
+                .join('')
+            : '';
+        const taxSummaryRows = taxBreakdownRows || ((tax || 0) > 0
+            ? `
+                        <tr>
+                            <td style="font-size: 14px; color: #64748B; padding: 4px 0;">Impuestos</td>
+                            <td align="right" style="font-size: 14px; color: #1E293B; font-weight: 600; padding: 4px 0;">
+                                ${currencySymbol}${Number(tax || 0).toFixed(2)}
+                            </td>
+                        </tr>
+                    `
+            : '');
+        html = html.replace(/{{taxBreakdownRows}}/g, taxSummaryRows);
 
         // NCF Row
         if (ncf) {

@@ -567,6 +567,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                 receptions: fiscalReceptions,
                 suppliers: fiscalSuppliers
               } : undefined}
+              currentUser={props.currentUser}
               onBack={() => setSelectedCategory(null)}
             />
           );

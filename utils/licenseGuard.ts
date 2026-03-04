@@ -22,7 +22,8 @@ export const checkLicenseStatus = async (
         const res = await fetch(`${supabaseUrl}/rest/v1/tenants?id=eq.${tenantId}&select=status`, {
             headers: {
                 'apikey': supabaseKey,
-                'Authorization': `Bearer ${supabaseKey}`
+                'Authorization': `Bearer ${supabaseKey}`,
+                'Accept-Profile': 'landlord'
             },
             signal: AbortSignal.timeout(5000) // Fast fail
         });
@@ -47,7 +48,8 @@ export const checkLicenseStatus = async (
                 'apikey': supabaseKey,
                 'Authorization': `Bearer ${supabaseKey}`,
                 'Content-Type': 'application/json',
-                'Prefer': 'return=minimal'
+                'Prefer': 'return=minimal',
+                'Accept-Profile': 'landlord'
             },
             body: JSON.stringify({ last_checkin_at: new Date().toISOString() })
         }).catch(e => console.warn("Check-in silenciado falló", e));
