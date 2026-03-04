@@ -18,14 +18,19 @@ const decodeJwtRole = (token: string): string | null => {
     }
 };
 
+const isPublicClientKey = (token: string): boolean => {
+    if (token.startsWith('sb_publishable_')) return true;
+    return decodeJwtRole(token) === 'anon';
+};
+
 if (!supabaseUrl || !supabaseAnonKey) {
     console.warn('⚠️ Supabase credentials missing in .env. Cloud features will be disabled.');
 }
 
 if (supabaseAnonKey && !allowInsecureKeys) {
     const role = decodeJwtRole(supabaseAnonKey);
-    if (role !== 'anon') {
-        throw new Error(`VITE_SUPABASE_ANON_KEY must be an anon key (current role: ${role || 'unknown'})`);
+    if (!isPublicClientKey(supabaseAnonKey)) {
+        throw new Error(`VITE_SUPABASE_ANON_KEY must be anon or sb_publishable (current role: ${role || 'unknown'})`);
     }
 }
 
