@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
 import { supabase } from '../utils/supabase';
+import { resolveTenantId } from '../utils/licenseGuard';
 import { Rocket, Lock, Mail, CheckCircle, AlertCircle, ShieldCheck, ArrowRight, Loader2 } from 'lucide-react';
 
 interface ActivationScreenProps {
@@ -37,7 +38,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             if (isNewUser) {
                 setStep('CHANGE_PASSWORD');
             } else {
-                completeActivation(data.user);
+                await completeActivation(data.user);
             }
         } catch (err: any) {
             setError(err.message || 'Error al iniciar sesión. Verifique sus credenciales.');
@@ -69,7 +70,12 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             if (updateError) throw updateError;
 
             setStep('SUCCESS');
-            setTimeout(() => completeActivation(data.user), 2000);
+            setTimeout(() => {
+                void completeActivation(data.user).catch((err: any) => {
+                    setStep('CHANGE_PASSWORD');
+                    setError(err.message || 'No se pudo completar la activacion.');
+                });
+            }, 2000);
         } catch (err: any) {
             setError(err.message || 'Error al actualizar la contraseña.');
         } finally {
@@ -77,18 +83,27 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         }
     };
 
-    const completeActivation = (user: any) => {
+    const completeActivation = async (user: any) => {
+        const resolvedTenantId = user?.user_metadata?.tenant_id || await resolveTenantId();
+        if (!resolvedTenantId) {
+            throw new Error('No se pudo resolver la licencia de esta empresa. Solicite reprovisionar el tenant en Cloud Admin.');
+        }
+
         // Save tenant session info
         const tenantData = {
             id: user.id,
             email: user.email,
             name: user.user_metadata?.full_name || user.email.split('@')[0],
-            tenantId: user.user_metadata?.tenant_id || user.id // Fallback to user ID if tenant_id is missing
+            tenantId: resolvedTenantId,
+            slug: user.user_metadata?.slug || null,
         };
 
         // Save locally for persistence
         localStorage.setItem('clic_tenant_id', tenantData.tenantId);
         localStorage.setItem('clic_tenant_email', tenantData.email);
+        if (tenantData.slug) {
+            localStorage.setItem('clic_tenant_slug', tenantData.slug);
+        }
 
         onActivationComplete(tenantData);
     };
