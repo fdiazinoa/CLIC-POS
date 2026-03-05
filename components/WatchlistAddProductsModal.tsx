@@ -77,23 +77,28 @@ const WatchlistAddProductsModal: React.FC<WatchlistAddProductsModalProps> = ({
                <button onClick={onClose} className="p-3 hover:bg-slate-200 rounded-full transition-colors"><X size={24} /></button>
             </div>
 
-            <div className="flex px-8 border-b bg-white gap-8 shrink-0">
-               {[
-                  { id: 'INDIVIDUAL', label: 'Individual', icon: ShoppingBag },
-                  { id: 'GROUPS', label: 'Por Grupo', icon: Grid },
-                  { id: 'CATEGORIES', label: 'Por Categoría', icon: FolderOpen },
-               ].map(tab => (
-                  <button
-                     key={tab.id}
-                     onClick={() => {
-                        setActiveSubTab(tab.id as any);
-                        setExpandedGroupId(null);
-                     }}
-                     className={`py-4 text-sm font-bold border-b-4 flex items-center gap-2 transition-all ${activeSubTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-                  >
-                     <tab.icon size={16} /> {tab.label}
-                  </button>
-               ))}
+            <div className="bg-white border-b border-gray-200 shrink-0 px-4 md:px-8 overflow-hidden">
+               <div
+                  className="mobile-tab-scroller no-scrollbar -mx-4 px-4 md:mx-0 md:px-0"
+                  style={{ overflowX: 'scroll', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}
+               >
+                  {[
+                     { id: 'INDIVIDUAL', label: 'Individual', icon: ShoppingBag },
+                     { id: 'GROUPS', label: 'Por Grupo', icon: Grid },
+                     { id: 'CATEGORIES', label: 'Por Categoría', icon: FolderOpen },
+                  ].map(tab => (
+                     <button
+                        key={tab.id}
+                        onClick={() => {
+                           setActiveSubTab(tab.id as any);
+                           setExpandedGroupId(null);
+                        }}
+                        className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 flex items-center gap-2 transition-all ${activeSubTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                     >
+                        <tab.icon size={16} /> {tab.label}
+                     </button>
+                  ))}
+               </div>
             </div>
 
             <div className="flex-1 overflow-hidden flex flex-col bg-slate-50/30">
