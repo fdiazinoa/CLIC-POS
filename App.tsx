@@ -788,8 +788,11 @@ const AppContent: React.FC = () => {
         );
 
         // --- ACTIVATION CHECK ---
-        const localTenantId = await resolveTenantId(localStorage.getItem('clic_tenant_id') || '');
-        if (!localTenantId && !masterIp) {
+        // Gate activation using locally persisted tenant identity first.
+        // This avoids skipping onboarding because of stale cloud session resolution.
+        const storedTenantId = (localStorage.getItem('clic_tenant_id') || '').trim();
+        const localTenantId = storedTenantId || await resolveTenantId(storedTenantId);
+        if (!storedTenantId && !masterIp) {
           console.warn('[BOOT] Sistema no activado. Redirigiendo a pantalla de activación...');
           setIsDataLoaded(true);
           setIsSecurityLoaded(true);

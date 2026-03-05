@@ -9,6 +9,7 @@ import { db } from '../utils/db'; // Import DB to call reset
 import { dbAdapter } from '../services/db';
 import FactoryResetModal, { ResetCategory } from './FactoryResetModal';
 import { ExportUtils } from '../utils/ExportUtils';
+import { clearTenantIdentity } from '../utils/licenseGuard';
 
 import { BusinessConfig } from '../types';
 
@@ -112,6 +113,10 @@ const DataSecurityHub: React.FC<DataSecurityHubProps> = ({ onClose, terminalId, 
       try {
          // Call selective delete
          await db.selectiveReset(categories, terminalId, isSlave);
+         // Reset cloud activation hints too, so onboarding can run again if needed.
+         clearTenantIdentity();
+         localStorage.removeItem('pos_master_ip');
+         localStorage.removeItem('CLIC_POS_MASTER_URL');
          alert(`✅ Datos eliminados: ${categoryNames}`);
          window.location.reload();
       } catch (error: any) {
