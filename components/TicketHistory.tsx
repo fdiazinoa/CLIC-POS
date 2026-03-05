@@ -931,7 +931,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       const ticketCount = filteredTransactions.length;
       const avgTicket = ticketCount > 0 ? totalSales / ticketCount : 0;
       const refunds = filteredTransactions.reduce((acc, tx) => {
-         if (tx.documentType === 'REFUND' || tx.ncfType === 'B04' || tx.status === 'REFUNDED' || tx.status === 'PARTIAL_REFUND') {
+         const isCreditNoteOrRefundDoc = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+         const isRefundStatus = tx.status === 'PARTIAL_REFUND';
+         if (isCreditNoteOrRefundDoc || isRefundStatus) {
             return acc + tx.total;
          }
          return acc;
