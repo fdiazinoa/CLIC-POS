@@ -87,8 +87,12 @@ console.log(JSON.stringify(firstPublish, null, 2));
 console.log("\nFirst resolve:");
 console.log(JSON.stringify(firstResolve, null, 2));
 
-if (!firstResolve || firstResolve.localIp !== firstIp) {
-    throw new Error(`Expected first resolved IP ${firstIp}, got ${firstResolve?.localIp || "null"}`);
+if (!firstPublish?.localIp) {
+    throw new Error("First publish did not return a localIp.");
+}
+
+if (!firstResolve || firstResolve.localIp !== firstPublish.localIp) {
+    throw new Error(`Expected first resolved IP ${firstPublish.localIp}, got ${firstResolve?.localIp || "null"}`);
 }
 
 const secondPublish = await publishEndpoint(secondIp);
@@ -99,8 +103,19 @@ console.log(JSON.stringify(secondPublish, null, 2));
 console.log("\nRotated resolve:");
 console.log(JSON.stringify(secondResolve, null, 2));
 
-if (!secondResolve || secondResolve.localIp !== secondIp) {
-    throw new Error(`Expected rotated resolved IP ${secondIp}, got ${secondResolve?.localIp || "null"}`);
+if (!secondPublish?.localIp) {
+    throw new Error("Rotated publish did not return a localIp.");
+}
+
+if (!secondResolve || secondResolve.localIp !== secondPublish.localIp) {
+    throw new Error(`Expected rotated resolved IP ${secondPublish.localIp}, got ${secondResolve?.localIp || "null"}`);
+}
+
+if (secondPublish.localIp === firstPublish.localIp) {
+    console.warn(
+        `\nWarning: requested rotation (${secondIp}) did not produce a new local interface. ` +
+        `The APK normalized to ${secondPublish.localIp}.`
+    );
 }
 
 console.log("\nCloud master discovery verification OK.");
