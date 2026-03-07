@@ -105,6 +105,7 @@ import { useOfflineInventoryCountSync } from './hooks/useOfflineInventoryCountSy
 import { printLabelsFromTemplate } from './utils/labelPrinter';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
+import { getStoredTenantIdentity, normalizeMasterHost, publishMasterEndpointToCloud, resolveMasterEndpointFromCloud } from './utils/cloudMasterRegistry';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -206,6 +207,54 @@ const AppContent: React.FC = () => {
     const terminal = getCurrentTerminal();
     return terminal?.config?.deviceRole?.role || DeviceRole.STANDARD_POS;
   }, [getCurrentTerminal]);
+
+  useEffect(() => {
+    const currentTerminal = getCurrentTerminal();
+    const tenantIdentity = getStoredTenantIdentity();
+
+    if (!deviceId || !currentTerminal?.id) return;
+    if (currentTerminal.config?.isPrimaryNode === false) return;
+    if (!tenantIdentity.tenantId && !tenantIdentity.tenantSlug && !tenantIdentity.tenantEmail) return;
+
+    let disposed = false;
+
+    const publishEndpoint = async () => {
+      const endpoint = await publishMasterEndpointToCloud({
+        deviceId,
+        terminalId: currentTerminal.id,
+        terminalName: currentTerminal.id,
+        isPrimary: currentTerminal.config?.isPrimaryNode !== false,
+      });
+
+      if (!disposed && endpoint?.localIp) {
+        console.log(`[CLOUD] Master endpoint publicado: ${endpoint.localIp}`);
+      }
+    };
+
+    void publishEndpoint();
+
+    const heartbeatId = window.setInterval(() => {
+      if (navigator.onLine) {
+        void publishEndpoint();
+      }
+    }, 60000);
+
+    const republish = () => {
+      if (navigator.onLine) {
+        void publishEndpoint();
+      }
+    };
+
+    window.addEventListener('online', republish);
+    window.addEventListener('focus', republish);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(heartbeatId);
+      window.removeEventListener('online', republish);
+      window.removeEventListener('focus', republish);
+    };
+  }, [deviceId, getCurrentTerminal]);
 
   // --- RECONNECTION BANNER ---
   const renderReconnectionBanner = () => {
@@ -703,11 +752,24 @@ const AppContent: React.FC = () => {
         // IMPORTANT:
         // Only pull remote config when this device is a SLAVE (or not yet paired locally).
         // If a MASTER keeps stale pos_master_ip, blindly pulling here corrupts local runtime config.
-        const masterIp = localStorage.getItem('pos_master_ip');
+        let masterIp = localStorage.getItem('pos_master_ip');
         const localTerminals = (!Array.isArray(currentConfig) && currentConfig?.terminals) ? currentConfig.terminals : [];
         const localPairedTerminal = (localTerminals || []).find(
           (t: any) => t.config?.currentDeviceId === storedDeviceId
         );
+
+        const shouldResolveMasterFromCloud = !masterIp && (
+          !localPairedTerminal || localPairedTerminal?.config?.isPrimaryNode === false
+        );
+
+        if (shouldResolveMasterFromCloud) {
+          const cloudEndpoint = await resolveMasterEndpointFromCloud();
+          const discoveredMasterIp = normalizeMasterHost(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl || '');
+          if (discoveredMasterIp) {
+            masterIp = discoveredMasterIp;
+            console.log(`[BOOT] Master resuelto desde Cloud-Admin: ${discoveredMasterIp}`);
+          }
+        }
 
         // --- PAIRING CHECK & REDIRECT ---
         // If no local pairing exists and we have no master IP, we are definitely unpaired.
@@ -739,24 +801,40 @@ const AppContent: React.FC = () => {
 
         if (shouldFetchConfigFromMaster) {
           console.log("🔄 Slave Mode: Fetching latest config from Master...");
-          try {
+          const fetchConfigFromMaster = async (host: string) => {
             const currentProtocol = window.location.protocol;
-            const targetUrl = `${currentProtocol}//${masterIp}:3001/api/config`;
+            const targetUrl = `${currentProtocol}//${host}:3001/api/config`;
 
-            // ADDED TIMEOUT: Fail fast if Master is offline (common in emulators)
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 3000); // 3s timeout
+            const timeoutId = setTimeout(() => controller.abort(), 3000);
 
-            const res = await fetch(targetUrl, { signal: controller.signal });
-            clearTimeout(timeoutId);
+            try {
+              const res = await fetch(targetUrl, { signal: controller.signal });
+              if (!res.ok) return null;
+              return await res.json();
+            } finally {
+              clearTimeout(timeoutId);
+            }
+          };
 
-            if (res.ok) {
-              const fetchedConfig = await res.json();
-              if (fetchedConfig && fetchedConfig.terminals) {
-                console.log("✅ Config fetched from Master. Saving to local DB...");
-                await db.save('config', fetchedConfig);
-                currentConfig = fetchedConfig;
+          try {
+            let fetchedConfig = masterIp ? await fetchConfigFromMaster(masterIp) : null;
+
+            if (!fetchedConfig) {
+              const cloudEndpoint = await resolveMasterEndpointFromCloud();
+              const refreshedMasterIp = normalizeMasterHost(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl || '');
+
+              if (refreshedMasterIp && refreshedMasterIp !== masterIp) {
+                console.warn(`⚠️ Master IP actualizada desde cloud: ${masterIp || 'N/D'} -> ${refreshedMasterIp}`);
+                masterIp = refreshedMasterIp;
+                fetchedConfig = await fetchConfigFromMaster(refreshedMasterIp);
               }
+            }
+
+            if (fetchedConfig && fetchedConfig.terminals) {
+              console.log("✅ Config fetched from Master. Saving to local DB...");
+              await db.save('config', fetchedConfig);
+              currentConfig = fetchedConfig;
             }
           } catch (e: any) {
             console.error("❌ Failed to fetch config from Master (Timeout/Network):", e.name === 'AbortError' ? 'Timeout' : e.message);
@@ -1303,7 +1381,7 @@ const AppContent: React.FC = () => {
 
   // --- CORE EVENT HANDLERS ---
 
-  const handlePairTerminal = async (terminalId: string) => {
+  const handlePairTerminal = async (terminalId: string, resolvedMasterIp?: string) => {
     setRestoringHistory(true);
     try {
       const newTerminals = (config.terminals || []).map(t => {
@@ -1331,6 +1409,12 @@ const AppContent: React.FC = () => {
 
       const selectedTerminal = (newTerminals || []).find(t => t.id === terminalId);
       const isSlave = selectedTerminal?.config?.isPrimaryNode === false;
+      const normalizedResolvedMasterIp = normalizeMasterHost(resolvedMasterIp || '');
+
+      if (isSlave && normalizedResolvedMasterIp) {
+        localStorage.setItem('pos_master_ip', normalizedResolvedMasterIp);
+        localStorage.setItem('CLIC_POS_MASTER_URL', `${window.location.protocol}//${normalizedResolvedMasterIp}:3001`);
+      }
 
       // If user takes control of a MASTER terminal, clear stale slave pointers.
       if (!isSlave) {
@@ -1361,6 +1445,15 @@ const AppContent: React.FC = () => {
       } catch (e) {
         console.error("❌ Failed to sync binding to backend:", e);
         // We continue; local binding is already saved.
+      }
+
+      if (!isSlave) {
+        void publishMasterEndpointToCloud({
+          deviceId,
+          terminalId,
+          terminalName: terminalId,
+          isPrimary: true,
+        });
       }
 
       // If it's a slave terminal, restore history
