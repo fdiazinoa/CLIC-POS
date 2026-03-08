@@ -1,4 +1,9 @@
 import { ensureSupabaseSessionRestored, supabase } from './supabase';
+import {
+    DEFAULT_CLOUD_SUPABASE_ANON_KEY,
+    DEFAULT_CLOUD_SUPABASE_URL,
+    normalizeCloudUrl,
+} from './cloudDefaults';
 import { clearStoredErpSyncBinding } from './erpSyncLifecycle';
 
 export interface LicenseStatus {
@@ -44,8 +49,8 @@ const BLOCKED_STATUSES = new Set([
 const getCloudConfig = () => {
     const env = import.meta.env as Record<string, string | boolean | undefined>;
     return {
-        supabaseUrl: (env['VITE_SUPABASE_URL'] as string | undefined) || localStorage.getItem('CLIC_POS_MASTER_URL'),
-        supabaseKey: env['VITE_SUPABASE_ANON_KEY'] as string | undefined,
+        supabaseUrl: normalizeCloudUrl((env['VITE_SUPABASE_URL'] as string | undefined) || DEFAULT_CLOUD_SUPABASE_URL),
+        supabaseKey: String((env['VITE_SUPABASE_ANON_KEY'] as string | undefined) || DEFAULT_CLOUD_SUPABASE_ANON_KEY || '').trim(),
     };
 };
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../utils/supabase';
 import { resolveTenantRecord } from '../utils/licenseGuard';
+import { DEFAULT_CLOUD_ADMIN_URL, normalizeCloudUrl } from '../utils/cloudDefaults';
 import {
     Rocket,
     Lock,
@@ -77,10 +78,10 @@ const getErrorMessage = (error: unknown): string => {
 
 const getActivationApiBase = (): string => {
     const env = (import.meta as any).env || {};
-    const explicitBase = String(env.VITE_ACTIVATION_API_BASE_URL || '').trim().replace(/\/$/, '');
+    const explicitBase = normalizeCloudUrl(env.VITE_ACTIVATION_API_BASE_URL || '');
     if (explicitBase) return explicitBase;
 
-    const cloudAdminUrl = String(env.VITE_CLOUD_ADMIN_URL || '').trim().replace(/\/$/, '');
+    const cloudAdminUrl = normalizeCloudUrl(env.VITE_CLOUD_ADMIN_URL || DEFAULT_CLOUD_ADMIN_URL);
     if (cloudAdminUrl) return `${cloudAdminUrl}/api/activation`;
 
     return '/api/activation';

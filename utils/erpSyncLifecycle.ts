@@ -1,4 +1,5 @@
 import { getStoredTenantIdentity } from './cloudMasterRegistry';
+import { DEFAULT_ERP_SYNC_API_URL, normalizeCloudUrl } from './cloudDefaults';
 
 type TenantIdentity = {
     tenantId?: string | null;
@@ -76,9 +77,13 @@ const normalizeOptional = (value?: string | null) => (typeof value === 'string' 
 
 const getSyncApiBase = () => {
     const env = (import.meta as any).env || {};
-    const explicitBase = normalizeOptional(
-        String(env.VITE_SYNC_API_URL || env.VITE_ERP_SYNC_API_URL || localStorage.getItem(SYNC_API_URL_STORAGE_KEY) || '')
-    );
+    const explicitBase = normalizeOptional(normalizeCloudUrl(
+        String(env.VITE_SYNC_API_URL
+            || env.VITE_ERP_SYNC_API_URL
+            || localStorage.getItem(SYNC_API_URL_STORAGE_KEY)
+            || DEFAULT_ERP_SYNC_API_URL
+            || '')
+    ));
 
     if (!explicitBase) return '';
 
