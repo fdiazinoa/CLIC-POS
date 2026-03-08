@@ -1,18 +1,22 @@
 
 import { createClient } from '@supabase/supabase-js';
+import {
+    DEFAULT_CLOUD_SUPABASE_ANON_KEY,
+    DEFAULT_CLOUD_SUPABASE_URL,
+    normalizeCloudUrl,
+} from './cloudDefaults';
 
 const _env = (import.meta as any).env || {};
-const supabaseUrl = _env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = _env.VITE_SUPABASE_ANON_KEY || '';
+const supabaseUrl = normalizeCloudUrl(_env.VITE_SUPABASE_URL || DEFAULT_CLOUD_SUPABASE_URL);
+const supabaseAnonKey = String(_env.VITE_SUPABASE_ANON_KEY || DEFAULT_CLOUD_SUPABASE_ANON_KEY || '').trim();
 const hasSupabaseConfig = Boolean(supabaseUrl && supabaseAnonKey);
 
 if (!hasSupabaseConfig) {
     console.warn('⚠️ Supabase credentials missing in .env. Cloud features will be disabled.');
 }
 
-// Keep runtime alive even when .env is missing. Activation/login will still fail gracefully.
-const safeUrl = supabaseUrl || 'https://placeholder.supabase.co';
-const safeAnonKey = supabaseAnonKey || 'placeholder-anon-key';
+const safeUrl = supabaseUrl || DEFAULT_CLOUD_SUPABASE_URL;
+const safeAnonKey = supabaseAnonKey || DEFAULT_CLOUD_SUPABASE_ANON_KEY;
 
 export const supabase = createClient(safeUrl, safeAnonKey);
 

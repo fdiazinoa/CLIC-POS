@@ -1,4 +1,9 @@
 import { ensureSupabaseSessionRestored, supabase } from './supabase';
+import {
+    DEFAULT_CLOUD_SUPABASE_ANON_KEY,
+    DEFAULT_CLOUD_SUPABASE_URL,
+    normalizeCloudUrl,
+} from './cloudDefaults';
 
 export type TenantIdentity = {
     tenantId?: string | null;
@@ -63,8 +68,8 @@ const dedupeStrings = (values: Array<string | null | undefined>) =>
 const getCloudConfig = () => {
     const env = (import.meta as any).env || {};
     return {
-        supabaseUrl: String(env.VITE_SUPABASE_URL || '').trim().replace(/\/$/, ''),
-        supabaseAnonKey: String(env.VITE_SUPABASE_ANON_KEY || '').trim(),
+        supabaseUrl: normalizeCloudUrl(env.VITE_SUPABASE_URL || DEFAULT_CLOUD_SUPABASE_URL),
+        supabaseAnonKey: String(env.VITE_SUPABASE_ANON_KEY || DEFAULT_CLOUD_SUPABASE_ANON_KEY || '').trim(),
     };
 };
 
