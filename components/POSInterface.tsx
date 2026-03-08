@@ -57,6 +57,7 @@ import SupervisorAuthModal from './SupervisorAuthModal';
 import VirtualKeyboard from './VirtualKeyboard';
 import SafetyGateModal from './SafetyGateModal';
 import { printReservation } from '../utils/printer';
+import { calculateTaxBreakdownFromItems, formatTaxLineLabel, resolveEffectiveTaxIds } from '../utils/fiscalBreakdown';
 import MobileCartButton from './MobileCartButton';
 
 // ... existing imports
@@ -716,12 +717,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const finalPrice = priceOverride || getProductPrice(product);
       const modifiersString = modifiers ? modifiers.sort().join('|') : '';
+      const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
+      const taxSignature = effectiveTaxIds.slice().sort().join('|');
 
       // We look for existing item in the stable 'cart' prop/state instead of inside the setter
       // to avoid using setter for logic that triggers side effects.
       const existing = (cart || []).find(i => {
          const iMods = i.modifiers ? i.modifiers.sort().join('|') : '';
-         return i.id === product.id && iMods === modifiersString && i.price === finalPrice;
+         const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig).slice().sort().join('|');
+         return i.id === product.id && iMods === modifiersString && i.price === finalPrice && existingTaxSignature === taxSignature;
       });
 
       let targetCartId: string;
@@ -729,7 +733,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (existing && !usesSerial) {
          targetCartId = existing.cartId!;
          onUpdateCart(prev => {
-            const updatedItem = { ...existing, quantity: existing.quantity + quantity };
+            const updatedItem = { ...existing, quantity: existing.quantity + quantity, appliedTaxIds: effectiveTaxIds };
             return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
          });
       } else {
@@ -741,6 +745,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             quantity,
             price: finalPrice,
             modifiers,
+            appliedTaxIds: effectiveTaxIds,
             originalPrice: getProductPrice(product),
             trackingData
          };
@@ -749,7 +754,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);
-   }, [canAddItemToCart, getProductPrice, onUpdateCart, cart]); // Added cart to dependencies
+   }, [canAddItemToCart, getProductPrice, onUpdateCart, cart, activeTerminalConfig]); // Added cart to dependencies
 
    const handleProductClick = useCallback((product: Product) => {
       // MOBILE INTERCEPTION
@@ -1051,32 +1056,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const discountAmount = globalDiscount.type === 'PERCENT' ? grossLineTotal * (globalDiscount.value / 100) : Math.min(globalDiscount.value, grossLineTotal);
 
    const taxBreakdown = useMemo(() => {
-      const breakdown: Record<string, { name: string, amount: number }> = {};
-
-      processedCart.forEach(item => {
-         const lineGross = item.price * item.quantity;
-         const itemRatio = lineGross / (grossLineTotal || 1);
-         const lineDiscount = discountAmount * itemRatio;
-         const lineBaseAfterDiscount = lineGross - lineDiscount;
-
-         let itemTaxRate = 0;
-         const itemTaxes = (item.appliedTaxIds || []).map(id => (config.taxes || []).find(t => t.id === id)).filter(Boolean);
-         itemTaxes.forEach(t => itemTaxRate += t!.rate);
-
-         let lineNet = 0;
-         if (isTaxIncluded) {
-            lineNet = lineBaseAfterDiscount / (1 + itemTaxRate);
-         } else {
-            lineNet = lineBaseAfterDiscount;
-         }
-
-         itemTaxes.forEach(t => {
-            if (!breakdown[t!.id]) breakdown[t!.id] = { name: t!.name, amount: 0 };
-            breakdown[t!.id].amount += lineNet * t!.rate;
-         });
+      return calculateTaxBreakdownFromItems(processedCart, config, {
+         discountAmount,
+         isTaxIncluded,
+         terminalConfig: activeTerminalConfig,
       });
-      return Object.values(breakdown);
-   }, [processedCart, grossLineTotal, config.taxes, discountAmount, isTaxIncluded]);
+   }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig]);
 
    const cartTax = taxBreakdown.reduce((sum, t) => sum + t.amount, 0);
 
@@ -1094,6 +1079,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // Alias for compatibility if needed, though netSubtotal is what we usually display as "Subtotal"
    const cartSubtotal = grossLineTotal; // This represents the sum of list prices
    const baseCurrency = (config.currencies || []).find(c => c.isBase) || (config.currencies || [])[0];
+   const getCartItemTaxSummary = useCallback((item: CartItem) => {
+      const lineTaxBreakdown = calculateTaxBreakdownFromItems([item], config, {
+         isTaxIncluded,
+         terminalConfig: activeTerminalConfig,
+         absoluteLineValues: true,
+      });
+      if (lineTaxBreakdown.length === 0) {
+         return 'Sin impuestos';
+      }
+      const lineTaxAmount = Math.abs(lineTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0));
+      return `${lineTaxBreakdown.map((tax) => formatTaxLineLabel(tax)).join(' + ')} (${baseCurrency.symbol}${lineTaxAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`;
+   }, [config, isTaxIncluded, activeTerminalConfig, baseCurrency.symbol]);
    const reservationAdvanceApplied = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
    const reservationBalanceDue = Math.max(0, cartTotal - reservationAdvanceApplied);
    const amountDueNow = activeRecoveredReservation ? reservationBalanceDue : cartTotal;
@@ -1398,6 +1395,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                // Calculate totals for each part
                const saleTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
                const returnTotal = returnItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               const saleTaxBreakdown = calculateTaxBreakdownFromItems(saleItems, config, {
+                  isTaxIncluded,
+                  terminalConfig: activeTerminalConfig,
+               });
+               const saleTaxAmount = Math.round((
+                  saleTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0)
+                  + Number.EPSILON
+               ) * 100) / 100;
+               const saleNetAmount = isTaxIncluded
+                  ? Math.round(((saleTotal - saleTaxAmount) + Number.EPSILON) * 100) / 100
+                  : saleTotal;
 
                // Prepare wallet operations
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
@@ -1420,8 +1428,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         customerName: selectedCustomer?.name,
                         ncf: finalNcf,
                         ncfType: fiscalStatus.type,
-                        taxAmount: isTaxIncluded ? saleTotal * 0.18 : 0,
-                        netAmount: isTaxIncluded ? saleTotal / 1.18 : saleTotal,
+                        taxAmount: saleTaxAmount,
+                        netAmount: saleNetAmount,
                         pendingBalance: payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0) || undefined,
                         dueDate: payments.some(p => p.method === 'CREDIT') ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined,
                         customerSnapshot: selectedCustomer ? {
@@ -2501,6 +2509,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         const hasDiscount = item.originalPrice && item.price < item.originalPrice;
                         const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
                         const lineNet = item.price * item.quantity;
+                        const lineTaxSummary = getCartItemTaxSummary(item);
 
                         // MOBILE CARD DESIGN
                         if (isMobile) {
@@ -2520,9 +2529,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                              {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
                                           </div>
-                                          <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">
-                                             ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
-                                          </span>
+                                          <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">{lineTaxSummary}</span>
                                        </div>
                                        {item.salespersonId && (
                                           <div className="mt-1 flex items-center gap-1 text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-md w-fit">
@@ -2580,7 +2587,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 {item.modifiers && item.modifiers.length > 0 && <span className="text-blue-600 font-bold ml-1">+{item.modifiers.length} mod</span>}
                                              </div>
                                              <div className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">
-                                                ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                                                {lineTaxSummary}
                                              </div>
                                           </div>
                                           {/* Salesperson Badge */}

@@ -46,6 +46,7 @@ import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
 import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
 import { calculateZReportStats } from './utils/analytics';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
+import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 
 // Component Imports
@@ -2412,9 +2413,17 @@ const AppContent: React.FC = () => {
 
     // 1. Calculations
     const refundSubtotalRaw = itemsToRefund.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+    const refundTerminalConfig = config.terminals?.find(t => t.id === originalTx.terminalId)?.config;
+    const refundSummary = calculateTransactionFiscalSummary({
+      items: itemsToRefund,
+      total: 0,
+      discountAmount: 0,
+      taxAmount: 0,
+      isTaxIncluded: !!originalTx.isTaxIncluded,
+    }, config, { terminalConfig: refundTerminalConfig });
     const refundTotal = originalTx.isTaxIncluded
       ? refundSubtotalRaw
-      : refundSubtotalRaw * (1 + (config.taxRate || 0));
+      : refundSummary.total;
 
     // Check if full refund
     const totalOriginalQty = originalTx.items.reduce((acc, i) => acc + i.quantity, 0);

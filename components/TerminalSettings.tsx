@@ -750,6 +750,63 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  isReadOnly={isReadOnly}
                               />
 
+                              <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6">
+                                 <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                                    <div>
+                                       <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><Percent size={24} className="text-emerald-600" /> Impuestos por Defecto</h3>
+                                       <p className="text-sm text-gray-500 font-medium leading-relaxed mt-2">
+                                          Si el artículo no tiene impuestos en su ficha, esta terminal aplicará esta combinación. Si el artículo sí tiene impuestos configurados, prevalece la ficha del artículo.
+                                       </p>
+                                    </div>
+                                    <button
+                                       type="button"
+                                       onClick={() => handleUpdateActiveConfig('operational', 'defaultTaxIds', [])}
+                                       disabled={isReadOnly || (activeTerminal.config.operational?.defaultTaxIds || []).length === 0}
+                                       className={`px-4 py-2 rounded-2xl text-xs font-black uppercase tracking-widest border transition-all ${isReadOnly || (activeTerminal.config.operational?.defaultTaxIds || []).length === 0 ? 'bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed' : 'bg-white border-slate-200 text-slate-600 hover:border-emerald-300 hover:text-emerald-700'}`}
+                                    >
+                                       Limpiar selección
+                                    </button>
+                                 </div>
+
+                                 {config.taxes.length > 0 ? (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                       {config.taxes.map((tax) => {
+                                          const selectedTaxIds = activeTerminal.config.operational?.defaultTaxIds || [];
+                                          const isSelected = selectedTaxIds.includes(tax.id);
+                                          const ratePercent = tax.rate <= 1 ? tax.rate * 100 : tax.rate;
+                                          const formattedRate = Number.isInteger(ratePercent) ? `${ratePercent}%` : `${ratePercent.toFixed(2)}%`;
+
+                                          return (
+                                             <button
+                                                key={tax.id}
+                                                type="button"
+                                                onClick={() => {
+                                                   const updated = isSelected
+                                                      ? selectedTaxIds.filter((taxId) => taxId !== tax.id)
+                                                      : [...selectedTaxIds, tax.id];
+                                                   handleUpdateActiveConfig('operational', 'defaultTaxIds', updated);
+                                                }}
+                                                disabled={isReadOnly}
+                                                className={`p-4 rounded-2xl border-2 text-left transition-all flex items-center justify-between gap-4 ${isSelected ? 'bg-emerald-50 border-emerald-500 shadow-sm' : 'bg-white border-slate-100 hover:border-emerald-200'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                             >
+                                                <div>
+                                                   <p className="text-sm font-black text-slate-800">{tax.name}</p>
+                                                   <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400 mt-1">{formattedRate}</p>
+                                                </div>
+                                                <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center ${isSelected ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-200 bg-white text-transparent'}`}>
+                                                   <Check size={14} strokeWidth={3} />
+                                                </div>
+                                             </button>
+                                          );
+                                       })}
+                                    </div>
+                                 ) : (
+                                    <div className="p-4 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                                       <p className="text-xs font-bold text-slate-400">No hay impuestos globales configurados en el sistema.</p>
+                                    </div>
+                                 )}
+                              </div>
+
                               {activeTerminal.config.operational?.usa_mesas && (
                                  <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-8 animate-in slide-in-from-top-4 duration-300">
                                     <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><Layout size={24} className="text-emerald-600" /> Salas Visibles</h3>
