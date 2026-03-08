@@ -136,7 +136,7 @@ const GroupForm: React.FC<GroupFormProps> = ({
                   className="w-full text-2xl font-black bg-transparent border-none outline-none placeholder:text-gray-300 text-gray-800 mb-6"
                   required
                />
-               <div className="flex gap-8">
+               <div className="mobile-tab-scroller no-scrollbar">
                   {[
                      { id: 'GENERAL', label: 'General', icon: Info },
                      { id: 'ITEMS', label: 'Artículos Vinculados', icon: Box }
@@ -145,7 +145,7 @@ const GroupForm: React.FC<GroupFormProps> = ({
                         key={tab.id}
                         type="button"
                         onClick={() => setActiveTab(tab.id as TabType)}
-                        className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === tab.id ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                        className={`mobile-tab-item pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === tab.id ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                      >
                         <tab.icon size={16} /> {tab.label}
                      </button>

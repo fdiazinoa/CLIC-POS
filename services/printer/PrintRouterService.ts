@@ -1,6 +1,7 @@
 import { BusinessConfig, PrinterDevice } from '../../types';
 import { LocalPrintAgentService } from './LocalPrintAgentService';
 import { nativePrintBridge } from './NativePrintBridge';
+import { isAndroidNativePrintRuntime } from './PrintRuntime';
 
 export type PrinterRole = 'TICKET' | 'LABEL' | 'KITCHEN' | 'LOGISTICS';
 
@@ -88,6 +89,10 @@ export const PrintRouterService = {
             if (nativePrinted) return true;
         }
 
+        if (isAndroidNativePrintRuntime()) {
+            return false;
+        }
+
         return LocalPrintAgentService.sendHtmlJob({
             html,
             printerId: printer.id,
@@ -128,6 +133,10 @@ export const PrintRouterService = {
             });
 
             if (nativePrinted) return true;
+        }
+
+        if (isAndroidNativePrintRuntime()) {
+            return false;
         }
 
         return LocalPrintAgentService.sendEscPosJob({

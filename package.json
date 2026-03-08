@@ -6,6 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "android:sync": "npm run build && npx cap sync android",
+    "android:open": "npx cap open android",
+    "android:run": "npm run android:sync && npx cap run android",
+    "android:apk:debug": "npm run android:sync && cd android && ./gradlew assembleDebug",
+    "android:apk:release": "npm run android:sync && cd android && ./gradlew assembleRelease",
     "lint": "eslint .",
     "preview": "vite preview",
     "server": "nodemon",
@@ -17,7 +22,12 @@
     "start": "npm run start:dev"
   },
   "dependencies": {
+    "@capacitor-community/sqlite": "^8.0.0",
+    "@capacitor/android": "^8.1.0",
+    "@capacitor/cli": "^8.1.0",
+    "@capacitor/core": "^8.1.0",
     "@google/genai": "^1.35.0",
+    "@supabase/supabase-js": "^2.98.0",
     "@types/nodemailer": "^7.0.5",
     "@types/papaparse": "^5.5.2",
     "@types/uuid": "^10.0.0",

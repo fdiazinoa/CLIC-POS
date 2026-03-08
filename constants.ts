@@ -7,6 +7,12 @@ export const DEFAULT_DOCUMENT_SERIES: DocumentSeries[] = [
   { id: 'TRANSFER', documentType: 'TRANSFER', name: 'Nota de Traspaso', description: 'Movimiento de inventario entre almacenes.', prefix: 'TR', nextNumber: 1, padding: 6, icon: 'ArrowRightLeft', color: 'purple' },
 ];
 
+export const DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS = {
+  TICKET: 'TICKET',
+  REFUND: 'REFUND',
+  TRANSFER: 'TRANSFER'
+} as const;
+
 export const INITIAL_TAXES: TaxDefinition[] = [
   { id: 'tax-18', name: 'ITBIS 18%', rate: 0.18, type: 'VAT' },
   { id: 'tax-16', name: 'ITBIS 16%', rate: 0.16, type: 'VAT' },
@@ -100,6 +106,7 @@ export const DEFAULT_TERMINAL_CONFIG = {
     acceptedCurrencies: ['USD', 'EUR']
   },
   documentSeries: DEFAULT_DOCUMENT_SERIES,
+  documentAssignments: { ...DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS },
   hardware: {
     cashDrawerTrigger: 'PRINTER' as const,
     printerAssignments: {},

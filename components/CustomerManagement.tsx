@@ -1097,7 +1097,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                         </div>
 
                         {/* TABS */}
-                        <div className="flex gap-6 border-b border-gray-200 mb-6">
+                        <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 md:mx-0 md:px-0 border-b border-gray-200 mb-6">
                            {[
                               { id: 'HISTORY', label: 'Historial', icon: History },
                               { id: 'WALLET', label: 'Billetera', icon: WalletIcon },
@@ -1108,7 +1108,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                               <button
                                  key={tab.id}
                                  onClick={() => setActiveProfileTab(tab.id as any)}
-                                 className={`pb-3 flex items-center gap-2 text-sm font-bold border-b-2 transition-all ${activeProfileTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'
+                                 className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeProfileTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'
                                     }`}
                               >
                                  <tab.icon size={16} /> {tab.label}

@@ -931,7 +931,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       const ticketCount = filteredTransactions.length;
       const avgTicket = ticketCount > 0 ? totalSales / ticketCount : 0;
       const refunds = filteredTransactions.reduce((acc, tx) => {
-         if (tx.documentType === 'REFUND' || tx.ncfType === 'B04' || tx.status === 'REFUNDED' || tx.status === 'PARTIAL_REFUND') {
+         const isCreditNoteOrRefundDoc = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+         const isRefundStatus = tx.status === 'PARTIAL_REFUND';
+         if (isCreditNoteOrRefundDoc || isRefundStatus) {
             return acc + tx.total;
          }
          return acc;
@@ -990,7 +992,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       if (selectedItemsQty.size === 0) return;
 
       // Validation: Check if terminal has REFUND document series assigned
-      const terminalId = config.terminals?.[0]?.id || 'T1';
+      const terminalId = transaction.terminalId || config.terminals?.[0]?.id || 'T1';
       const validation = validateTerminalDocument(config, terminalId, 'REFUND');
       if (!validation.isValid) {
          alert(validation.error);
