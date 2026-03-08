@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -14,10 +15,14 @@ const TABLE_CANDIDATES = [
 const REGISTER_RPC_CANDIDATES = [
     'register_tenant_server_endpoint',
     'upsert_tenant_server_endpoint',
+    'clic_register_tenant_server_endpoint',
+    'clic_upsert_tenant_server_endpoint',
 ];
 const RESOLVE_RPC_CANDIDATES = [
     'resolve_tenant_server_endpoint',
     'get_tenant_server_endpoint',
+    'clic_resolve_tenant_server_endpoint',
+    'clic_get_tenant_server_endpoint',
 ];
 
 type TenantIdentity = {
@@ -36,6 +41,8 @@ type CloudEndpointRecord = TenantIdentity & {
     localIp: string;
     localIps: string[];
     endpointUrl: string;
+    appVersion?: string | null;
+    appVersionCode?: number | null;
     isPrimary: boolean;
     lastSeenAt: string;
     status: 'ONLINE';
@@ -95,6 +102,26 @@ const getSupabaseConfig = () => {
     };
 };
 
+const getRequestSupabaseContext = (req: Request) => {
+    const headerSupabaseUrl = normalizeOptional(req.header('x-cloud-supabase-url'));
+    const headerApiKey = normalizeOptional(req.header('x-cloud-apikey') || req.header('apikey'));
+    const headerAuthorization = normalizeOptional(req.header('authorization'));
+    const envConfig = getSupabaseConfig();
+    const supabaseUrl = headerSupabaseUrl || envConfig.supabaseUrl;
+    const hasServiceRole = Boolean(supabaseUrl && envConfig.serviceRoleKey);
+    const hasForwardedUserAuth = Boolean(supabaseUrl && headerApiKey && headerAuthorization);
+
+    return {
+        supabaseUrl,
+        serviceRoleKey: envConfig.serviceRoleKey,
+        forwardedApiKey: headerApiKey,
+        forwardedAuthorization: headerAuthorization,
+        hasServiceRole,
+        hasForwardedUserAuth,
+        isConfigured: hasServiceRole || hasForwardedUserAuth,
+    };
+};
+
 const normalizeOptional = (value: unknown): string | null => {
     if (typeof value !== 'string') return null;
     const trimmed = value.trim();
@@ -119,6 +146,11 @@ const normalizeBoolean = (value: unknown, fallback = false): boolean => {
 const normalizePort = (value: unknown, fallback = 3001): number => {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const normalizeVersionCode = (value: unknown): number | null => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
 
 const dedupeStrings = (values: Array<string | null | undefined>) =>
@@ -146,16 +178,53 @@ const getPreferredIp = (requestedIp?: string | null): string | null => {
     return localIps[0] || preferred || null;
 };
 
-const getJsonHeaders = (serviceRoleKey: string, schema: string, method: 'GET' | 'POST' | 'PATCH') => {
+const getJsonHeaders = (
+    credentials: { apiKey: string; authorization: string },
+    schema: string,
+    method: 'GET' | 'POST' | 'PATCH'
+) => {
     const schemaHeader = method === 'GET' ? 'Accept-Profile' : 'Content-Profile';
 
     return {
-        apikey: serviceRoleKey,
-        Authorization: `Bearer ${serviceRoleKey}`,
+        apikey: credentials.apiKey,
+        Authorization: credentials.authorization,
         'Content-Type': 'application/json',
         Prefer: 'return=representation',
         [schemaHeader]: schema,
     };
+};
+
+const getRpcHeaders = (
+    credentials: { apiKey: string; authorization: string },
+    schema?: string | null,
+    includeRepresentation = false
+) => ({
+    apikey: credentials.apiKey,
+    Authorization: credentials.authorization,
+    'Content-Type': 'application/json',
+    ...(includeRepresentation ? { Prefer: 'return=representation' } : {}),
+    ...(schema ? {
+        'Accept-Profile': schema,
+        'Content-Profile': schema,
+    } : {}),
+});
+
+const getRpcCredentials = (context: ReturnType<typeof getRequestSupabaseContext>) => {
+    if (context.hasServiceRole) {
+        return {
+            apiKey: context.serviceRoleKey,
+            authorization: `Bearer ${context.serviceRoleKey}`,
+        };
+    }
+
+    if (context.hasForwardedUserAuth && context.forwardedApiKey && context.forwardedAuthorization) {
+        return {
+            apiKey: context.forwardedApiKey,
+            authorization: context.forwardedAuthorization,
+        };
+    }
+
+    return null;
 };
 
 const safeFetchJson = async (url: string, init: RequestInit) => {
@@ -212,6 +281,8 @@ const buildPublishedRecord = (body: Record<string, unknown>): CloudEndpointRecor
         localIp,
         localIps,
         endpointUrl: `${protocol}://${localIp}:${port}`,
+        appVersion: normalizeOptional(body.appVersion),
+        appVersionCode: normalizeVersionCode(body.appVersionCode),
         isPrimary: normalizeBoolean(body.isPrimary, true),
         lastSeenAt: new Date().toISOString(),
         status: 'ONLINE',
@@ -254,55 +325,104 @@ const normalizeResolvedRecord = (row: Record<string, any> | null | undefined) =>
         localIp: preferredIp,
         localIps,
         endpointUrl: endpointUrl || `${protocol}://${preferredIp}:${port}`,
+        appVersion: normalizeOptional(row.app_version || row.appVersion),
+        appVersionCode: normalizeVersionCode(row.app_version_code ?? row.appVersionCode),
         isPrimary: Boolean(row.is_primary ?? row.isPrimary ?? true),
         lastSeenAt: normalizeOptional(row.last_seen_at || row.lastSeenAt),
         status: normalizeOptional(row.status) || 'ONLINE',
     };
 };
 
-const tryRegisterViaRpc = async (supabaseUrl: string, serviceRoleKey: string, payload: CloudEndpointRecord) => {
-    for (const rpcName of REGISTER_RPC_CANDIDATES) {
-        try {
-            const data = await safeFetchJson(`${supabaseUrl}/rest/v1/rpc/${rpcName}`, {
-                method: 'POST',
-                headers: getJsonHeaders(serviceRoleKey, LANDLORD_PROFILE, 'POST'),
-                body: JSON.stringify({
-                    p_tenant_id: payload.tenantId,
-                    p_tenant_slug: payload.tenantSlug,
-                    p_tenant_email: payload.tenantEmail,
-                    p_device_id: payload.deviceId,
-                    p_terminal_id: payload.terminalId,
-                    p_terminal_name: payload.terminalName,
-                    p_hostname: payload.hostname,
-                    p_protocol: payload.protocol,
-                    p_port: payload.port,
-                    p_local_ip: payload.localIp,
-                    p_local_ips: payload.localIps,
-                    p_endpoint_url: payload.endpointUrl,
-                    p_is_primary: payload.isPrimary,
-                    p_last_seen_at: payload.lastSeenAt,
-                    p_status: payload.status,
-                }),
-            });
+const tryRegisterViaRpc = async (
+    supabaseUrl: string,
+    credentials: { apiKey: string; authorization: string },
+    payload: CloudEndpointRecord
+) => {
+    const rpcPayloads = [
+        {
+            p_tenant_id: payload.tenantId,
+            p_tenant_slug: payload.tenantSlug,
+            p_tenant_email: payload.tenantEmail,
+            p_device_id: payload.deviceId,
+            p_terminal_id: payload.terminalId,
+            p_terminal_name: payload.terminalName,
+            p_hostname: payload.hostname,
+            p_protocol: payload.protocol,
+            p_port: payload.port,
+            p_local_ip: payload.localIp,
+            p_local_ips: payload.localIps,
+            p_endpoint_url: payload.endpointUrl,
+            p_is_primary: payload.isPrimary,
+            p_last_seen_at: payload.lastSeenAt,
+            p_status: payload.status,
+            p_app_version: payload.appVersion,
+            p_app_version_code: payload.appVersionCode,
+        },
+        {
+            p_tenant_id: payload.tenantId,
+            p_tenant_slug: payload.tenantSlug,
+            p_tenant_email: payload.tenantEmail,
+            p_device_id: payload.deviceId,
+            p_terminal_id: payload.terminalId,
+            p_terminal_name: payload.terminalName,
+            p_hostname: payload.hostname,
+            p_protocol: payload.protocol,
+            p_port: payload.port,
+            p_local_ip: payload.localIp,
+            p_local_ips: payload.localIps,
+            p_endpoint_url: payload.endpointUrl,
+            p_is_primary: payload.isPrimary,
+            p_last_seen_at: payload.lastSeenAt,
+            p_status: payload.status,
+        },
+    ];
 
-            if (Array.isArray(data) && data.length > 0) return normalizeResolvedRecord(data[0]);
-            if (data && typeof data === 'object') return normalizeResolvedRecord(data as Record<string, any>);
-        } catch (error) {
-            const status = (error as Error & { status?: number }).status;
-            if (status === 404 || status === 401 || status === 403) continue;
-            console.warn(`[cloudRegistry] register RPC ${rpcName} failed:`, error);
+    for (const rpcName of REGISTER_RPC_CANDIDATES) {
+        for (let index = 0; index < rpcPayloads.length; index += 1) {
+            try {
+                const data = await safeFetchJson(`${supabaseUrl}/rest/v1/rpc/${rpcName}`, {
+                    method: 'POST',
+                    headers: getRpcHeaders(
+                        credentials,
+                        rpcName.startsWith('clic_') ? null : LANDLORD_PROFILE,
+                        true
+                    ),
+                    body: JSON.stringify(rpcPayloads[index]),
+                });
+
+                if (Array.isArray(data) && data.length > 0) return normalizeResolvedRecord(data[0]);
+                if (data && typeof data === 'object') return normalizeResolvedRecord(data as Record<string, any>);
+            } catch (error) {
+                const status = (error as Error & { status?: number }).status;
+                if (status === 404 || status === 401 || status === 403) {
+                    break;
+                }
+
+                if (index < rpcPayloads.length - 1) {
+                    continue;
+                }
+
+                console.warn(`[cloudRegistry] register RPC ${rpcName} failed:`, error);
+            }
         }
     }
 
     return null;
 };
 
-const tryResolveViaRpc = async (supabaseUrl: string, serviceRoleKey: string, identity: TenantIdentity) => {
+const tryResolveViaRpc = async (
+    supabaseUrl: string,
+    credentials: { apiKey: string; authorization: string },
+    identity: TenantIdentity
+) => {
     for (const rpcName of RESOLVE_RPC_CANDIDATES) {
         try {
             const data = await safeFetchJson(`${supabaseUrl}/rest/v1/rpc/${rpcName}`, {
                 method: 'POST',
-                headers: getJsonHeaders(serviceRoleKey, LANDLORD_PROFILE, 'POST'),
+                headers: getRpcHeaders(
+                    credentials,
+                    rpcName.startsWith('clic_') ? null : LANDLORD_PROFILE
+                ),
                 body: JSON.stringify({
                     p_tenant_id: identity.tenantId || null,
                     p_tenant_slug: identity.tenantSlug || null,
@@ -336,6 +456,10 @@ const tryFindExistingRow = async (
     table: string,
     payload: CloudEndpointRecord
 ) => {
+    const credentials = {
+        apiKey: serviceRoleKey,
+        authorization: `Bearer ${serviceRoleKey}`,
+    };
     try {
         const query = new URLSearchParams({
             select: 'id',
@@ -345,7 +469,7 @@ const tryFindExistingRow = async (
         });
         const data = await safeFetchJson(`${supabaseUrl}/rest/v1/${table}?${query.toString()}`, {
             method: 'GET',
-            headers: getJsonHeaders(serviceRoleKey, schema, 'GET'),
+            headers: getJsonHeaders(credentials, schema, 'GET'),
         });
         return Array.isArray(data) && data.length > 0 ? data[0]?.id : null;
     } catch (error) {
@@ -355,7 +479,11 @@ const tryFindExistingRow = async (
 };
 
 const tryRegisterViaTable = async (supabaseUrl: string, serviceRoleKey: string, payload: CloudEndpointRecord) => {
-    const tablePayload = {
+    const credentials = {
+        apiKey: serviceRoleKey,
+        authorization: `Bearer ${serviceRoleKey}`,
+    };
+    const baseTablePayload = {
         tenant_id: payload.tenantId,
         tenant_slug: payload.tenantSlug,
         tenant_email: payload.tenantEmail,
@@ -372,29 +500,43 @@ const tryRegisterViaTable = async (supabaseUrl: string, serviceRoleKey: string, 
         last_seen_at: payload.lastSeenAt,
         status: payload.status,
     };
+    const tablePayloads = [
+        {
+            ...baseTablePayload,
+            ...(payload.appVersion ? { app_version: payload.appVersion } : {}),
+            ...(payload.appVersionCode ? { app_version_code: payload.appVersionCode } : {}),
+        },
+        baseTablePayload,
+    ];
 
     for (const candidate of TABLE_CANDIDATES) {
-        try {
-            const existingId = await tryFindExistingRow(
-                supabaseUrl,
-                serviceRoleKey,
-                candidate.schema,
-                candidate.table,
-                payload
-            );
+        for (let index = 0; index < tablePayloads.length; index += 1) {
+            try {
+                const existingId = await tryFindExistingRow(
+                    supabaseUrl,
+                    serviceRoleKey,
+                    candidate.schema,
+                    candidate.table,
+                    payload
+                );
 
-            const method = existingId ? 'PATCH' : 'POST';
-            const suffix = existingId ? `?id=eq.${encodeURIComponent(existingId)}&select=*` : '?select=*';
-            const data = await safeFetchJson(`${supabaseUrl}/rest/v1/${candidate.table}${suffix}`, {
-                method,
-                headers: getJsonHeaders(serviceRoleKey, candidate.schema, method),
-                body: JSON.stringify(existingId ? tablePayload : tablePayload),
-            });
+                const method = existingId ? 'PATCH' : 'POST';
+                const suffix = existingId ? `?id=eq.${encodeURIComponent(existingId)}&select=*` : '?select=*';
+                const data = await safeFetchJson(`${supabaseUrl}/rest/v1/${candidate.table}${suffix}`, {
+                    method,
+                    headers: getJsonHeaders(credentials, candidate.schema, method),
+                    body: JSON.stringify(tablePayloads[index]),
+                });
 
-            if (Array.isArray(data) && data.length > 0) return normalizeResolvedRecord(data[0]);
-            if (data && typeof data === 'object') return normalizeResolvedRecord(data as Record<string, any>);
-        } catch (error) {
-            console.warn(`[cloudRegistry] register table fallback failed for ${candidate.schema}.${candidate.table}:`, error);
+                if (Array.isArray(data) && data.length > 0) return normalizeResolvedRecord(data[0]);
+                if (data && typeof data === 'object') return normalizeResolvedRecord(data as Record<string, any>);
+            } catch (error) {
+                if (index < tablePayloads.length - 1) {
+                    continue;
+                }
+
+                console.warn(`[cloudRegistry] register table fallback failed for ${candidate.schema}.${candidate.table}:`, error);
+            }
         }
     }
 
@@ -402,6 +544,10 @@ const tryRegisterViaTable = async (supabaseUrl: string, serviceRoleKey: string, 
 };
 
 const tryResolveViaTable = async (supabaseUrl: string, serviceRoleKey: string, identity: TenantIdentity) => {
+    const credentials = {
+        apiKey: serviceRoleKey,
+        authorization: `Bearer ${serviceRoleKey}`,
+    };
     const identityQuery = buildIdentityQuery(identity);
     if (!identityQuery) return null;
 
@@ -415,7 +561,7 @@ const tryResolveViaTable = async (supabaseUrl: string, serviceRoleKey: string, i
             const url = `${supabaseUrl}/rest/v1/${candidate.table}?${identityQuery}&${query.toString()}`;
             const data = await safeFetchJson(url, {
                 method: 'GET',
-                headers: getJsonHeaders(serviceRoleKey, candidate.schema, 'GET'),
+                headers: getJsonHeaders(credentials, candidate.schema, 'GET'),
             });
 
             if (Array.isArray(data) && data.length > 0) return normalizeResolvedRecord(data[0]);
@@ -433,15 +579,20 @@ router.post('/publish', async (req, res) => {
         return res.status(400).json({ error: 'tenantId/tenantSlug/tenantEmail, deviceId y terminalId son requeridos.' });
     }
 
-    const { supabaseUrl, serviceRoleKey, isConfigured } = getSupabaseConfig();
-    if (!isConfigured) {
-        return res.status(503).json({ error: 'Cloud registry no configurado en este APK.' });
+    const supabaseContext = getRequestSupabaseContext(req);
+    if (!supabaseContext.isConfigured) {
+        return res.status(503).json({ error: 'Cloud registry no configurado en este APK ni autenticado en esta sesión.' });
     }
 
     try {
+        const rpcCredentials = getRpcCredentials(supabaseContext);
         const resolved =
-            await tryRegisterViaRpc(supabaseUrl, serviceRoleKey, payload)
-            || await tryRegisterViaTable(supabaseUrl, serviceRoleKey, payload);
+            (rpcCredentials
+                ? await tryRegisterViaRpc(supabaseContext.supabaseUrl, rpcCredentials, payload)
+                : null)
+            || (supabaseContext.hasServiceRole
+                ? await tryRegisterViaTable(supabaseContext.supabaseUrl, supabaseContext.serviceRoleKey, payload)
+                : null);
 
         if (!resolved) {
             return res.status(424).json({
@@ -469,15 +620,20 @@ router.get('/resolve', async (req, res) => {
         return res.status(400).json({ error: 'tenantId, tenantSlug o tenantEmail es requerido.' });
     }
 
-    const { supabaseUrl, serviceRoleKey, isConfigured } = getSupabaseConfig();
-    if (!isConfigured) {
-        return res.status(503).json({ error: 'Cloud registry no configurado en este APK.' });
+    const supabaseContext = getRequestSupabaseContext(req);
+    if (!supabaseContext.isConfigured) {
+        return res.status(503).json({ error: 'Cloud registry no configurado en este APK ni autenticado en esta sesión.' });
     }
 
     try {
+        const rpcCredentials = getRpcCredentials(supabaseContext);
         const resolved =
-            await tryResolveViaRpc(supabaseUrl, serviceRoleKey, identity)
-            || await tryResolveViaTable(supabaseUrl, serviceRoleKey, identity);
+            (rpcCredentials
+                ? await tryResolveViaRpc(supabaseContext.supabaseUrl, rpcCredentials, identity)
+                : null)
+            || (supabaseContext.hasServiceRole
+                ? await tryResolveViaTable(supabaseContext.supabaseUrl, supabaseContext.serviceRoleKey, identity)
+                : null);
 
         if (!resolved) {
             return res.status(404).json({ error: 'No hay servidor publicado para este tenant.' });

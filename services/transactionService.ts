@@ -1,6 +1,136 @@
 import { Transaction, DocumentType } from '../types';
 import { db } from '../utils/db';
 
+const EPSILON = 0.01;
+
+const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const toNumber = (value: unknown): number => {
+    const parsed = Number(value || 0);
+    return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const resolveCurrentConfig = (configCollection: any): any => {
+    if (Array.isArray(configCollection)) {
+        return configCollection.find((entry: any) => entry?.id === 'current')
+            || configCollection.find((entry: any) => entry?.id !== '_db_initialized' && entry?.id !== 'config_metadata')
+            || configCollection[0]
+            || null;
+    }
+    return configCollection || null;
+};
+
+const getItemTaxRate = (item: any, taxesById: Map<string, any>): number => {
+    const taxIds = Array.isArray(item?.appliedTaxIds) ? item.appliedTaxIds : [];
+    return taxIds.reduce((sum: number, taxId: string) => {
+        const tax = taxesById.get(taxId);
+        return sum + Math.max(0, toNumber(tax?.rate));
+    }, 0);
+};
+
+const deriveFiscalAmountsFromItems = async (data: Partial<Transaction>): Promise<{ netAmount: number; taxAmount: number; total: number } | null> => {
+    const items = Array.isArray(data.items) ? data.items : [];
+    if (items.length === 0) return null;
+
+    const grossLineTotal = round2(items.reduce((sum, item: any) => {
+        const price = Math.abs(toNumber(item?.price));
+        const quantity = Math.abs(toNumber(item?.quantity));
+        return sum + (price * quantity);
+    }, 0));
+    const discountAmount = round2(Math.abs(toNumber(data.discountAmount)));
+    const totalAfterDiscount = round2(Math.max(0, grossLineTotal - discountAmount));
+    if (totalAfterDiscount <= EPSILON) return null;
+
+    const configCollection = await db.get('config' as any);
+    const currentConfig = resolveCurrentConfig(configCollection);
+    const taxesById = new Map<string, any>(
+        (Array.isArray(currentConfig?.taxes) ? currentConfig.taxes : []).map((tax: any) => [tax.id, tax])
+    );
+
+    let netAmount = 0;
+    let taxAmount = 0;
+
+    items.forEach((item: any) => {
+        const lineGross = Math.abs(toNumber(item?.price)) * Math.abs(toNumber(item?.quantity));
+        if (lineGross <= EPSILON) return;
+
+        const itemRatio = lineGross / (grossLineTotal || 1);
+        const lineDiscount = discountAmount * itemRatio;
+        const lineBaseAfterDiscount = round2(Math.max(0, lineGross - lineDiscount));
+        const itemTaxRate = getItemTaxRate(item, taxesById);
+        const lineNet = data.isTaxIncluded
+            ? round2(lineBaseAfterDiscount / (1 + itemTaxRate))
+            : lineBaseAfterDiscount;
+        const lineTax = round2(Math.max(0, lineBaseAfterDiscount - lineNet));
+
+        netAmount += lineNet;
+        taxAmount += lineTax;
+    });
+
+    netAmount = round2(netAmount);
+    taxAmount = round2(taxAmount);
+
+    return {
+        netAmount,
+        taxAmount,
+        total: round2(data.isTaxIncluded ? totalAfterDiscount : netAmount + taxAmount)
+    };
+};
+
+const normalizeFiscalAmounts = async (data: Partial<Transaction>): Promise<{ netAmount?: number; taxAmount?: number }> => {
+    const total = round2(Math.abs(toNumber(data.total)));
+    if (total <= EPSILON) {
+        return {
+            netAmount: data.netAmount,
+            taxAmount: data.taxAmount
+        };
+    }
+
+    const providedNet = round2(Math.abs(toNumber(data.netAmount)));
+    const providedTax = round2(Math.abs(toNumber(data.taxAmount)));
+    if (Math.abs(round2(providedNet + providedTax) - total) <= 0.02) {
+        return {
+            netAmount: providedNet,
+            taxAmount: providedTax
+        };
+    }
+
+    const derived = await deriveFiscalAmountsFromItems(data);
+    if (derived && derived.total > EPSILON) {
+        return {
+            netAmount: derived.netAmount,
+            taxAmount: derived.taxAmount
+        };
+    }
+
+    if (data.isTaxIncluded) {
+        const taxAmount = round2(Math.max(0, total - (total / 1.18)));
+        return {
+            netAmount: round2(Math.max(0, total - taxAmount)),
+            taxAmount
+        };
+    }
+
+    if (providedTax > EPSILON && providedTax < total) {
+        return {
+            netAmount: round2(total - providedTax),
+            taxAmount: providedTax
+        };
+    }
+
+    if (providedNet > EPSILON && providedNet < total) {
+        return {
+            netAmount: providedNet,
+            taxAmount: round2(total - providedNet)
+        };
+    }
+
+    return {
+        netAmount: total,
+        taxAmount: 0
+    };
+};
+
 /**
  * Transaction Service
  * Handles transaction ID generation with global sequence numbers
@@ -75,6 +205,7 @@ class TransactionService {
         // Generate IDs
         const { globalSequence, displayId, seriesNumber } =
             await this.generateTransactionId(data.documentType, data.seriesId);
+        const normalizedFiscalAmounts = await normalizeFiscalAmounts(data);
 
         // Create transaction object
         const transaction: Transaction = {
@@ -99,8 +230,8 @@ class TransactionService {
             customerId: data.customerId,
             customerName: data.customerName,
             customerSnapshot: data.customerSnapshot,
-            taxAmount: data.taxAmount,
-            netAmount: data.netAmount,
+            taxAmount: normalizedFiscalAmounts.taxAmount,
+            netAmount: normalizedFiscalAmounts.netAmount,
             discountAmount: data.discountAmount,
             isTaxIncluded: data.isTaxIncluded,
             ncf: data.ncf,
@@ -118,6 +249,14 @@ class TransactionService {
 
         // Save only the new document to avoid full-collection rewrites that can block checkout.
         await db.saveDocument('transactions', transaction);
+        try {
+            await db.saveDocument('transactionHistory', {
+                ...transaction,
+                syncStatus: transaction.syncStatus || 'PENDING'
+            } as any);
+        } catch (historyMirrorError) {
+            console.warn('⚠️ Transaction history mirror skipped:', historyMirrorError);
+        }
 
         return transaction;
     }

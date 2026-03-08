@@ -437,6 +437,7 @@ export interface TerminalConfig {
     bloqueo_meseros: boolean;
     pedir_comensales: boolean;
     usa_modulos_cocina: boolean;
+    defaultTaxIds?: string[];
     reservationPolicy?: {
       validityDays: number;
       requireAdvance: boolean;
@@ -1104,6 +1105,9 @@ export interface Transaction {
 
 export type ViewState =
   // Standard views
+  | 'ACTIVATION'
+  | 'TERMINAL_MODE_SELECTOR'
+  | 'VERTICAL_SELECTOR'
   | 'SETUP'
   | 'WIZARD'
   | 'LOGIN'

@@ -10,16 +10,16 @@ interface VerticalSelectorProps {
 
 const VerticalSelector: React.FC<VerticalSelectorProps> = ({ onSelect }) => {
   const retailOptions = [
-    { id: SubVertical.SUPERMARKET, icon: ShoppingCart, label: 'Supermercado', color: 'bg-blue-500' },
-    { id: SubVertical.CLOTHING, icon: Shirt, label: 'Tienda Ropa', color: 'bg-indigo-500' },
-    { id: SubVertical.PHARMACY, icon: Pill, label: 'Farmacia', color: 'bg-emerald-500' },
-    { id: SubVertical.SERVICES, icon: Briefcase, label: 'Servicios', color: 'bg-purple-500' },
+    { id: SubVertical.SUPERMARKET, icon: ShoppingCart, label: 'Supermercado', color: 'bg-blue-500', hoverClass: 'hover:border-blue-300' },
+    { id: SubVertical.CLOTHING, icon: Shirt, label: 'Tienda Ropa', color: 'bg-indigo-500', hoverClass: 'hover:border-indigo-300' },
+    { id: SubVertical.PHARMACY, icon: Pill, label: 'Farmacia', color: 'bg-emerald-500', hoverClass: 'hover:border-emerald-300' },
+    { id: SubVertical.SERVICES, icon: Briefcase, label: 'Servicios', color: 'bg-purple-500', hoverClass: 'hover:border-purple-300' },
   ];
 
   const foodOptions = [
-    { id: SubVertical.RESTAURANT, icon: Utensils, label: 'Restaurante', color: 'bg-orange-500' },
-    { id: SubVertical.FAST_FOOD, icon: Coffee, label: 'Fast Food', color: 'bg-red-500' },
-    { id: SubVertical.BAR, icon: Beer, label: 'Discoteca/Bar', color: 'bg-purple-600' },
+    { id: SubVertical.RESTAURANT, icon: Utensils, label: 'Restaurante', color: 'bg-orange-500', hoverClass: 'hover:border-orange-300' },
+    { id: SubVertical.FAST_FOOD, icon: Coffee, label: 'Fast Food', color: 'bg-red-500', hoverClass: 'hover:border-red-300' },
+    { id: SubVertical.BAR, icon: Beer, label: 'Discoteca/Bar', color: 'bg-purple-600', hoverClass: 'hover:border-purple-300' },
   ];
 
   const handleSelect = (sub: SubVertical) => {
@@ -28,18 +28,18 @@ const VerticalSelector: React.FC<VerticalSelectorProps> = ({ onSelect }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-6">
+    <div className="min-h-[100dvh] bg-gray-900 flex items-center justify-center p-4 md:p-6">
       <div className="max-w-4xl w-full">
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-extrabold text-white mb-2 tracking-tight">
+        <div className="text-center mb-8 md:mb-12">
+          <h1 className="text-3xl md:text-4xl font-extrabold text-white mb-2 tracking-tight">
             <span className="text-orange-500">CLIC</span> <span className="text-blue-400">POS</span>
           </h1>
-          <p className="text-gray-400 text-lg">Selecciona la vertical de tu negocio para configurar el entorno.</p>
+          <p className="text-gray-400 text-base md:text-lg">Selecciona la vertical de tu negocio para configurar el entorno.</p>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-8">
+        <div className="grid md:grid-cols-2 gap-6 md:gap-8">
           {/* Retail Section */}
-          <div className="bg-gray-800 rounded-2xl p-6 border border-gray-700">
+          <div className="bg-gray-800 rounded-2xl p-5 md:p-6 border border-gray-700">
             <div className="flex items-center gap-3 mb-6 border-b border-gray-700 pb-4">
               <ShoppingBag className="text-blue-400" />
               <h2 className="text-2xl font-bold text-white">Retail & Servicios</h2>
@@ -49,7 +49,7 @@ const VerticalSelector: React.FC<VerticalSelectorProps> = ({ onSelect }) => {
                 <button
                   key={opt.id}
                   onClick={() => handleSelect(opt.id)}
-                  className={`group relative overflow-hidden bg-gray-700 hover:bg-gray-600 rounded-xl p-6 text-left transition-all hover:shadow-lg hover:-translate-y-1 border border-transparent hover:border-${opt.color.replace('bg-', '')}/30`}
+                  className={`group relative overflow-hidden bg-gray-700 hover:bg-gray-600 rounded-xl p-5 md:p-6 text-left transition-all hover:shadow-lg hover:-translate-y-1 border border-transparent ${opt.hoverClass}`}
                 >
                   <div className={`absolute top-0 right-0 p-2 opacity-10 group-hover:opacity-20 transition-opacity`}>
                     <opt.icon size={64} className="text-white" />
@@ -67,7 +67,7 @@ const VerticalSelector: React.FC<VerticalSelectorProps> = ({ onSelect }) => {
           </div>
 
           {/* F&B Section */}
-          <div className="bg-gray-800 rounded-2xl p-6 border border-gray-700">
+          <div className="bg-gray-800 rounded-2xl p-5 md:p-6 border border-gray-700">
              <div className="flex items-center gap-3 mb-6 border-b border-gray-700 pb-4">
               <Utensils className="text-orange-400" />
               <h2 className="text-2xl font-bold text-white">Alimentos y Bebidas</h2>
@@ -77,7 +77,7 @@ const VerticalSelector: React.FC<VerticalSelectorProps> = ({ onSelect }) => {
                 <button
                   key={opt.id}
                   onClick={() => handleSelect(opt.id)}
-                  className={`group relative overflow-hidden bg-gray-700 hover:bg-gray-600 rounded-xl p-6 text-left transition-all hover:shadow-lg hover:-translate-y-1 border border-transparent hover:border-${opt.color.replace('bg-', '')}/30`}
+                  className={`group relative overflow-hidden bg-gray-700 hover:bg-gray-600 rounded-xl p-5 md:p-6 text-left transition-all hover:shadow-lg hover:-translate-y-1 border border-transparent ${opt.hoverClass}`}
                 >
                    <div className={`absolute top-0 right-0 p-2 opacity-10 group-hover:opacity-20 transition-opacity`}>
                     <opt.icon size={64} className="text-white" />

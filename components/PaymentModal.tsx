@@ -629,7 +629,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                         <button
                            key={method.key}
                            onClick={() => setActiveMethodKey(method.key)}
-                           className={`flex-1 min-w-[80px] md:min-w-[100px] py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center gap-1 md:gap-2 transition-all ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} bg-gray-50 shadow-sm` : 'border-transparent text-gray-400 hover:bg-gray-50'} ${isExceeded ? 'bg-red-50/50' : ''}`}
+                           className={`flex-1 min-w-[80px] md:min-w-[100px] py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center gap-1 md:gap-2 transition-all bg-white ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} shadow-sm` : 'border-gray-200 text-gray-400 hover:border-gray-300 hover:bg-white'} ${isExceeded ? 'bg-red-50/50 border-red-200' : ''}`}
                         >
                            <method.Icon size={24} className="md:w-8 md:h-8" />
                            <span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{method.label}</span>

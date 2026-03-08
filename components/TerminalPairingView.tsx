@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
     Monitor,
     Server,
-    Wifi,
     WifiOff,
     ArrowRight,
     RefreshCw,
@@ -16,6 +15,7 @@ interface TerminalPairingViewProps {
     currentDeviceId: string;
     onPair: (terminalId: string, masterIp: string) => Promise<void>;
     initialMasterIp?: string;
+    onBack?: () => void;
 }
 
 type ConnectionSource = 'CLOUD' | 'MANUAL' | 'LOCAL' | null;
@@ -23,7 +23,8 @@ type ConnectionSource = 'CLOUD' | 'MANUAL' | 'LOCAL' | null;
 export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
     currentDeviceId,
     onPair,
-    initialMasterIp = ''
+    initialMasterIp = '',
+    onBack
 }) => {
     const [masterIp, setMasterIp] = useState(() => normalizeMasterHost(initialMasterIp || localStorage.getItem('pos_master_ip') || ''));
     const [terminals, setTerminals] = useState<{ id: string; config: TerminalConfig }[]>([]);
@@ -57,7 +58,7 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
             const data = await res.json();
 
             if (!data || !Array.isArray(data.terminals)) {
-                throw new Error("Formato de respuesta inválido del servidor.");
+                throw new Error('Formato de respuesta inválido del servidor.');
             }
 
             return data.terminals.filter((t: any) => {
@@ -70,7 +71,7 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
 
     const buildConnectionError = (resolvedMasterIp: string, err: any) => {
         if (err?.name === 'AbortError') {
-            return "Tiempo de espera agotado. Verifique la IP.";
+            return 'Tiempo de espera agotado. Verifique la IP.';
         }
 
         return `No se pudo conectar al Master (${resolvedMasterIp}).`;
@@ -85,7 +86,7 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
         const requestedSource = sourceOverride || connectionSource || 'MANUAL';
 
         if (!requestedHost) {
-            setError("Ingrese la IP del servidor master.");
+            setError('Ingrese la IP del servidor master.');
             setShowIpInput(true);
             setTerminals([]);
             return;
@@ -104,10 +105,10 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
             setTerminals(availables);
 
             if (availables.length === 0) {
-                setError("No hay terminales disponibles en el servidor.");
+                setError('No hay terminales disponibles en el servidor.');
             }
         } catch (err: any) {
-            console.error("❌ Error fetching terminals:", err);
+            console.error('❌ Error fetching terminals:', err);
 
             if (allowCloudFallback) {
                 const cloudEndpoint = await resolveMasterEndpointFromCloud();
@@ -123,12 +124,12 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
                         setTerminals(availables);
 
                         if (availables.length === 0) {
-                            setError("No hay terminales disponibles en el servidor.");
+                            setError('No hay terminales disponibles en el servidor.');
                         }
 
                         return;
                     } catch (cloudError: any) {
-                        console.error("❌ Error fetching terminals from cloud-discovered host:", cloudError);
+                        console.error('❌ Error fetching terminals from cloud-discovered host:', cloudError);
                         setError(buildConnectionError(cloudHost, cloudError));
                         setMasterIp(cloudHost);
                         setConnectionSource('CLOUD');
@@ -171,13 +172,12 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
                 return;
             }
 
-            const fallbackHost = normalizeMasterHost(window.location.hostname);
             if (!isMounted) return;
 
-            setMasterIp(fallbackHost);
-            setConnectionSource('LOCAL');
+            setMasterIp('');
+            setConnectionSource(null);
             setShowIpInput(true);
-            setError("No se encontró un servidor master en cloud. Ingrese la IP manualmente.");
+            setError('No se encontró un servidor master en cloud. Ingrese la IP manualmente.');
         };
 
         void bootstrapDiscovery();
@@ -192,7 +192,7 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
 
         const resolvedMasterIp = normalizeMasterHost(masterIp);
         if (!resolvedMasterIp) {
-            setError("Ingrese la IP del servidor master.");
+            setError('Ingrese la IP del servidor master.');
             setShowIpInput(true);
             return;
         }
@@ -201,17 +201,14 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
         try {
             await onPair(selectedTerminalId, resolvedMasterIp);
         } catch (e: any) {
-            setError(e.message || "Error al vincular.");
+            setError(e.message || 'Error al vincular.');
             setIsPairing(false);
         }
     };
 
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6 font-sans text-slate-800">
-
             <div className="max-w-md w-full bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
-
-                {/* Header */}
                 <div className="bg-slate-900 p-6 text-white text-center">
                     <div className="mx-auto bg-blue-600 w-12 h-12 rounded-xl flex items-center justify-center mb-4 shadow-lg ring-4 ring-blue-500/20">
                         <Monitor size={24} className="text-white" />
@@ -223,14 +220,12 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
                 </div>
 
                 <div className="p-6">
-                    {/* Device ID Badge */}
                     <div className="flex justify-center mb-6">
                         <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-full text-xs font-mono font-medium text-gray-500 border border-gray-200">
                             <span>ID: {currentDeviceId}</span>
                         </div>
                     </div>
 
-                    {/* Master Connection Status */}
                     <div className="mb-6">
                         <div className="flex items-center justify-between mb-2">
                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Servidor Master</label>
@@ -286,7 +281,7 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
                                     )}
                                 </div>
                                 <div className="text-gray-400 group-hover:text-blue-500">
-                                    <RefreshCw size={14} className={isLoading ? "animate-spin" : ""} />
+                                    <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
                                 </div>
                             </div>
                         )}
@@ -298,7 +293,6 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
                         )}
                     </div>
 
-                    {/* Terminal List */}
                     <div className="mb-6">
                         <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
                             Terminales Disponibles
@@ -343,7 +337,6 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
                         </div>
                     </div>
 
-                    {/* Action Button */}
                     <button
                         onClick={handleConfirmPairing}
                         disabled={!selectedTerminalId || isPairing}
@@ -367,6 +360,15 @@ export const TerminalPairingView: React.FC<TerminalPairingViewProps> = ({
                         )}
                     </button>
 
+                    {onBack && (
+                        <button
+                            type="button"
+                            onClick={onBack}
+                            className="w-full mt-3 py-3 text-sm font-bold text-slate-500 hover:text-slate-700 transition-colors"
+                        >
+                            Volver a elegir modo
+                        </button>
+                    )}
                 </div>
             </div>
 

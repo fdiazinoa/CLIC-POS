@@ -794,17 +794,17 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
 
    return (
       <>
-         <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">
+         <div className="responsive-shell flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">
 
             {/* Header */}
-            <div className="bg-white px-8 py-6 border-b border-gray-200 flex justify-between items-center shrink-0">
+            <div className="bg-white px-4 md:px-8 py-4 md:py-6 border-b border-gray-200 flex flex-col gap-4 md:flex-row md:justify-between md:items-center shrink-0">
                <div>
-                  <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2">
+                  <h1 className="text-xl md:text-2xl font-black text-gray-800 flex items-center gap-2">
                      <Building2 className="text-purple-600" /> Gestión de Almacenes
                   </h1>
                   <p className="text-sm text-gray-500">Configuración de ubicaciones y transferencias de stock.</p>
                </div>
-               <div className="flex gap-3">
+               <div className="flex gap-3 self-end md:self-auto">
                   <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
                      <X size={24} />
                   </button>
@@ -812,55 +812,57 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
             </div>
 
             {/* Tabs */}
-            <div className="bg-white px-8 border-b border-gray-200 flex gap-8">
-               <button
-                  onClick={() => setActiveTab('LOCATIONS')}
-                  className={`py-4 text-sm font-bold border-b-4 transition-all ${activeTab === 'LOCATIONS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-               >
-                  Ubicaciones
-               </button>
-               <button
-                  onClick={() => setActiveTab('TRANSFERS')}
-                  className={`py-4 text-sm font-bold border-b-4 transition-all ${activeTab === 'TRANSFERS' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-               >
-                  Nuevo Traspaso
-               </button>
-               <button
-                  onClick={() => setActiveTab('HISTORY')}
-                  className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'HISTORY' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-               >
-                  Historial y Recepción
-                  {pendingCount > 0 && (
-                     <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">{pendingCount}</span>
-                  )}
-               </button>
-               <button
-                  onClick={() => setActiveTab('OPTIMIZER')}
-                  className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'OPTIMIZER' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-               >
-                  <Zap size={18} /> Optimización
-               </button>
-               <button
-                  onClick={() => setActiveTab('FORECASTING')}
-                  className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'FORECASTING' ? 'border-amber-600 text-amber-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-               >
-                  <ShoppingBag size={18} /> Reabastecimiento
-               </button>
-               <button
-                  onClick={() => setActiveTab('INVENTORY')}
-                  className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'INVENTORY' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-               >
-                  <Package size={18} /> Inventario
-               </button>
-               <button
-                  onClick={() => setActiveTab('AUDIT_CLOSURE')}
-                  className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'AUDIT_CLOSURE' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-               >
-                  <ClipboardList size={18} /> Auditoría & Cierre
-               </button>
+            <div className="bg-white border-b border-gray-200 shrink-0 px-4 md:px-8 overflow-hidden">
+               <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
+                  <button
+                     onClick={() => setActiveTab('LOCATIONS')}
+                     className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all ${activeTab === 'LOCATIONS' ? 'border-purple-600 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  >
+                     Ubicaciones
+                  </button>
+                  <button
+                     onClick={() => setActiveTab('TRANSFERS')}
+                     className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all ${activeTab === 'TRANSFERS' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  >
+                     Nuevo Traspaso
+                  </button>
+                  <button
+                     onClick={() => setActiveTab('HISTORY')}
+                     className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'HISTORY' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  >
+                     Historial y Recepción
+                     {pendingCount > 0 && (
+                        <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">{pendingCount}</span>
+                     )}
+                  </button>
+                  <button
+                     onClick={() => setActiveTab('OPTIMIZER')}
+                     className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'OPTIMIZER' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  >
+                     <Zap size={18} /> Optimización
+                  </button>
+                  <button
+                     onClick={() => setActiveTab('FORECASTING')}
+                     className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'FORECASTING' ? 'border-amber-600 text-amber-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  >
+                     <ShoppingBag size={18} /> Reabastecimiento
+                  </button>
+                  <button
+                     onClick={() => setActiveTab('INVENTORY')}
+                     className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'INVENTORY' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  >
+                     <Package size={18} /> Inventario
+                  </button>
+                  <button
+                     onClick={() => setActiveTab('AUDIT_CLOSURE')}
+                     className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === 'AUDIT_CLOSURE' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  >
+                     <ClipboardList size={18} /> Auditoría & Cierre
+                  </button>
+               </div>
             </div>
 
-            <div className="flex-1 overflow-hidden p-8">
+            <div className="responsive-content flex-1 min-h-0 overflow-hidden p-4 md:p-8">
 
                {/* --- INVENTORY LIST TAB --- */}
                {activeTab === 'INVENTORY' && renderInventoryList()}
