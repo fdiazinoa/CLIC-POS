@@ -437,6 +437,7 @@ export interface TerminalConfig {
     bloqueo_meseros: boolean;
     pedir_comensales: boolean;
     usa_modulos_cocina: boolean;
+    defaultTaxIds?: string[];
     reservationPolicy?: {
       validityDays: number;
       requireAdvance: boolean;
