@@ -2262,17 +2262,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </h2>
                   </div>
                   <div className="flex gap-1">
-                     <button onClick={handleParkCurrentTicket} className="p-2 text-gray-400 hover:text-blue-600" title="Guardar Ticket">
+                     <button onClick={handleParkCurrentTicket} className="p-2 rounded-2xl border border-gray-200 bg-white text-gray-400 shadow-sm transition-colors hover:border-blue-100 hover:bg-blue-50 hover:text-blue-600" title="Guardar Ticket">
                         <Save size={20} />
                      </button>
-                     <button onClick={() => setShowParkedList(!showParkedList)} className="p-2 text-gray-400 hover:text-orange-600 relative" title="Recuperar Ticket">
+                     <button onClick={() => setShowParkedList(!showParkedList)} className="relative p-2 rounded-2xl border border-gray-200 bg-white text-gray-400 shadow-sm transition-colors hover:border-orange-100 hover:bg-orange-50 hover:text-orange-600" title="Recuperar Ticket">
                         <Inbox size={20} />
                         {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && (
                            <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white"></span>
                         )}
                      </button>
                      <div className="relative group">
-                        <button className="p-2 text-gray-400 hover:text-gray-600"><MoreVertical size={20} /></button>
+                        <button className="p-2 rounded-2xl border border-gray-200 bg-white text-gray-400 shadow-sm transition-colors hover:border-gray-300 hover:bg-gray-50 hover:text-gray-600"><MoreVertical size={20} /></button>
                         <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-xl border border-gray-100 hidden group-hover:block z-50">
                            <button onClick={onOpenHistory} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><History size={16} /> Historial</button>
                            <button onClick={onOpenFinance} className="w-full px-4 py-3 text-left text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2"><Lock size={16} /> Cierre Z</button>
@@ -2417,16 +2417,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <div className="flex gap-1 shrink-0">
                      {!isRetailMode && (
                         <>
-                           <button onClick={handleOpenDrawer} title="Abrir Cajón" className="p-2 hover:bg-emerald-50 rounded-lg text-gray-400 hover:text-emerald-600 transition-colors"><Box size={18} /></button>
-                           <button onClick={handleParkCurrentTicket} title="Guardar Ticket" className="p-2 hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Save size={18} /></button>
-                           <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="p-2 hover:bg-orange-50 rounded-lg text-gray-400 hover:text-orange-600 transition-colors relative">
+                           <button onClick={handleOpenDrawer} title="Abrir Cajón" className="p-2 rounded-2xl border border-gray-200 bg-white text-gray-400 shadow-sm transition-colors hover:border-emerald-100 hover:bg-emerald-50 hover:text-emerald-600"><Box size={18} /></button>
+                           <button onClick={handleParkCurrentTicket} title="Guardar Ticket" className="p-2 rounded-2xl border border-gray-200 bg-white text-gray-400 shadow-sm transition-colors hover:border-blue-100 hover:bg-blue-50 hover:text-blue-600"><Save size={18} /></button>
+                           <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="relative p-2 rounded-2xl border border-gray-200 bg-white text-gray-400 shadow-sm transition-colors hover:border-orange-100 hover:bg-orange-50 hover:text-orange-600">
                               <Inbox size={18} />
                               {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-0 right-0 w-3 h-3 bg-orange-500 rounded-full border-2 border-white"></span>}
                            </button>
-                           <button onClick={onOpenHistory} title="Historial" className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><History size={18} /></button>
+                           <button onClick={onOpenHistory} title="Historial" className="p-2 rounded-2xl border border-gray-200 bg-white text-gray-400 shadow-sm transition-colors hover:border-blue-100 hover:bg-blue-50 hover:text-blue-600"><History size={18} /></button>
                         </>
                      )}
-                     <button onClick={() => onOpenSettings()} title="Configuración" className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Settings size={18} /></button>
+                     <button onClick={() => onOpenSettings()} title="Configuración" className="p-2 rounded-2xl border border-gray-200 bg-white text-gray-400 shadow-sm transition-colors hover:border-blue-100 hover:bg-blue-50 hover:text-blue-600"><Settings size={18} /></button>
                   </div>
                </div>
 
