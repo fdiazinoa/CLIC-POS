@@ -1,5 +1,6 @@
 import { ensureSupabaseSessionRestored, supabase } from './supabase';
 import {
+    DEFAULT_CLOUD_ADMIN_URL,
     DEFAULT_CLOUD_SUPABASE_ANON_KEY,
     DEFAULT_CLOUD_SUPABASE_URL,
     normalizeCloudUrl,
@@ -68,6 +69,7 @@ const dedupeStrings = (values: Array<string | null | undefined>) =>
 const getCloudConfig = () => {
     const env = (import.meta as any).env || {};
     return {
+        cloudAdminUrl: normalizeCloudUrl(env.VITE_CLOUD_ADMIN_URL || DEFAULT_CLOUD_ADMIN_URL),
         supabaseUrl: normalizeCloudUrl(env.VITE_SUPABASE_URL || DEFAULT_CLOUD_SUPABASE_URL),
         supabaseAnonKey: String(env.VITE_SUPABASE_ANON_KEY || DEFAULT_CLOUD_SUPABASE_ANON_KEY || '').trim(),
     };
@@ -368,11 +370,16 @@ const getLocalNetworkCandidates = () => {
 const getLocalCloudRegistryCandidates = (path: string, query = '') => {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const suffix = query ? `${normalizedPath}?${query}` : normalizedPath;
+    const { cloudAdminUrl } = getCloudConfig();
     const candidates = [
         suffix,
         `http://127.0.0.1:3001${suffix}`,
         `http://localhost:3001${suffix}`,
     ];
+
+    if (cloudAdminUrl) {
+        candidates.unshift(`${cloudAdminUrl}${suffix}`);
+    }
 
     if (window.location.protocol.startsWith('http') && window.location.hostname) {
         candidates.unshift(`${window.location.protocol}//${window.location.hostname}:3001${suffix}`);
