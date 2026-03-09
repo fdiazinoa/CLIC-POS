@@ -1,6 +1,17 @@
 import { getStoredTenantIdentity } from './cloudMasterRegistry';
 import { DEFAULT_ERP_SYNC_API_URL, normalizeCloudUrl } from './cloudDefaults';
 import { v5 as uuidv5 } from 'uuid';
+import { db } from './db';
+import {
+    BusinessConfig,
+    Customer,
+    DocumentSeries,
+    FiscalRangeDGII,
+    PaymentMethodDefinition,
+    Product,
+    Supplier,
+    Warehouse,
+} from '../types';
 
 type TenantIdentity = {
     tenantId?: string | null;
@@ -58,6 +69,58 @@ type SyncInboxResponse = {
     sync_id?: string;
 };
 
+type SyncOutboxEvent = {
+    id: string;
+    event_type: string;
+    payload?: Record<string, unknown> | null;
+    status?: string;
+    created_at?: string;
+};
+
+type SyncOutboxPullResponse = {
+    status: string;
+    events?: SyncOutboxEvent[];
+    count?: number;
+};
+
+type SyncOutboxAckResponse = {
+    status: string;
+    outbox_id: string;
+    applied_status: 'APPLIED' | 'FAILED';
+};
+
+type SyncBootstrapSnapshotResponse = {
+    status: string;
+    snapshot_id?: string;
+    validation?: {
+        ready_for_documents?: boolean;
+    } | null;
+    bootstrap_state?: {
+        status?: string;
+    } | null;
+};
+
+type SyncBootstrapValidateResponse = {
+    status: string;
+    validation?: {
+        ready_for_documents?: boolean;
+    } | null;
+    bootstrap_state?: {
+        status?: string;
+    } | null;
+};
+
+type SyncBootstrapCompleteResponse = {
+    status: string;
+    message?: string;
+    validation?: {
+        ready_for_documents?: boolean;
+    } | null;
+    bootstrap_state?: {
+        status?: string;
+    } | null;
+};
+
 type RuntimeDeviceInfo = {
     versionName?: string | null;
     versionCode?: number | string | null;
@@ -96,6 +159,21 @@ type SalePostedInput = {
     [key: string]: unknown;
 };
 
+type BootstrapEventPayload = {
+    tenant_id?: string | null;
+    company_id?: string | null;
+    store_id?: string | null;
+    terminal_id?: string | null;
+    device_id?: string | null;
+    bootstrap_mode?: string | null;
+    required_entities?: string[];
+};
+
+type ProcessErpOutboxParams = {
+    deviceId: string;
+    terminalId: string;
+};
+
 const SYNC_API_URL_STORAGE_KEY = 'CLIC_ERP_SYNC_URL';
 const SYNC_BINDING_TENANT_KEY = 'clic_erp_sync_tenant_id';
 const SYNC_BINDING_TERMINAL_KEY = 'clic_erp_sync_terminal_id';
@@ -104,8 +182,34 @@ const SYNC_BINDING_STORE_KEY = 'clic_erp_sync_store_id';
 const SYNC_BINDING_LAST_SEEN_KEY = 'clic_erp_sync_last_seen';
 const SYNC_BINDING_STATUS_KEY = 'clic_erp_sync_status';
 const ERP_SALE_EVENT_NAMESPACE = 'b38114f6-930e-4b2d-b5e7-523de8386b6c';
+const BOOTSTRAP_ENTITY_KEY_MAP: Record<string, string> = {
+    WAREHOUSE: 'warehouses',
+    CURRENCY: 'currencies',
+    TAX: 'taxes',
+    DOCUMENT_TYPE: 'document_types',
+    DOCUMENT_SERIES: 'document_series',
+    FISCAL_RANGE: 'fiscal_ranges',
+    CUSTOMER: 'customers',
+    SUPPLIER: 'suppliers',
+    ITEM: 'items',
+    PAYMENT_METHOD: 'payment_methods',
+};
+const DEFAULT_BOOTSTRAP_ENTITY_TYPES = Object.keys(BOOTSTRAP_ENTITY_KEY_MAP);
+
+let outboxProcessingPromise: Promise<{ processed: number; applied: number; failed: number } | null> | null = null;
 
 const normalizeOptional = (value?: string | null) => (typeof value === 'string' ? value.trim() : '');
+const normalizeEntityCode = (value?: string | null) => normalizeOptional(value || null);
+const uniqueStrings = (values: unknown) => Array.from(
+    new Set(
+        (Array.isArray(values) ? values : [])
+            .map((value) => normalizeOptional(String(value || '')))
+            .filter(Boolean)
+    )
+);
+const asObject = <T>(value: unknown): T =>
+    (value && typeof value === 'object' && !Array.isArray(value) ? value as T : {} as T);
+const asArray = <T>(value: unknown): T[] => Array.isArray(value) ? value as T[] : [];
 
 const getSyncApiBase = () => {
     const env = (import.meta as any).env || {};
@@ -230,6 +334,310 @@ const postJson = async <T>(path: string, body: Record<string, unknown>): Promise
     });
 
     return readJson<T>(response);
+};
+
+const getJson = async <T>(path: string, query: Record<string, string | number | null | undefined>): Promise<T> => {
+    const baseUrl = getSyncApiBase();
+    if (!baseUrl) {
+        throw new Error('ERP sync lifecycle URL is not configured');
+    }
+
+    const searchParams = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+        if (value === null || value === undefined || value === '') return;
+        searchParams.set(key, String(value));
+    });
+
+    const response = await fetch(`${baseUrl}${path}?${searchParams.toString()}`, {
+        method: 'GET',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+    });
+
+    return readJson<T>(response);
+};
+
+const normalizeRequiredEntities = (requiredEntities?: string[] | null): Set<string> => {
+    const normalized = uniqueStrings(requiredEntities).map((entityType) => entityType.toUpperCase());
+    return new Set(normalized.length > 0 ? normalized : DEFAULT_BOOTSTRAP_ENTITY_TYPES);
+};
+
+const shouldIncludeEntity = (requiredEntities: Set<string>, entityType: string) => requiredEntities.has(entityType);
+
+const buildDocumentTypes = (seriesList: DocumentSeries[]) => {
+    const seen = new Set<string>();
+
+    return seriesList
+        .map((series) => normalizeEntityCode(series.documentType || null).toUpperCase())
+        .filter(Boolean)
+        .filter((documentType) => {
+            if (seen.has(documentType)) return false;
+            seen.add(documentType);
+            return true;
+        })
+        .map((documentType) => ({
+            code: documentType,
+            document_type: documentType,
+            name: documentType,
+        }));
+};
+
+const buildBootstrapMasters = async (requiredEntities?: string[] | null) => {
+    const normalizedEntities = normalizeRequiredEntities(requiredEntities);
+
+    const [
+        config,
+        warehouses,
+        customers,
+        suppliers,
+        products,
+        internalSequences,
+        fiscalRanges,
+        paymentMethodsCollection,
+    ] = await Promise.all([
+        db.get('config') as Promise<unknown>,
+        db.get('warehouses') as Promise<Warehouse[]>,
+        db.get('customers') as Promise<Customer[]>,
+        db.get('suppliers') as Promise<Supplier[]>,
+        db.get('products') as Promise<Product[]>,
+        db.get('internalSequences') as Promise<DocumentSeries[]>,
+        db.get('fiscalRanges') as Promise<FiscalRangeDGII[]>,
+        db.get('paymentMethods') as Promise<PaymentMethodDefinition[]>,
+    ]);
+
+    const safeConfig = asObject<BusinessConfig>(config);
+    const safeCurrencies = Array.isArray(safeConfig?.currencies) ? safeConfig.currencies : [];
+    const safeTaxes = Array.isArray(safeConfig?.taxes) ? safeConfig.taxes : [];
+    const safeTerminals = Array.isArray(safeConfig?.terminals) ? safeConfig.terminals : [];
+    const safeSequences = asArray<DocumentSeries>(internalSequences);
+    const safeFiscalRanges = asArray<FiscalRangeDGII>(fiscalRanges);
+    const safeWarehouses = asArray<Warehouse>(warehouses);
+    const safeCustomers = asArray<Customer>(customers);
+    const safeSuppliers = asArray<Supplier>(suppliers);
+    const safeProducts = asArray<Product>(products);
+    const safeConfigPaymentMethods = asArray<PaymentMethodDefinition>(safeConfig.paymentMethods);
+    const safePaymentMethods = safeConfigPaymentMethods.length > 0
+        ? safeConfigPaymentMethods
+        : asArray<PaymentMethodDefinition>(paymentMethodsCollection);
+
+    return {
+        warehouses: shouldIncludeEntity(normalizedEntities, 'WAREHOUSE')
+            ? safeWarehouses.map((warehouse) => ({
+                id: warehouse.id,
+                code: normalizeEntityCode(warehouse.code || warehouse.id),
+                warehouse_code: normalizeEntityCode(warehouse.code || warehouse.id),
+                name: warehouse.name,
+                type: warehouse.type,
+                address: warehouse.address || '',
+                allow_pos_sale: Boolean(warehouse.allowPosSale),
+                allow_negative_stock: Boolean(warehouse.allowNegativeStock),
+                is_main_branch: Boolean(warehouse.isMain),
+                source_store_id: normalizeEntityCode(warehouse.storeId || null) || null,
+            }))
+            : [],
+        currencies: shouldIncludeEntity(normalizedEntities, 'CURRENCY')
+            ? safeCurrencies.map((currency) => ({
+                code: normalizeEntityCode(currency.code),
+                currency_code: normalizeEntityCode(currency.code),
+                name: currency.name,
+                symbol: currency.symbol,
+                rate: Number(currency.rate || 0),
+                buy_rate: Number(currency.buyRate || currency.rate || 0),
+                sell_rate: Number(currency.sellRate || currency.rate || 0),
+                is_enabled: Boolean(currency.isEnabled),
+                is_base: Boolean(currency.isBase),
+            }))
+            : [],
+        taxes: shouldIncludeEntity(normalizedEntities, 'TAX')
+            ? safeTaxes.map((tax) => ({
+                code: normalizeEntityCode(tax.id),
+                tax_code: normalizeEntityCode(tax.id),
+                name: tax.name,
+                rate: Number(tax.rate || 0),
+                type: tax.type,
+            }))
+            : [],
+        document_types: shouldIncludeEntity(normalizedEntities, 'DOCUMENT_TYPE')
+            ? buildDocumentTypes(safeSequences)
+            : [],
+        document_series: shouldIncludeEntity(normalizedEntities, 'DOCUMENT_SERIES')
+            ? safeSequences.map((series) => ({
+                code: normalizeEntityCode(series.id),
+                series_code: normalizeEntityCode(series.id),
+                name: series.name,
+                description: series.description || '',
+                prefix: normalizeEntityCode(series.prefix),
+                document_type: normalizeEntityCode(series.documentType || null).toUpperCase(),
+                next_number: Number(series.nextNumber || 1),
+                padding: Number(series.padding || 0),
+                business_unit: normalizeEntityCode(series.businessUnit || null) || null,
+            }))
+            : [],
+        fiscal_ranges: shouldIncludeEntity(normalizedEntities, 'FISCAL_RANGE')
+            ? safeFiscalRanges.map((range) => ({
+                code: normalizeEntityCode(range.id || `${range.type}-${range.prefix}`),
+                fiscal_range_code: normalizeEntityCode(range.id || `${range.type}-${range.prefix}`),
+                ncf_type: normalizeEntityCode(range.type),
+                prefix: normalizeEntityCode(range.prefix),
+                start_number: Number(range.startNumber || 0),
+                end_number: Number(range.endNumber || 0),
+                current_global: Number(range.currentGlobal || 0),
+                expiry_date: range.expiryDate || null,
+                is_active: Boolean(range.isActive),
+            }))
+            : [],
+        customers: shouldIncludeEntity(normalizedEntities, 'CUSTOMER')
+            ? safeCustomers.map((customer) => ({
+                code: normalizeEntityCode(customer.id),
+                customer_code: normalizeEntityCode(customer.id),
+                name: customer.name,
+                tax_id: normalizeEntityCode(customer.taxId || null) || null,
+                email: normalizeEntityCode(customer.email || null) || null,
+                phone: normalizeEntityCode(customer.phone || null) || null,
+                address: normalizeEntityCode(customer.address || null) || null,
+                credit_limit: Number(customer.creditLimit || 0),
+                credit_days: Number(customer.creditDays || 0),
+                default_ncf_type: normalizeEntityCode(customer.defaultNcfType || null) || null,
+                is_tax_exempt: Boolean(customer.isTaxExempt),
+            }))
+            : [],
+        suppliers: shouldIncludeEntity(normalizedEntities, 'SUPPLIER')
+            ? safeSuppliers.map((supplier) => ({
+                code: normalizeEntityCode(supplier.id),
+                supplier_code: normalizeEntityCode(supplier.id),
+                name: supplier.name,
+                tax_id: normalizeEntityCode(supplier.taxId || null) || null,
+                email: normalizeEntityCode(supplier.email || null) || null,
+                phone: normalizeEntityCode(supplier.phone || null) || null,
+                contact_person: normalizeEntityCode(supplier.contactPerson || null) || null,
+                payment_method: normalizeEntityCode(supplier.paymentMethod || null) || null,
+                payment_term_days: Number(supplier.paymentTermDays || 0),
+                credit_limit: Number(supplier.creditLimit || 0),
+                lead_time_days: Number(supplier.leadTimeDays || 0),
+                is_active: supplier.isActive !== false,
+            }))
+            : [],
+        items: shouldIncludeEntity(normalizedEntities, 'ITEM')
+            ? safeProducts.map((product) => ({
+                code: normalizeEntityCode(product.id),
+                item_code: normalizeEntityCode(product.id),
+                sku: normalizeEntityCode(product.id),
+                barcode: normalizeEntityCode(product.barcode || null) || null,
+                name: product.name,
+                description: normalizeEntityCode(product.description || null) || null,
+                category: normalizeEntityCode(product.category || null) || null,
+                type: normalizeEntityCode(product.type || null) || 'PRODUCT',
+                price: Number(product.price || 0),
+                cost: Number(product.cost || 0),
+                tax_ids: asArray<string>(product.appliedTaxIds),
+                warehouse_ids: asArray<string>(product.activeInWarehouses),
+                variants: asArray<Product['variants'][number]>(product.variants).map((variant) => ({
+                    sku: normalizeEntityCode(variant.sku),
+                    barcode: asArray<string>(variant.barcode),
+                    attribute_values: asObject<Record<string, string>>(variant.attributeValues),
+                    price: Number(variant.price || 0),
+                })),
+                is_inventoriable: product.isInventoriable !== false,
+            }))
+            : [],
+        payment_methods: shouldIncludeEntity(normalizedEntities, 'PAYMENT_METHOD')
+            ? safePaymentMethods.map((method) => ({
+                code: normalizeEntityCode(method.id),
+                payment_code: normalizeEntityCode(method.id),
+                name: method.name,
+                type: normalizeEntityCode(method.type),
+                is_enabled: Boolean(method.isEnabled),
+                integration: normalizeEntityCode(method.integration),
+                opens_drawer: Boolean(method.opensDrawer),
+                requires_signature: Boolean(method.requiresSignature),
+            }))
+            : [],
+        _metadata: {
+            company_info: safeConfig.companyInfo || null,
+            terminal_count: safeTerminals.length,
+            tax_rate: Number((safeConfig as any).taxRate || 0),
+        },
+    };
+};
+
+const postBootstrapSnapshotToErp = async ({
+    deviceId,
+    terminalId,
+    requiredEntities,
+    payload,
+}: {
+    deviceId: string;
+    terminalId: string;
+    requiredEntities?: string[] | null;
+    payload?: BootstrapEventPayload | null;
+}): Promise<SyncBootstrapSnapshotResponse | null> => {
+    if (!isConfigured()) return null;
+
+    const identity = getStoredTenantIdentity();
+    const binding = getStoredErpSyncBinding();
+    const runtimeTelemetry = await resolveRuntimeTelemetry();
+    const masters = await buildBootstrapMasters(requiredEntities);
+    const metadata = asObject<BootstrapEventPayload>(payload);
+
+    const resolvedTenantId = normalizeEntityCode(metadata.tenant_id || identity.tenantId || binding.tenantId || null);
+    if (!resolvedTenantId) {
+        throw new Error('No existe tenant_id para enviar snapshot de bootstrap.');
+    }
+
+    return postJson<SyncBootstrapSnapshotResponse>('/bootstrap/snapshot', {
+        tenant_id: resolvedTenantId,
+        company_id: normalizeEntityCode(metadata.company_id || binding.companyId || null) || null,
+        store_id: normalizeEntityCode(metadata.store_id || binding.storeId || null) || null,
+        terminal_id: normalizeEntityCode(metadata.terminal_id || binding.terminalId || null) || terminalId,
+        device_id: normalizeEntityCode(metadata.device_id || deviceId || null) || null,
+        source_system: 'POS',
+        bootstrap_mode: normalizeEntityCode(metadata.bootstrap_mode || null) || 'POS_FIRST',
+        masters: Object.fromEntries(
+            Object.entries(masters).filter(([key]) => !key.startsWith('_'))
+        ),
+        metadata: {
+            requested_entities: uniqueStrings(requiredEntities),
+            company_info: (masters as any)._metadata?.company_info || null,
+            terminal_context: {
+                local_terminal_id: terminalId,
+                bound_terminal_id: binding.terminalId,
+                bound_company_id: binding.companyId,
+                bound_store_id: binding.storeId,
+            },
+            runtime: {
+                app_version: runtimeTelemetry.appVersion,
+                app_version_code: runtimeTelemetry.appVersionCode,
+                ip_address: runtimeTelemetry.ipAddress,
+            },
+        },
+    });
+};
+
+const pullErpOutbox = async (bindingTerminalId: string | null, deviceId: string): Promise<SyncOutboxPullResponse | null> => {
+    if (!isConfigured()) return null;
+
+    if (!bindingTerminalId && !deviceId) return null;
+
+    return getJson<SyncOutboxPullResponse>('/outbox/pull', {
+        terminal_id: bindingTerminalId || undefined,
+        device_id: bindingTerminalId ? undefined : deviceId,
+        limit: 20,
+    });
+};
+
+const ackErpOutboxEvent = async (
+    outboxId: string,
+    status: 'APPLIED' | 'FAILED',
+    errorDetail?: string
+): Promise<SyncOutboxAckResponse | null> => {
+    if (!outboxId) return null;
+
+    return postJson<SyncOutboxAckResponse>('/outbox/ack', {
+        outbox_id: outboxId,
+        status,
+        error_detail: errorDetail || null,
+    });
 };
 
 export const clearStoredErpSyncBinding = () => {
@@ -370,6 +778,91 @@ export const ensureErpSyncLifecycle = async (params: EnsureLifecycleParams): Pro
     const heartbeat = await heartbeatErpSyncTerminal(params, params.deviceId);
 
     return { bootstrap, registered, heartbeat };
+};
+
+export const processErpSyncOutbox = async (
+    params: ProcessErpOutboxParams
+): Promise<{ processed: number; applied: number; failed: number } | null> => {
+    if (!isConfigured() || !params.deviceId) return null;
+
+    if (outboxProcessingPromise) {
+        return outboxProcessingPromise;
+    }
+
+    outboxProcessingPromise = (async () => {
+        const binding = getStoredErpSyncBinding();
+        const outbox = await pullErpOutbox(binding.terminalId, params.deviceId);
+        const events = Array.isArray(outbox?.events) ? outbox.events : [];
+
+        if (events.length === 0) {
+            return { processed: 0, applied: 0, failed: 0 };
+        }
+
+        let applied = 0;
+        let failed = 0;
+
+        for (const event of events) {
+            const eventType = normalizeEntityCode(event.event_type || null).toUpperCase();
+            const payload = asObject<BootstrapEventPayload>(event.payload);
+
+            try {
+                if (eventType === 'BOOTSTRAP_REQUESTED') {
+                    const snapshotResponse = await postBootstrapSnapshotToErp({
+                        deviceId: params.deviceId,
+                        terminalId: params.terminalId,
+                        requiredEntities: payload.required_entities,
+                        payload,
+                    });
+
+                    const tenantId = normalizeEntityCode(payload.tenant_id || getStoredTenantIdentity().tenantId || binding.tenantId || null);
+                    let readyForDocuments = Boolean(snapshotResponse?.validation?.ready_for_documents);
+
+                    if (tenantId) {
+                        const validateResponse = await postJson<SyncBootstrapValidateResponse>('/bootstrap/validate', {
+                            tenant_id: tenantId,
+                        });
+                        readyForDocuments = Boolean(validateResponse?.validation?.ready_for_documents);
+
+                        if (readyForDocuments) {
+                            await postJson<SyncBootstrapCompleteResponse>('/bootstrap/complete', {
+                                tenant_id: tenantId,
+                            });
+                        }
+                    }
+
+                    await ackErpOutboxEvent(event.id, 'APPLIED');
+                    applied += 1;
+                    continue;
+                }
+
+                if (eventType === 'CONFIG_PUSH') {
+                    console.info('[ERP SYNC] CONFIG_PUSH recibido. Se marca aplicado mientras llega el fetch declarativo de configuracion.');
+                    await ackErpOutboxEvent(event.id, 'APPLIED');
+                    applied += 1;
+                    continue;
+                }
+
+                await ackErpOutboxEvent(event.id, 'FAILED', `Evento no soportado por el POS: ${eventType || 'UNKNOWN'}`);
+                failed += 1;
+            } catch (error: any) {
+                console.warn(`[ERP SYNC] Error procesando ${eventType || 'UNKNOWN'}:`, error);
+                await ackErpOutboxEvent(event.id, 'FAILED', error?.message || 'Error procesando evento ERP outbox');
+                failed += 1;
+            }
+        }
+
+        return {
+            processed: events.length,
+            applied,
+            failed,
+        };
+    })();
+
+    try {
+        return await outboxProcessingPromise;
+    } finally {
+        outboxProcessingPromise = null;
+    }
 };
 
 export const postSalePostedToErp = async (transaction: SalePostedInput): Promise<SyncInboxResponse | null> => {
