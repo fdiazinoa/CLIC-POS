@@ -26,6 +26,7 @@ type SyncTerminalRecord = {
     last_seen?: string | null;
     ip_address?: string | null;
     app_version?: string | null;
+    app_version_code?: number | null;
     pending_events?: number;
     status?: string | null;
 };
@@ -51,6 +52,7 @@ type SyncHeartbeatResponse = {
 
 type RuntimeDeviceInfo = {
     versionName?: string | null;
+    versionCode?: number | string | null;
     localIp?: string | null;
     localIps?: string[] | null;
 };
@@ -125,6 +127,9 @@ const resolveRuntimeTelemetry = async () => {
 
     return {
         appVersion: normalizeOptional(deviceInfo?.versionName || null) || null,
+        appVersionCode: Number.isFinite(Number(deviceInfo?.versionCode))
+            ? Number(deviceInfo?.versionCode)
+            : null,
         ipAddress: localIps[0] || null,
     };
 };
@@ -260,6 +265,7 @@ export const registerErpSyncTerminal = async (params: EnsureLifecycleParams): Pr
         store_id: params.storeId || storedBinding.storeId || null,
         name: params.terminalName || params.terminalId,
         app_version: runtimeTelemetry.appVersion || null,
+        app_version_code: runtimeTelemetry.appVersionCode,
         ip_address: runtimeTelemetry.ipAddress || null,
         metadata: {
             source: 'CLIC_POS_APK',
@@ -294,6 +300,7 @@ export const heartbeatErpSyncTerminal = async (
         terminal_id: terminalRef || undefined,
         device_id: terminalRef ? undefined : resolvedDeviceId,
         app_version: runtimeTelemetry.appVersion || null,
+        app_version_code: runtimeTelemetry.appVersionCode,
         ip_address: runtimeTelemetry.ipAddress || null,
         pending_events: params.pendingEvents || 0,
     });
