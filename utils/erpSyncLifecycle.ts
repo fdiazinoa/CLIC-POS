@@ -1,5 +1,6 @@
 import { getStoredTenantIdentity } from './cloudMasterRegistry';
 import { DEFAULT_ERP_SYNC_API_URL, normalizeCloudUrl } from './cloudDefaults';
+import { v5 as uuidv5 } from 'uuid';
 
 type TenantIdentity = {
     tenantId?: string | null;
@@ -50,6 +51,13 @@ type SyncHeartbeatResponse = {
     terminal?: SyncTerminalRecord | null;
 };
 
+type SyncInboxResponse = {
+    status: string;
+    message?: string;
+    duplicate?: boolean;
+    sync_id?: string;
+};
+
 type RuntimeDeviceInfo = {
     versionName?: string | null;
     versionCode?: number | string | null;
@@ -67,6 +75,27 @@ type EnsureLifecycleParams = {
     storeId?: string | null;
 };
 
+type SalePostedInput = {
+    id: string;
+    displayId?: string | null;
+    date?: string | null;
+    total?: number | null;
+    taxAmount?: number | null;
+    netAmount?: number | null;
+    discountAmount?: number | null;
+    documentType?: string | null;
+    ncf?: string | null;
+    status?: string | null;
+    userId?: string | null;
+    userName?: string | null;
+    terminalId?: string | null;
+    customerId?: string | null;
+    customerName?: string | null;
+    items?: unknown[];
+    payments?: unknown[];
+    [key: string]: unknown;
+};
+
 const SYNC_API_URL_STORAGE_KEY = 'CLIC_ERP_SYNC_URL';
 const SYNC_BINDING_TENANT_KEY = 'clic_erp_sync_tenant_id';
 const SYNC_BINDING_TERMINAL_KEY = 'clic_erp_sync_terminal_id';
@@ -74,6 +103,7 @@ const SYNC_BINDING_COMPANY_KEY = 'clic_erp_sync_company_id';
 const SYNC_BINDING_STORE_KEY = 'clic_erp_sync_store_id';
 const SYNC_BINDING_LAST_SEEN_KEY = 'clic_erp_sync_last_seen';
 const SYNC_BINDING_STATUS_KEY = 'clic_erp_sync_status';
+const ERP_SALE_EVENT_NAMESPACE = 'b38114f6-930e-4b2d-b5e7-523de8386b6c';
 
 const normalizeOptional = (value?: string | null) => (typeof value === 'string' ? value.trim() : '');
 
@@ -340,4 +370,65 @@ export const ensureErpSyncLifecycle = async (params: EnsureLifecycleParams): Pro
     const heartbeat = await heartbeatErpSyncTerminal(params, params.deviceId);
 
     return { bootstrap, registered, heartbeat };
+};
+
+export const postSalePostedToErp = async (transaction: SalePostedInput): Promise<SyncInboxResponse | null> => {
+    if (!isConfigured() || !transaction?.id) return null;
+
+    const identity = getStoredTenantIdentity();
+    const binding = getStoredErpSyncBinding();
+
+    if (!binding.terminalId || (!identity.tenantId && !identity.tenantSlug && !identity.tenantEmail)) {
+        return null;
+    }
+
+    const runtimeTelemetry = await resolveRuntimeTelemetry();
+    const deviceId = normalizeOptional(localStorage.getItem('CLIC_POS_DEVICE_TOKEN')) || null;
+    const items = Array.isArray(transaction.items) ? transaction.items : [];
+    const payments = Array.isArray(transaction.payments) ? transaction.payments : [];
+    const total = Number(transaction.total);
+    const taxAmount = Number(transaction.taxAmount);
+    const netAmount = Number(transaction.netAmount);
+    const discountAmount = Number(transaction.discountAmount);
+
+    return postJson<SyncInboxResponse>('/inbox', {
+        event_id: uuidv5(`sale:${transaction.id}`, ERP_SALE_EVENT_NAMESPACE),
+        terminal_id: binding.terminalId,
+        event_type: 'SALE_POSTED',
+        payload: {
+            source: 'CLIC_POS_APK',
+            schema_version: 1,
+            tenant_id: identity.tenantId || binding.tenantId || null,
+            company_ref: identity.tenantSlug || null,
+            tenant_email: identity.tenantEmail || null,
+            company_id: binding.companyId || null,
+            store_id: binding.storeId || null,
+            terminal_binding_id: binding.terminalId,
+            source_terminal_id: normalizeOptional(transaction.terminalId || null) || null,
+            device_id: deviceId,
+            occurred_at: normalizeOptional(transaction.date || null) || new Date().toISOString(),
+            summary: {
+                transaction_id: transaction.id,
+                display_id: normalizeOptional(transaction.displayId || null) || null,
+                document_type: normalizeOptional(transaction.documentType || null) || null,
+                status: normalizeOptional(transaction.status || null) || 'COMPLETED',
+                total: Number.isFinite(total) ? total : 0,
+                tax_amount: Number.isFinite(taxAmount) ? taxAmount : 0,
+                net_amount: Number.isFinite(netAmount) ? netAmount : 0,
+                discount_amount: Number.isFinite(discountAmount) ? discountAmount : 0,
+                item_count: items.length,
+                payment_count: payments.length,
+                customer_id: normalizeOptional(transaction.customerId || null) || null,
+                customer_name: normalizeOptional(transaction.customerName || null) || null,
+                user_id: normalizeOptional(transaction.userId || null) || null,
+                user_name: normalizeOptional(transaction.userName || null) || null,
+            },
+            runtime: {
+                app_version: runtimeTelemetry.appVersion,
+                app_version_code: runtimeTelemetry.appVersionCode,
+                ip_address: runtimeTelemetry.ipAddress,
+            },
+            transaction,
+        },
+    });
 };
