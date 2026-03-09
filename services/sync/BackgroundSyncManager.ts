@@ -2,6 +2,7 @@ import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
 import { apiSyncAdapter } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
+import { postSalePostedToErp } from '../../utils/erpSyncLifecycle';
 import { InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
 
 export interface SyncState {
@@ -126,6 +127,11 @@ class BackgroundSyncManager {
             // 1) Transactions first to prioritize sales visibility at central terminal.
             await this.processCollection<any>('transactions', async (item) => {
                 await apiSyncAdapter.pushTransaction(item);
+                try {
+                    await postSalePostedToErp(item);
+                } catch (erpMirrorError) {
+                    console.warn('⚠️ BackgroundSyncManager: ERP sale mirror failed, preserving local sync flow:', erpMirrorError);
+                }
             }).catch((error: any) => {
                 collectionErrors.push(`transactions: ${error?.message || 'unknown error'}`);
             });
