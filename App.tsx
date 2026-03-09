@@ -112,7 +112,7 @@ import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { persistStandaloneRefundTransaction } from './services/localRefundPersistence';
 import { checkLicenseStatus, clearTenantIdentity, resolveTenantId } from './utils/licenseGuard';
 import { getStoredTenantIdentity, publishMasterEndpointToCloud, resolveMasterEndpointFromCloud } from './utils/cloudMasterRegistry';
-import { clearStoredErpSyncBinding, ensureErpSyncLifecycle } from './utils/erpSyncLifecycle';
+import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, processErpSyncOutbox } from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 
 type ReceivableRepairSummary = {
@@ -624,6 +624,18 @@ const AppContent: React.FC = () => {
 
         if (!disposed && result?.heartbeat?.terminal?.id) {
           console.log(`[ERP SYNC] Terminal ${currentTerminal.id} enlazada con ${result.heartbeat.terminal.id}`);
+        }
+
+        const outboxResult = await processErpSyncOutbox({
+          deviceId,
+          terminalId: currentTerminal.id,
+        });
+
+        if (!disposed && outboxResult && outboxResult.processed > 0) {
+          console.log(
+            `[ERP SYNC] Outbox procesado para ${currentTerminal.id}: ` +
+            `${outboxResult.applied} aplicado(s), ${outboxResult.failed} fallido(s)`
+          );
         }
       } catch (error) {
         console.warn('[ERP SYNC] lifecycle registration skipped:', error);
