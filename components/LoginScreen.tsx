@@ -10,9 +10,10 @@ interface LoginScreenProps {
   subVertical: string;
   availableUsers: UserType[];
   config: TerminalConfig;
+  terminalId?: string;
 }
 
-const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availableUsers, config }) => {
+const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availableUsers, config, terminalId }) => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
@@ -291,7 +292,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
         </div>
 
         <div className="text-center text-gray-500 text-xs">
-          <p>Terminal ID: POS-001</p>
+          <p>Terminal ID: {terminalId || 'N/D'}</p>
           {buildVersion && <p className="mt-1">Versión: {buildVersion}</p>}
         </div>
 

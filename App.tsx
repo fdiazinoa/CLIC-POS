@@ -3387,6 +3387,7 @@ const AppContent: React.FC = () => {
             config={getCurrentTerminal()!.config as any}
             availableUsers={users}
             subVertical={config.subVertical}
+            terminalId={getCurrentTerminal()!.id}
             onLogin={(u) => {
               setCurrentUser(u);
               const terminal = getCurrentTerminal();
