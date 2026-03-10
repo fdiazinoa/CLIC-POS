@@ -10,6 +10,7 @@ import {
     PaymentMethodDefinition,
     Product,
     Supplier,
+    Tariff,
     Warehouse,
 } from '../types';
 
@@ -186,6 +187,7 @@ const BOOTSTRAP_ENTITY_KEY_MAP: Record<string, string> = {
     WAREHOUSE: 'warehouses',
     CURRENCY: 'currencies',
     TAX: 'taxes',
+    TARIFF: 'tariffs',
     DOCUMENT_TYPE: 'document_types',
     DOCUMENT_SERIES: 'document_series',
     FISCAL_RANGE: 'fiscal_ranges',
@@ -416,6 +418,7 @@ const buildBootstrapMasters = async (requiredEntities?: string[] | null) => {
     const safeCustomers = asArray<Customer>(customers);
     const safeSuppliers = asArray<Supplier>(suppliers);
     const safeProducts = asArray<Product>(products);
+    const safeTariffs = asArray<Tariff>(safeConfig.tariffs);
     const safeConfigPaymentMethods = asArray<PaymentMethodDefinition>(safeConfig.paymentMethods);
     const safePaymentMethods = safeConfigPaymentMethods.length > 0
         ? safeConfigPaymentMethods
@@ -456,6 +459,26 @@ const buildBootstrapMasters = async (requiredEntities?: string[] | null) => {
                 name: tax.name,
                 rate: Number(tax.rate || 0),
                 type: tax.type,
+            }))
+            : [],
+        tariffs: shouldIncludeEntity(normalizedEntities, 'TARIFF')
+            ? safeTariffs.map((tariff) => ({
+                code: normalizeEntityCode(tariff.id),
+                tariff_code: normalizeEntityCode(tariff.id),
+                name: tariff.name,
+                currency_code: normalizeEntityCode(tariff.currency || null) || null,
+                is_active: Boolean(tariff.active),
+                tax_included: Boolean(tariff.taxIncluded),
+                strategy_type: normalizeEntityCode(tariff.strategy?.type || null) || null,
+                rounding_rule: normalizeEntityCode(tariff.strategy?.rounding || null) || null,
+                strategy_factor: Number(tariff.strategy?.factor || 0),
+                base_tariff_id: normalizeEntityCode(tariff.strategy?.baseTariffId || null) || null,
+                scope_store_ids: asArray<string>(tariff.scope?.storeIds),
+                scope_priority: Number(tariff.scope?.priority || 0),
+                schedule_days: asArray<number>(tariff.schedule?.daysOfWeek),
+                schedule_start: normalizeEntityCode(tariff.schedule?.timeStart || null) || null,
+                schedule_end: normalizeEntityCode(tariff.schedule?.timeEnd || null) || null,
+                item_overrides_count: Object.keys(asObject<Record<string, unknown>>(tariff.items)).length,
             }))
             : [],
         document_types: shouldIncludeEntity(normalizedEntities, 'DOCUMENT_TYPE')
