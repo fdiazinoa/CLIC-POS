@@ -2,6 +2,7 @@ import { getStoredTenantIdentity } from './cloudMasterRegistry';
 import { DEFAULT_ERP_SYNC_API_URL, normalizeCloudUrl } from './cloudDefaults';
 import { v5 as uuidv5 } from 'uuid';
 import { db } from './db';
+import { INITIAL_TARIFFS } from '../constants';
 import {
     BusinessConfig,
     Customer,
@@ -213,6 +214,23 @@ const asObject = <T>(value: unknown): T =>
     (value && typeof value === 'object' && !Array.isArray(value) ? value as T : {} as T);
 const asArray = <T>(value: unknown): T[] => Array.isArray(value) ? value as T[] : [];
 
+const resolveCurrentConfig = (value: unknown): BusinessConfig => {
+    if (Array.isArray(value)) {
+        const current = value.find((entry: any) => entry?.id === 'current');
+        const firstReal = value.find((entry: any) => entry?.id !== '_db_initialized' && entry?.id !== 'config_metadata');
+        return (current || firstReal || value[0] || {}) as BusinessConfig;
+    }
+
+    if (value && typeof value === 'object') {
+        return value as BusinessConfig;
+    }
+
+    return {} as BusinessConfig;
+};
+
+const cloneDefaultTariffs = (): Tariff[] =>
+    INITIAL_TARIFFS.map((tariff) => JSON.parse(JSON.stringify(tariff)) as Tariff);
+
 const getSyncApiBase = () => {
     const env = (import.meta as any).env || {};
     const explicitBase = normalizeOptional(normalizeCloudUrl(
@@ -408,7 +426,7 @@ const buildBootstrapMasters = async (requiredEntities?: string[] | null) => {
         db.get('paymentMethods') as Promise<PaymentMethodDefinition[]>,
     ]);
 
-    const safeConfig = asObject<BusinessConfig>(config);
+    const safeConfig = resolveCurrentConfig(config);
     const safeCurrencies = Array.isArray(safeConfig?.currencies) ? safeConfig.currencies : [];
     const safeTaxes = Array.isArray(safeConfig?.taxes) ? safeConfig.taxes : [];
     const safeTerminals = Array.isArray(safeConfig?.terminals) ? safeConfig.terminals : [];
@@ -418,7 +436,8 @@ const buildBootstrapMasters = async (requiredEntities?: string[] | null) => {
     const safeCustomers = asArray<Customer>(customers);
     const safeSuppliers = asArray<Supplier>(suppliers);
     const safeProducts = asArray<Product>(products);
-    const safeTariffs = asArray<Tariff>(safeConfig.tariffs);
+    const configuredTariffs = asArray<Tariff>(safeConfig.tariffs);
+    const safeTariffs = configuredTariffs.length > 0 ? configuredTariffs : cloneDefaultTariffs();
     const safeConfigPaymentMethods = asArray<PaymentMethodDefinition>(safeConfig.paymentMethods);
     const safePaymentMethods = safeConfigPaymentMethods.length > 0
         ? safeConfigPaymentMethods
