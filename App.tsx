@@ -68,6 +68,7 @@ import TerminalBindingScreen from './components/TerminalBindingScreen';
 import { TerminalPairingView } from './components/TerminalPairingView';
 import CustomerVisor from './components/CustomerVisor';
 import { visorSync } from './utils/visorSync';
+import HelpCenter from './components/Support/HelpCenter';
 
 // Layout imports
 import StandardPOSLayout from './components/layouts/StandardPOSLayout';
@@ -109,6 +110,7 @@ import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueSe
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { checkLicenseStatus, clearTenantIdentity, resolveTenantId } from './utils/licenseGuard';
 import { supabase } from './utils/supabase';
+import { calculateTaxBreakdownFromItems } from './utils/fiscalBreakdown';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -788,8 +790,19 @@ const AppContent: React.FC = () => {
         );
 
         // --- ACTIVATION CHECK ---
-        const localTenantId = await resolveTenantId(localStorage.getItem('clic_tenant_id') || '');
-        if (!localTenantId && !masterIp) {
+        const persistedTenantId = (localStorage.getItem('clic_tenant_id') || '').trim();
+        const persistedTenantEmail = (localStorage.getItem('clic_tenant_email') || '').trim().toLowerCase();
+        const hasActivationIdentity = Boolean(persistedTenantId && persistedTenantEmail);
+        if (!hasActivationIdentity) {
+          // En primera activacion, forzamos sesion cloud limpia para evitar auto-login heredado.
+          clearTenantIdentity();
+          Object.keys(localStorage)
+            .filter((key) => key.startsWith('sb-'))
+            .forEach((key) => localStorage.removeItem(key));
+          await supabase.auth.signOut().catch((error) => {
+            console.warn('[BOOT] Failed to clear stale Supabase session before activation:', error);
+          });
+
           console.warn('[BOOT] Sistema no activado. Redirigiendo a pantalla de activación...');
           setIsDataLoaded(true);
           setIsSecurityLoaded(true);
@@ -798,7 +811,7 @@ const AppContent: React.FC = () => {
         }
 
         // --- LICENSE / KILL-SWITCH VALIDATION ---
-        const activeTenantId = localTenantId || (currentConfig as any)?.companyInfo?.rnc || 'DEFAULT-TENANT';
+        const activeTenantId = persistedTenantId || (currentConfig as any)?.companyInfo?.rnc || 'DEFAULT-TENANT';
         const license = await checkLicenseStatus(activeTenantId, storedDeviceId);
         if (!license.isValid) {
           triggerLockdown(license.reason || 'Servicio Suspendido.');
@@ -1415,16 +1428,29 @@ const AppContent: React.FC = () => {
 
   // --- CORE EVENT HANDLERS ---
 
-  const handlePairTerminal = async (terminalId: string) => {
+  const handlePairTerminal = async (terminalId: string, incomingMasterIp?: string) => {
     setRestoringHistory(true);
     try {
+      const resolvedTerminalId = terminalId === '__SERVER_AUTO__'
+        ? (config.terminals || []).find(t => t.config?.isPrimaryNode !== false)?.id
+        || (config.terminals || [])[0]?.id
+        || terminalId
+        : terminalId;
+
+      const normalizedMasterIp = (incomingMasterIp || '').trim();
+      if (normalizedMasterIp) {
+        localStorage.setItem('pos_master_ip', normalizedMasterIp);
+      } else if (incomingMasterIp !== undefined) {
+        localStorage.removeItem('pos_master_ip');
+      }
+
       const newTerminals = (config.terminals || []).map(t => {
         // Desvincular este dispositivo de cualquier otra terminal donde estuviera
         if (t.config.currentDeviceId === deviceId) {
           return { ...t, config: { ...t.config, currentDeviceId: undefined } };
         }
         // Vincular a la terminal seleccionada
-        if (t.id === terminalId) {
+        if (t.id === resolvedTerminalId) {
           return {
             ...t,
             config: {
@@ -1441,7 +1467,7 @@ const AppContent: React.FC = () => {
       setConfig(updatedConfig);
       await db.save('config', updatedConfig);
 
-      const selectedTerminal = (newTerminals || []).find(t => t.id === terminalId);
+      const selectedTerminal = (newTerminals || []).find(t => t.id === resolvedTerminalId);
       const isSlave = selectedTerminal?.config?.isPrimaryNode === false;
 
       // If user takes control of a MASTER terminal, clear stale slave pointers.
@@ -1449,12 +1475,14 @@ const AppContent: React.FC = () => {
         localStorage.removeItem('pos_master_ip');
         const runtimeMasterUrl = `${window.location.protocol}//${window.location.hostname}:3001`;
         localStorage.setItem('CLIC_POS_MASTER_URL', runtimeMasterUrl);
+      } else if (normalizedMasterIp) {
+        localStorage.setItem('pos_master_ip', normalizedMasterIp);
       }
 
       // Always persist binding to backend before re-initializing sync.
       // This prevents pulling old config right after takeover.
       const currentProtocol = window.location.protocol;
-      const masterIp = localStorage.getItem('pos_master_ip');
+      const masterIp = normalizedMasterIp || localStorage.getItem('pos_master_ip');
       const targetUrl = masterIp
         ? `${currentProtocol}//${masterIp}:3001/api/config`
         : `${currentProtocol}//${window.location.hostname}:3001/api/config`;
@@ -1479,8 +1507,8 @@ const AppContent: React.FC = () => {
       if (isSlave) {
         try {
           // Re-initialize sync manager with new config
-          await syncManager.initialize(updatedConfig, terminalId);
-          await syncManager.restoreHistory(terminalId);
+          await syncManager.initialize(updatedConfig, resolvedTerminalId);
+          await syncManager.restoreHistory(resolvedTerminalId);
 
           // CRITICAL: Force full catalog sync to ensure sequences are loaded immediately
           // restoreHistory only pulls operational data (txns, z-reports), but we need sequences too.
@@ -1501,8 +1529,8 @@ const AppContent: React.FC = () => {
         // CRITICAL: Even if not a slave (Master mode), we MUST re-initialize services
         // with the new terminal ID and updated config, otherwise they stay uninitialized.
         console.log("🛠️ Re-initializing services for Master/Local terminal...");
-        permissionService.initialize(updatedConfig, terminalId);
-        await syncManager.initialize(updatedConfig, terminalId);
+        permissionService.initialize(updatedConfig, resolvedTerminalId);
+        await syncManager.initialize(updatedConfig, resolvedTerminalId);
       }
 
       setCurrentView('LOGIN');
@@ -2649,6 +2677,7 @@ const AppContent: React.FC = () => {
         cashOut: reportData?.cashOut || 0,
         transactionCount,
         notes,
+        taxBreakdown: reportData?.taxBreakdown || [],
         stats,
         syncStatus: 'PENDING' as const
       };
@@ -2781,9 +2810,17 @@ const AppContent: React.FC = () => {
 
     // 1. Calculations
     const refundSubtotalRaw = itemsToRefund.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+    const refundTaxBreakdown = calculateTaxBreakdownFromItems(itemsToRefund, config, {
+      isTaxIncluded: !!originalTx.isTaxIncluded,
+      fallbackTaxRate: config.taxRate || 0,
+    });
+    const refundTaxTotal = refundTaxBreakdown.reduce((sum, tax) => sum + tax.amount, 0);
     const refundTotal = originalTx.isTaxIncluded
       ? refundSubtotalRaw
-      : refundSubtotalRaw * (1 + (config.taxRate || 0));
+      : refundSubtotalRaw + refundTaxTotal;
+    const refundNetAmount = originalTx.isTaxIncluded
+      ? Math.max(0, refundSubtotalRaw - refundTaxTotal)
+      : refundSubtotalRaw;
 
     // Check if full refund
     const totalOriginalQty = originalTx.items.reduce((acc, i) => acc + i.quantity, 0);
@@ -2843,6 +2880,9 @@ const AppContent: React.FC = () => {
       originalTransactionId: originalTx.id,
       refundReason: reason,
       isTaxIncluded: originalTx.isTaxIncluded,
+      taxAmount: refundTaxTotal,
+      netAmount: refundNetAmount,
+      taxBreakdown: refundTaxBreakdown,
       syncStatus: 'PENDING'
     };
 
