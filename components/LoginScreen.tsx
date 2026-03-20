@@ -36,26 +36,32 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
 
   React.useEffect(() => {
     const loadBuildVersion = async () => {
-      try {
-        const runtimeWindow = window as any;
-        let deviceInfo: { versionName?: string; versionCode?: number } | null = null;
+      const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
-        if (typeof runtimeWindow.ClicPOSNativePrinter?.getDeviceInfo === 'function') {
-          deviceInfo = await runtimeWindow.ClicPOSNativePrinter.getDeviceInfo();
-        } else if (typeof runtimeWindow.AndroidPrinter?.getDeviceInfo === 'function') {
-          const raw = runtimeWindow.AndroidPrinter.getDeviceInfo();
-          deviceInfo = raw ? JSON.parse(raw) : null;
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        try {
+          const runtimeWindow = window as any;
+          let deviceInfo: { versionName?: string; versionCode?: number } | null = null;
+
+          if (typeof runtimeWindow.ClicPOSNativePrinter?.getDeviceInfo === 'function') {
+            deviceInfo = await runtimeWindow.ClicPOSNativePrinter.getDeviceInfo();
+          } else if (typeof runtimeWindow.AndroidPrinter?.getDeviceInfo === 'function') {
+            const raw = runtimeWindow.AndroidPrinter.getDeviceInfo();
+            deviceInfo = raw ? JSON.parse(raw) : null;
+          }
+
+          if (deviceInfo?.versionName) {
+            const versionLabel = deviceInfo.versionCode
+              ? `APK v${deviceInfo.versionName} (${deviceInfo.versionCode})`
+              : `APK v${deviceInfo.versionName}`;
+            setBuildVersion(versionLabel);
+            return;
+          }
+        } catch (error) {
+          console.warn('No se pudo leer la versión del compilado:', error);
         }
 
-        if (deviceInfo?.versionName) {
-          const versionLabel = deviceInfo.versionCode
-            ? `APK v${deviceInfo.versionName} (${deviceInfo.versionCode})`
-            : `APK v${deviceInfo.versionName}`;
-          setBuildVersion(versionLabel);
-          return;
-        }
-      } catch (error) {
-        console.warn('No se pudo leer la versión del compilado:', error);
+        await wait(250);
       }
 
       setBuildVersion('Web');

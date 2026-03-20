@@ -48,6 +48,7 @@ import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
 import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
 import { calculateZReportStats } from './utils/analytics';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
+import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 
 // Component Imports
@@ -63,8 +64,9 @@ import ZReportDashboard from './components/ZReportDashboard';
 import SupplyChainManager from './components/SupplyChainManager';
 import VerticalSelector from './components/VerticalSelector';
 import SetupWizard from './components/SetupWizard';
+import ActivationScreen from './components/ActivationScreen';
 import FranchiseDashboard from './components/FranchiseDashboard';
-import TerminalBindingScreen from './components/TerminalBindingScreen';
+import TerminalModeSelector from './components/TerminalModeSelector';
 import { TerminalPairingView } from './components/TerminalPairingView';
 import CustomerVisor from './components/CustomerVisor';
 import { visorSync } from './utils/visorSync';
@@ -108,6 +110,10 @@ import { printLabelsFromTemplate } from './utils/labelPrinter';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { persistStandaloneRefundTransaction } from './services/localRefundPersistence';
+import { checkLicenseStatus, clearTenantIdentity, resolveTenantId } from './utils/licenseGuard';
+import { getStoredTenantIdentity, publishMasterEndpointToCloud, resolveMasterEndpointFromCloud } from './utils/cloudMasterRegistry';
+import { clearStoredErpSyncBinding, ensureErpSyncLifecycle } from './utils/erpSyncLifecycle';
+import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -178,6 +184,8 @@ const CREDIT_PAYMENT_METHODS = new Set(['CREDIT', 'CREDITO', 'PENDIENTE']);
 const SETUP_WIZARD_COMPLETED_KEY = 'clic_pos_setup_wizard_completed';
 const SETUP_FLOW_STAGE_KEY = 'clic_pos_setup_flow_stage';
 const SETUP_FLOW_VERSION_KEY = 'clic_pos_setup_flow_version';
+const TERMINAL_SETUP_MODE_KEY = 'clic_pos_terminal_setup_mode';
+const TERMINAL_SETUP_PENDING_KEY = 'clic_pos_terminal_setup_pending';
 const SETUP_FLOW_VERSION = '2';
 const buildRuntimeMasterUrl = () => `${window.location.protocol}//${window.location.hostname}:3001`;
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -186,6 +194,15 @@ const normalizeMasterHost = (value: string | null | undefined) =>
     .trim()
     .replace(/^https?:\/\//i, '')
     .replace(/\/.*$/, '');
+
+type TerminalSetupMode = 'SERVER' | 'CLIENT';
+
+const getStoredTerminalSetupMode = (): TerminalSetupMode | null => {
+  const storedMode = localStorage.getItem(TERMINAL_SETUP_MODE_KEY);
+  return storedMode === 'SERVER' || storedMode === 'CLIENT' ? storedMode : null;
+};
+
+const hasPendingTerminalSetup = (): boolean => localStorage.getItem(TERMINAL_SETUP_PENDING_KEY) === '1';
 
 const buildConfigSyncUrl = (): string | null => {
   const currentProtocol = window.location.protocol;
@@ -261,11 +278,13 @@ const AppContent: React.FC = () => {
   const [failedMasterIp, setFailedMasterIp] = useState<string>('');
   const initLoadStartedRef = useRef(false);
   const forceSyncHandledRef = useRef(false);
+  const lockdownHandledRef = useRef(false);
   const [reconnectionStatus, setReconnectionStatus] = useState<'idle' | 'searching' | 'connected' | 'failed'>('idle');
 
   // --- SECURITY BOOTSTRAP STATE ---
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [licenseError, setLicenseError] = useState<string | null>(null);
 
   // Security bootstrap logic moved to loadData
 
@@ -373,6 +392,79 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('sync:reconnecting', handleReconnection as any);
   }, []);
 
+  const triggerLockdown = React.useCallback((message: string) => {
+    if (lockdownHandledRef.current) return;
+    lockdownHandledRef.current = true;
+    setLicenseError(message);
+    setIsDataLoaded(true);
+    setIsSecurityLoaded(true);
+    setCurrentUser(null);
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith('sb-'))
+      .forEach((key) => localStorage.removeItem(key));
+    clearPersistedSupabaseSession();
+    void supabase.auth.signOut().catch(error => {
+      console.warn('Failed to clear Supabase session during lockdown', error);
+    });
+  }, []);
+
+  // --- REALTIME KILL SWITCH (FALLBACK: SMART POLLING) ---
+  useEffect(() => {
+    if (!isDataLoaded) return;
+
+    const persistedTenantId = (localStorage.getItem('clic_tenant_id') || '').trim();
+    const persistedTenantEmail = (localStorage.getItem('clic_tenant_email') || '').trim().toLowerCase();
+    const hasActivationIdentity = Boolean(persistedTenantId && persistedTenantEmail);
+    if (!hasActivationIdentity) return;
+
+    const runLicenseCheck = async (fallbackMessage: string) => {
+      try {
+        const res = await checkLicenseStatus(persistedTenantId, deviceId);
+        if (!res.isValid) {
+          triggerLockdown(res.reason || fallbackMessage);
+        }
+      } catch {
+        // Offline tolerance: avoid false positives on transient connectivity issues.
+      }
+    };
+
+    void runLicenseCheck('Servicio Suspendido.');
+
+    const intervalId = window.setInterval(async () => {
+      await runLicenseCheck('Servicio Suspendido por el Administrador.');
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, [isDataLoaded, deviceId, triggerLockdown]);
+
+  // --- TENANT ID SELF-CORRECTION ---
+  useEffect(() => {
+    if (!isDataLoaded) return;
+
+    const persistedTenantId = (localStorage.getItem('clic_tenant_id') || '').trim();
+    if (!persistedTenantId) return;
+
+    resolveTenantId(persistedTenantId)
+      .then((resolvedTenantId) => {
+        if (!resolvedTenantId) return;
+
+        const currentId = (localStorage.getItem('clic_tenant_id') || '').trim();
+        if (resolvedTenantId !== currentId) {
+          console.log('🔄 Syncing local tenant ID with cloud session:', resolvedTenantId);
+          localStorage.setItem('clic_tenant_id', resolvedTenantId);
+        }
+
+        return checkLicenseStatus(resolvedTenantId, deviceId).then(res => {
+          if (!res.isValid) {
+            triggerLockdown(res.reason || 'Servicio Suspendido');
+          }
+        });
+      })
+      .catch(error => {
+        console.warn('Tenant self-correction skipped:', error);
+      });
+  }, [isDataLoaded, deviceId, triggerLockdown]);
+
   // --- AUTO-RETRY ON BOOT ERROR ---
   useEffect(() => {
     if (initialConnError || bootstrapError) {
@@ -411,7 +503,19 @@ const AppContent: React.FC = () => {
 
     const primaryTerminal = terminals.find(t => t.config?.isPrimaryNode) || terminals[0];
     const occupiedByAnotherDevice = primaryTerminal?.config?.currentDeviceId;
-    if (!primaryTerminal || (occupiedByAnotherDevice && occupiedByAnotherDevice !== targetDeviceId)) {
+    const setupMode = getStoredTerminalSetupMode();
+    const canForceStandaloneRebind =
+      !hasPendingTerminalSetup() &&
+      setupMode !== 'CLIENT' &&
+      !localStorage.getItem('pos_master_ip') &&
+      primaryTerminal?.config?.governedByMaster !== true;
+
+    if (
+      !primaryTerminal ||
+      (occupiedByAnotherDevice &&
+        occupiedByAnotherDevice !== targetDeviceId &&
+        !canForceStandaloneRebind)
+    ) {
       return null;
     }
 
@@ -473,12 +577,98 @@ const AppContent: React.FC = () => {
   }, [getStandalonePrimaryBinding]);
 
   const handleVerticalSelection = React.useCallback(async (selectedConfig: BusinessConfig) => {
+    localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+    localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER');
     localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'VERTICAL_SELECTED');
     localStorage.setItem(SETUP_FLOW_VERSION_KEY, SETUP_FLOW_VERSION);
     setConfig(selectedConfig);
     await db.save('config', selectedConfig);
     setCurrentView('SETUP');
   }, []);
+
+  const handleTerminalModeSelection = React.useCallback((mode: TerminalSetupMode) => {
+    localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+    localStorage.setItem(TERMINAL_SETUP_MODE_KEY, mode);
+
+    if (mode === 'SERVER') {
+      localStorage.removeItem('pos_master_ip');
+      localStorage.setItem('CLIC_POS_MASTER_URL', buildRuntimeMasterUrl());
+      setCurrentView('VERTICAL_SELECTOR');
+      return;
+    }
+
+    localStorage.removeItem(SETUP_FLOW_STAGE_KEY);
+    localStorage.removeItem(SETUP_FLOW_VERSION_KEY);
+    setCurrentView('TERMINAL_PAIRING');
+  }, []);
+
+  useEffect(() => {
+    const currentTerminal = getCurrentTerminal();
+    const tenantIdentity = getStoredTenantIdentity();
+
+    if (!deviceId || !currentTerminal?.id) return;
+    if (!tenantIdentity.tenantId && !tenantIdentity.tenantSlug && !tenantIdentity.tenantEmail) return;
+
+    let disposed = false;
+
+    const publishEndpoint = async () => {
+      const endpoint = await publishMasterEndpointToCloud({
+        deviceId,
+        terminalId: currentTerminal.id,
+        terminalName: currentTerminal.id,
+        isPrimary: currentTerminal.config?.isPrimaryNode !== false,
+      });
+
+      if (!disposed && endpoint?.localIp) {
+        console.log(`[CLOUD] Terminal ${currentTerminal.id} publicada en cloud: ${endpoint.localIp}`);
+      }
+    };
+
+    const syncLifecycle = async () => {
+      try {
+        const result = await ensureErpSyncLifecycle({
+          deviceId,
+          terminalId: currentTerminal.id,
+          terminalName: currentTerminal.id,
+          isPrimary: currentTerminal.config?.isPrimaryNode !== false,
+          pendingEvents: 0,
+        });
+
+        if (!disposed && result?.heartbeat?.terminal?.id) {
+          console.log(`[ERP SYNC] Terminal ${currentTerminal.id} enlazada con ${result.heartbeat.terminal.id}`);
+        }
+      } catch (error) {
+        console.warn('[ERP SYNC] lifecycle registration skipped:', error);
+      }
+    };
+
+    void publishEndpoint();
+    void syncLifecycle();
+
+    const heartbeatId = window.setInterval(() => {
+      if (navigator.onLine) {
+        void publishEndpoint();
+        void syncLifecycle();
+      }
+    }, 60000);
+
+    const republish = () => {
+      if (navigator.onLine) {
+        void publishEndpoint();
+        void syncLifecycle();
+      }
+    };
+
+    window.addEventListener('online', republish);
+    window.addEventListener('focus', republish);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(heartbeatId);
+      window.removeEventListener('online', republish);
+      window.removeEventListener('focus', republish);
+    };
+  }, [deviceId, getCurrentTerminal]);
 
   // --- RECONNECTION BANNER ---
   const renderReconnectionBanner = () => {
@@ -978,13 +1168,45 @@ const AppContent: React.FC = () => {
         }
         setDeviceId(storedDeviceId);
 
+        const persistedTenantId = (localStorage.getItem('clic_tenant_id') || '').trim();
+        const persistedTenantEmail = (localStorage.getItem('clic_tenant_email') || '').trim().toLowerCase();
+        const hasActivationIdentity = Boolean(persistedTenantId && persistedTenantEmail);
+        if (!hasActivationIdentity) {
+          // En primera activacion, forzamos sesion cloud limpia para evitar auto-login heredado.
+          clearTenantIdentity();
+          localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
+          localStorage.removeItem(TERMINAL_SETUP_MODE_KEY);
+          Object.keys(localStorage)
+            .filter((key) => key.startsWith('sb-'))
+            .forEach((key) => localStorage.removeItem(key));
+          clearPersistedSupabaseSession();
+          await supabase.auth.signOut().catch((error) => {
+            console.warn('[BOOT] Failed to clear stale Supabase session before activation:', error);
+          });
+
+          console.warn('[BOOT] Sistema no activado. Redirigiendo a pantalla de activación...');
+          setIsDataLoaded(true);
+          setIsSecurityLoaded(true);
+          setCurrentView('ACTIVATION');
+          return;
+        }
+
+        // --- LICENSE / KILL-SWITCH VALIDATION ---
+        const license = await checkLicenseStatus(persistedTenantId, storedDeviceId);
+        if (!license.isValid) {
+          triggerLockdown(license.reason || 'Servicio Suspendido.');
+          return;
+        }
+
         // IMPORTANT:
         // Only pull remote config when this device is a SLAVE (or not yet paired locally).
         // If a MASTER keeps stale pos_master_ip, blindly pulling here corrupts local runtime config.
-        const masterIp = localStorage.getItem('pos_master_ip');
+        let masterIp = localStorage.getItem('pos_master_ip');
         const setupWizardCompleted = localStorage.getItem(SETUP_WIZARD_COMPLETED_KEY) === '1';
         const setupFlowStage = localStorage.getItem(SETUP_FLOW_STAGE_KEY);
         const setupFlowVersion = localStorage.getItem(SETUP_FLOW_VERSION_KEY);
+        const setupMode = getStoredTerminalSetupMode();
+        const terminalSetupPending = hasPendingTerminalSetup();
         const localTerminals = (!Array.isArray(currentConfig) && currentConfig?.terminals) ? currentConfig.terminals : [];
         const localPairedTerminal = (localTerminals || []).find(
           (t: any) => t.config?.currentDeviceId === storedDeviceId
@@ -992,7 +1214,17 @@ const AppContent: React.FC = () => {
         const isVisorMode = new URLSearchParams(window.location.search).get('view') === 'VISOR';
         const hasStartupTransactions = Array.isArray(data.transactions) && data.transactions.length > 0;
         const shouldResumeSetupWizard =
+          terminalSetupPending &&
+          setupMode === 'SERVER' &&
           setupFlowStage === 'VERTICAL_SELECTED' &&
+          !masterIp &&
+          !localPairedTerminal &&
+          !isVisorMode;
+        const shouldResumeVerticalSelection =
+          terminalSetupPending &&
+          setupMode === 'SERVER' &&
+          !setupWizardCompleted &&
+          !setupFlowStage &&
           !masterIp &&
           !localPairedTerminal &&
           !isVisorMode;
@@ -1004,11 +1236,53 @@ const AppContent: React.FC = () => {
           !isVisorMode &&
           !hasStartupTransactions &&
           isSeedSetupBusinessConfig(currentConfig);
+        const shouldChooseTerminalMode =
+          terminalSetupPending &&
+          !isVisorMode &&
+          !setupMode &&
+          !localPairedTerminal &&
+          !setupWizardCompleted;
+        const shouldPairAsClient =
+          terminalSetupPending &&
+          !isVisorMode &&
+          setupMode === 'CLIENT' &&
+          !localPairedTerminal;
 
-        if (shouldResumeSetupWizard || shouldReplayLegacySetupFlow) {
-          const resumeView = shouldResumeSetupWizard ? 'SETUP' : 'VERTICAL_SELECTOR';
+        const shouldResolveMasterFromCloud = !masterIp && (
+          !localPairedTerminal || localPairedTerminal?.config?.isPrimaryNode === false || shouldPairAsClient
+        );
+
+        if (shouldResolveMasterFromCloud) {
+          const cloudEndpoint = await resolveMasterEndpointFromCloud();
+          const discoveredMasterIp = normalizeMasterHost(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl || '');
+          if (discoveredMasterIp) {
+            masterIp = discoveredMasterIp;
+            console.log(`[BOOT] Master resuelto desde Cloud-Admin: ${discoveredMasterIp}`);
+          }
+        }
+
+        if (shouldResumeSetupWizard || shouldReplayLegacySetupFlow || shouldResumeVerticalSelection) {
+          const resumeView = shouldResumeSetupWizard
+            ? 'SETUP'
+            : 'VERTICAL_SELECTOR';
           console.log(`[BOOT] Resuming initial setup flow in ${resumeView} mode...`);
           setCurrentView(resumeView);
+          setIsDataLoaded(true);
+          setIsSecurityLoaded(true);
+          return;
+        }
+
+        if (shouldChooseTerminalMode) {
+          console.log('[BOOT] Activation completed. Waiting for server/client selection...');
+          setCurrentView('TERMINAL_MODE_SELECTOR');
+          setIsDataLoaded(true);
+          setIsSecurityLoaded(true);
+          return;
+        }
+
+        if (shouldPairAsClient) {
+          console.log('[BOOT] Client mode selected. Redirecting to terminal pairing...');
+          setCurrentView('TERMINAL_PAIRING');
           setIsDataLoaded(true);
           setIsSecurityLoaded(true);
           return;
@@ -1052,19 +1326,37 @@ const AppContent: React.FC = () => {
 
         if (shouldFetchConfigFromMaster) {
           console.log("🔄 Slave Mode: Fetching latest config from Master...");
-          try {
+          const fetchConfigFromMaster = async (host: string) => {
             const currentProtocol = window.location.protocol;
-            const targetUrl = `${currentProtocol}//${masterIp}:3001/api/config`;
+            const targetUrl = `${currentProtocol}//${host}:3001/api/config`;
 
-            // ADDED TIMEOUT: Fail fast if Master is offline (common in emulators)
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 3000); // 3s timeout
+            const timeoutId = setTimeout(() => controller.abort(), 3000);
 
-            const res = await fetch(targetUrl, { signal: controller.signal });
-            clearTimeout(timeoutId);
+            try {
+              const res = await fetch(targetUrl, { signal: controller.signal });
+              if (!res.ok) return null;
+              return await res.json();
+            } finally {
+              clearTimeout(timeoutId);
+            }
+          };
 
-            if (res.ok) {
-              const fetchedConfig = await res.json();
+          try {
+            let fetchedConfig = masterIp ? await fetchConfigFromMaster(masterIp) : null;
+
+            if (!fetchedConfig) {
+              const cloudEndpoint = await resolveMasterEndpointFromCloud();
+              const refreshedMasterIp = normalizeMasterHost(cloudEndpoint?.localIp || cloudEndpoint?.endpointUrl || '');
+
+              if (refreshedMasterIp && refreshedMasterIp !== masterIp) {
+                console.warn(`⚠️ Master IP actualizada desde cloud: ${masterIp || 'N/D'} -> ${refreshedMasterIp}`);
+                masterIp = refreshedMasterIp;
+                fetchedConfig = await fetchConfigFromMaster(refreshedMasterIp);
+              }
+            }
+
+            if (fetchedConfig && fetchedConfig.terminals) {
               const normalizedFetchedConfig = normalizeTerminalDocumentAssignments(fetchedConfig);
               const configFromMaster = normalizedFetchedConfig.config;
               if (configFromMaster && !Array.isArray(configFromMaster) && configFromMaster.terminals) {
@@ -1629,7 +1921,7 @@ const AppContent: React.FC = () => {
 
   // --- CORE EVENT HANDLERS ---
 
-  const handlePairTerminal = async (terminalId: string) => {
+  const handlePairTerminal = async (terminalId: string, resolvedMasterIp?: string) => {
     setRestoringHistory(true);
     try {
       const newTerminals = (config.terminals || []).map(t => {
@@ -1657,6 +1949,14 @@ const AppContent: React.FC = () => {
 
       const selectedTerminal = (newTerminals || []).find(t => t.id === terminalId);
       const isSlave = selectedTerminal?.config?.isPrimaryNode === false;
+      const normalizedResolvedMasterIp = normalizeMasterHost(resolvedMasterIp || '');
+      localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
+      localStorage.setItem(TERMINAL_SETUP_MODE_KEY, isSlave ? 'CLIENT' : 'SERVER');
+
+      if (isSlave && normalizedResolvedMasterIp) {
+        localStorage.setItem('pos_master_ip', normalizedResolvedMasterIp);
+        localStorage.setItem('CLIC_POS_MASTER_URL', `${window.location.protocol}//${normalizedResolvedMasterIp}:3001`);
+      }
 
       // If user takes control of a MASTER terminal, clear stale slave pointers.
       if (!isSlave) {
@@ -1688,6 +1988,13 @@ const AppContent: React.FC = () => {
       } else {
         console.log('ℹ️ Native standalone runtime detected. Skipping backend binding sync.');
       }
+
+      void publishMasterEndpointToCloud({
+        deviceId,
+        terminalId,
+        terminalName: terminalId,
+        isPrimary: !isSlave,
+      });
 
       // If it's a slave terminal, restore history
       if (isSlave) {
@@ -1736,6 +2043,8 @@ const AppContent: React.FC = () => {
       };
       const effectiveDeviceId = deviceId || localStorage.getItem('pos_device_id') || '';
 
+      localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
+      localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER');
       localStorage.setItem(SETUP_WIZARD_COMPLETED_KEY, '1');
       localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'COMPLETE');
       localStorage.setItem(SETUP_FLOW_VERSION_KEY, SETUP_FLOW_VERSION);
@@ -2744,6 +3053,33 @@ const AppContent: React.FC = () => {
   };
 
   // --- VIEW RENDERING LOGIC ---
+  if (licenseError) {
+    return (
+      <div className="h-screen w-screen bg-red-50 flex flex-col items-center justify-center p-6 text-center">
+        <div className="bg-white p-10 rounded-3xl shadow-2xl border border-red-100 max-w-lg z-50">
+          <div className="w-24 h-24 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <h1 className="text-3xl font-black text-slate-800 mb-4 tracking-tight">Acceso Bloqueado</h1>
+          <p className="text-lg text-slate-600 font-medium mb-8 leading-relaxed">
+            {licenseError}
+          </p>
+          <div className="p-4 bg-slate-50 rounded-xl text-sm font-mono text-slate-500 font-bold border border-slate-200">
+            Terminal Token: {deviceId}
+          </div>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-8 w-full py-4 bg-slate-900 hover:bg-black text-white rounded-xl font-bold transition-transform active:scale-95"
+          >
+            Reintentar Conexión
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!isDataLoaded || restoringHistory) {
     if (initialConnError && !restoringHistory) {
       return (
@@ -2794,9 +3130,17 @@ const AppContent: React.FC = () => {
 
     // 1. Calculations
     const refundSubtotalRaw = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+    const refundTerminalConfig = config.terminals?.find(t => t.id === originalTx.terminalId)?.config;
+    const refundSummary = calculateTransactionFiscalSummary({
+      items: normalizedRefundItems,
+      total: 0,
+      discountAmount: 0,
+      taxAmount: 0,
+      isTaxIncluded: !!originalTx.isTaxIncluded,
+    }, config, { terminalConfig: refundTerminalConfig });
     const refundTotal = originalTx.isTaxIncluded
       ? refundSubtotalRaw
-      : refundSubtotalRaw * (1 + (config.taxRate || 0));
+      : refundSummary.total;
 
     // Check if full refund
     const totalOriginalQty = originalTx.items.reduce((acc, i) => acc + Math.abs(Number(i.quantity || 0)), 0);
@@ -2969,6 +3313,64 @@ const AppContent: React.FC = () => {
 
   const renderView = () => {
     switch (currentView) {
+      case 'ACTIVATION':
+        return (
+          <ActivationScreen
+            onActivationComplete={(tenantData) => {
+              void (async () => {
+                console.log('✅ Sistema activado para:', tenantData?.name || tenantData?.email || 'tenant');
+
+                const activatedTenantId = String(tenantData?.tenantId || '').trim();
+                const resolvedDeviceId = deviceId || localStorage.getItem('pos_device_id') || '';
+                const storedSetupMode = getStoredTerminalSetupMode();
+                const setupWizardCompleted = localStorage.getItem(SETUP_WIZARD_COMPLETED_KEY) === '1';
+                const localTerminals = (!Array.isArray(config) && config?.terminals) ? config.terminals : [];
+                const localPairedTerminal = (localTerminals || []).find(
+                  (t: any) => t.config?.currentDeviceId === resolvedDeviceId
+                );
+                const hasKnownTerminalContext = Boolean(
+                  storedSetupMode ||
+                  setupWizardCompleted ||
+                  localPairedTerminal
+                );
+
+                if (activatedTenantId) {
+                  try {
+                    const license = await checkLicenseStatus(activatedTenantId, resolvedDeviceId);
+                    if (!license.isValid) {
+                      triggerLockdown(license.reason || 'Servicio Suspendido.');
+                      return;
+                    }
+                  } catch (error) {
+                    console.warn('[ACTIVATION] License check failed after activation, keeping offline-safe tolerance:', error);
+                  }
+                }
+
+                if (hasKnownTerminalContext) {
+                  console.log('[ACTIVATION] Se detectó una configuración previa. Reanudando flujo operativo...');
+                  window.location.reload();
+                  return;
+                }
+
+                localStorage.removeItem(SETUP_WIZARD_COMPLETED_KEY);
+                localStorage.removeItem(SETUP_FLOW_STAGE_KEY);
+                localStorage.removeItem(SETUP_FLOW_VERSION_KEY);
+                localStorage.removeItem(TERMINAL_SETUP_MODE_KEY);
+                localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+                clearStoredErpSyncBinding();
+                setCurrentView('TERMINAL_MODE_SELECTOR');
+              })();
+            }}
+          />
+        );
+
+      case 'TERMINAL_MODE_SELECTOR':
+        return (
+          <TerminalModeSelector
+            onSelect={handleTerminalModeSelection}
+          />
+        );
+
       case 'VERTICAL_SELECTOR':
         return (
           <VerticalSelector
@@ -2994,6 +3396,11 @@ const AppContent: React.FC = () => {
             currentDeviceId={deviceId}
             onPair={handlePairTerminal}
             initialMasterIp={localStorage.getItem('pos_master_ip') || ''}
+            onBack={() => {
+              localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+              localStorage.removeItem(TERMINAL_SETUP_MODE_KEY);
+              setCurrentView('TERMINAL_MODE_SELECTOR');
+            }}
           />
         );
 
@@ -3994,6 +4401,11 @@ const AppContent: React.FC = () => {
 
   // Render with appropriate layout based on device role
   const renderWithLayout = () => {
+    // Escape hatch for activation flow
+    if (currentView === 'ACTIVATION') {
+      return renderView();
+    }
+
     const role = getCurrentDeviceRole();
     const content = renderView();
 

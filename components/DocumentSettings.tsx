@@ -394,28 +394,28 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                </h1>
                <p className="text-sm text-gray-500">Gestión de series y cumplimiento fiscal DGII.</p>
             </div>
-            <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors self-end md:self-auto"><X size={24} /></button>
+            <button onClick={onClose} className="self-end md:self-auto p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors"><X size={24} /></button>
          </div>
 
          <div className="bg-white border-b border-gray-200 shrink-0 px-4 md:px-8 overflow-hidden">
             <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
-                  <button onClick={() => setActiveSubTab('SERIES')} className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all ${activeSubTab === 'SERIES' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>Secuencias Internas</button>
-                  <button onClick={() => setActiveSubTab('FISCAL_POOL')} className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeSubTab === 'FISCAL_POOL' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
-                     <Landmark size={16} /> Pool Fiscal DGII
-                  </button>
+               <button onClick={() => setActiveSubTab('SERIES')} className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all ${activeSubTab === 'SERIES' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>Secuencias Internas</button>
+               <button onClick={() => setActiveSubTab('FISCAL_POOL')} className={`mobile-tab-item py-4 text-[11px] md:text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeSubTab === 'FISCAL_POOL' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+                  <Landmark size={16} /> Pool Fiscal DGII
+               </button>
             </div>
          </div>
 
-         <div className="responsive-content flex-1 overflow-hidden p-4 md:p-8">
+         <div className="responsive-content flex-1 min-h-0 overflow-hidden p-4 md:p-8">
             <div className="max-w-6xl mx-auto h-full overflow-y-auto custom-scrollbar">
 
                {activeSubTab === 'SERIES' && (
                   <div className="space-y-6 animate-in slide-in-from-bottom-4">
-                     <div className="flex justify-between items-center px-2">
+                     <div className="flex flex-col gap-3 md:flex-row md:justify-between md:items-center px-2">
                         <h2 className="text-lg font-bold text-gray-800 uppercase tracking-widest text-xs opacity-50">Secuencias por Tipo</h2>
                         <button
                            onClick={handleAddNewSeries}
-                           className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 flex items-center gap-2 active:scale-95 transition-all"
+                           className="self-end md:self-auto px-6 py-2.5 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 flex items-center gap-2 active:scale-95 transition-all"
                         >
                            <Plus size={20} /> Nueva Serie
                         </button>
@@ -540,12 +540,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                         </div>
                      </section>
 
-                     <div className="flex justify-between items-center px-2">
+                     <div className="flex flex-col gap-3 md:flex-row md:justify-between md:items-center px-2">
                         <div>
                            <h2 className="text-xl font-bold text-gray-800">Autorizaciones DGII Vigentes</h2>
                            <p className="text-sm text-gray-500">Administra los rangos aprobados en tu oficina virtual.</p>
                         </div>
-                        <button onClick={() => setIsAddingRange(true)} className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 flex items-center gap-2 active:scale-95 transition-all">
+                        <button onClick={() => setIsAddingRange(true)} className="self-end md:self-auto px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 flex items-center gap-2 active:scale-95 transition-all">
                            <Plus size={20} /> Cargar Nuevo Rango
                         </button>
                      </div>

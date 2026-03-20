@@ -9,6 +9,9 @@ import android.os.Build
 import android.util.Base64
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import java.net.Inet4Address
+import java.net.NetworkInterface
+import java.util.Collections
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -190,6 +193,9 @@ class AndroidPrinterBridge(context: Context) {
             0L
         }
 
+        val localIps = getLocalIpv4Addresses()
+        val preferredLocalIp = localIps.firstOrNull()
+
         return JSONObject()
             .put("profile", "HANDHELD")
             .put("integratedPrinter", false)
@@ -197,6 +203,8 @@ class AndroidPrinterBridge(context: Context) {
             .put("packageName", appContext.packageName)
             .put("versionName", versionName)
             .put("versionCode", versionCode)
+            .put("localIp", preferredLocalIp)
+            .put("localIps", JSONArray(localIps))
             .toString()
     }
 
@@ -301,10 +309,48 @@ class AndroidPrinterBridge(context: Context) {
             .toString()
     }
 
+    private fun getLocalIpv4Addresses(): List<String> {
+        return try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            val interfaceEntries = if (interfaces != null) Collections.list(interfaces) else emptyList()
+            val addressEntries = interfaceEntries
+                .filter { iface ->
+                    runCatching { iface.isUp && !iface.isLoopback && !iface.isVirtual }.getOrDefault(false)
+                }
+                .flatMap { iface ->
+                    Collections.list(iface.inetAddresses)
+                        .mapNotNull { address ->
+                            val ipv4 = address as? Inet4Address ?: return@mapNotNull null
+                            val hostAddress = ipv4.hostAddress ?: return@mapNotNull null
+                            if (ipv4.isLoopbackAddress || hostAddress.startsWith("127.")) return@mapNotNull null
+                            if (!ipv4.isSiteLocalAddress) return@mapNotNull null
+                            iface.name to hostAddress
+                        }
+                }
+
+            addressEntries
+                .sortedWith(
+                    compareBy<Pair<String, String>> { entry ->
+                        when {
+                            entry.first.startsWith("wlan") -> 0
+                            entry.first.startsWith("eth") -> 1
+                            entry.first.startsWith("en") -> 2
+                            else -> 3
+                        }
+                    }.thenBy { it.first }.thenBy { it.second }
+                )
+                .map { it.second }
+                .distinct()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     companion object {
         /**
          * Shim para exponer contrato JS unificado como window.ClicPOSNativePrinter.
          */
+        @JvmStatic
         fun injectContractShim(webView: WebView) {
             val script = """
                 (function () {

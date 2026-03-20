@@ -40,6 +40,7 @@ public class MainActivity extends BridgeActivity {
         settings.setLoadWithOverviewMode(true);
 
         webView.addJavascriptInterface(new AndroidPrinterBridge(getApplicationContext()), "AndroidPrinter");
+        AndroidPrinterBridge.injectContractShim(webView);
         webView.setInitialScale(0);
         webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
 

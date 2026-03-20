@@ -46,6 +46,7 @@ import AuditLogViewer from './AuditLogViewer';
 import TeamHub from './TeamHub';
 import PaymentSettings from './PaymentSettings';
 import DocumentSettings from './DocumentSettings';
+import TaxSettings from './TaxSettings';
 import PromotionBuilder from './PromotionBuilder';
 import { ImportWizard } from './ImportWizard/ImportWizard';
 import LoyaltySettings from './LoyaltySettings';
@@ -112,7 +113,7 @@ interface SettingsProps {
   onUpdateRooms?: (rooms: Room[]) => void;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -144,6 +145,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
   const [fiscalPurchaseOrders, setFiscalPurchaseOrders] = useState<PurchaseOrder[]>(props.purchaseOrders || []);
   const [fiscalReceptions, setFiscalReceptions] = useState<Reception[]>(props.receptions || []);
   const [fiscalSuppliers, setFiscalSuppliers] = useState<Supplier[]>(props.suppliers || []);
+  const usesPageScroll = currentView === 'HOME' || currentView === 'TERMINALS' || currentView === 'TAXES';
 
   useEffect(() => {
     const previousBodyOverflow = document.body.style.overflow;
@@ -336,6 +338,17 @@ const Settings: React.FC<SettingsProps> = (props) => {
       case 'DOCUMENTS':
         return (
           <DocumentSettings
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'TAXES':
+        return (
+          <TaxSettings
+            config={props.config}
+            products={props.products}
+            onUpdateConfig={props.onUpdateConfig}
+            onUpdateProducts={props.onUpdateProducts}
             onClose={() => setCurrentView('HOME')}
           />
         );
@@ -789,6 +802,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                   <SettingsCard icon={CreditCard} label="Métodos de Pago" description="Pasarelas, Tarjetas, QR" color="bg-indigo-500" onClick={() => setCurrentView('PAYMENTS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={Percent} label="Impuestos" description="ITBIS, Exentos y Cargos" color="bg-emerald-500" onClick={() => setCurrentView('TAXES')} locked={!hasPermission('SETTINGS_TAXES')} />
                   <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} locked={!hasPermission('POS_CLOSE_Z')} />
                   <SettingsCard icon={FileText} label="Documentos" description="Series, NCF, Prefijos" color="bg-blue-400" onClick={() => setCurrentView('DOCUMENTS')} locked={!hasPermission('SETTINGS_TAXES')} />
                 </div>
@@ -852,10 +866,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
   return (
     <div
-      className={`z-50 bg-gray-50 ${currentView === 'HOME' ? '' : `fixed inset-0 flex min-h-0 flex-col ${currentView === 'TERMINALS' ? '' : 'overflow-hidden'}`}`}
-      style={currentView === 'HOME' || currentView === 'TERMINALS'
+      className={`fixed inset-0 z-50 bg-gray-50 flex min-h-0 flex-col ${usesPageScroll ? '' : 'overflow-hidden'}`}
+      style={usesPageScroll
         ? {
-            height: '100%',
             overflowY: 'scroll',
             WebkitOverflowScrolling: 'touch',
             touchAction: 'pan-y'
@@ -863,8 +876,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
         : undefined}
     >
       <div
-        className={currentView === 'HOME' || currentView === 'TERMINALS' ? 'min-h-[100dvh] flex flex-1 flex-col' : 'flex min-h-0 flex-1 flex-col'}
-        style={currentView === 'HOME' || currentView === 'TERMINALS' ? { minHeight: '100dvh' } : undefined}
+        className={usesPageScroll ? 'min-h-[100dvh] flex flex-1 flex-col' : 'flex min-h-0 flex-1 flex-col'}
+        style={usesPageScroll ? { minHeight: '100dvh' } : undefined}
       >
         {renderContent()}
       </div>

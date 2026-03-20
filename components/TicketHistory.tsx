@@ -13,6 +13,7 @@ import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
 import { User, DeviceRole } from '../types';
 import { RefundModal } from './RefundModal';
+import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/fiscalBreakdown';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -213,34 +214,36 @@ const SalesHistoryTable: React.FC<{
                   {transactions.map((tx) => {
                      const inferredZSeq = inferredZByTxId.get(tx.id);
                      const zSeq = tx.zReportSequence || (tx.zReportId ? zReportMap?.get(tx.zReportId) : null) || inferredZSeq;
+                     const openDetail = () => onRowClick(tx.id);
                      return (
                         <tr
                            key={tx.id}
-                           onClick={() => onRowClick(tx.id)}
+                           onClick={openDetail}
                            className={`transition-colors cursor-pointer group ${tx.documentType === 'REFUND' || tx.status === 'REFUNDED' || tx.status === 'PARTIAL_REFUND'
                               ? 'bg-red-50/50 hover:bg-red-100/50'
                               : 'hover:bg-gray-50'
                               }`}
+                           style={{ touchAction: 'manipulation' }}
                         >
-                           <td className="px-4 py-3">{getStatusBadge(tx)}</td>
-                           <td className="px-4 py-3 text-xs font-medium text-gray-500">{tx.displayId || tx.id.slice(-8).toUpperCase()}</td>
-                           <td className="px-4 py-3">
+                           <td className="px-4 py-3" onClick={openDetail}>{getStatusBadge(tx)}</td>
+                           <td className="px-4 py-3 text-xs font-medium text-gray-500" onClick={openDetail}>{tx.displayId || tx.id.slice(-8).toUpperCase()}</td>
+                           <td className="px-4 py-3" onClick={openDetail}>
                               <p className="font-bold text-gray-800">{new Date(tx.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                               <p className="text-[10px] text-gray-400 font-medium">{new Date(tx.date).toLocaleDateString()}</p>
                            </td>
-                           <td className="px-4 py-3">
+                           <td className="px-4 py-3" onClick={openDetail}>
                               {tx.customerName && tx.customerName !== 'null' ? (
                                  <p className="font-bold text-gray-700">{tx.customerName}</p>
                               ) : (
                                  <p className="text-gray-400 italic">Cliente General</p>
                               )}
                            </td>
-                           <td className="px-4 py-3 text-center">
+                           <td className="px-4 py-3 text-center" onClick={openDetail}>
                               <div className="flex justify-center">
                                  {getPaymentIcon(tx.payments?.[0]?.method || 'CASH')}
                               </div>
                            </td>
-                           <td className="px-4 py-3 text-center">
+                           <td className="px-4 py-3 text-center" onClick={openDetail}>
                               {zSeq ? (
                                  <span
                                     title={!tx.zReportId && !tx.zReportSequence && inferredZSeq ? 'Cierre Z inferido por ventana horaria' : undefined}
@@ -259,11 +262,17 @@ const SalesHistoryTable: React.FC<{
                                  <span className="text-gray-300 text-[10px]">•</span>
                               )}
                            </td>
-                           <td className="px-4 py-3 text-right font-mono font-bold text-gray-900">
+                           <td className="px-4 py-3 text-right font-mono font-bold text-gray-900" onClick={openDetail}>
                               {config.currencySymbol}{tx.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                            </td>
                            <td className="px-4 py-3 text-right">
-                              <button className="p-1 hover:bg-gray-200 rounded-md transition-colors text-gray-400">
+                              <button
+                                 onClick={(event) => {
+                                    event.stopPropagation();
+                                    openDetail();
+                                 }}
+                                 className="p-1 hover:bg-gray-200 rounded-md transition-colors text-gray-400"
+                              >
                                  <MoreVertical size={16} />
                               </button>
                            </td>
@@ -300,6 +309,8 @@ const TicketDetailDrawer: React.FC<{
    const isRefundDoc = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
    const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
    const affectedNCF = (tx.affectedNCF || '').toString().trim();
+   const terminalConfig = config.terminals?.find(t => t.id === tx.terminalId)?.config;
+   const fiscalSummary = calculateTransactionFiscalSummary(tx, config, { terminalConfig });
 
    const getPaymentMethodLabel = (payment: any): string => {
       const method = (payment?.method || '').toString().toUpperCase();
@@ -408,15 +419,24 @@ const TicketDetailDrawer: React.FC<{
                <section className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-2">
                   <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
                      <span>Subtotal</span>
-                     <span>{config.currencySymbol}{(tx.total / (1 + config.taxRate)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     <span>{config.currencySymbol}{fiscalSummary.subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
-                  <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
-                     <span>Impuestos ({config.taxRate * 100}%)</span>
-                     <span>{config.currencySymbol}{(tx.total - (tx.total / (1 + config.taxRate))).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
+                  {fiscalSummary.taxBreakdown.length > 0 ? (
+                     fiscalSummary.taxBreakdown.map((tax) => (
+                        <div key={`${tx.id}-${tax.id}`} className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                           <span>{formatTaxLineLabel(tax)}</span>
+                           <span>{config.currencySymbol}{Number(tax.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </div>
+                     ))
+                  ) : (
+                     <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                        <span>Impuestos</span>
+                        <span>{config.currencySymbol}{fiscalSummary.taxTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     </div>
+                  )}
                   <div className="flex justify-between text-lg font-black text-blue-900 border-t border-blue-100 pt-2 mt-2">
                      <span>Total Final</span>
-                     <span>{config.currencySymbol}{tx.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     <span>{config.currencySymbol}{fiscalSummary.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                </section>
 
@@ -1050,9 +1070,17 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       }
 
       const refundSubtotal = refundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+      const refundTerminalConfig = config.terminals?.find(t => t.id === originalTx.terminalId)?.config;
+      const refundSummary = calculateTransactionFiscalSummary({
+         items: refundItems,
+         total: 0,
+         discountAmount: 0,
+         taxAmount: 0,
+         isTaxIncluded: !!originalTx.isTaxIncluded,
+      }, config, { terminalConfig: refundTerminalConfig });
       const refundTotal = originalTx.isTaxIncluded
          ? refundSubtotal
-         : refundSubtotal * (1 + (config.taxRate || 0));
+         : refundSummary.total;
 
       const authorized = await requestApproval({
          permission: 'POS_VOID_PAID_TICKET',
@@ -1077,13 +1105,24 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       const tx = transactions.find(t => t.id === returnModeId);
       if (!tx) return 0;
 
-      return tx.items
+      const refundItems = tx.items
          .filter(item => selectedItemsQty.has(item.cartId))
-         .reduce((acc, item) => {
-            const qtyToReturn = selectedItemsQty.get(item.cartId) || 0;
-            return acc + (item.price * qtyToReturn);
-         }, 0) * (1 + config.taxRate);
-   }, [returnModeId, selectedItemsQty, transactions, config.taxRate]);
+         .map(item => ({
+            ...item,
+            quantity: selectedItemsQty.get(item.cartId) || 0,
+         }))
+         .filter(item => item.quantity > 0);
+      if (refundItems.length === 0) return 0;
+      const refundTerminalConfig = config.terminals?.find(t => t.id === tx.terminalId)?.config;
+      const refundSummary = calculateTransactionFiscalSummary({
+         items: refundItems,
+         total: 0,
+         discountAmount: 0,
+         taxAmount: 0,
+         isTaxIncluded: !!tx.isTaxIncluded,
+      }, config, { terminalConfig: refundTerminalConfig });
+      return tx.isTaxIncluded ? refundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0) : refundSummary.total;
+   }, [returnModeId, selectedItemsQty, transactions, config]);
 
 
    // --- RENDER HELPERS ---
