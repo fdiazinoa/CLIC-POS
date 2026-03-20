@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { Capacitor } from '@capacitor/core';
 import {
    Search, ShoppingCart, Trash2, MoreVertical,
    CreditCard, User, Tag, Grid, Save,
@@ -43,6 +44,7 @@ import { transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useBottomSafeOffset } from '../hooks/useBottomSafeOffset';
 import MobileConfigModal from './MobileConfigModal';
 import ReturnModal from './ReturnModal';
 import PromoBottomSheet from './PromoBottomSheet';
@@ -58,6 +60,8 @@ import VirtualKeyboard from './VirtualKeyboard';
 import SafetyGateModal from './SafetyGateModal';
 import { printReservation } from '../utils/printer';
 import MobileCartButton from './MobileCartButton';
+import { calculateTaxBreakdownFromItems, formatTaxLineLabel, resolveEffectiveTaxIds } from '../utils/fiscalBreakdown';
+import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from '../services/localRefundPersistence';
 
 // ... existing imports
 
@@ -145,6 +149,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    rooms = []
 }) => {
    const cartEndRef = useRef<HTMLDivElement>(null);
+   const posRootRef = useRef<HTMLDivElement>(null);
+   const mobileFooterRef = useRef<HTMLDivElement>(null);
+   const mobileCartButtonRef = useRef<HTMLButtonElement>(null);
    const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
    const isMaster = useMemo(() => {
       const terminal = config.terminals?.find(t => t.id === activeTerminalId);
@@ -323,16 +330,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const gridClass = useMemo(() => {
       if (uxConfig.gridDensity === 'COMPACT') {
-         return "grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-4 pb-32";
+         return "grid [grid-template-columns:repeat(auto-fill,minmax(150px,1fr))] gap-4 content-start";
       }
-      return "grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6 pb-32";
+      return "grid [grid-template-columns:repeat(auto-fill,minmax(170px,1fr))] gap-4 md:gap-6 content-start";
    }, [uxConfig.gridDensity]);
 
    const categoryContainerClass = useMemo(() => {
       if (uxConfig.quickKeysLayout === 'B') {
-         return "bg-white border-b border-gray-200 px-8 py-3 flex flex-wrap gap-2 shrink-0 max-h-32 overflow-y-auto custom-scrollbar";
+         return "bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex flex-wrap gap-2 shrink-0 max-h-32 overflow-y-auto custom-scrollbar";
       }
-      return "bg-white border-b border-gray-200 px-8 py-3 flex gap-2 overflow-x-auto no-scrollbar shrink-0";
+      return "bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex gap-2 overflow-x-auto no-scrollbar shrink-0";
    }, [uxConfig.quickKeysLayout]);
 
    const allowedTariffs = useMemo(() => {
@@ -445,6 +452,44 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    // --- MOBILE ADAPTATION ---
    const isMobile = useIsMobile();
+   const bottomOverlayRefs = useMemo(
+      () => [mobileFooterRef, mobileCartButtonRef],
+      []
+   );
+   const posShellStyle = useMemo(
+      () =>
+         ({
+            ['--bottom-bar-height' as string]: '0px',
+            ['--bottom-safe-offset' as string]: '12px',
+            ['--viewport-bottom-inset' as string]: '0px',
+            ['--pos-viewport-height' as string]: '100dvh',
+            height: 'var(--pos-viewport-height, 100dvh)',
+            maxHeight: 'var(--pos-viewport-height, 100dvh)',
+         }) as React.CSSProperties,
+      []
+   );
+   const bottomAwareScrollStyle = useMemo(
+      () =>
+         ({
+            paddingBottom: 'calc(var(--bottom-safe-offset, 12px) + env(safe-area-inset-bottom))',
+         }) as React.CSSProperties,
+      []
+   );
+   const mobileFooterStyle = useMemo(
+      () =>
+         ({
+            bottom: 'var(--viewport-bottom-inset, 0px)',
+            paddingBottom: 'calc(env(safe-area-inset-bottom) + 1rem)',
+         }) as React.CSSProperties,
+      []
+   );
+   const mobileCartButtonStyle = useMemo(
+      () =>
+         ({
+            bottom: 'calc(var(--viewport-bottom-inset, 0px) + env(safe-area-inset-bottom) + 1.5rem)',
+         }) as React.CSSProperties,
+      []
+   );
    const [showMobileConfigModal, setShowMobileConfigModal] = useState(false);
    const [pendingProductToAdd, setPendingProductToAdd] = useState<Product | null>(null);
    const [pendingTrackingProduct, setPendingTrackingProduct] = useState<{ product: Product, quantity: number, price?: number, modifiers?: string[] } | null>(null);
@@ -461,6 +506,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [reservations, setReservations] = useState<Reservation[]>([]);
    const [showReservationModal, setShowReservationModal] = useState(false);
    const [showReservationReceipt, setShowReservationReceipt] = useState<Reservation | null>(null);
+   const [isPrintingReservationReceipt, setIsPrintingReservationReceipt] = useState(false);
    const [showRecoverReservationModal, setShowRecoverReservationModal] = useState(false);
    const [reservationCustomerId, setReservationCustomerId] = useState<string>('');
    const [reservationAdvanceInput, setReservationAdvanceInput] = useState<string>('0');
@@ -469,6 +515,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [reservationCustomerFilterId, setReservationCustomerFilterId] = useState<string | null>(null);
    const [activeRecoveredReservation, setActiveRecoveredReservation] = useState<Reservation | null>(null);
    const [committedByProduct, setCommittedByProduct] = useState<Record<string, number>>({});
+
+   useBottomSafeOffset({
+      rootRef: posRootRef,
+      overlayRefs: bottomOverlayRefs,
+      dependencyKey: `${isMobile}-${mobileView}`,
+   });
 
    // --- SUPERVISOR AUTH ---
    const { requestApproval, supervisorModalProps } = useSupervisorAuth({
@@ -716,12 +768,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const finalPrice = priceOverride || getProductPrice(product);
       const modifiersString = modifiers ? modifiers.sort().join('|') : '';
+      const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
+      const taxSignature = effectiveTaxIds.slice().sort().join('|');
 
       // We look for existing item in the stable 'cart' prop/state instead of inside the setter
       // to avoid using setter for logic that triggers side effects.
       const existing = (cart || []).find(i => {
          const iMods = i.modifiers ? i.modifiers.sort().join('|') : '';
-         return i.id === product.id && iMods === modifiersString && i.price === finalPrice;
+         const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig).slice().sort().join('|');
+         return i.id === product.id && iMods === modifiersString && i.price === finalPrice && existingTaxSignature === taxSignature;
       });
 
       let targetCartId: string;
@@ -729,7 +784,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (existing && !usesSerial) {
          targetCartId = existing.cartId!;
          onUpdateCart(prev => {
-            const updatedItem = { ...existing, quantity: existing.quantity + quantity };
+            const updatedItem = { ...existing, quantity: existing.quantity + quantity, appliedTaxIds: effectiveTaxIds };
             return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
          });
       } else {
@@ -741,6 +796,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             quantity,
             price: finalPrice,
             modifiers,
+            appliedTaxIds: effectiveTaxIds,
             originalPrice: getProductPrice(product),
             trackingData
          };
@@ -749,7 +805,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);
-   }, [canAddItemToCart, getProductPrice, onUpdateCart, cart]); // Added cart to dependencies
+   }, [canAddItemToCart, getProductPrice, onUpdateCart, cart, activeTerminalConfig]); // Added cart to dependencies
 
    const handleProductClick = useCallback((product: Product) => {
       // MOBILE INTERCEPTION
@@ -1051,32 +1107,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const discountAmount = globalDiscount.type === 'PERCENT' ? grossLineTotal * (globalDiscount.value / 100) : Math.min(globalDiscount.value, grossLineTotal);
 
    const taxBreakdown = useMemo(() => {
-      const breakdown: Record<string, { name: string, amount: number }> = {};
-
-      processedCart.forEach(item => {
-         const lineGross = item.price * item.quantity;
-         const itemRatio = lineGross / (grossLineTotal || 1);
-         const lineDiscount = discountAmount * itemRatio;
-         const lineBaseAfterDiscount = lineGross - lineDiscount;
-
-         let itemTaxRate = 0;
-         const itemTaxes = (item.appliedTaxIds || []).map(id => (config.taxes || []).find(t => t.id === id)).filter(Boolean);
-         itemTaxes.forEach(t => itemTaxRate += t!.rate);
-
-         let lineNet = 0;
-         if (isTaxIncluded) {
-            lineNet = lineBaseAfterDiscount / (1 + itemTaxRate);
-         } else {
-            lineNet = lineBaseAfterDiscount;
-         }
-
-         itemTaxes.forEach(t => {
-            if (!breakdown[t!.id]) breakdown[t!.id] = { name: t!.name, amount: 0 };
-            breakdown[t!.id].amount += lineNet * t!.rate;
-         });
+      return calculateTaxBreakdownFromItems(processedCart, config, {
+         discountAmount,
+         isTaxIncluded,
+         terminalConfig: activeTerminalConfig,
       });
-      return Object.values(breakdown);
-   }, [processedCart, grossLineTotal, config.taxes, discountAmount, isTaxIncluded]);
+   }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig]);
 
    const cartTax = taxBreakdown.reduce((sum, t) => sum + t.amount, 0);
 
@@ -1094,6 +1130,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // Alias for compatibility if needed, though netSubtotal is what we usually display as "Subtotal"
    const cartSubtotal = grossLineTotal; // This represents the sum of list prices
    const baseCurrency = (config.currencies || []).find(c => c.isBase) || (config.currencies || [])[0];
+   const getCartItemTaxSummary = useCallback((item: CartItem) => {
+      const lineTaxBreakdown = calculateTaxBreakdownFromItems([item], config, {
+         isTaxIncluded,
+         terminalConfig: activeTerminalConfig,
+         absoluteLineValues: true,
+      });
+      if (lineTaxBreakdown.length === 0) {
+         return 'Sin impuestos';
+      }
+      const lineTaxAmount = Math.abs(lineTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0));
+      return `${lineTaxBreakdown.map((tax) => formatTaxLineLabel(tax)).join(' + ')} (${baseCurrency.symbol}${lineTaxAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`;
+   }, [config, isTaxIncluded, activeTerminalConfig, baseCurrency.symbol]);
    const reservationAdvanceApplied = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
    const reservationBalanceDue = Math.max(0, cartTotal - reservationAdvanceApplied);
    const amountDueNow = activeRecoveredReservation ? reservationBalanceDue : cartTotal;
@@ -1345,8 +1393,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       try {
+         const terminalId = activeTerminalId || 't1';
+         const hasReturns = processedCart.some(i => i.quantity < 0);
+         const hasSales = processedCart.some(i => i.quantity > 0);
+         const isRefundOnly = hasReturns && !hasSales;
+         const refundSeriesId = activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND';
+         const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
+         const normalizedRefundItems = processedCart
+            .filter(i => i.quantity < 0)
+            .map(item => ({ ...item, quantity: Math.abs(item.quantity) }));
+         const sellableConditions = new Map<string, 'SELLABLE' | 'DAMAGED'>();
+         normalizedRefundItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
+
          // --- FISCAL COMPLIANCE CHECK (DGII RNC VALIDATION) ---
-         if (fiscalStatus && fiscalStatus.type === 'B01' && selectedCustomer) {
+         if (!isRefundOnly && fiscalStatus && fiscalStatus.type === 'B01' && selectedCustomer) {
             if (selectedCustomer.fiscalStatus && selectedCustomer.fiscalStatus !== 'ACTIVO') {
                alert(
                   `⛔ COMPROBANTE BLOQUEADO\n\n` +
@@ -1358,27 +1418,49 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
 
-         const terminalId = activeTerminalId || 't1';
-         const finalNcf = await withTimeout(
-            db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100),
-            8000,
-            'TIMEOUT_GET_NCF'
-         );
-
-         if (!finalNcf) {
-            alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
-            return null;
-         }
-
-         const validation = validateTerminalSeries(activeTerminalConfig, 'TICKET');
+         const validation = validateTerminalSeries(activeTerminalConfig, isRefundOnly ? 'REFUND' : 'TICKET');
          if (!validation.isValid) {
             alert(validation.message);
             return null;
          }
 
-         const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
-         const hasReturns = processedCart.some(i => i.quantity < 0);
-         const hasSales = processedCart.some(i => i.quantity > 0);
+         if (hasReturns && hasSales) {
+            const refundValidation = validateTerminalSeries(activeTerminalConfig, 'REFUND');
+            if (!refundValidation.isValid) {
+               alert(refundValidation.message);
+               return null;
+            }
+         }
+
+         let finalNcf: string | undefined;
+         let finalNcfType: NCFType | undefined;
+
+         if (isRefundOnly) {
+            try {
+               finalNcf = await withTimeout(
+                  db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50),
+                  8000,
+                  'TIMEOUT_GET_REFUND_ONLY_NCF'
+               );
+               finalNcfType = finalNcf ? 'B04' : undefined;
+            } catch (refundNcfError) {
+               console.warn('No se pudo generar NCF B04 para devolución:', refundNcfError);
+            }
+         } else {
+            finalNcf = await withTimeout(
+               db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100),
+               8000,
+               'TIMEOUT_GET_NCF'
+            );
+
+            if (!finalNcf) {
+               alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
+               return null;
+            }
+
+            finalNcfType = fiscalStatus.type;
+         }
+
          const reservationAdvance = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
          const paymentsForTransaction = reservationAdvance > 0
             ? [...payments, { id: `ADV-${Date.now()}`, method: 'ADVANCE', amount: reservationAdvance, timestamp: new Date() }]
@@ -1397,18 +1479,40 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                // Calculate totals for each part
                const saleTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-               const returnTotal = returnItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               const normalizedSplitRefundItems = returnItems.map(item => ({ ...item, quantity: Math.abs(item.quantity) }));
+               const returnTotal = normalizedSplitRefundItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               const saleTaxBreakdown = calculateTaxBreakdownFromItems(saleItems, config, {
+                  isTaxIncluded,
+                  terminalConfig: activeTerminalConfig,
+               });
+               const saleTaxAmount = Math.round((
+                  saleTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0)
+                  + Number.EPSILON
+               ) * 100) / 100;
+               const saleNetAmount = isTaxIncluded
+                  ? Math.round(((saleTotal - saleTaxAmount) + Number.EPSILON) * 100) / 100
+                  : saleTotal;
 
                // Prepare wallet operations
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
+               let refundNcf: string | undefined;
 
-               const response = await withTimeout(fetch('/api/transactions/split', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
+               if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+                  try {
+                     refundNcf = await withTimeout(
+                        db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50),
+                        8000,
+                        'TIMEOUT_GET_REFUND_NCF'
+                     );
+                  } catch (refundNcfError) {
+                     console.warn('No se pudo generar NCF B04 para devolución mixta:', refundNcfError);
+                  }
+               }
+
+               const splitPayload: Parameters<typeof transactionService.createSplitTransaction>[0] = {
                      saleTransaction: {
-                        documentType: 'TICKET',
+                        documentType: 'TICKET' as const,
                         seriesId: assignedSequenceId,
                         items: saleItems,
                         total: saleTotal,
@@ -1420,8 +1524,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         customerName: selectedCustomer?.name,
                         ncf: finalNcf,
                         ncfType: fiscalStatus.type,
-                        taxAmount: isTaxIncluded ? saleTotal * 0.18 : 0,
-                        netAmount: isTaxIncluded ? saleTotal / 1.18 : saleTotal,
+                        taxAmount: saleTaxAmount,
+                        netAmount: saleNetAmount,
                         pendingBalance: payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0) || undefined,
                         dueDate: payments.some(p => p.method === 'CREDIT') ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined,
                         customerSnapshot: selectedCustomer ? {
@@ -1431,9 +1535,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined
                      },
                      refundTransaction: {
-                        documentType: 'REFUND',
-                        seriesId: activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC',
-                        items: returnItems,
+                        documentType: 'REFUND' as const,
+                        seriesId: refundSeriesId,
+                        items: normalizedSplitRefundItems,
                         total: returnTotal,
                         userId: currentUser.id,
                         userName: currentUser.name,
@@ -1441,13 +1545,62 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         customerId: selectedCustomer?.id,
                         customerName: selectedCustomer?.name,
                         status: 'COMPLETED',
+                        ncf: refundNcf,
+                        ncfType: refundNcf ? 'B04' : undefined,
                         walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
                         authorizedById: refundAuthorizedBy?.id,
                         authorizedByName: refundAuthorizedBy?.name
                      },
-                     walletDeposit: walletDepositAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletDepositAmount } : undefined,
-                     walletPayment: walletPaymentAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletPaymentAmount } : undefined
-                  })
+                     walletDeposit: selectedCustomer?.id && walletDepositAmount > 0 ? { customerId: selectedCustomer.id, amount: walletDepositAmount } : undefined,
+                     walletPayment: selectedCustomer?.id && walletPaymentAmount > 0 ? { customerId: selectedCustomer.id, amount: walletPaymentAmount } : undefined
+                  };
+
+               if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+                  const result = await withTimeout(
+                     transactionService.createSplitTransaction(splitPayload),
+                     25000,
+                     'TIMEOUT_SPLIT_LOCAL'
+                  );
+
+                  if (result.sale) {
+                     await persistStandaloneSaleHistory({
+                        ...result.sale,
+                        syncStatus: 'PENDING'
+                     });
+                  }
+
+                  if (result.refund) {
+                     await persistStandaloneRefundTransaction(
+                        {
+                           ...result.refund,
+                           items: normalizedSplitRefundItems,
+                           total: returnTotal,
+                           ncf: refundNcf,
+                           ncfType: refundNcf ? 'B04' : undefined,
+                           status: 'REFUNDED',
+                           refundReason: 'Devolución en transacción mixta',
+                           authorizedById: refundAuthorizedBy?.id,
+                           authorizedByName: refundAuthorizedBy?.name,
+                           syncStatus: 'PENDING'
+                        },
+                        {
+                           warehouseId: defaultSalesWarehouseId || 'wh_central',
+                           terminalId
+                        }
+                     );
+                  }
+
+                  onUpdateCart([]);
+                  onSelectCustomer(null);
+                  setIsReturnMode(false);
+                  setRefundAuthorizedBy(null);
+                  return result.sale || result.refund || null;
+               }
+
+               const response = await withTimeout(fetch('/api/transactions/split', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(splitPayload)
                }), 25000, 'TIMEOUT_SPLIT_FETCH');
 
                const data = await withTimeout(response.json(), 4000, 'TIMEOUT_SPLIT_PARSE');
@@ -1471,6 +1624,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
                const creditAmount = payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0);
+               const refundDocumentTotal = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+               const documentItems = isRefundOnly ? normalizedRefundItems : processedCart;
 
                const txn = await withTimeout(transactionService.createTransaction({
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
@@ -1478,8 +1633,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      ? (activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC')
                      : assignedSequenceId,
                   date: new Date().toISOString(),
-                  items: processedCart,
-                  total: cartTotal,
+                  items: documentItems,
+                  total: isRefundOnly ? refundDocumentTotal : cartTotal,
                   payments: paymentsForTransaction,
                   userId: currentUser.id,
                   userName: currentUser.name,
@@ -1490,7 +1645,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   pendingBalance: creditAmount > 0 ? creditAmount : undefined,
                   dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined, // Default 30 days
                   ncf: finalNcf,
-                  ncfType: fiscalStatus.type,
+                  ncfType: finalNcfType,
                   taxAmount: taxAmount,
                   netAmount: netAmount,
                   discountAmount: discountAmount,
@@ -1515,10 +1670,32 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                // Ensure seriesId is preserved (Backend might not return it in the root object)
                const finalTxn = {
                   ...txn,
-                  seriesId: txn.seriesId || assignedSequenceId
+                  seriesId: txn.seriesId || (isRefundOnly ? refundSeriesId : assignedSequenceId)
                };
 
-               onTransactionComplete(finalTxn);
+               if (isRefundOnly) {
+                  await persistStandaloneRefundTransaction(
+                     {
+                        ...finalTxn,
+                        items: normalizedRefundItems,
+                        total: refundDocumentTotal,
+                        status: 'REFUNDED',
+                        ncf: finalNcf,
+                        ncfType: finalNcfType,
+                        refundReason: 'Devolución POS',
+                        authorizedById: refundAuthorizedBy?.id,
+                        authorizedByName: refundAuthorizedBy?.name,
+                        syncStatus: 'PENDING'
+                     },
+                     {
+                        warehouseId: defaultSalesWarehouseId || 'wh_central',
+                        terminalId,
+                        conditions: sellableConditions
+                     }
+                  );
+               } else {
+                  onTransactionComplete(finalTxn);
+               }
 
                if (activeRecoveredReservation) {
                   const warehouseId = activeRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
@@ -1824,11 +2001,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             returnItems.push({
                ...originalItem,
-               quantity: returnItem.quantity,
+               quantity: Math.abs(returnItem.quantity),
                cartId: `RET-${Date.now()}-${returnItem.itemId}`
             });
          }
       });
+
+      let refundNcf: string | undefined;
+      try {
+         refundNcf = await db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50);
+      } catch (refundNcfError) {
+         console.warn('No se pudo generar NCF B04 para devolución QR:', refundNcfError);
+      }
 
       // 2. Create Refund Transaction
       const refundTxn = await transactionService.createTransaction({
@@ -1841,41 +2025,50 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          userId: currentUser.id,
          userName: currentUser.name,
          terminalId: terminalId,
-         status: 'COMPLETED',
+         status: 'REFUNDED',
          customerId: originalTransaction.customerId,
          customerName: originalTransaction.customerName,
          originalTransactionId: originalTransaction.id,
+         affectedInvoiceNumber: originalTransaction.displayId || originalTransaction.id,
+         affectedNCF: originalTransaction.ncf,
+         ncf: refundNcf,
+         ncfType: refundNcf ? 'B04' : undefined,
          refundReason: 'Smart QR Return',
          isTaxIncluded: originalTransaction.isTaxIncluded
       });
 
+      const sellableConditions = new Map<string, 'SELLABLE' | 'DAMAGED'>();
+      returnItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
 
-
-      // 3. Update Original Transaction Status (Global & Local)
-      try {
-         // Global/Server Update
-         await fetch(`/api/transactions/${originalTransaction.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: 'REFUNDED' })
-         });
-
-         // Local Update (if exists in current view)
-         const localExists = transactions.find(t => t.id === originalTransaction.id);
-         if (localExists) {
-            // Use a custom event or callback?
-            // Since transactions prop is passed down, we might not be able to set it directly if onTransactionComplete handles addition only.
-            // Ideally we should reload transactions or optimistically update.
-            // Given the architecture, onTransactionComplete usually refreshes or adds.
-            // For now, let's just log success.
-            console.log('✅ Original transaction marked as REFUNDED remotely.');
+      await persistStandaloneRefundTransaction(
+         {
+            ...refundTxn,
+            items: returnItems,
+            total: refundTotal,
+            status: 'REFUNDED',
+            refundReason: 'Smart QR Return',
+            syncStatus: 'PENDING'
+         },
+         {
+            warehouseId: defaultSalesWarehouseId || 'wh_central',
+            terminalId,
+            originalTransaction,
+            conditions: sellableConditions
          }
-      } catch (e) {
-         console.error("Failed to update original transaction status:", e);
-         // Don't block the UI, the refund itself is valid.
+      );
+
+      if (!(Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android')) {
+         try {
+            await fetch(`/api/transactions/${originalTransaction.id}`, {
+               method: 'PUT',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ status: 'REFUNDED' })
+            });
+         } catch (e) {
+            console.error("Failed to update original transaction status:", e);
+         }
       }
 
-      onTransactionComplete(refundTxn);
       alert(`Devolución registrada: ${config.currencySymbol}${refundTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\nTicket original (${originalTransaction.displayId}) marcado como REEMBOLSADO.`);
    };
 
@@ -1922,7 +2115,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    return (
-      <div className="fixed inset-0 w-full h-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900">
+      <div
+         ref={posRootRef}
+         className="fixed inset-0 w-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900"
+         style={posShellStyle}
+      >
          {errorToast && (
             <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
                <div className="bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border-2 border-red-400">
@@ -1969,6 +2166,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      newConfig.terminals[terminalIndex].config.documentAssignments = {};
                   }
                   newConfig.terminals[terminalIndex].config.documentAssignments!['TICKET'] = mobileConfig.seriesId;
+                  newConfig.terminals[terminalIndex].config.documentAssignments!['REFUND'] =
+                     newConfig.terminals[terminalIndex].config.documentAssignments!['REFUND'] || 'REFUND';
+                  newConfig.terminals[terminalIndex].config.documentAssignments!['TRANSFER'] =
+                     newConfig.terminals[terminalIndex].config.documentAssignments!['TRANSFER'] || 'TRANSFER';
 
                   onUpdateConfig(newConfig);
                   setActiveTariffId(mobileConfig.tariffId);
@@ -2012,13 +2213,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          {mobileView === 'PRODUCTS' && (
             <MobileCartButton
+               buttonRef={mobileCartButtonRef}
                itemCount={cart.length}
                onClick={() => setMobileView('TICKET')}
+               style={mobileCartButtonStyle}
             />
          )}
 
          {/* LEFT AREA: PRODUCTS */}
-         <div className={`flex-1 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
+         <div className={`flex-1 min-h-0 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
             <header className="bg-white px-4 md:px-8 py-3 md:py-4 border-b border-gray-200 flex items-center gap-3 md:gap-6 shadow-sm z-10 shrink-0">
                <div className="flex items-center gap-3 pr-4 border-r border-gray-100">
                   <div className="w-10 h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
@@ -2113,7 +2316,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                ))}
             </div>
 
-            <div className={`flex-1 overflow-y-auto ${isMobile ? 'p-4' : 'p-8'} custom-scrollbar dark:bg-slate-900`}>
+            <div
+               className={`flex-1 min-h-0 overflow-y-auto ${isMobile ? 'p-4' : 'p-8'} custom-scrollbar dark:bg-slate-900`}
+               style={bottomAwareScrollStyle}
+            >
                <div className={gridClass}>
                   {filteredProducts.map((product, idx) => {
                      const productName = product.name || '';
@@ -2147,11 +2353,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            }}
                            onTouchStart={handleTouchStart}
                            onTouchEnd={handleTouchEnd}
-                           className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-[2rem] p-4 shadow-sm border border-gray-100 cursor-pointer hover:shadow-xl hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group flex flex-col h-full relative overflow-hidden"
+                           className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-[2rem] p-4 shadow-sm border border-gray-100 cursor-pointer hover:shadow-xl hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group flex flex-col min-h-[250px] relative overflow-hidden"
                         >
                            {uxConfig.showProductImages && (
-                              <div className="aspect-square bg-gray-50 dark:bg-slate-800 rounded-[1.5rem] mb-4 overflow-hidden relative">
-                                 {product.image ? <img src={product.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
+                              <div className="h-32 md:h-36 bg-gray-50 dark:bg-slate-800 rounded-[1.5rem] mb-4 overflow-hidden relative flex items-center justify-center">
+                                 {product.image ? <img src={product.image} className="w-full h-full object-cover object-center" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
 
                                  {/* BADGES DE TIPO DE ARTÍCULO */}
                                  {isWeighted && (
@@ -2200,10 +2406,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
                            )}
-                           <div className="flex flex-col flex-1">
-                              <span className="text-[9px] font-bold text-purple-500 uppercase mb-1 opacity-60">{product.category}</span>
-                              <h3 className="font-bold text-gray-800 dark:text-white text-sm leading-tight mb-2 line-clamp-2 flex-1">{product.name}</h3>
-                              <div className="mt-auto pt-2 border-t border-gray-50 dark:border-slate-700"><span className="font-black text-lg text-gray-900 dark:text-white">{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+                           <div className="flex flex-col flex-1 justify-between gap-3">
+                              <div className="space-y-1.5">
+                                 <span className="block text-[9px] font-bold text-purple-500 uppercase opacity-60 line-clamp-1">{product.category}</span>
+                                 <h3 className="font-bold text-gray-800 dark:text-white text-sm leading-tight line-clamp-2 min-h-[2.75rem]">{product.name}</h3>
+                              </div>
+                              <div className="pt-2 border-t border-gray-50 dark:border-slate-700"><span className="font-black text-lg text-gray-900 dark:text-white">{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
                            </div>
                         </div>
                      );
@@ -2240,7 +2448,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          </div >
 
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
-         <div className={`w-full ${isRetailMode ? '' : 'md:w-96'} h-full bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
+         <div className={`w-full ${isRetailMode ? '' : 'md:w-96'} h-full min-h-0 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
 
             {/* MOBILE HEADER */}
             < div className="md:hidden p-4 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
@@ -2417,16 +2625,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <div className="flex gap-1 shrink-0">
                      {!isRetailMode && (
                         <>
-                           <button onClick={handleOpenDrawer} title="Abrir Cajón" className="p-2 hover:bg-emerald-50 rounded-lg text-gray-400 hover:text-emerald-600 transition-colors"><Box size={18} /></button>
-                           <button onClick={handleParkCurrentTicket} title="Guardar Ticket" className="p-2 hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Save size={18} /></button>
-                           <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="p-2 hover:bg-orange-50 rounded-lg text-gray-400 hover:text-orange-600 transition-colors relative">
+                           <button onClick={handleOpenDrawer} title="Abrir Cajón" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-emerald-50 rounded-lg text-gray-400 hover:text-emerald-600 transition-colors"><Box size={18} /></button>
+                           <button onClick={handleParkCurrentTicket} title="Guardar Ticket" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Save size={18} /></button>
+                           <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-orange-50 rounded-lg text-gray-400 hover:text-orange-600 transition-colors relative">
                               <Inbox size={18} />
                               {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-0 right-0 w-3 h-3 bg-orange-500 rounded-full border-2 border-white"></span>}
                            </button>
-                           <button onClick={onOpenHistory} title="Historial" className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><History size={18} /></button>
+                           <button onClick={onOpenHistory} title="Historial" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><History size={18} /></button>
                         </>
                      )}
-                     <button onClick={() => onOpenSettings()} title="Configuración" className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Settings size={18} /></button>
+                     <button onClick={() => onOpenSettings()} title="Configuración" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Settings size={18} /></button>
                   </div>
                </div>
 
@@ -2492,15 +2700,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   currencySymbol={baseCurrency.symbol}
                   lastAddedCartId={lastAddedCartId}
                   onRemoveItem={(cartId) => updateCartItem(null, cartId)}
+                  containerStyle={isMobile ? bottomAwareScrollStyle : undefined}
                />
             ) : (
                // STANDARD RESTAURANT/RETAIL LIST
-               <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-gray-50/50" >
+               <div
+                  className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-gray-50/50"
+                  style={isMobile ? bottomAwareScrollStyle : undefined}
+               >
                   {
                      processedCart.map((item, idx) => {
                         const hasDiscount = item.originalPrice && item.price < item.originalPrice;
                         const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
                         const lineNet = item.price * item.quantity;
+                        const lineTaxSummary = getCartItemTaxSummary(item);
 
                         // MOBILE CARD DESIGN
                         if (isMobile) {
@@ -2520,9 +2733,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                              {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
                                           </div>
-                                          <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">
-                                             ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
-                                          </span>
+                                          <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">{lineTaxSummary}</span>
                                        </div>
                                        {item.salespersonId && (
                                           <div className="mt-1 flex items-center gap-1 text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-md w-fit">
@@ -2580,7 +2791,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 {item.modifiers && item.modifiers.length > 0 && <span className="text-blue-600 font-bold ml-1">+{item.modifiers.length} mod</span>}
                                              </div>
                                              <div className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">
-                                                ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                                                {lineTaxSummary}
                                              </div>
                                           </div>
                                           {/* Salesperson Badge */}
@@ -2819,7 +3030,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {/* MOBILE STICKY FOOTER */}
          {
             isMobile && mobileView === 'TICKET' && (
-               <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5">
+               <div
+                  ref={mobileFooterRef}
+                  className="md:hidden fixed left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5"
+                  style={mobileFooterStyle}
+               >
                   <div className="flex justify-between items-center mb-4 px-2">
                      <div className="flex gap-4">
                         <button onClick={() => setShowGlobalDiscount(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-pink-500">
@@ -3161,10 +3376,29 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                      <div className="px-6 pb-6 flex justify-between items-center gap-3">
                         <button
-                           onClick={() => printReservation(showReservationReceipt, config)}
+                           onClick={async () => {
+                              if (isPrintingReservationReceipt) return;
+                              setIsPrintingReservationReceipt(true);
+                              try {
+                                 const printed = await printReservation(showReservationReceipt, config);
+                                 if (printed) {
+                                    setSuccessToast(`Reserva ${showReservationReceipt.code} enviada a impresión`);
+                                 } else {
+                                    setErrorToast('No se pudo imprimir la nota de reserva. Verifica la impresora configurada.');
+                                    setTimeout(() => setErrorToast(null), 3500);
+                                 }
+                              } catch (error) {
+                                 console.error('Reservation print failed:', error);
+                                 setErrorToast('Error al imprimir la nota de reserva.');
+                                 setTimeout(() => setErrorToast(null), 3500);
+                              } finally {
+                                 setIsPrintingReservationReceipt(false);
+                              }
+                           }}
+                           disabled={isPrintingReservationReceipt}
                            className="flex-1 px-5 py-2.5 rounded-xl bg-blue-600 text-white font-black hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-100"
                         >
-                           <Printer size={18} /> Imprimir
+                           <Printer size={18} /> {isPrintingReservationReceipt ? 'Imprimiendo...' : 'Imprimir'}
                         </button>
                         <button
                            onClick={() => setShowReservationReceipt(null)}

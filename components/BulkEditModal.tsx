@@ -88,7 +88,7 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
          <div className="bg-white rounded-[2.5rem] w-full max-w-4xl h-[85vh] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
 
             {/* Header */}
-            <div className="p-8 border-b flex justify-between items-center bg-slate-50/50 shrink-0">
+            <div className="p-8 border-b flex justify-between items-center bg-white shrink-0">
                <div className="flex items-center gap-4">
                   <div className="p-4 bg-blue-600 text-white rounded-2xl shadow-xl shadow-blue-500/20">
                      <Settings2 size={28} />
@@ -100,7 +100,7 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                      </p>
                   </div>
                </div>
-               <button type="button" onClick={onClose} disabled={isSaving} className="p-3 hover:bg-slate-100 rounded-full text-slate-400 transition-colors disabled:opacity-30">
+               <button type="button" onClick={onClose} disabled={isSaving} className="p-3 bg-white border border-slate-200 shadow-sm hover:bg-slate-50 rounded-full text-slate-400 transition-colors disabled:opacity-30">
                   <X size={24} />
                </button>
             </div>

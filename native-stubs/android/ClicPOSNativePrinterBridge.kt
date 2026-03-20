@@ -1,9 +1,17 @@
 package com.clicpos.nativeprinter
 
+import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.util.Base64
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import java.net.Inet4Address
+import java.net.NetworkInterface
+import java.util.Collections
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -17,8 +25,10 @@ import org.json.JSONObject
  * 4) AndroidPrinterBridge.injectContractShim(webView)
  */
 class AndroidPrinterBridge(context: Context) {
+    private val appContext = context.applicationContext
+    private val clipboardManager = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
 
-    private val manager = ClicPOSBluetoothPrinterManager(context.applicationContext)
+    private val manager = ClicPOSBluetoothPrinterManager(appContext)
 
     @JavascriptInterface
     fun printEscPos(payloadJson: String?): String {
@@ -156,12 +166,127 @@ class AndroidPrinterBridge(context: Context) {
     }
 
     @JavascriptInterface
-    fun getDeviceInfo(): String = getDeviceProfile()
+    fun getDeviceInfo(): String {
+        val packageInfo = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                appContext.packageManager.getPackageInfo(
+                    appContext.packageName,
+                    PackageManager.PackageInfoFlags.of(0)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                appContext.packageManager.getPackageInfo(appContext.packageName, 0)
+            }
+        } catch (_: Exception) {
+            null
+        }
+
+        val versionName = packageInfo?.versionName ?: "0.0.0"
+        val versionCode = if (packageInfo != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                packageInfo.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                packageInfo.versionCode.toLong()
+            }
+        } else {
+            0L
+        }
+
+        val localIps = getLocalIpv4Addresses()
+        val preferredLocalIp = localIps.firstOrNull()
+
+        return JSONObject()
+            .put("profile", "HANDHELD")
+            .put("integratedPrinter", false)
+            .put("platform", "android")
+            .put("packageName", appContext.packageName)
+            .put("versionName", versionName)
+            .put("versionCode", versionCode)
+            .put("localIp", preferredLocalIp)
+            .put("localIps", JSONArray(localIps))
+            .toString()
+    }
+
+    @JavascriptInterface
+    fun readClipboard(): String {
+        return try {
+            if (!clipboardManager.hasPrimaryClip()) {
+                return error("Portapapeles vacío.", "CLIPBOARD_EMPTY")
+            }
+
+            val clip = clipboardManager.primaryClip
+                ?: return error("Portapapeles vacío.", "CLIPBOARD_EMPTY")
+
+            if (clip.itemCount <= 0) {
+                return error("Portapapeles vacío.", "CLIPBOARD_EMPTY")
+            }
+
+            val item = clip.getItemAt(0)
+            val uri = item.uri
+            if (uri != null) {
+                val imageDataUrl = readImageDataUrlFromUri(uri)
+                if (imageDataUrl != null) {
+                    return JSONObject()
+                        .put("success", true)
+                        .put("source", "uri")
+                        .put("imageDataUrl", imageDataUrl)
+                        .toString()
+                }
+            }
+
+            val html = item.htmlText?.takeIf { it.isNotBlank() }
+            val text = item.coerceToText(appContext)?.toString()?.trim()?.takeIf { it.isNotBlank() }
+
+            if (html != null || text != null) {
+                return JSONObject()
+                    .put("success", true)
+                    .put("source", "text")
+                    .put("html", html)
+                    .put("text", text)
+                    .toString()
+            }
+
+            val description = clip.description
+            if (description != null && hasImageMimeType(description)) {
+                return error("La imagen del portapapeles no se pudo leer desde Android.", "CLIPBOARD_IMAGE_UNREADABLE")
+            }
+
+            error("Contenido del portapapeles no soportado.", "CLIPBOARD_UNSUPPORTED")
+        } catch (e: SecurityException) {
+            error(e.message ?: "Android bloqueó el acceso al portapapeles.", "CLIPBOARD_SECURITY")
+        } catch (e: Exception) {
+            error(e.message ?: "Error leyendo portapapeles.", "CLIPBOARD_ERROR")
+        }
+    }
 
     @JavascriptInterface
     fun closeBridge(): String {
         manager.close()
         return JSONObject().put("status", "success").toString()
+    }
+
+    private fun hasImageMimeType(description: ClipDescription): Boolean {
+        for (index in 0 until description.mimeTypeCount) {
+            val mime = description.getMimeType(index) ?: continue
+            if (mime.startsWith("image/")) return true
+        }
+        return false
+    }
+
+    private fun readImageDataUrlFromUri(uri: Uri): String? {
+        val contentResolver = appContext.contentResolver
+        val mimeType = contentResolver.getType(uri) ?: return null
+        if (!mimeType.startsWith("image/")) return null
+
+        contentResolver.openInputStream(uri)?.use { input ->
+            val bytes = input.readBytes()
+            if (bytes.isEmpty()) return null
+            val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
+            return "data:$mimeType;base64,$encoded"
+        }
+
+        return null
     }
 
     private fun toJson(result: ClicPOSBluetoothPrinterManager.PrintResult): String {
@@ -184,10 +309,48 @@ class AndroidPrinterBridge(context: Context) {
             .toString()
     }
 
+    private fun getLocalIpv4Addresses(): List<String> {
+        return try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            val interfaceEntries = if (interfaces != null) Collections.list(interfaces) else emptyList()
+            val addressEntries = interfaceEntries
+                .filter { iface ->
+                    runCatching { iface.isUp && !iface.isLoopback && !iface.isVirtual }.getOrDefault(false)
+                }
+                .flatMap { iface ->
+                    Collections.list(iface.inetAddresses)
+                        .mapNotNull { address ->
+                            val ipv4 = address as? Inet4Address ?: return@mapNotNull null
+                            val hostAddress = ipv4.hostAddress ?: return@mapNotNull null
+                            if (ipv4.isLoopbackAddress || hostAddress.startsWith("127.")) return@mapNotNull null
+                            if (!ipv4.isSiteLocalAddress) return@mapNotNull null
+                            iface.name to hostAddress
+                        }
+                }
+
+            addressEntries
+                .sortedWith(
+                    compareBy<Pair<String, String>> { entry ->
+                        when {
+                            entry.first.startsWith("wlan") -> 0
+                            entry.first.startsWith("eth") -> 1
+                            entry.first.startsWith("en") -> 2
+                            else -> 3
+                        }
+                    }.thenBy { it.first }.thenBy { it.second }
+                )
+                .map { it.second }
+                .distinct()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     companion object {
         /**
          * Shim para exponer contrato JS unificado como window.ClicPOSNativePrinter.
          */
+        @JvmStatic
         fun injectContractShim(webView: WebView) {
             val script = """
                 (function () {

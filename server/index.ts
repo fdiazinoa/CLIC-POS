@@ -12,6 +12,8 @@ import maintenanceRoutes from './routes/maintenance.js'; // Restore missing impo
 import dgiiRoutes from './routes/dgiiRoutes.js'; // Import new route
 import bulkRoutes from './routes/bulkRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
+import activationRoutes from './routes/activationRoutes.js';
+import cloudRegistryRoutes from './routes/cloudRegistry.js';
 import os from 'os';
 import { createServer } from 'http';
 import { initSocket } from './socket.js';
@@ -133,6 +135,7 @@ server.get('/api/productStocks', (req, res) => {
 
 // Mount custom routes
 server.use('/api/sync', syncRoutes);
+server.use('/api/cloud/master-endpoint', cloudRegistryRoutes);
 server.use('/api/wallet', walletRoutes);
 server.use('/v1', passKitRoutes);
 server.use('/api/email', emailRoutes);
@@ -142,6 +145,7 @@ server.use('/api/maintenance', maintenanceRoutes);
 server.use('/api/dgii', dgiiRoutes);
 server.use('/api/bulk', bulkRoutes);
 server.use('/api/audit', auditRoutes);
+server.use('/api/activation', activationRoutes);
 
 // --- Mesas & Salas Endpoints ---
 server.get('/api/mesas', (req, res) => {

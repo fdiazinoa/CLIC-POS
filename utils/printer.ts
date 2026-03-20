@@ -1,77 +1,32 @@
 import { Transaction, BusinessConfig, Reservation } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { dbAdapter } from '../services/db';
+import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, formatTaxLineLabel } from './fiscalBreakdown';
 
 export const printTicket = async (transaction: Transaction, config: BusinessConfig) => {
     const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
     const users = ((await dbAdapter.getCollection('users')) || []) as any[];
     const dateStr = new Date(transaction.date).toLocaleDateString();
     const timeStr = new Date(transaction.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const terminalConfig = config.terminals?.find(t => t.id === transaction.terminalId)?.config;
 
     // Calculate totals and savings
-    let subtotal = 0;
     let discountTotal = 0;
-    let taxTotal = 0;
     const isTaxIncluded = transaction.isTaxIncluded || false;
-
-    // 1. Calculate Raw Totals
-    let rawNetTotal = 0;
-    let rawTaxTotal = 0;
-    let rawGrossTotal = 0;
 
     transaction.items.forEach(item => {
         const originalPrice = item.originalPrice || item.price;
-        const lineVal = item.price * item.quantity;
-        const lineDiscount = (originalPrice - item.price) * item.quantity;
-
-        discountTotal += lineDiscount;
-        rawGrossTotal += lineVal;
-
-        // Determine Tax Rate for this item
-        let itemTaxRate = 0;
-        if (item.appliedTaxIds && item.appliedTaxIds.length > 0) {
-            item.appliedTaxIds.forEach(id => {
-                const t = (config.taxes || []).find(tax => tax.id === id);
-                if (t) itemTaxRate += t.rate;
-            });
-        } else {
-            itemTaxRate = config.taxRate || 0;
-        }
-
-        let lineNet = 0;
-        let lineTax = 0;
-
-        if (isTaxIncluded) {
-            lineNet = lineVal / (1 + itemTaxRate);
-            lineTax = lineVal - lineNet;
-        } else {
-            lineNet = lineVal;
-            lineTax = lineNet * itemTaxRate;
-        }
-
-        rawNetTotal += lineNet;
-        rawTaxTotal += lineTax;
+        discountTotal += (originalPrice - item.price) * item.quantity;
     });
 
-    // 2. Apply Global Discount
     if (transaction.discountAmount && transaction.discountAmount > 0) {
         discountTotal += transaction.discountAmount;
-
-        if (isTaxIncluded) {
-            const ratio = (rawGrossTotal - transaction.discountAmount) / (rawGrossTotal || 1);
-            subtotal = rawNetTotal * ratio;
-            taxTotal = rawTaxTotal * ratio;
-        } else {
-            subtotal = rawNetTotal - transaction.discountAmount;
-            const ratio = subtotal / (rawNetTotal || 1);
-            taxTotal = rawTaxTotal * ratio;
-        }
-    } else {
-        subtotal = rawNetTotal;
-        taxTotal = rawTaxTotal;
     }
 
-    const finalTotal = transaction.total || (subtotal + taxTotal);
+    const fiscalSummary = calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
+    const subtotal = fiscalSummary.subtotal;
+    const taxTotal = fiscalSummary.taxTotal;
+    const finalTotal = fiscalSummary.total;
     const savings = discountTotal;
 
     // NCF Type Label Map
@@ -217,24 +172,16 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
             <table class="items-table">
                 <tbody>
                     ${transaction.items.map(item => {
-            let itemTaxRate = 0;
-            if (item.appliedTaxIds && item.appliedTaxIds.length > 0) {
-                item.appliedTaxIds.forEach(id => {
-                    const t = (config.taxes || []).find(tax => tax.id === id);
-                    if (t) itemTaxRate += t.rate;
-                });
-            } else {
-                itemTaxRate = config.taxRate || 0;
-            }
-
             const lineVal = item.price * item.quantity;
-            let iTax = 0;
-            if (isTaxIncluded) {
-                iTax = lineVal - (lineVal / (1 + itemTaxRate));
-            } else {
-                iTax = lineVal * itemTaxRate;
-            }
-
+            const itemTaxBreakdown = calculateTaxBreakdownFromItems([item], config, {
+                isTaxIncluded,
+                terminalConfig,
+                absoluteLineValues: true,
+            });
+            const iTax = Math.abs(itemTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0));
+            const taxLineHtml = itemTaxBreakdown.length > 0
+                ? `<br/>${itemTaxBreakdown.map(tax => `${formatTaxLineLabel(tax)}: ${currencySymbol}${Number(tax.amount || 0).toFixed(2)}`).join('<br/>')}`
+                : '';
             const originalPrice = item.originalPrice || item.price;
             const hasDiscount = originalPrice > item.price;
 
@@ -269,7 +216,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                                     ${item.quantity} x ${currencySymbol}${item.price.toFixed(2)}
                                     ${hasDiscount ? `<span style="text-decoration: line-through; color: #999; margin-left: 5px;">${currencySymbol}${originalPrice.toFixed(2)}</span>` : ''}
                                     ${item.modifiers ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
-                                    <br/>ITBIS: ${currencySymbol}${iTax.toFixed(2)}
+                                    ${taxLineHtml || `<br/>Impuestos: ${currencySymbol}${iTax.toFixed(2)}`}
                                     ${sellerNameHtml}
                                     ${hasTrackingHtml ? `<br/>${trackingHtml.join('<br/>')}` : ''}
                                 </span>
