@@ -1557,6 +1557,7 @@ export type Permission =
   | 'CAN_REFUND'
   | 'POS_CREDIT_OVERRIDE'
   | 'POS_PAY_CREDIT'
+  | 'POS_NEW_SALE'
   | 'POS_ALLOW_ZERO_PRICE'
   // --- POS CORE ---
   | 'SALE'

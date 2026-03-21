@@ -107,6 +107,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    }, [currentUser, config?.roles, roles]);
 
    const hasPermission = (perm: Permission) => userPermissions.includes('ALL') || userPermissions.includes(perm);
+   const canStartNewSaleAfterSuccess = hasPermission('POS_NEW_SALE');
 
    useEffect(() => {
       const unsubscribe = networkSyncService.subscribe(status => {
@@ -437,6 +438,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
          if (data.success) {
             alert(`Ticket enviado a ${email}`);
             setShowEmailInput(false);
+            onClose();
          } else {
             alert('Error al enviar: ' + data.message);
          }
@@ -495,9 +497,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                </div>
                <div className="w-full space-y-3">
                   <div className="flex gap-3">
-                     <button onClick={() => {
+                     <button onClick={async () => {
                         if (!config || !completedTransaction) return;
-                        printTicket(completedTransaction, config);
+                        await printTicket(completedTransaction, config);
+                        onClose();
                      }} className="flex-1 py-3 rounded-xl bg-gray-100 font-bold text-gray-700 flex items-center justify-center gap-2 hover:bg-gray-200 transition-colors"><Printer size={18} /> Ticket</button>
 
                      <button
@@ -509,7 +512,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                         <Mail size={18} />
                      </button>
                   </div>
-                  <button onClick={onClose} className={`w-full py-4 rounded-xl font-bold text-white shadow-xl flex items-center justify-center gap-2 ${themeBgClass}`}><Repeat size={20} /> Nueva Venta</button>
+                  {canStartNewSaleAfterSuccess && (
+                     <button onClick={onClose} className={`w-full py-4 rounded-xl font-bold text-white shadow-xl flex items-center justify-center gap-2 ${themeBgClass}`}><Repeat size={20} /> Nueva Venta</button>
+                  )}
                </div>
             </div>
          </div>
