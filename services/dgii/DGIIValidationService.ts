@@ -58,15 +58,30 @@ class DGIIValidationService {
 
         try {
             console.log(`🔍 [DGII Client] Querying API for ${sanitizedRNC}`);
-            // Call the local backend API (proxied by Vite to port 3001)
-            const response = await fetch(`/api/dgii/validate/${sanitizedRNC}`);
+            const endpoints = this.buildEndpointCandidates(sanitizedRNC);
+            let lastError: Error | null = null;
+            let data: DGIIResponse | null = null;
 
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.error || `HTTP ${response.status}`);
+            for (const endpoint of endpoints) {
+                try {
+                    const response = await fetch(endpoint);
+
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({}));
+                        throw new Error(errorData.error || `HTTP ${response.status}`);
+                    }
+
+                    data = await response.json();
+                    break;
+                } catch (error: any) {
+                    lastError = error instanceof Error ? error : new Error(String(error));
+                    console.warn(`⚠️ [DGII Client] Endpoint failed: ${endpoint}`, lastError.message);
+                }
             }
 
-            const data: DGIIResponse = await response.json();
+            if (!data) {
+                throw lastError || new Error('No se pudo conectar con el servicio DGII');
+            }
 
             // Cache successful result
             this.cache.set(sanitizedRNC, { data, cachedAt: Date.now() });
@@ -86,6 +101,29 @@ class DGIIValidationService {
 
     clearCache(): void {
         this.cache.clear();
+    }
+
+    private buildEndpointCandidates(rnc: string): string[] {
+        const seen = new Set<string>();
+        const add = (value?: string | null) => {
+            if (!value) return;
+            if (seen.has(value)) return;
+            seen.add(value);
+        };
+
+        add(`/api/dgii/validate/${rnc}`);
+
+        if (typeof window !== 'undefined') {
+            const { protocol, hostname } = window.location;
+            if (hostname) {
+                add(`${protocol}//${hostname}:3001/api/dgii/validate/${rnc}`);
+            }
+        }
+
+        add(`http://localhost:3001/api/dgii/validate/${rnc}`);
+        add(`http://127.0.0.1:3001/api/dgii/validate/${rnc}`);
+
+        return Array.from(seen);
     }
 }
 
