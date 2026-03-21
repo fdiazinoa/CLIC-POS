@@ -321,12 +321,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, [activeTable, parkedTickets]); // Re-run if table changes or tickets sync
 
+   const isMobile = useIsMobile();
+
+   const usesExpandedCatalog = useMemo(
+      () => Boolean(!isMobile && activeTerminalConfig?.operational?.expandTicket),
+      [activeTerminalConfig?.operational?.expandTicket, isMobile]
+   );
+
    const gridClass = useMemo(() => {
+      if (usesExpandedCatalog) {
+         return "grid [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))] gap-x-3 gap-y-5 content-start";
+      }
       if (uxConfig.gridDensity === 'COMPACT') {
          return "grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-4 pb-32";
       }
       return "grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6 pb-32";
-   }, [uxConfig.gridDensity]);
+   }, [usesExpandedCatalog, uxConfig.gridDensity]);
 
    const categoryContainerClass = useMemo(() => {
       if (uxConfig.quickKeysLayout === 'B') {
@@ -444,7 +454,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [status, setStatus] = useState<{ isConnected: boolean, currentNCF: string, remaining: number, expiryDate: string, batteryLevel: number } | null>(null);
 
    // --- MOBILE ADAPTATION ---
-   const isMobile = useIsMobile();
    const [showMobileConfigModal, setShowMobileConfigModal] = useState(false);
    const [pendingProductToAdd, setPendingProductToAdd] = useState<Product | null>(null);
    const [pendingTrackingProduct, setPendingTrackingProduct] = useState<{ product: Product, quantity: number, price?: number, modifiers?: string[] } | null>(null);
@@ -2113,7 +2122,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                ))}
             </div>
 
-            <div className={`flex-1 overflow-y-auto ${isMobile ? 'p-4' : 'p-8'} custom-scrollbar dark:bg-slate-900`}>
+            <div className={`flex-1 overflow-y-auto ${usesExpandedCatalog ? 'p-3 pr-2 pb-3' : isMobile ? 'p-4' : 'p-8'} custom-scrollbar scrollbar-thin dark:bg-slate-900`}>
                <div className={gridClass}>
                   {filteredProducts.map((product, idx) => {
                      const productName = product.name || '';
@@ -2147,10 +2156,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            }}
                            onTouchStart={handleTouchStart}
                            onTouchEnd={handleTouchEnd}
-                           className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-[2rem] p-4 shadow-sm border border-gray-100 cursor-pointer hover:shadow-xl hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group flex flex-col h-full relative overflow-hidden"
+                           className={`bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 cursor-pointer hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group relative overflow-hidden ${(usesExpandedCatalog && uxConfig.showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[320px] grid grid-rows-[7fr_3fr]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[220px] flex flex-col h-full' : 'rounded-[2rem] p-4 shadow-sm hover:shadow-xl flex flex-col h-full'}`}
                         >
                            {uxConfig.showProductImages && (
-                              <div className="aspect-square bg-gray-50 dark:bg-slate-800 rounded-[1.5rem] mb-4 overflow-hidden relative">
+                              <div className={`${usesExpandedCatalog ? 'h-full bg-gray-50 dark:bg-slate-800 rounded-[1.25rem] mb-0 overflow-hidden relative' : 'aspect-square bg-gray-50 dark:bg-slate-800 rounded-[1.5rem] mb-4 overflow-hidden relative'}`}>
                                  {product.image ? <img src={product.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
 
                                  {/* BADGES DE TIPO DE ARTÍCULO */}
@@ -2200,10 +2209,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
                            )}
-                           <div className="flex flex-col flex-1">
-                              <span className="text-[9px] font-bold text-purple-500 uppercase mb-1 opacity-60">{product.category}</span>
-                              <h3 className="font-bold text-gray-800 dark:text-white text-sm leading-tight mb-2 line-clamp-2 flex-1">{product.name}</h3>
-                              <div className="mt-auto pt-2 border-t border-gray-50 dark:border-slate-700"><span className="font-black text-lg text-gray-900 dark:text-white">{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+                           <div className={`flex flex-col ${usesExpandedCatalog ? 'min-h-0 pt-2' : 'flex-1'}`}>
+                              <span className={`${usesExpandedCatalog ? 'text-[10px] mb-1.5' : 'text-[9px] mb-1'} font-bold text-purple-500 uppercase opacity-60`}>{product.category}</span>
+                              <h3 className={`font-bold text-gray-800 dark:text-white leading-tight ${usesExpandedCatalog ? 'text-base line-clamp-2 min-h-[2.5rem]' : 'text-sm mb-2 line-clamp-2 flex-1'}`}>{product.name}</h3>
+                              <div className={`${usesExpandedCatalog ? 'mt-auto pt-2.5 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-2 border-t border-gray-50 dark:border-slate-700'}`}><span className={`font-black text-gray-900 dark:text-white ${usesExpandedCatalog ? 'text-2xl' : 'text-lg'}`}>{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
                            </div>
                         </div>
                      );
