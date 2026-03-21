@@ -139,6 +139,17 @@ export class SQLiteWASMAdapter implements DatabaseAdapter {
                 if (updates.classification.measurementUnit) next.measurementUnit = updates.classification.measurementUnit;
                 if (updates.classification.purchaseUnit) next.purchaseUnit = updates.classification.purchaseUnit;
             }
+            if (updates?.warehouseActions) {
+                const activeInWarehouses = new Set(next.activeInWarehouses || []);
+                Object.entries(updates.warehouseActions).forEach(([whId, action]) => {
+                    if (action === 'ENABLE') {
+                        activeInWarehouses.add(whId);
+                    } else if (action === 'DISABLE') {
+                        activeInWarehouses.delete(whId);
+                    }
+                });
+                next.activeInWarehouses = Array.from(activeInWarehouses);
+            }
             next.updatedAt = now;
             return next;
         });
