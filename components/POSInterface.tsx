@@ -2705,6 +2705,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               isReturnMode={isReturnMode}
                               hasCartItems={cart.length > 0}
                               globalDiscountValue={globalDiscount.value}
+                              showLogout={false}
                            />
                         </div>
 
@@ -2756,6 +2757,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        isReturnMode={isReturnMode}
                                        hasCartItems={cart.length > 0}
                                        globalDiscountValue={globalDiscount.value}
+                                       showLogout={false}
                                     />
                                  </div>
                               )}
@@ -2788,26 +2790,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
 
-                              <button
-                                 onClick={() => {
-                                    if (cart.length > 0 && fiscalStatus.hasNCF) {
-                                       const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-                                       if (!validation.isValid) {
-                                          alert(validation.error);
-                                          return;
+                              <div className="flex items-center gap-8 pt-4">
+                                 <button
+                                    onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
+                                    className="w-[128px] px-4 py-3.5 rounded-2xl font-black text-base border-2 border-red-100 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2 shrink-0"
+                                 >
+                                    <LogOut size={20} />
+                                    <span>Salir</span>
+                                 </button>
+                                 <button
+                                    onClick={() => {
+                                       if (cart.length > 0 && fiscalStatus.hasNCF) {
+                                          const validation = validateTerminalDocument(config, terminalId, 'TICKET');
+                                          if (!validation.isValid) {
+                                             alert(validation.error);
+                                             return;
+                                          }
+                                          if (!canProceedWithOperationalSession()) return;
+                                          proceedToCheckout();
+                                       } else if (!fiscalStatus.hasNCF) {
+                                          alert("No hay secuencias fiscales disponibles.");
                                        }
-                                       if (!canProceedWithOperationalSession()) return;
-                                       proceedToCheckout();
-                                    } else if (!fiscalStatus.hasNCF) {
-                                       alert("No hay secuencias fiscales disponibles.");
-                                    }
-                                 }}
-                                 disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                                 className={`w-full py-4 rounded-2xl font-black text-xl shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
-                              >
-                                 <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
-                                 <ArrowRight size={24} />
-                              </button>
+                                    }}
+                                    disabled={cart.length === 0 || !fiscalStatus.hasNCF}
+                                    className={`flex-1 max-w-[220px] py-3.5 rounded-2xl font-black text-lg shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
+                                 >
+                                    <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
+                                    <ArrowRight size={24} />
+                                 </button>
+                              </div>
                            </>
                         )}
                      </>
