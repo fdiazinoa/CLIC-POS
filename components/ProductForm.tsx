@@ -591,6 +591,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const handleFinalSave = async () => {
     if (isSaving) return;
     if (!formData.name.trim()) return alert("Debe asignar un nombre al artículo.");
+    const activeWarehouses = (formData.activeInWarehouses || []).filter(Boolean);
+    const requiresWarehouseAssignment = formData.is_sellable !== false || formData.operationalFlags?.trackInventory;
+    if (requiresWarehouseAssignment && activeWarehouses.length === 0) {
+      alert("Debe asignar al menos un almacén al artículo antes de guardarlo.");
+      return;
+    }
     if (formData.image && estimateDataUrlBytes(formData.image) > MAX_IMAGE_BYTES) { // rough bytes estimate
       alert(`La imagen pegada/suelta supera el límite (~${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB). Súbela reducida o quítala e inténtalo de nuevo.`);
       return;
@@ -599,6 +605,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     // Ensure updatedAt is set for Delta Sync
     const updatedProduct = {
       ...formData,
+      activeInWarehouses: activeWarehouses,
       warehouseSettings,
       updatedAt: new Date().toISOString()
     };

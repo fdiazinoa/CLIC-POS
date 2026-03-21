@@ -665,6 +665,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return false;
       }
 
+      const activeWarehouses = (product.activeInWarehouses || []).filter(Boolean);
+      if (activeWarehouses.length === 0) {
+         setErrorToast('Artículo sin almacén asignado. Defina al menos un almacén antes de vender.');
+         setTimeout(() => setErrorToast(null), 3500);
+         return false;
+      }
+
       // 1. Warehouse enablement check
       if (defaultSalesWarehouseId) {
          const validation = validateWarehouseAccess(product, defaultSalesWarehouseId);
@@ -965,7 +972,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const filtered = products.filter(p => {
          if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
-         const isAvailableInWarehouse = defaultSalesWarehouseId ? p.activeInWarehouses?.includes(defaultSalesWarehouseId) ?? true : true;
+         const activeWarehouses = (p.activeInWarehouses || []).filter(Boolean);
+         const hasAssignedWarehouse = activeWarehouses.length > 0;
+         const isAvailableInWarehouse = defaultSalesWarehouseId
+            ? activeWarehouses.includes(defaultSalesWarehouseId)
+            : hasAssignedWarehouse;
          const productName = p.name || '';
          const matchSearch = productName.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
 
@@ -976,7 +987,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          const isSellable = p.is_sellable !== false;
 
-         return matchSearch && matchCat && isAvailableInWarehouse && matchAllowedCat && isSellable;
+         return matchSearch && matchCat && hasAssignedWarehouse && isAvailableInWarehouse && matchAllowedCat && isSellable;
       });
 
       // Defensive: Ensure unique IDs to prevent React key warnings
@@ -1345,6 +1356,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       try {
+         const productsById = new Map(products.map(product => [product.id, product]));
+         for (const cartItem of processedCart) {
+            const sourceProduct = productsById.get(cartItem.id);
+            if (!sourceProduct) {
+               alert(`El artículo ${cartItem.name || cartItem.id} no existe o no está disponible para procesar la transacción.`);
+               return null;
+            }
+            if (!canAddItemToCart(sourceProduct, 0)) {
+               alert(`No se puede finalizar la venta porque el artículo "${sourceProduct.name}" no tiene almacén válido para esta terminal.`);
+               return null;
+            }
+         }
+
          // --- FISCAL COMPLIANCE CHECK (DGII RNC VALIDATION) ---
          if (fiscalStatus && fiscalStatus.type === 'B01' && selectedCustomer) {
             if (selectedCustomer.fiscalStatus && selectedCustomer.fiscalStatus !== 'ACTIVO') {

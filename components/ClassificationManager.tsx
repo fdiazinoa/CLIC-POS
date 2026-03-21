@@ -82,7 +82,7 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, o
     return (
         <div className="flex bg-white rounded-2xl border border-gray-100 h-[600px] overflow-hidden shadow-sm">
             {/* Sidebar */}
-            <div className="w-64 bg-gray-50 border-r border-gray-100 flex flex-col">
+            <div className="w-64 bg-white border-r border-gray-100 flex flex-col">
                 <div className="p-4 border-b border-gray-100 flex items-center gap-2">
                     <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 hover:text-gray-700 transition-colors">
                         <ArrowLeft size={20} />
@@ -92,12 +92,12 @@ const ClassificationManager: React.FC<ClassificationManagerProps> = ({ config, o
                         Clasificaciones
                     </h3>
                 </div>
-                <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-white">
                     {CLASSIFICATION_TYPES.map(type => (
                         <button
                             key={type.id}
                             onClick={() => { setActiveType(type.id); setEditingItem(null); setIsCreating(false); }}
-                            className={`w-full text-left px-3 py-2.5 rounded-xl text-sm font-bold flex items-center gap-3 transition-colors ${activeType === type.id ? 'bg-white text-blue-600 shadow-sm border border-gray-100' : 'text-gray-500 hover:bg-gray-100'}`}
+                            className={`w-full text-left px-3 py-2.5 rounded-xl text-sm font-bold flex items-center gap-3 transition-colors border ${activeType === type.id ? 'bg-white text-blue-600 shadow-sm border-blue-100' : 'bg-white text-gray-500 border-gray-100 hover:border-gray-200 hover:shadow-sm'}`}
                         >
                             <type.icon size={16} />
                             {type.label}
