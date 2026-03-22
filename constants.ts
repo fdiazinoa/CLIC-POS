@@ -170,7 +170,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
       'ALL',
       'POS_VOID_ITEM', 'POS_VOID_TICKET', 'POS_DISCOUNT',
       'POS_PRICE_OVERRIDE', 'POS_OPEN_DRAWER', 'POS_RETURNS',
-      'POS_REPRINT_RECEIPT', 'SETTINGS_ACCESS', 'POS_ALLOW_ZERO_PRICE'
+      'POS_REPRINT_RECEIPT', 'POS_CHANGE_TARIFF', 'SETTINGS_ACCESS', 'POS_ALLOW_ZERO_PRICE'
     ],
     isSystem: true,
     maxDiscountPercent: 100
@@ -180,7 +180,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
     name: 'Supervisor',
     permissions: [
       'POS_VOID_ITEM', 'POS_DISCOUNT', 'POS_OPEN_DRAWER',
-      'POS_RETURNS', 'POS_REPRINT_RECEIPT'
+      'POS_RETURNS', 'POS_REPRINT_RECEIPT', 'POS_CHANGE_TARIFF'
     ],
     isSystem: true,
     maxDiscountPercent: 20
@@ -385,6 +385,7 @@ export const AVAILABLE_PERMISSIONS = [
   { key: 'POS_VOID_PAID_TICKET', label: 'Anular Factura Pagada', description: 'Revertir una venta finalizada', category: 'SALES' },
   { key: 'POS_RETURNS', label: 'Autorizar Devoluciones y Notas de Crédito', description: 'Permite activar el modo de devolución en el POS y procesar notas de crédito', category: 'SALES' },
   { key: 'POS_MANAGE_PARKED', label: 'Gestionar Cuentas', description: 'Ver y recuperar cuentas de otros', category: 'SALES' },
+  { key: 'POS_CHANGE_TARIFF', label: 'Cambiar Tarifa de Venta', description: 'Permite seleccionar la tarifa activa desde la pantalla de ventas', category: 'SALES' },
 
   // --- CASH & FINANCE ---
   { key: 'POS_OPEN_DRAWER', label: 'Abrir Cajón', description: 'Sin venta', category: 'CASH' },
