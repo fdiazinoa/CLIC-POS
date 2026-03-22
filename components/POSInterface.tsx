@@ -398,6 +398,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showPaymentModal, setShowPaymentModal] = useState(false);
    const [showTicketOptions, setShowTicketOptions] = useState(false);
    const [showParkedList, setShowParkedList] = useState(false);
+   const [showParkAliasModal, setShowParkAliasModal] = useState(false);
+   const [parkTicketAlias, setParkTicketAlias] = useState('');
    const [showGlobalDiscount, setShowGlobalDiscount] = useState(false);
    const [showCouponModal, setShowCouponModal] = useState(false);
    const [couponCode, setCouponCode] = useState('');
@@ -426,6 +428,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [isScannerOpen, setIsScannerOpen] = useState(false);
    const scannerRef = useRef<Html5Qrcode | null>(null);
    const searchInputRef = useRef<HTMLInputElement>(null);
+   const parkAliasInputRef = useRef<HTMLInputElement>(null);
    const [showVirtualKeyboard, setShowVirtualKeyboard] = useState(false);
 
    const [fiscalStatus, setFiscalStatus] = useState<{
@@ -456,6 +459,45 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // --- PROMO BOTTOM SHEET ---
    const [showPromoSheet, setShowPromoSheet] = useState(false);
    const [selectedPromoProduct, setSelectedPromoProduct] = useState<Product | null>(null);
+
+   const buildParkedTicketName = useCallback(() => {
+      if (activeTable) {
+         return `Mesa: ${activeTable.nombre || activeTable.name}`;
+      }
+
+      if (selectedCustomer?.name) {
+         return selectedCustomer.name;
+      }
+
+      return `Ticket #${(Array.isArray(parkedTickets) ? parkedTickets : []).length + 1}`;
+   }, [activeTable, selectedCustomer, parkedTickets]);
+
+   const closeParkAliasModal = useCallback(() => {
+      setShowParkAliasModal(false);
+      setParkTicketAlias('');
+   }, []);
+
+   const openParkAliasModal = useCallback(() => {
+      if (cart.length === 0) return;
+
+      const existingParked = activeTable?.currentOrderId
+         ? parkedTickets.find((ticket) => ticket.id === activeTable.currentOrderId)
+         : undefined;
+
+      setParkTicketAlias(existingParked?.alias || '');
+      setShowParkAliasModal(true);
+   }, [activeTable, cart.length, parkedTickets]);
+
+   useEffect(() => {
+      if (!showParkAliasModal) return;
+
+      const focusTimer = window.setTimeout(() => {
+         parkAliasInputRef.current?.focus();
+         parkAliasInputRef.current?.select();
+      }, 40);
+
+      return () => window.clearTimeout(focusTimer);
+   }, [showParkAliasModal]);
 
    // --- RESERVAS / PRE-FACTURACION ---
    const [reservations, setReservations] = useState<Reservation[]>([]);
@@ -1119,6 +1161,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const syncedTicket: ParkedTicket = {
          id: orderId,
          name: existing?.name || `Mesa: ${activeTable.nombre || activeTable.name || orderId}`,
+         alias: existing?.alias,
          items: [...cart],
          total: cartTotal,
          customerId: selectedCustomer?.id,
@@ -1702,21 +1745,28 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const handleParkCurrentTicket = async () => {
+   const handleParkCurrentTicket = async (aliasInput?: string) => {
       if (cart.length === 0) return;
+      const parkedTicketId = activeTable?.currentOrderId || `P-${Date.now()}`;
+      const existingParked = (Array.isArray(parkedTickets) ? parkedTickets : []).find((ticket) => ticket.id === parkedTicketId);
+      const normalizedAlias = aliasInput === undefined
+         ? existingParked?.alias
+         : (aliasInput.trim() || undefined);
       const newParked: ParkedTicket = {
-         id: activeTable?.currentOrderId || `P-${Date.now()}`,
-         name: activeTable ? `Mesa: ${activeTable.name}` : (selectedCustomer ? selectedCustomer.name : `Ticket #${(Array.isArray(parkedTickets) ? parkedTickets : []).length + 1}`),
+         id: parkedTicketId,
+         name: buildParkedTicketName(),
+         alias: normalizedAlias,
          items: [...cart],
          total: cartTotal,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
-         timestamp: new Date().toISOString()
+         timestamp: existingParked?.timestamp || new Date().toISOString()
       };
 
       // Remove existing if updating same ID
       const updatedTickets = [...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(p => p.id !== newParked.id), newParked];
       onUpdateParkedTickets(updatedTickets);
+      closeParkAliasModal();
 
       if (activeTable) {
          try {
@@ -1908,7 +1958,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          case 'SETTINGS': if (onOpenSettings) onOpenSettings(); break;
          case 'TRACKING': if (onOpenInventoryTracking) onOpenInventoryTracking(); break;
          case 'DRAWER': handleOpenDrawer(); break;
-         case 'SAVE': handleParkCurrentTicket(); break;
+         case 'SAVE': openParkAliasModal(); break;
          case 'TABLES':
             if ((config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL') && cart.length > 0) {
                handleSendAndExit();
@@ -2262,7 +2312,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </h2>
                   </div>
                   <div className="flex gap-1">
-                     <button onClick={handleParkCurrentTicket} className="p-2 text-gray-400 hover:text-blue-600" title="Guardar Ticket">
+                     <button onClick={openParkAliasModal} className="p-2 text-gray-400 hover:text-blue-600" title="Guardar Ticket">
                         <Save size={20} />
                      </button>
                      <button onClick={() => setShowParkedList(!showParkedList)} className="p-2 text-gray-400 hover:text-orange-600 relative" title="Recuperar Ticket">
@@ -2418,7 +2468,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      {!isRetailMode && (
                         <>
                            <button onClick={handleOpenDrawer} title="Abrir Cajón" className="p-2 hover:bg-emerald-50 rounded-lg text-gray-400 hover:text-emerald-600 transition-colors"><Box size={18} /></button>
-                           <button onClick={handleParkCurrentTicket} title="Guardar Ticket" className="p-2 hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Save size={18} /></button>
+                           <button onClick={openParkAliasModal} title="Guardar Ticket" className="p-2 hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Save size={18} /></button>
                            <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="p-2 hover:bg-orange-50 rounded-lg text-gray-400 hover:text-orange-600 transition-colors relative">
                               <Inbox size={18} />
                               {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-0 right-0 w-3 h-3 bg-orange-500 rounded-full border-2 border-white"></span>}
@@ -2830,7 +2880,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <QrCode size={18} />
                            <span className="text-[9px] font-bold uppercase">Cupón</span>
                         </button>
-                        <button onClick={handleParkCurrentTicket} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
+                        <button onClick={openParkAliasModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
                            <Save size={18} />
                            <span className="text-[9px] font-bold uppercase">Grd.</span>
                         </button>
@@ -3178,6 +3228,62 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             )
          }
 
+         {/* Save Parked Ticket Alias */}
+         {showParkAliasModal && (
+            <div className="fixed inset-0 z-[101] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in zoom-in-95">
+               <div className="bg-white rounded-[2.5rem] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95">
+                  <div className="p-6 border-b bg-gray-50 flex justify-between items-center">
+                     <div>
+                        <h3 className="font-black text-xl text-gray-800">Guardar En Espera</h3>
+                        <p className="text-sm text-gray-500 mt-1">Agrega un alias para ubicar esta factura más rápido.</p>
+                     </div>
+                     <button onClick={closeParkAliasModal} className="p-2 hover:bg-gray-200 rounded-full">
+                        <X size={20} />
+                     </button>
+                  </div>
+                  <div className="p-6 space-y-4">
+                     <div>
+                        <label htmlFor="park-ticket-alias" className="block text-sm font-bold text-gray-700 mb-2">
+                           Alias de la factura
+                        </label>
+                        <input
+                           id="park-ticket-alias"
+                           ref={parkAliasInputRef}
+                           value={parkTicketAlias}
+                           onChange={(e) => setParkTicketAlias(e.target.value)}
+                           onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                 void handleParkCurrentTicket(parkTicketAlias);
+                              }
+                           }}
+                           placeholder="Ej. Cliente VIP, Pedido oficina, Recoger luego"
+                           maxLength={80}
+                           className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-base font-medium text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                     </div>
+                     <div className="rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3">
+                        <p className="text-[11px] font-black uppercase tracking-[0.18em] text-blue-500 mb-1">Nombre Base</p>
+                        <p className="text-sm font-semibold text-blue-900">{buildParkedTicketName()}</p>
+                     </div>
+                  </div>
+                  <div className="p-6 pt-0 flex gap-3">
+                     <button
+                        onClick={closeParkAliasModal}
+                        className="flex-1 rounded-2xl border border-gray-200 px-4 py-3 text-sm font-black uppercase tracking-[0.12em] text-gray-500 hover:bg-gray-50 transition-colors"
+                     >
+                        Cancelar
+                     </button>
+                     <button
+                        onClick={() => void handleParkCurrentTicket(parkTicketAlias)}
+                        className="flex-1 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black uppercase tracking-[0.12em] text-white hover:bg-blue-700 transition-colors"
+                     >
+                        Guardar En Espera
+                     </button>
+                  </div>
+               </div>
+            </div>
+         )}
+
          {/* List of Parked Tickets */}
          {
             showParkedList && (
@@ -3191,7 +3297,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         {(Array.isArray(parkedTickets) ? parkedTickets : []).map((pt, idx) => (
                            <div key={pt.id || `parked-${idx}`} onClick={() => handleRestoreTicket(pt)} className="p-4 bg-white border border-gray-100 rounded-2xl hover:border-orange-400 hover:bg-orange-50 cursor-pointer group transition-all">
                               <div className="flex justify-between items-start mb-2">
-                                 <span className="font-bold text-gray-800">{pt.name}</span>
+                                 <div className="min-w-0 pr-3">
+                                    <span className="block font-bold text-gray-800 truncate">{pt.alias || pt.name}</span>
+                                    {pt.alias && (
+                                       <span className="block text-[11px] font-semibold text-gray-400 truncate mt-1">
+                                          {pt.name}
+                                       </span>
+                                    )}
+                                 </div>
                                  <span className="text-[10px] font-bold text-gray-400 uppercase">{new Date(pt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                               </div>
                               <div className="flex justify-between items-center">

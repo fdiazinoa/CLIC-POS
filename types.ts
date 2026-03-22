@@ -1356,6 +1356,7 @@ export interface Reception {
 export interface ParkedTicket {
   id: string;
   name: string;
+  alias?: string;
   items: CartItem[];
   total?: number;
   customerId?: string;
