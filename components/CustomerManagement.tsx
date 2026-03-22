@@ -85,6 +85,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    // --- HYBRID SEARCH STATE ---
    const [searchingDGII, setSearchingDGII] = useState(false);
    const [remoteResult, setRemoteResult] = useState<Customer | null>(null);
+   const [remoteSearchMessage, setRemoteSearchMessage] = useState<string | null>(null);
 
    // --- TRANSACTION DETAIL STATE ---
    const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
@@ -118,6 +119,15 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
          minimumFractionDigits: 2,
          maximumFractionDigits: 2
       });
+
+   const buildDgiiInactiveMessage = (data: Pick<DGIIResponse, 'status' | 'name' | 'rnc'>): string => {
+      if (data.status === 'NO_REGISTRADO') {
+         return `Empresa no encontrada en DGII para el RNC ${data.rnc}. No se puede facturar B01.`;
+      }
+
+      const companyName = data.name?.trim() || `RNC ${data.rnc}`;
+      return `${companyName} no está activa en DGII (${data.status}). No se puede facturar B01.`;
+   };
 
    const isRNC = (term: string) => /^\d{9,11}$/.test(term);
 
@@ -206,6 +216,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       const performRemoteSearch = async () => {
          if (!isRNC(searchTerm)) {
             setRemoteResult(null);
+            setRemoteSearchMessage(null);
             return;
          }
 
@@ -213,13 +224,15 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
          const localExists = customers.some(c => c.taxId === searchTerm);
          if (localExists) {
             setRemoteResult(null);
+            setRemoteSearchMessage(null);
             return;
          }
 
          setSearchingDGII(true);
+         setRemoteSearchMessage(null);
          try {
             const data: DGIIResponse = await dgiiService.validateRNC(searchTerm);
-            if (data.status === 'ACTIVO' || data.status === 'INACTIVO') { // Show result even if inactive? Implementation plan says validateRNC
+            if (data.status === 'ACTIVO') {
                // Construct Temporary Customer
                const tempCustomer: Customer = {
                   id: `temp_${searchTerm}_${Date.now()}`,
@@ -233,7 +246,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                      economicActivity: data.economicActivity,
                      regimeType: data.regimeType
                   },
-                  defaultNcfType: data.status === 'ACTIVO' ? 'B01' : 'B02', // Auto-NCF logic
+                  defaultNcfType: 'B01',
                   // Defaults
                   totalSpent: 0,
                   currentDebt: 0,
@@ -247,12 +260,15 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                   updatedAt: new Date().toISOString()
                } as Customer;
                setRemoteResult(tempCustomer);
+               setRemoteSearchMessage(null);
             } else {
                setRemoteResult(null);
+               setRemoteSearchMessage(buildDgiiInactiveMessage(data));
             }
          } catch (e) {
             console.error("DGII Search failed", e);
             setRemoteResult(null);
+            setRemoteSearchMessage('Error al consultar DGII. Verifique la conexión.');
          } finally {
             setSearchingDGII(false);
          }
@@ -348,14 +364,9 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             return;
          }
 
-         // Show warning if not ACTIVO
          if (dgiiData.status !== 'ACTIVO') {
-            const message = `⚠️ ATENCIÓN: Contribuyente ${dgiiData.status}\n\n` +
-               `RNC: ${dgiiData.rnc}\n` +
-               `Nombre: ${dgiiData.name}\n\n` +
-               `Este contribuyente NO está vigente en DGII.\n` +
-               `No se puede emitir crédito fiscal B01.`;
-            alert(message);
+            setValidationError(buildDgiiInactiveMessage(dgiiData));
+            return;
          }
 
          // Auto-populate fields
@@ -369,8 +380,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                economicActivity: dgiiData.economicActivity,
                regimeType: dgiiData.regimeType
             },
-            // Auto-set NCF type based on status
-            defaultNcfType: dgiiData.status === 'ACTIVO' ? 'B01' : 'B02'
+            defaultNcfType: 'B01'
          });
 
          setValidationError(null);
@@ -945,6 +955,18 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                      <div className="p-4 flex items-center justify-center gap-3 text-gray-400 bg-gray-50 rounded-2xl border border-dashed border-gray-200 mb-4">
                         <Loader2 size={16} className="animate-spin" />
                         <span className="text-xs font-bold">Consultando DGII...</span>
+                     </div>
+                  )}
+
+                  {remoteSearchMessage && (
+                     <div className="mx-4 mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                        <div className="flex items-start gap-3">
+                           <AlertOctagon size={16} className="mt-0.5 flex-shrink-0 text-amber-500" />
+                           <div>
+                              <p className="text-xs font-black uppercase tracking-widest text-amber-600">Validación DGII</p>
+                              <p className="mt-1 font-semibold leading-relaxed">{remoteSearchMessage}</p>
+                           </div>
+                        </div>
                      </div>
                   )}
 
