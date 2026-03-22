@@ -674,7 +674,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const getProductPrice = useCallback((p: Product) => (p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price || p.price || 0, [activeTariffId]);
+   const getTariffPrice = useCallback((p: Product) => {
+      const tariffPrice = (p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price;
+      return typeof tariffPrice === 'number' && Number.isFinite(tariffPrice) ? tariffPrice : null;
+   }, [activeTariffId]);
+
+   const productHasActiveTariff = useCallback((p: Product) => getTariffPrice(p) !== null, [getTariffPrice]);
+
+   const getProductPrice = useCallback((p: Product) => getTariffPrice(p) ?? 0, [getTariffPrice]);
 
    const handleLoyaltyScan = useCallback((code: string) => {
       // Find customer by loyalty card or gift card
@@ -697,6 +704,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       // 0. Sellable check
       if (product.is_sellable === false) {
          setErrorToast(`Artículo no disponible para la venta (Insumo)`);
+         setTimeout(() => setErrorToast(null), 3500);
+         return false;
+      }
+
+      if (!productHasActiveTariff(product)) {
+         setErrorToast('Artículo no disponible en la tarifa activa.');
          setTimeout(() => setErrorToast(null), 3500);
          return false;
       }
@@ -735,7 +748,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return true;
-   }, [defaultSalesWarehouseId, warehouses, config.features.stockTracking, activeTerminalConfig, cart, committedByProduct]);
+   }, [defaultSalesWarehouseId, warehouses, config.features.stockTracking, activeTerminalConfig, cart, committedByProduct, productHasActiveTariff]);
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 
@@ -824,7 +837,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // A. Check Variants (SKU or Barcode)
          if (p.variants && p.variants.length > 0) {
             for (const v of p.variants) {
-               if (v.sku === searchCode || (v.barcode && v.barcode.includes(searchCode))) {
+               if ((v.sku === searchCode || (v.barcode && v.barcode.includes(searchCode))) && productHasActiveTariff(p)) {
                   // Map attribute values to a simple list of modifiers
                   const modifiersList = Object.entries(v.attributeValues || {}).map(([_, val]) => val);
                   return { product: p, quantity, price: v.price || getProductPrice(p), modifiers: modifiersList };
@@ -833,12 +846,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          // B. Check Parent (ID, SKU, or Barcode)
-         if (p.id === searchCode || p.barcode === searchCode) {
+         if ((p.id === searchCode || p.barcode === searchCode) && productHasActiveTariff(p)) {
             return { product: p, quantity, price: getProductPrice(p), modifiers: [] };
          }
       }
       return null;
-   }, [products, getProductPrice]);
+   }, [products, getProductPrice, productHasActiveTariff]);
 
    const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter') {
@@ -1011,8 +1024,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const matchAllowedCat = allowedCategorySet.size === 0 || allowedCategorySet.has(normalizedProductCategory);
 
          const isSellable = p.is_sellable !== false;
+         const hasActiveTariff = productHasActiveTariff(p);
 
-         return matchSearch && matchCat && isAvailableInWarehouse && matchAllowedCat && isSellable;
+         return matchSearch && matchCat && isAvailableInWarehouse && matchAllowedCat && isSellable && hasActiveTariff;
       });
 
       // Defensive: Ensure unique IDs to prevent React key warnings
@@ -1022,7 +1036,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          seenIds.add(p.id);
          return true;
       });
-   }, [products, searchTerm, categoryFilter, defaultSalesWarehouseId, activeTerminalConfig]);
+   }, [products, searchTerm, categoryFilter, defaultSalesWarehouseId, activeTerminalConfig, productHasActiveTariff]);
 
    const categories = useMemo(() => {
       const allowedCats = activeTerminalConfig?.catalog?.allowedCategories || [];
@@ -1040,6 +1054,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       );
       const availableProducts = products.filter(p => {
          if (!p || p.is_sellable === false) return false;
+         if (!productHasActiveTariff(p)) return false;
          if (allowedCategorySet.size > 0) {
             const normalizedCategory = typeof p.category === 'string' ? p.category.trim().toLowerCase() : '';
             if (!allowedCategorySet.has(normalizedCategory)) return false;
@@ -1065,7 +1080,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const cats = ['ALL', ...scopedCategories];
       console.log('[POS] Categories:', cats);
       return cats;
-   }, [products, activeTerminalConfig]);
+   }, [products, activeTerminalConfig, productHasActiveTariff]);
 
    useEffect(() => {
       if (categoryFilter !== 'ALL' && !categories.includes(categoryFilter)) {
