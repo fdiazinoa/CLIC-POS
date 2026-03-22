@@ -18,7 +18,7 @@ import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType,
-   PaymentEntry, Table, Reservation, ZReport, Room
+   PaymentEntry, Table, Reservation, ZReport, Room, Permission
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import UnifiedPaymentModal from './PaymentModal';
@@ -337,7 +337,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const allowedTariffs = useMemo(() => {
       const allowedIds = activeTerminalConfig?.pricing?.allowedTariffIds || [];
-      return config.tariffs.filter(t => allowedIds.includes(t.id));
+      if (allowedIds.length === 0) return config.tariffs;
+      const filteredTariffs = config.tariffs.filter(t => allowedIds.includes(t.id));
+      return filteredTariffs.length > 0 ? filteredTariffs : config.tariffs;
    }, [config.tariffs, activeTerminalConfig]);
 
    const [activeTariffId, setActiveTariffId] = useState<string>(() => {
@@ -407,6 +409,39 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    useEffect(() => {
       return backgroundSyncManager.subscribe(setSyncState);
    }, []);
+
+   const userPermissions = useMemo(() => {
+      const rolesSource = roles || config.roles || [];
+      const role = rolesSource.find(r => r.id === currentUser.roleId || r.id === currentUser.role);
+      return role?.permissions || [];
+   }, [config.roles, currentUser.role, currentUser.roleId, roles]);
+
+   const hasPermission = useCallback(
+      (perm: Permission) => userPermissions.includes('ALL') || userPermissions.includes(perm),
+      [userPermissions]
+   );
+
+   const canChangeTariff = hasPermission('POS_CHANGE_TARIFF');
+
+   useEffect(() => {
+      if (!canChangeTariff && showTariffSelector) {
+         setShowTariffSelector(false);
+      }
+   }, [canChangeTariff, showTariffSelector]);
+
+   useEffect(() => {
+      if (!showTariffSelector) return;
+
+      const handlePointerDown = (event: MouseEvent) => {
+         if (!tariffSelectorRef.current?.contains(event.target as Node)) {
+            setShowTariffSelector(false);
+         }
+      };
+
+      document.addEventListener('mousedown', handlePointerDown);
+      return () => document.removeEventListener('mousedown', handlePointerDown);
+   }, [showTariffSelector]);
+
    const [globalDiscount, setGlobalDiscount] = useState<{ type: 'PERCENT' | 'FIXED', value: number }>({ type: 'PERCENT', value: 0 });
 
    useEffect(() => {
@@ -445,6 +480,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    // --- MOBILE ADAPTATION ---
    const isMobile = useIsMobile();
+   const tariffSelectorRef = useRef<HTMLDivElement>(null);
    const [showMobileConfigModal, setShowMobileConfigModal] = useState(false);
    const [pendingProductToAdd, setPendingProductToAdd] = useState<Product | null>(null);
    const [pendingTrackingProduct, setPendingTrackingProduct] = useState<{ product: Product, quantity: number, price?: number, modifiers?: string[] } | null>(null);
@@ -2066,15 +2102,59 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      />
                      <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
                   </div>
-                  <div className="relative shrink-0">
-                     <button onClick={() => setShowTariffSelector(!showTariffSelector)} className={`flex items-center gap-2 md:gap-3 px-3 md:px-5 py-2.5 md:py-3 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-gray-100 border-transparent'}`}>
+                  <div className="relative shrink-0" ref={tariffSelectorRef}>
+                     <button
+                        type="button"
+                        onClick={() => {
+                           if (!canChangeTariff) return;
+                           setShowTariffSelector(!showTariffSelector);
+                        }}
+                        className={`flex items-center gap-2 md:gap-3 px-3 md:px-5 py-2.5 md:py-3 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-gray-100 border-transparent'} ${canChangeTariff ? 'hover:border-purple-300' : 'opacity-75 cursor-not-allowed'}`}
+                        disabled={!canChangeTariff}
+                        title={canChangeTariff ? 'Cambiar tarifa activa' : 'Tu rol no tiene permiso para cambiar la tarifa'}
+                     >
                         <Tag size={18} className="text-purple-600" />
                         <div className="text-left hidden sm:block">
                            <p className="text-[9px] font-black text-purple-400 uppercase tracking-widest leading-none mb-1">Tarifa Activa</p>
                            <p className="text-xs font-bold text-purple-900 leading-none truncate max-w-[120px]">{activeTariff?.name || 'General'}</p>
                         </div>
-                        <ChevronDown size={14} className={`text-purple-400 transition-transform ${showTariffSelector ? 'rotate-180' : ''}`} />
+                        {canChangeTariff ? (
+                           <ChevronDown size={14} className={`text-purple-400 transition-transform ${showTariffSelector ? 'rotate-180' : ''}`} />
+                        ) : (
+                           <Lock size={14} className="text-purple-300" />
+                        )}
                      </button>
+                     {canChangeTariff && showTariffSelector && (
+                        <div className="absolute right-0 top-[calc(100%+0.5rem)] z-30 min-w-[220px] rounded-2xl border border-purple-100 bg-white p-2 shadow-xl">
+                           <div className="px-3 py-2">
+                              <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest">Seleccionar tarifa</p>
+                           </div>
+                           <div className="space-y-1">
+                              {allowedTariffs.map((tariff) => {
+                                 const isSelected = tariff.id === activeTariffId;
+                                 return (
+                                    <button
+                                       key={tariff.id}
+                                       type="button"
+                                       onClick={() => {
+                                          setActiveTariffId(tariff.id);
+                                          setShowTariffSelector(false);
+                                       }}
+                                       className={`w-full flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition-all ${isSelected ? 'bg-purple-50 text-purple-900 border border-purple-200' : 'bg-white text-gray-700 hover:bg-gray-50 border border-transparent'}`}
+                                    >
+                                       <div className="min-w-0">
+                                          <p className="text-sm font-bold truncate">{tariff.name}</p>
+                                          <p className="text-[10px] font-medium text-gray-400 uppercase tracking-widest">
+                                             {tariff.taxIncluded ? 'Impuestos incluidos' : 'Impuestos separados'}
+                                          </p>
+                                       </div>
+                                       {isSelected && <Check size={16} className="text-purple-600 shrink-0" />}
+                                    </button>
+                                 );
+                              })}
+                           </div>
+                        </div>
+                     )}
                   </div>
 
 
