@@ -25,19 +25,24 @@ export const useBottomSafeOffset = ({
     if (!root || typeof window === 'undefined') return;
 
     let frameId: number | null = null;
+    let delayedMeasureId: number | null = null;
     let resizeObserver: ResizeObserver | null = null;
 
     const applyMeasurements = () => {
       frameId = null;
 
       const visualViewport = window.visualViewport;
-      const visibleHeight = Math.round(visualViewport?.height ?? window.innerHeight);
+      const rawVisibleHeight = Math.round(visualViewport?.height ?? window.innerHeight);
       const viewportBottomInset = Math.max(
         0,
         Math.round(
           window.innerHeight - ((visualViewport?.height ?? window.innerHeight) + (visualViewport?.offsetTop ?? 0))
         )
       );
+      const visibleHeight =
+        viewportBottomInset === 0
+          ? window.innerHeight
+          : Math.max(rawVisibleHeight, window.innerHeight - viewportBottomInset);
 
       let maxOverlayHeight = 0;
       let maxOverlayFootprint = 0;
@@ -64,7 +69,20 @@ export const useBottomSafeOffset = ({
       if (frameId !== null) {
         window.cancelAnimationFrame(frameId);
       }
+      if (delayedMeasureId !== null) {
+        window.clearTimeout(delayedMeasureId);
+      }
       frameId = window.requestAnimationFrame(applyMeasurements);
+
+      // Android WebView can report a stale visualViewport right after the
+      // keyboard closes. Re-measure shortly after the first frame.
+      delayedMeasureId = window.setTimeout(() => {
+        if (!rootRef.current) return;
+        if (frameId !== null) {
+          window.cancelAnimationFrame(frameId);
+        }
+        frameId = window.requestAnimationFrame(applyMeasurements);
+      }, 180);
     };
 
     scheduleMeasure();
@@ -86,6 +104,9 @@ export const useBottomSafeOffset = ({
     return () => {
       if (frameId !== null) {
         window.cancelAnimationFrame(frameId);
+      }
+      if (delayedMeasureId !== null) {
+        window.clearTimeout(delayedMeasureId);
       }
       resizeObserver?.disconnect();
       window.removeEventListener('resize', scheduleMeasure);

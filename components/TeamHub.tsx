@@ -659,14 +659,14 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
                         </button>
                      </div>
 
-                     <div className="flex-1 overflow-y-auto">
+                     <div className="flex-1 overflow-y-auto bg-slate-50/70 p-3">
                         {roles.map(role => (
                            <button
                               key={role.id}
                               onClick={() => setEditingRole(role)}
-                              className={`w-full p-4 text-left border-l-4 transition-all hover:bg-gray-50 flex items-center justify-between group ${editingRole?.id === role.id
-                                 ? 'border-purple-500 bg-purple-50 text-purple-900'
-                                 : 'border-transparent text-gray-600'
+                              className={`w-full p-4 mb-3 text-left rounded-2xl border transition-all shadow-sm hover:shadow-md flex items-center justify-between group bg-white ${editingRole?.id === role.id
+                                 ? 'border-purple-500 bg-white text-purple-900 ring-2 ring-purple-100'
+                                 : 'border-gray-200 text-gray-700 hover:border-gray-300'
                                  }`}
                            >
                               <span className="font-bold text-sm truncate pr-2">{role.name}</span>

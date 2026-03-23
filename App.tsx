@@ -285,6 +285,7 @@ const AppContent: React.FC = () => {
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [licenseError, setLicenseError] = useState<string | null>(null);
+  const inactivityTimerRef = useRef<number | null>(null);
 
   // Security bootstrap logic moved to loadData
 
@@ -326,6 +327,7 @@ const AppContent: React.FC = () => {
 
       runtimeWindow.ClicPOSNativePrinter = {
         platform: 'android',
+        validateDgiiRnc: (payload: unknown) => call('validateDgiiRnc', payload),
         printEscPos: (payload: unknown) => call('printEscPos', payload),
         printEscpos: (payload: unknown) => call('printEscpos', payload),
         printRaw: (payload: unknown) => call('printRaw', payload),
@@ -485,6 +487,73 @@ const AppContent: React.FC = () => {
     const terminal = getCurrentTerminal();
     return terminal?.config?.deviceRole?.role || DeviceRole.STANDARD_POS;
   }, [getCurrentTerminal]);
+
+  const navigateToUserLogin = React.useCallback(() => {
+    clearSecurityState();
+    setCurrentUser(null);
+    setCurrentView('LOGIN');
+  }, [clearSecurityState]);
+
+  useEffect(() => {
+    const currentTerminal = getCurrentTerminal();
+    const autoLogoutMinutes = currentTerminal?.config?.security?.autoLogoutMinutes ?? 0;
+    const shouldTrackInactivity =
+      Boolean(currentUser) &&
+      currentView !== 'LOGIN' &&
+      currentView !== 'ACTIVATION' &&
+      currentView !== 'WIZARD' &&
+      autoLogoutMinutes > 0;
+
+    if (!shouldTrackInactivity) {
+      if (inactivityTimerRef.current) {
+        window.clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
+      }
+      return;
+    }
+
+    const timeoutMs = autoLogoutMinutes * 60 * 1000;
+    const resetInactivityTimer = () => {
+      if (inactivityTimerRef.current) {
+        window.clearTimeout(inactivityTimerRef.current);
+      }
+      inactivityTimerRef.current = window.setTimeout(() => {
+        console.info(`[Security] Auto-logout triggered after ${autoLogoutMinutes} minute(s) of inactivity.`);
+        navigateToUserLogin();
+      }, timeoutMs);
+    };
+
+    const activityEvents: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'touchstart', 'wheel', 'scroll'];
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(eventName, resetInactivityTimer, { passive: true });
+    });
+
+    resetInactivityTimer();
+
+    return () => {
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, resetInactivityTimer as EventListener);
+      });
+      if (inactivityTimerRef.current) {
+        window.clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
+      }
+    };
+  }, [currentUser, currentView, getCurrentTerminal, navigateToUserLogin]);
+
+  useEffect(() => {
+    if (currentView !== 'POS') return;
+
+    const timers = [0, 60, 180, 320].map((delay) =>
+      window.setTimeout(() => {
+        window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+        window.dispatchEvent(new Event('resize'));
+        window.dispatchEvent(new Event('orientationchange'));
+      }, delay)
+    );
+
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [currentView]);
 
   const getStandalonePrimaryBinding = React.useCallback((sourceConfig: BusinessConfig, targetDeviceId: string) => {
     if (!targetDeviceId) return null;
@@ -3585,7 +3654,7 @@ const AppContent: React.FC = () => {
               setParkedTickets(validArray);
               await db.save('parkedTickets', validArray);
             }}
-            onLogout={() => { setCurrentUser(null); setCurrentView('LOGIN'); }}
+            onLogout={navigateToUserLogin}
             onOpenSettings={(view, data) => {
               setSettingsInitialView(view);
               setSettingsInitialData(data);

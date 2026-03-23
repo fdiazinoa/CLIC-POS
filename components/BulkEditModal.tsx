@@ -117,7 +117,7 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                      type="button"
                      onClick={() => setActiveTab(tab.id as BulkTab)}
                      disabled={isSaving}
-                     className={`flex items-center gap-2 py-3 px-6 font-black text-xs uppercase tracking-wider transition-all rounded-xl ${activeTab === tab.id ? 'bg-blue-50 text-blue-600 shadow-sm border border-blue-100' : 'text-slate-400 hover:text-slate-600'} disabled:opacity-50`}
+                     className={`flex items-center gap-2 py-3 px-6 font-black text-xs uppercase tracking-wider transition-all rounded-xl border shadow-sm ${activeTab === tab.id ? 'bg-white text-blue-600 border-blue-200 ring-2 ring-blue-50' : 'bg-white text-slate-500 border-slate-200 hover:text-slate-700 hover:border-slate-300'} disabled:opacity-50`}
                   >
                      <tab.icon size={16} /> {tab.label}
                   </button>

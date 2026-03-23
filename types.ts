@@ -1360,6 +1360,7 @@ export interface Reception {
 export interface ParkedTicket {
   id: string;
   name: string;
+  alias?: string;
   items: CartItem[];
   total?: number;
   customerId?: string;
@@ -1572,6 +1573,8 @@ export type Permission =
   | 'POS_OPEN_DRAWER'
   | 'POS_RETURNS'
   | 'POS_REPRINT_RECEIPT'
+  | 'POS_NEW_SALE'
+  | 'POS_CHANGE_TARIFF'
   | 'POS_CLOSE_Z'
   | 'POS_VIEW_ACTIVE_CASH'
   | 'POS_MANAGE_PARKED'

@@ -698,9 +698,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       return;
     }
 
+    const activeWarehouses = (formData.activeInWarehouses || []).filter(Boolean);
+    const requiresWarehouseAssignment = formData.is_sellable !== false || formData.operationalFlags?.trackInventory;
+    if (requiresWarehouseAssignment && activeWarehouses.length === 0) {
+      alert("Debe asignar al menos un almacén al artículo antes de guardarlo.");
+      return;
+    }
+
     // Ensure updatedAt is set for Delta Sync
     const updatedProduct = {
       ...formData,
+      activeInWarehouses: activeWarehouses,
       warehouseSettings,
       updatedAt: new Date().toISOString()
     };

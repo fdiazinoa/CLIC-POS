@@ -1,17 +1,38 @@
 package com.clicpos.nativeprinter
 
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbDeviceConnection
+import android.hardware.usb.UsbEndpoint
+import android.hardware.usb.UsbInterface
+import android.hardware.usb.UsbConstants
+import android.hardware.usb.UsbManager
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.util.Base64
+import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
 import java.net.Inet4Address
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.Socket
+import java.net.URL
+import java.net.URLEncoder
 import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -25,10 +46,69 @@ import org.json.JSONObject
  * 4) AndroidPrinterBridge.injectContractShim(webView)
  */
 class AndroidPrinterBridge(context: Context) {
+    companion object {
+        private const val DGII_LOG_TAG = "ClicPOSDGII"
+
+        /**
+         * Shim para exponer contrato JS unificado como window.ClicPOSNativePrinter.
+         */
+        @JvmStatic
+        fun injectContractShim(webView: WebView) {
+            val script = """
+                (function () {
+                  if (!window.AndroidPrinter) return;
+                  var parseResult = function (value) {
+                    if (!value) return { status: 'error', success: false, printed: false, message: 'Empty native response' };
+                    if (typeof value === 'string') {
+                      try { return JSON.parse(value); } catch (e) { return { status: 'error', success: false, printed: false, message: String(value) }; }
+                    }
+                    return value;
+                  };
+
+                  var call = function (method, payload) {
+                    if (!window.AndroidPrinter || typeof window.AndroidPrinter[method] !== 'function') {
+                      return Promise.resolve({ status: 'error', success: false, printed: false, message: 'Missing native method: ' + method });
+                    }
+                    var raw = window.AndroidPrinter[method](JSON.stringify(payload || {}));
+                    return Promise.resolve(parseResult(raw));
+                  };
+
+                  window.ClicPOSNativePrinter = {
+                    platform: 'android',
+                    validateDgiiRnc: function (payload) { return call('validateDgiiRnc', payload); },
+                    printEscPos: function (payload) { return call('printEscPos', payload); },
+                    printEscpos: function (payload) { return call('printEscpos', payload); },
+                    printRaw: function (payload) { return call('printRaw', payload); },
+                    printHtml: function (payload) { return call('printHtml', payload); },
+                    print: function (payload) { return call('print', payload); },
+                    discoverPrinters: function (payload) { return call('discoverPrinters', payload); },
+                    scanPrinters: function (payload) { return call('scanPrinters', payload); },
+                    listPrinters: function (payload) { return call('listPrinters', payload); },
+                    pairPrinter: function (payload) { return call('pairPrinter', payload); },
+                    connectPrinter: function (payload) { return call('connectPrinter', payload); },
+                    bindPrinter: function (payload) { return call('bindPrinter', payload); },
+                    testPrinter: function (payload) { return call('testPrinter', payload); },
+                    testPrinterConnection: function (payload) { return call('testPrinterConnection', payload); },
+                    getPrinterStatus: function (payload) { return call('getPrinterStatus', payload); },
+                    checkStatus: function (payload) { return call('checkStatus', payload); },
+                    getDeviceProfile: function () { return Promise.resolve(parseResult(window.AndroidPrinter.getDeviceProfile())); },
+                    getDeviceInfo: function () { return Promise.resolve(parseResult(window.AndroidPrinter.getDeviceInfo())); }
+                  };
+                })();
+            """.trimIndent()
+
+            webView.post {
+                webView.evaluateJavascript(script, null)
+            }
+        }
+    }
+
     private val appContext = context.applicationContext
     private val clipboardManager = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
 
     private val manager = ClicPOSBluetoothPrinterManager(appContext)
+    private val usbPermissionAction = "${appContext.packageName}.USB_PRINTER_PERMISSION"
+    private val dgiiUrl = "https://dgii.gov.do/app/WebApps/ConsultasWeb2/ConsultasWeb/consultas/rnc.aspx"
 
     @JavascriptInterface
     fun printEscPos(payloadJson: String?): String {
@@ -40,8 +120,9 @@ class AndroidPrinterBridge(context: Context) {
             }
 
             val rawBytes = Base64.decode(dataBase64, Base64.DEFAULT)
-            val result = manager.printEscPos(
+            val result = routeEscPosPrint(
                 rawBytes = rawBytes,
+                connection = payload.optString("connection", "BLUETOOTH").uppercase(),
                 printerAddress = payload.optString("printerAddress", null),
                 printerName = payload.optString("printerName", null),
                 printerId = payload.optString("printerId", null)
@@ -69,12 +150,27 @@ class AndroidPrinterBridge(context: Context) {
                 return error("Missing html", "PAYLOAD_INVALID")
             }
 
-            val result = manager.printHtmlAsText(
-                html = html,
-                printerAddress = payload.optString("printerAddress", null),
-                printerName = payload.optString("printerName", null),
-                printerId = payload.optString("printerId", null)
-            )
+            val connection = payload.optString("connection", "BLUETOOTH").uppercase()
+            val printerAddress = payload.optString("printerAddress", null)
+            val printerName = payload.optString("printerName", null)
+            val printerId = payload.optString("printerId", null)
+
+            val result = if (connection == "BLUETOOTH") {
+                manager.printHtmlAsText(
+                    html = html,
+                    printerAddress = printerAddress,
+                    printerName = printerName,
+                    printerId = printerId
+                )
+            } else {
+                routeEscPosPrint(
+                    rawBytes = htmlToPlainTextBytes(html),
+                    connection = connection,
+                    printerAddress = printerAddress,
+                    printerName = printerName,
+                    printerId = printerId
+                )
+            }
             toJson(result)
         } catch (e: Exception) {
             error(e.message ?: "Native HTML print error", "PRINT_HTML_ERROR")
@@ -89,24 +185,22 @@ class AndroidPrinterBridge(context: Context) {
         return try {
             val payload = JSONObject(payloadJson ?: "{}")
             val connection = payload.optString("connection", "BLUETOOTH").uppercase()
-
-            if (connection != "BLUETOOTH") {
-                return JSONObject().put("devices", JSONArray()).toString()
+            val devices = when (connection) {
+                "BLUETOOTH" -> manager.discoverBondedPrinters().map { printer ->
+                    JSONObject()
+                        .put("id", printer.id)
+                        .put("name", printer.name)
+                        .put("connection", printer.connection)
+                        .put("address", printer.address)
+                        .put("status", printer.status)
+                        .put("type", printer.type)
+                }
+                "USB" -> discoverUsbPrinters()
+                else -> emptyList()
             }
-
-            val devices = manager.discoverBondedPrinters()
             JSONObject()
                 .put("devices", JSONArray().apply {
-                    devices.forEach { device ->
-                        put(JSONObject()
-                            .put("id", device.id)
-                            .put("name", device.name)
-                            .put("connection", device.connection)
-                            .put("address", device.address)
-                            .put("status", device.status)
-                            .put("type", device.type)
-                        )
-                    }
+                    devices.forEach { device -> put(device) }
                 })
                 .toString()
         } catch (e: Exception) {
@@ -128,24 +222,34 @@ class AndroidPrinterBridge(context: Context) {
         return try {
             val payload = JSONObject(payloadJson ?: "{}")
             val connection = payload.optString("connection", "BLUETOOTH").uppercase()
-            if (connection != "BLUETOOTH") {
-                return error("Only BLUETOOTH pairing is implemented in this bridge.", "UNSUPPORTED_CONNECTION")
+            val printer = when (connection) {
+                "BLUETOOTH" -> {
+                    val address = payload.optString("address", payload.optString("id", null))
+                    val name = payload.optString("name", null)
+                    val paired = manager.pairPrinter(address = address, fallbackName = name)
+                    JSONObject()
+                        .put("id", paired.id)
+                        .put("name", paired.name)
+                        .put("connection", paired.connection)
+                        .put("address", paired.address)
+                        .put("status", paired.status)
+                        .put("type", paired.type)
+                }
+                "USB" -> resolveUsbPrinter(
+                    address = payload.optString("address", payload.optString("id", null)),
+                    fallbackName = payload.optString("name", null)
+                )
+                "NETWORK" -> JSONObject()
+                    .put("id", payload.optString("id", payload.optString("address", payload.optString("name", "network-printer"))))
+                    .put("name", payload.optString("name", "Impresora por IP"))
+                    .put("connection", "NETWORK")
+                    .put("address", payload.optString("address", null))
+                    .put("status", "CONNECTED")
+                    .put("type", payload.optString("type", "TICKET"))
+                else -> return error("Unsupported connection: $connection", "UNSUPPORTED_CONNECTION")
             }
 
-            val address = payload.optString("address", payload.optString("id", null))
-            val name = payload.optString("name", null)
-            val paired = manager.pairPrinter(address = address, fallbackName = name)
-
-            JSONObject()
-                .put("printer", JSONObject()
-                    .put("id", paired.id)
-                    .put("name", paired.name)
-                    .put("connection", paired.connection)
-                    .put("address", paired.address)
-                    .put("status", paired.status)
-                    .put("type", paired.type)
-                )
-                .toString()
+            JSONObject().put("printer", printer).toString()
         } catch (e: Exception) {
             error(e.message ?: "PAIR_ERROR", "PAIR_ERROR")
         }
@@ -156,6 +260,65 @@ class AndroidPrinterBridge(context: Context) {
 
     @JavascriptInterface
     fun bindPrinter(payloadJson: String?): String = pairPrinter(payloadJson)
+
+    @JavascriptInterface
+    fun testPrinter(payloadJson: String?): String = testPrinterConnection(payloadJson)
+
+    @JavascriptInterface
+    fun testPrinterConnection(payloadJson: String?): String {
+        return try {
+            val payload = JSONObject(payloadJson ?: "{}")
+            val connection = payload.optString("connection", "BLUETOOTH").uppercase()
+            val address = payload.optString("printerAddress", payload.optString("address", payload.optString("printerId", payload.optString("id", null))))
+            val name = payload.optString("printerName", payload.optString("name", null))
+
+            when (connection) {
+                "BLUETOOTH" -> toJson(manager.testConnection(address, name, payload.optString("printerId", payload.optString("id", null))))
+                "USB" -> {
+                    val usbDevice = findUsbDevice(address, name)
+                    if (usbDevice != null) {
+                        JSONObject()
+                            .put("status", "ONLINE")
+                            .put("success", true)
+                            .put("message", "Puerto USB detectado: ${usbDevice.deviceName}")
+                            .toString()
+                    } else {
+                        JSONObject()
+                            .put("status", "OFFLINE")
+                            .put("success", false)
+                            .put("message", "No se detectó una impresora USB conectada.")
+                            .toString()
+                    }
+                }
+                "NETWORK" -> {
+                    val endpoint = parseNetworkEndpoint(address)
+                    val online = endpoint != null && testTcpEndpoint(endpoint.first, endpoint.second)
+                    JSONObject()
+                        .put("status", if (online) "ONLINE" else "OFFLINE")
+                        .put("success", online)
+                        .put("message", if (online) "Conexión IP exitosa a ${endpoint?.first}:${endpoint?.second ?: 9100}" else "No se pudo conectar a la impresora IP.")
+                        .toString()
+                }
+                else -> JSONObject()
+                    .put("status", "UNKNOWN")
+                    .put("success", false)
+                    .put("message", "Modo de conexión no soportado: $connection")
+                    .toString()
+            }
+        } catch (e: Exception) {
+            JSONObject()
+                .put("status", "OFFLINE")
+                .put("success", false)
+                .put("message", e.message ?: "No se pudo probar la conexión.")
+                .toString()
+        }
+    }
+
+    @JavascriptInterface
+    fun getPrinterStatus(payloadJson: String?): String = testPrinterConnection(payloadJson)
+
+    @JavascriptInterface
+    fun checkStatus(payloadJson: String?): String = testPrinterConnection(payloadJson)
 
     @JavascriptInterface
     fun getDeviceProfile(): String {
@@ -266,12 +429,168 @@ class AndroidPrinterBridge(context: Context) {
         return JSONObject().put("status", "success").toString()
     }
 
+    @JavascriptInterface
+    fun validateDgiiRnc(payloadJson: String?): String {
+        val payload = try {
+            JSONObject(payloadJson ?: "{}")
+        } catch (_: Exception) {
+            JSONObject()
+        }
+
+        val sanitizedRnc = payload.optString("rnc", "")
+            .replace(Regex("[^0-9]"), "")
+
+        if (sanitizedRnc.length !in 9..11) {
+            Log.w(DGII_LOG_TAG, "Rejected invalid RNC payload: $sanitizedRnc")
+            return JSONObject()
+                .put("rnc", sanitizedRnc)
+                .put("name", "")
+                .put("status", "NO_REGISTRADO")
+                .put("error", "RNC inválido: debe contener entre 9 y 11 dígitos")
+                .toString()
+        }
+
+        Log.d(DGII_LOG_TAG, "Starting native DGII lookup for RNC $sanitizedRnc")
+        return try {
+            val result = performNativeDgiiLookup(sanitizedRnc)
+            Log.d(
+                DGII_LOG_TAG,
+                "Native DGII result for $sanitizedRnc => ${result.optString("status")} / ${result.optString("name")}"
+            )
+            result.toString()
+        } catch (e: Exception) {
+            Log.e(DGII_LOG_TAG, "Native DGII lookup failed for $sanitizedRnc", e)
+            JSONObject()
+                .put("rnc", sanitizedRnc)
+                .put("name", "")
+                .put("status", "NO_REGISTRADO")
+                .put("error", e.message ?: "Error consultando DGII")
+                .toString()
+        }
+    }
+
     private fun hasImageMimeType(description: ClipDescription): Boolean {
         for (index in 0 until description.mimeTypeCount) {
             val mime = description.getMimeType(index) ?: continue
             if (mime.startsWith("image/")) return true
         }
         return false
+    }
+
+    private fun routeEscPosPrint(
+        rawBytes: ByteArray,
+        connection: String,
+        printerAddress: String?,
+        printerName: String?,
+        printerId: String?
+    ): ClicPOSBluetoothPrinterManager.PrintResult {
+        return when (connection.uppercase()) {
+            "BLUETOOTH" -> manager.printEscPos(rawBytes, printerAddress, printerName, printerId)
+            "USB" -> usbPrintEscPos(rawBytes, printerAddress, printerName)
+            "NETWORK" -> networkPrintEscPos(rawBytes, printerAddress)
+            else -> ClicPOSBluetoothPrinterManager.PrintResult(
+                status = "error",
+                success = false,
+                printed = false,
+                message = "Modo de impresión no soportado: $connection",
+                errorCode = "UNSUPPORTED_CONNECTION"
+            )
+        }
+    }
+
+    private fun htmlToPlainTextBytes(html: String): ByteArray {
+        val text = html
+            .replace(Regex("<script[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<style[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
+            .replace(Regex("</p>", RegexOption.IGNORE_CASE), "\n")
+            .replace(Regex("<[^>]+>"), " ")
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace(Regex("[ \t]+"), " ")
+            .replace(Regex("\\n{3,}"), "\n\n")
+            .trim()
+
+        return (text + "\n\n").toByteArray(Charsets.UTF_8)
+    }
+
+    private fun usbPrintEscPos(rawBytes: ByteArray, printerAddress: String?, printerName: String?): ClicPOSBluetoothPrinterManager.PrintResult {
+        if (rawBytes.isEmpty()) {
+            return ClicPOSBluetoothPrinterManager.PrintResult(
+                status = "error",
+                success = false,
+                printed = false,
+                message = "USB payload is empty.",
+                errorCode = "PAYLOAD_INVALID"
+            )
+        }
+
+        return try {
+            val device = findUsbDevice(printerAddress, printerName)
+                ?: throw IllegalStateException("No se detectó una impresora USB conectada.")
+            val transfer = openUsbTransfer(device)
+            try {
+                writeUsbBytes(transfer.connection, transfer.endpoint, rawBytes)
+                ClicPOSBluetoothPrinterManager.PrintResult(
+                    status = "success",
+                    success = true,
+                    printed = true,
+                    message = "Ticket enviado por USB correctamente."
+                )
+            } finally {
+                closeUsbTransfer(transfer)
+            }
+        } catch (e: Exception) {
+            ClicPOSBluetoothPrinterManager.PrintResult(
+                status = "error",
+                success = false,
+                printed = false,
+                message = e.message ?: "No se pudo imprimir por USB.",
+                errorCode = "USB_PRINT_ERROR"
+            )
+        }
+    }
+
+    private fun networkPrintEscPos(rawBytes: ByteArray, printerAddress: String?): ClicPOSBluetoothPrinterManager.PrintResult {
+        if (rawBytes.isEmpty()) {
+            return ClicPOSBluetoothPrinterManager.PrintResult(
+                status = "error",
+                success = false,
+                printed = false,
+                message = "Network payload is empty.",
+                errorCode = "PAYLOAD_INVALID"
+            )
+        }
+
+        return try {
+            val endpoint = parseNetworkEndpoint(printerAddress)
+                ?: throw IllegalStateException("Debe indicar una IP válida para la impresora de red.")
+
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(endpoint.first, endpoint.second), 2000)
+                socket.getOutputStream().use { out ->
+                    out.write(rawBytes)
+                    out.flush()
+                }
+            }
+
+            ClicPOSBluetoothPrinterManager.PrintResult(
+                status = "success",
+                success = true,
+                printed = true,
+                message = "Ticket enviado por red correctamente."
+            )
+        } catch (e: Exception) {
+            ClicPOSBluetoothPrinterManager.PrintResult(
+                status = "error",
+                success = false,
+                printed = false,
+                message = e.message ?: "No se pudo imprimir por red.",
+                errorCode = "NETWORK_PRINT_ERROR"
+            )
+        }
     }
 
     private fun readImageDataUrlFromUri(uri: Uri): String? {
@@ -307,6 +626,168 @@ class AndroidPrinterBridge(context: Context) {
             .put("message", message)
             .put("errorCode", code)
             .toString()
+    }
+
+    private fun performNativeDgiiLookup(rnc: String): JSONObject {
+        val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        Log.d(DGII_LOG_TAG, "GET DGII page for $rnc")
+
+        val initialConnection = (URL(dgiiUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            setRequestProperty("User-Agent", userAgent)
+            connectTimeout = 10000
+            readTimeout = 10000
+        }
+
+        val initialHtml = initialConnection.inputStream.use { it.bufferedReader().readText() }
+        Log.d(DGII_LOG_TAG, "DGII initial page loaded for $rnc with ${initialHtml.length} chars")
+        val cookies = initialConnection.headerFields["Set-Cookie"]
+            ?.joinToString("; ") { value -> value.substringBefore(';') }
+            .orEmpty()
+        initialConnection.disconnect()
+
+        val viewState = extractInputValue(initialHtml, "__VIEWSTATE")
+            ?: throw IllegalStateException("No se pudo extraer __VIEWSTATE desde DGII")
+        val eventValidation = extractInputValue(initialHtml, "__EVENTVALIDATION")
+            ?: throw IllegalStateException("No se pudo extraer __EVENTVALIDATION desde DGII")
+        val viewStateGenerator = extractInputValue(initialHtml, "__VIEWSTATEGENERATOR").orEmpty()
+
+        Log.d(DGII_LOG_TAG, "POST DGII lookup for $rnc")
+        val formData = buildString {
+            appendFormField("__VIEWSTATE", viewState)
+            appendFormField("__VIEWSTATEGENERATOR", viewStateGenerator)
+            appendFormField("__EVENTVALIDATION", eventValidation)
+            appendFormField("ctl00\$cphMain\$txtRNCCedula", rnc)
+            appendFormField("ctl00\$cphMain\$btnBuscarPorRNC", "BUSCAR")
+        }
+
+        val searchConnection = (URL(dgiiUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+            setRequestProperty("User-Agent", userAgent)
+            if (cookies.isNotBlank()) {
+                setRequestProperty("Cookie", cookies)
+            }
+            connectTimeout = 10000
+            readTimeout = 10000
+        }
+
+        searchConnection.outputStream.use { output ->
+            OutputStreamWriter(output, Charsets.UTF_8).use { writer ->
+                writer.write(formData)
+                writer.flush()
+            }
+        }
+
+        val responseHtml = runCatching {
+            searchConnection.inputStream.use { it.bufferedReader().readText() }
+        }.getOrElse {
+            searchConnection.errorStream?.use { stream ->
+                return JSONObject()
+                    .put("rnc", rnc)
+                    .put("name", "")
+                    .put("status", "NO_REGISTRADO")
+                    .put("error", stream.bufferedReader().readText().ifBlank { "DGII respondió con error HTTP ${searchConnection.responseCode}" })
+            }
+            throw IllegalStateException("DGII respondió con error HTTP ${searchConnection.responseCode}")
+        }
+
+        searchConnection.disconnect()
+        Log.d(DGII_LOG_TAG, "DGII response HTML received for $rnc with ${responseHtml.length} chars")
+        return parseDgiiHtml(responseHtml, rnc)
+    }
+
+    private fun StringBuilder.appendFormField(key: String, value: String) {
+        if (isNotEmpty()) append('&')
+        append(URLEncoder.encode(key, "UTF-8"))
+        append('=')
+        append(URLEncoder.encode(value, "UTF-8"))
+    }
+
+    private fun extractInputValue(html: String, inputId: String): String? {
+        val regex = Regex("""id="$inputId"\s+value="([^"]*)"""")
+        return regex.find(html)?.groupValues?.getOrNull(1)
+    }
+
+    private fun parseDgiiHtml(html: String, rnc: String): JSONObject {
+        if (
+            html.contains("No existe", ignoreCase = true) ||
+            html.contains("no se encuentra", ignoreCase = true) ||
+            html.contains("no encontrado", ignoreCase = true)
+        ) {
+            Log.w(DGII_LOG_TAG, "DGII reported NO_REGISTRADO for $rnc by content match")
+            return JSONObject()
+                .put("rnc", rnc)
+                .put("name", "")
+                .put("status", "NO_REGISTRADO")
+        }
+
+        val result = JSONObject()
+            .put("rnc", rnc)
+            .put("name", "")
+            .put("status", "NO_REGISTRADO")
+
+        val name = extractTableValue(html, "(?:Nombre|Raz[óo]n\\s+Social)")
+        val commercialName = extractTableValue(html, "Nombre\\s+Comercial")
+        val statusText = extractTableValue(html, "Estado")?.uppercase()
+        val regimeType = extractTableValue(html, "(?:R[ée]gimen|Tipo)")
+        val economicActivity = extractTableValue(html, "Actividad\\s+Econ[óo]mica")
+
+        if (!name.isNullOrBlank()) {
+            result.put("name", name)
+        }
+
+        if (!commercialName.isNullOrBlank()) {
+            result.put("commercialName", commercialName)
+        }
+
+        if (!regimeType.isNullOrBlank()) {
+            result.put("regimeType", regimeType)
+        }
+
+        if (!economicActivity.isNullOrBlank()) {
+            result.put("economicActivity", economicActivity)
+        }
+
+        when {
+            statusText?.contains("ACTIVO") == true -> result.put("status", "ACTIVO")
+            statusText?.contains("INACTIVO") == true || statusText?.contains("SUSPENDIDO") == true -> result.put("status", "INACTIVO")
+        }
+
+        if (result.optString("name").isBlank()) {
+            result.put("status", "NO_REGISTRADO")
+        }
+
+        Log.d(
+            DGII_LOG_TAG,
+            "Parsed DGII for $rnc => status=${result.optString("status")} name=${result.optString("name")}"
+        )
+
+        return result
+    }
+
+    private fun extractTableValue(html: String, labelPattern: String): String? {
+        val regex = Regex(
+            "<td[^>]*>\\s*$labelPattern[^<]*</td>\\s*<td[^>]*>([^<]+)</td>",
+            setOf(RegexOption.IGNORE_CASE)
+        )
+        return regex.find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let(::cleanDgiiText)
+    }
+
+    private fun cleanDgiiText(text: String): String {
+        return text
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace(Regex("&#\\d+;"), "")
+            .trim()
+            .replace(Regex("\\s+"), " ")
     }
 
     private fun getLocalIpv4Addresses(): List<String> {
@@ -346,53 +827,200 @@ class AndroidPrinterBridge(context: Context) {
         }
     }
 
-    companion object {
-        /**
-         * Shim para exponer contrato JS unificado como window.ClicPOSNativePrinter.
-         */
-        @JvmStatic
-        fun injectContractShim(webView: WebView) {
-            val script = """
-                (function () {
-                  if (!window.AndroidPrinter) return;
-                  var parseResult = function (value) {
-                    if (!value) return { status: 'error', success: false, printed: false, message: 'Empty native response' };
-                    if (typeof value === 'string') {
-                      try { return JSON.parse(value); } catch (e) { return { status: 'error', success: false, printed: false, message: String(value) }; }
-                    }
-                    return value;
-                  };
+    private fun discoverUsbPrinters(): List<JSONObject> {
+        val usbManager = appContext.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return emptyList()
+        return usbManager.deviceList.values
+            .map { device ->
+                JSONObject()
+                    .put("id", usbDeviceId(device))
+                    .put("name", usbDeviceName(device))
+                    .put("connection", "USB")
+                    .put("address", usbDeviceAddress(device))
+                    .put("status", "CONNECTED")
+                    .put("type", "TICKET")
+            }
+            .sortedBy { it.optString("name", "USB Printer") }
+    }
 
-                  var call = function (method, payload) {
-                    if (!window.AndroidPrinter || typeof window.AndroidPrinter[method] !== 'function') {
-                      return Promise.resolve({ status: 'error', success: false, printed: false, message: 'Missing native method: ' + method });
-                    }
-                    var raw = window.AndroidPrinter[method](JSON.stringify(payload || {}));
-                    return Promise.resolve(parseResult(raw));
-                  };
+    private fun resolveUsbPrinter(address: String?, fallbackName: String?): JSONObject {
+        val device = findUsbDevice(address, fallbackName)
+            ?: throw IllegalStateException("No se detectó una impresora USB conectada.")
 
-                  window.ClicPOSNativePrinter = {
-                    platform: 'android',
-                    printEscPos: function (payload) { return call('printEscPos', payload); },
-                    printEscpos: function (payload) { return call('printEscpos', payload); },
-                    printRaw: function (payload) { return call('printRaw', payload); },
-                    printHtml: function (payload) { return call('printHtml', payload); },
-                    print: function (payload) { return call('print', payload); },
-                    discoverPrinters: function (payload) { return call('discoverPrinters', payload); },
-                    scanPrinters: function (payload) { return call('scanPrinters', payload); },
-                    listPrinters: function (payload) { return call('listPrinters', payload); },
-                    pairPrinter: function (payload) { return call('pairPrinter', payload); },
-                    connectPrinter: function (payload) { return call('connectPrinter', payload); },
-                    bindPrinter: function (payload) { return call('bindPrinter', payload); },
-                    getDeviceProfile: function () { return Promise.resolve(parseResult(window.AndroidPrinter.getDeviceProfile())); },
-                    getDeviceInfo: function () { return Promise.resolve(parseResult(window.AndroidPrinter.getDeviceInfo())); }
-                  };
-                })();
-            """.trimIndent()
+        return JSONObject()
+            .put("id", usbDeviceId(device))
+            .put("name", usbDeviceName(device))
+            .put("connection", "USB")
+            .put("address", usbDeviceAddress(device))
+            .put("status", "CONNECTED")
+            .put("type", "TICKET")
+    }
 
-            webView.post {
-                webView.evaluateJavascript(script, null)
+    private fun findUsbDevice(address: String?, fallbackName: String?): UsbDevice? {
+        val usbManager = appContext.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return null
+        val devices = usbManager.deviceList.values.toList()
+        if (devices.isEmpty()) return null
+
+        val normalizedAddress = address?.trim()?.lowercase()
+        val normalizedName = fallbackName?.trim()?.lowercase()
+
+        return devices.firstOrNull { device ->
+            listOf(
+                usbDeviceId(device),
+                usbDeviceAddress(device),
+                device.deviceName,
+                device.productName ?: "",
+                device.manufacturerName ?: ""
+            )
+                .filter { it.isNotBlank() }
+                .any { candidate -> normalizedAddress != null && candidate.lowercase() == normalizedAddress }
+        } ?: devices.firstOrNull { device ->
+            normalizedName != null && usbDeviceName(device).lowercase() == normalizedName
+        } ?: devices.firstOrNull()
+    }
+
+    private fun usbDeviceId(device: UsbDevice): String =
+        "usb:${device.vendorId}:${device.productId}:${device.deviceId}"
+
+    private fun usbDeviceAddress(device: UsbDevice): String =
+        device.deviceName ?: usbDeviceId(device)
+
+    private fun usbDeviceName(device: UsbDevice): String {
+        val manufacturer = device.manufacturerName?.takeIf { it.isNotBlank() }
+        val product = device.productName?.takeIf { it.isNotBlank() }
+        return when {
+            manufacturer != null && product != null -> "$manufacturer $product"
+            product != null -> product
+            manufacturer != null -> manufacturer
+            else -> "USB Printer ${device.deviceId}"
+        }
+    }
+
+    private fun parseNetworkEndpoint(rawAddress: String?): Pair<String, Int>? {
+        val value = rawAddress?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        val hostPort = value.removePrefix("tcp://").removePrefix("http://").removePrefix("https://")
+        val parts = hostPort.split(':')
+        val host = parts.firstOrNull()?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        val port = parts.getOrNull(1)?.toIntOrNull() ?: 9100
+        return host to port
+    }
+
+    private fun testTcpEndpoint(host: String, port: Int): Boolean {
+        return try {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(host, port), 1500)
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private data class UsbTransfer(
+        val connection: UsbDeviceConnection,
+        val usbInterface: UsbInterface,
+        val endpoint: UsbEndpoint
+    )
+
+    private fun openUsbTransfer(device: UsbDevice): UsbTransfer {
+        val usbManager = appContext.getSystemService(Context.USB_SERVICE) as? UsbManager
+            ?: throw IllegalStateException("USB host no disponible en este dispositivo.")
+
+        if (!requestUsbPermission(usbManager, device)) {
+            throw IllegalStateException("Android no concedió permiso para acceder a la impresora USB.")
+        }
+
+        val connection = usbManager.openDevice(device)
+            ?: throw IllegalStateException("No se pudo abrir el puerto USB para la impresora.")
+
+        for (index in 0 until device.interfaceCount) {
+            val usbInterface = device.getInterface(index)
+            if (!connection.claimInterface(usbInterface, true)) continue
+
+            val endpoint = findUsbOutEndpoint(usbInterface)
+            if (endpoint != null) {
+                return UsbTransfer(connection, usbInterface, endpoint)
+            }
+
+            connection.releaseInterface(usbInterface)
+        }
+
+        connection.close()
+        throw IllegalStateException("No se encontró un endpoint de salida para la impresora USB.")
+    }
+
+    private fun closeUsbTransfer(transfer: UsbTransfer) {
+        runCatching { transfer.connection.releaseInterface(transfer.usbInterface) }
+        runCatching { transfer.connection.close() }
+    }
+
+    private fun findUsbOutEndpoint(usbInterface: UsbInterface): UsbEndpoint? {
+        for (index in 0 until usbInterface.endpointCount) {
+            val endpoint = usbInterface.getEndpoint(index)
+            if (endpoint.direction == UsbConstants.USB_DIR_OUT) {
+                return endpoint
             }
         }
+        return null
+    }
+
+    private fun writeUsbBytes(connection: UsbDeviceConnection, endpoint: UsbEndpoint, bytes: ByteArray) {
+        var offset = 0
+        while (offset < bytes.size) {
+            val chunkSize = minOf(4096, bytes.size - offset)
+            val chunk = bytes.copyOfRange(offset, offset + chunkSize)
+            val transferred = connection.bulkTransfer(endpoint, chunk, chunk.size, 4000)
+            if (transferred <= 0) {
+                throw IllegalStateException("La impresora USB no aceptó datos en el puerto seleccionado.")
+            }
+            offset += transferred
+        }
+    }
+
+    private fun requestUsbPermission(usbManager: UsbManager, device: UsbDevice): Boolean {
+        if (usbManager.hasPermission(device)) return true
+
+        val latch = CountDownLatch(1)
+        var granted = false
+        var receiverRegistered = false
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action != usbPermissionAction) return
+                val grantedDevice = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                if (grantedDevice?.deviceId == device.deviceId) {
+                    granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                    latch.countDown()
+                }
+            }
+        }
+
+        try {
+            val filter = IntentFilter(usbPermissionAction)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                appContext.registerReceiver(receiver, filter)
+            }
+            receiverRegistered = true
+
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+
+            val intent = Intent(usbPermissionAction).setPackage(appContext.packageName)
+            val pendingIntent = PendingIntent.getBroadcast(appContext, device.deviceId, intent, flags)
+            usbManager.requestPermission(device, pendingIntent)
+            latch.await(5, TimeUnit.SECONDS)
+        } catch (_: Exception) {
+            granted = false
+        } finally {
+            if (receiverRegistered) {
+                runCatching { appContext.unregisterReceiver(receiver) }
+            }
+        }
+
+        return granted || usbManager.hasPermission(device)
     }
 }

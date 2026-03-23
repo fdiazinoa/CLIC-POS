@@ -42,6 +42,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
 
     const documentTitle = transaction.ncfType ? (ncfTypeLabels[transaction.ncfType] || 'FACTURA DE VENTA') : 'TICKET DE VENTA';
     const isCreditNote = transaction.ncfType === 'B04' || transaction.documentType === 'REFUND';
+    const qrPayload = String(transaction.displayId || transaction.id || '').trim();
 
     // Foreign Currency Calculation
     const foreignCurrenciesHtml = receiptConfig?.showForeignCurrencyTotals && currencies ? currencies
@@ -320,7 +321,8 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 
                 ${receiptConfig?.showQr ? `
                 <div id="qrcode"></div>
-                <div style="font-weight: bold; font-size: 9px; margin-top: 5px;">E-FACTURA VALIDADA</div>
+                <div style="font-weight: bold; font-size: 9px; margin-top: 5px;">ESCANEA ESTE TICKET PARA DEVOLUCIONES Y CUPONES</div>
+                <div style="font-size: 10px; margin-top: 4px;">${qrPayload}</div>
                 ` : ''}
             </div>
             
@@ -328,13 +330,8 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 window.onload = function() {
                     ${receiptConfig?.showQr ? `
                     try {
-                        const qrData = JSON.stringify({
-                            type: 'INVOICE_RETURN',
-                            id: "${transaction.id}",
-                            sec: "${transaction.id.substring(0, 8)}"
-                        });
                         new QRCode(document.getElementById("qrcode"), {
-                            text: qrData,
+                            text: "${qrPayload}",
                             width: 100,
                             height: 100,
                             colorDark : "#000000",

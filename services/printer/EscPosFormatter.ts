@@ -300,6 +300,7 @@ export const buildEscPosTicketPayload = (
   const documentTitle = transaction.ncfType
     ? (ncfTypeLabels[transaction.ncfType] || 'FACTURA DE VENTA')
     : 'TICKET DE VENTA';
+  const qrPayload = String(transaction.displayId || transaction.id || '').trim();
 
   buildReceiptHeader(chunks, config, documentTitle, width);
 
@@ -373,6 +374,15 @@ export const buildEscPosTicketPayload = (
     .split('\n')
     .map(line => line.trim())
     .filter(Boolean);
+
+  if (config.receiptConfig?.showQr && qrPayload) {
+    chunks.push(divider(width));
+    pushTextLines(chunks, splitLines('ESCANEA ESTE TICKET PARA DEVOLUCIONES Y CUPONES', width));
+    pushQrCode(chunks, qrPayload);
+    chunks.push(align(1));
+    pushTextLines(chunks, splitLines(qrPayload, width));
+    chunks.push(align(0));
+  }
 
   chunks.push(align(1));
   footerLines.forEach(line => pushTextLines(chunks, splitLines(line, width)));
