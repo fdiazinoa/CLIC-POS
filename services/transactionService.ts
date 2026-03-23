@@ -234,6 +234,7 @@ class TransactionService {
             netAmount: normalizedFiscalAmounts.netAmount,
             discountAmount: data.discountAmount,
             isTaxIncluded: data.isTaxIncluded,
+            taxBreakdown: data.taxBreakdown,
             ncf: data.ncf,
             ncfType: data.ncfType,
             relatedTransactions: data.relatedTransactions,

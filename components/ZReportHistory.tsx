@@ -8,6 +8,7 @@ import { ZReport, BusinessConfig } from '../types';
 import { db } from '../utils/db';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
 import { ZReportRecoveryService } from '../services/recovery/ZReportRecoveryService';
+import { formatTaxLineLabel } from '../utils/fiscalBreakdown';
 
 interface ZReportHistoryProps {
     config: BusinessConfig;
@@ -314,6 +315,27 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
                                 ))}
                             </div>
                         </div>
+
+                        {Array.isArray(r.taxBreakdown) && r.taxBreakdown.length > 0 && (
+                            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                                <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-bold text-gray-700 flex items-center gap-2">
+                                    <FileText size={18} /> Impuestos Desglosados
+                                </div>
+                                <div className="p-4 space-y-3">
+                                    {r.taxBreakdown.map((tax) => (
+                                        <div key={`report-tax-${tax.id}`} className="flex items-start justify-between border-b border-gray-50 last:border-0 pb-2 last:pb-0 gap-4">
+                                            <div>
+                                                <p className="font-bold text-gray-800">{formatTaxLineLabel(tax)}</p>
+                                                <p className="text-xs text-gray-500">
+                                                    Base imponible: {formatCurrency(tax.taxableBase || 0, r.baseCurrency)}
+                                                </p>
+                                            </div>
+                                            <span className="font-bold text-gray-800">{formatCurrency(tax.amount || 0, r.baseCurrency)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
                         {/* Notes */}
                         {r.notes && (

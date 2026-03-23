@@ -116,12 +116,18 @@ const HelpCenter: React.FC = () => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        console.log("🛠️ Form submitted. Starting ticket creation process...");
         setIsSubmitting(true);
 
         try {
+            console.log("🛠️ Gathering technical context...");
             const techContext = await gatherTechnicalContext();
+            console.log("🛠️ Context gathered:", techContext);
 
             const tenantId = localStorage.getItem('clic_tenant_id') || 'UNKNOWN_TENANT';
+            
+            // Si el tenant_id no es un UUID válido, la BD de Supabase va a rechazar el insert por constraint
+            console.log("🛠️ Preparing payload for tenant:", tenantId);
 
             const payload = {
                 tenant_id: tenantId,
@@ -132,18 +138,30 @@ const HelpCenter: React.FC = () => {
                 technical_context: techContext
             };
 
+            console.log("🛠️ Sending payload to Supabase 'landlord.support_tickets':", payload);
             const { data, error } = await landlordDb.from('support_tickets').insert([payload]).select().single();
 
-            if (error) throw error;
+            if (error) {
+                console.error("❌ Supabase Insert Error:", error);
+                throw error;
+            }
 
+            console.log("✅ Ticket created successfully! Ticket ID:", data?.id);
             const ticketId = data.id;
 
             // Insert initial message
-            await landlordDb.from('ticket_messages').insert([{
+            console.log("🛠️ Sending initial client message...");
+            const { error: msgError } = await landlordDb.from('ticket_messages').insert([{
                 ticket_id: ticketId,
                 sender_type: 'Client',
                 message: subject
             }]);
+            
+            if (msgError) {
+                console.error("❌ Supabase Message Insert Error:", msgError);
+            } else {
+                 console.log("✅ Initial message saved.");
+            }
 
             // Sistema contesta automático (simulado asíncrono para dar feeling)
             setTimeout(() => {
@@ -152,7 +170,7 @@ const HelpCenter: React.FC = () => {
                     sender_type: 'System',
                     message: `Diagnóstico automático capturado y adjuntado. Versión local: ${techContext.app_version}. Batería: ${techContext.battery_level}. Red: ${techContext.network_type}.`
                 }]).then(({ error }) => {
-                    if (error) console.error(error);
+                    if (error) console.error("Error sending system auto-reply", error);
                 });
             }, 1000);
 
@@ -162,9 +180,11 @@ const HelpCenter: React.FC = () => {
             setShowChat(true); // Cambiar a la vista de chat al enviar
 
         } catch (error) {
-            console.error('Error enviando ticket:', error);
+            console.error('❌ Error enviando ticket completo:', error);
+            alert(`Error creando ticket: ${error.message || JSON.stringify(error)}`);
         } finally {
             setIsSubmitting(false);
+            console.log("🛠️ Submit process finished.");
         }
     };
 
@@ -173,7 +193,7 @@ const HelpCenter: React.FC = () => {
             {/* Botón Flotante */}
             <button
                 onClick={toggleHelpCenter}
-                className="fixed bottom-6 right-6 z-50 p-4 rounded-full shadow-2xl bg-gradient-to-r from-blue-600 to-indigo-700 text-white hover:scale-105 transition-transform duration-300 ring-4 ring-blue-200 ring-opacity-50"
+                className="fixed bottom-24 right-4 sm:bottom-6 sm:right-6 z-50 p-4 rounded-full shadow-2xl bg-gradient-to-r from-blue-600 to-indigo-700 text-white hover:scale-105 transition-transform duration-300 ring-4 ring-blue-200 ring-opacity-50"
                 aria-label="Abrir Centro de Soporte"
             >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -183,7 +203,7 @@ const HelpCenter: React.FC = () => {
 
             {/* Panel Flotante "Glassmorphism" */}
             {isOpen && (
-                <div className="fixed bottom-24 right-6 z-50 w-[400px] bg-white/10 backdrop-blur-xl border border-white/20 shadow-2xl rounded-2xl overflow-hidden flex flex-col h-[550px] shadow-[0_8px_32px_0_rgba(31,38,135,0.37)]">
+                <div className="fixed bottom-[130px] right-4 sm:bottom-24 sm:right-6 z-50 w-[calc(100vw-2rem)] sm:w-[400px] bg-white/10 backdrop-blur-xl border border-white/20 shadow-2xl rounded-2xl overflow-hidden flex flex-col h-[70vh] sm:h-[550px] shadow-[0_8px_32px_0_rgba(31,38,135,0.37)]">
                     {/* Header */}
                     <div className="bg-gradient-to-r from-blue-600/90 to-indigo-700/90 p-4 text-white flex justify-between items-center shrink-0">
                         <div>

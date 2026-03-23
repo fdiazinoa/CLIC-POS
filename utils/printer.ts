@@ -1,6 +1,7 @@
 import { Transaction, BusinessConfig, Reservation } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { dbAdapter } from '../services/db';
+import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, formatTaxLineLabel } from './fiscalBreakdown';
 
 export const printTicket = async (transaction: Transaction, config: BusinessConfig) => {
     const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
@@ -19,37 +20,6 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
         0,
     );
     const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
-    const formatTaxLineLabel = (tax: { name: string; rate: number }) => {
-        const ratePercent = tax.rate <= 1 ? tax.rate * 100 : tax.rate;
-        const formattedRate = Number.isInteger(ratePercent) ? `${ratePercent}%` : `${ratePercent.toFixed(2)}%`;
-        return tax.name.includes('%') ? tax.name : `${tax.name} ${formattedRate}`;
-    };
-    const calculateItemTaxBreakdown = (item: any, lineBaseAfterDiscount: number) => {
-        const resolvedTaxes = ((item.appliedTaxIds || []) as string[])
-            .map(id => (config.taxes || []).find(tax => tax.id === id))
-            .filter(Boolean) as Array<{ id: string; name: string; rate: number }>;
-
-        const fallbackRate = Number(config.taxRate || 0);
-        const taxesForItem = resolvedTaxes.length > 0
-            ? resolvedTaxes
-            : (fallbackRate > 0 ? [{ id: 'default-tax', name: 'Impuesto', rate: fallbackRate }] : []);
-        const combinedRate = taxesForItem.reduce((sum, tax) => sum + Number(tax.rate || 0), 0);
-
-        if (combinedRate <= 0) return [];
-
-        const lineNet = isTaxIncluded
-            ? lineBaseAfterDiscount / (1 + combinedRate)
-            : lineBaseAfterDiscount;
-
-        return taxesForItem
-            .map(tax => ({
-                id: tax.id,
-                name: tax.name,
-                rate: Number(tax.rate || 0),
-                amount: round2(lineNet * Number(tax.rate || 0)),
-            }))
-            .filter(tax => Math.abs(tax.amount) > 0.0001);
-    };
 
     // 1. Calculate Raw Totals
     let rawNetTotal = 0;
@@ -108,27 +78,11 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
         taxTotal = rawTaxTotal;
     }
 
-    const taxBreakdownMap: Record<string, { id: string; name: string; rate: number; amount: number }> = {};
-    transaction.items.forEach(item => {
-        const lineGross = (item.price || 0) * (item.quantity || 0);
-        const itemRatio = lineGross / (grossLineTotal || 1);
-        const lineDiscount = globalDiscount * itemRatio;
-        const itemTaxLines = calculateItemTaxBreakdown(item, lineGross - lineDiscount);
-
-        itemTaxLines.forEach(tax => {
-            if (!taxBreakdownMap[tax.id]) {
-                taxBreakdownMap[tax.id] = { ...tax, amount: 0 };
-            }
-            taxBreakdownMap[tax.id].amount += tax.amount;
-        });
-    });
-
-    const taxBreakdown = Object.values(taxBreakdownMap)
-        .map(tax => ({ ...tax, amount: round2(tax.amount) }))
-        .filter(tax => Math.abs(tax.amount) > 0.0001)
-        .sort((a, b) => b.rate - a.rate);
-
-    const finalTotal = transaction.total || (subtotal + taxTotal);
+    const fiscalSummary = calculateTransactionFiscalSummary(transaction, config);
+    const taxBreakdown = fiscalSummary.taxBreakdown;
+    subtotal = fiscalSummary.subtotal;
+    taxTotal = fiscalSummary.taxTotal;
+    const finalTotal = fiscalSummary.total || transaction.total || (subtotal + taxTotal);
     const savings = discountTotal;
 
     // NCF Type Label Map
@@ -277,7 +231,11 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
             const lineVal = item.price * item.quantity;
             const itemRatio = lineVal / (grossLineTotal || 1);
             const lineDiscount = globalDiscount * itemRatio;
-            const itemTaxLines = calculateItemTaxBreakdown(item, lineVal - lineDiscount);
+            const itemTaxLines = calculateTaxBreakdownFromItems([item], config, {
+                discountAmount: lineDiscount,
+                isTaxIncluded,
+                fallbackTaxRate: config.taxRate || 0,
+            });
             const itemTaxHtml = itemTaxLines
                 .map(tax => `${formatTaxLineLabel(tax)}: ${currencySymbol}${tax.amount.toFixed(2)}`)
                 .join('<br/>');

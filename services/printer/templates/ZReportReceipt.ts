@@ -1,10 +1,18 @@
 import { ZReport } from '../../../types';
+import { formatTaxLineLabel } from '../../../utils/fiscalBreakdown';
 
 export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] = []): string => {
   const width = '80mm'; // Standard thermal paper width
 
   const formatCurrency = (amount: number, currency: string) => {
-    return new Intl.NumberFormat('es-DO', { style: 'currency', currency }).format(amount);
+    try {
+      if (/^[A-Z]{3}$/.test(currency || '')) {
+        return new Intl.NumberFormat('es-DO', { style: 'currency', currency }).format(amount);
+      }
+    } catch (error) {
+      console.warn('⚠️ Invalid currency for Z-Report receipt, using fallback:', currency, error);
+    }
+    return `${currency || ''}${Number(amount || 0).toFixed(2)}`;
   };
 
   const formatDate = (isoString: string) => {
@@ -13,9 +21,6 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
       hour: '2-digit', minute: '2-digit'
     });
   };
-
-  // Helper for dashed lines
-  const line = '-'.repeat(32); // Approx 32 chars for 58mm, adjust for 80mm if needed
 
   return `
     <!DOCTYPE html>
@@ -106,6 +111,20 @@ export const generateZReportReceipt = (report: ZReport, hiddenModules: string[] 
         <span>Transacciones:</span>
         <span>${report.transactionCount}</span>
       </div>
+      ${Array.isArray(report.taxBreakdown) && report.taxBreakdown.length > 0 ? `
+      <div class="divider" style="margin: 4px 0; border-top: 0.5px solid #ccc;"></div>
+      <div class="bold">IMPUESTOS</div>
+      ${report.taxBreakdown.map((tax) => `
+        <div class="row">
+          <span>${formatTaxLineLabel(tax)}:</span>
+          <span>${formatCurrency(tax.amount || 0, report.baseCurrency)}</span>
+        </div>
+        <div class="row" style="font-size: 10px;">
+          <span>Base:</span>
+          <span>${formatCurrency(tax.taxableBase || 0, report.baseCurrency)}</span>
+        </div>
+      `).join('')}
+      ` : ''}
       ` : ''}
       
       <!-- PAYMENT METHODS -->

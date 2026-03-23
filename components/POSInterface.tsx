@@ -57,6 +57,7 @@ import SupervisorAuthModal from './SupervisorAuthModal';
 import VirtualKeyboard from './VirtualKeyboard';
 import SafetyGateModal from './SafetyGateModal';
 import { printReservation } from '../utils/printer';
+import { calculateTaxBreakdownFromItems } from '../utils/fiscalBreakdown';
 import MobileCartButton from './MobileCartButton';
 
 // ... existing imports
@@ -323,16 +324,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const gridClass = useMemo(() => {
       if (uxConfig.gridDensity === 'COMPACT') {
-         return "grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-4 pb-32";
+         return "grid [grid-template-columns:repeat(auto-fill,minmax(150px,1fr))] gap-4 content-start";
       }
-      return "grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6 pb-32";
+      return "grid [grid-template-columns:repeat(auto-fill,minmax(170px,1fr))] gap-4 md:gap-6 content-start";
    }, [uxConfig.gridDensity]);
 
    const categoryContainerClass = useMemo(() => {
       if (uxConfig.quickKeysLayout === 'B') {
-         return "bg-white border-b border-gray-200 px-8 py-3 flex flex-wrap gap-2 shrink-0 max-h-32 overflow-y-auto custom-scrollbar";
+         return "bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex flex-wrap gap-2 shrink-0 max-h-32 overflow-y-auto custom-scrollbar";
       }
-      return "bg-white border-b border-gray-200 px-8 py-3 flex gap-2 overflow-x-auto no-scrollbar shrink-0";
+      return "bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex gap-2 overflow-x-auto no-scrollbar shrink-0";
    }, [uxConfig.quickKeysLayout]);
 
    const allowedTariffs = useMemo(() => {
@@ -1051,31 +1052,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const discountAmount = globalDiscount.type === 'PERCENT' ? grossLineTotal * (globalDiscount.value / 100) : Math.min(globalDiscount.value, grossLineTotal);
 
    const taxBreakdown = useMemo(() => {
-      const breakdown: Record<string, { name: string, amount: number }> = {};
-
-      processedCart.forEach(item => {
-         const lineGross = item.price * item.quantity;
-         const itemRatio = lineGross / (grossLineTotal || 1);
-         const lineDiscount = discountAmount * itemRatio;
-         const lineBaseAfterDiscount = lineGross - lineDiscount;
-
-         let itemTaxRate = 0;
-         const itemTaxes = (item.appliedTaxIds || []).map(id => (config.taxes || []).find(t => t.id === id)).filter(Boolean);
-         itemTaxes.forEach(t => itemTaxRate += t!.rate);
-
-         let lineNet = 0;
-         if (isTaxIncluded) {
-            lineNet = lineBaseAfterDiscount / (1 + itemTaxRate);
-         } else {
-            lineNet = lineBaseAfterDiscount;
-         }
-
-         itemTaxes.forEach(t => {
-            if (!breakdown[t!.id]) breakdown[t!.id] = { name: t!.name, amount: 0 };
-            breakdown[t!.id].amount += lineNet * t!.rate;
-         });
+      return calculateTaxBreakdownFromItems(processedCart, config, {
+         discountAmount,
+         isTaxIncluded,
       });
-      return Object.values(breakdown);
    }, [processedCart, grossLineTotal, config.taxes, discountAmount, isTaxIncluded]);
 
    const cartTax = taxBreakdown.reduce((sum, t) => sum + t.amount, 0);
@@ -1398,9 +1378,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                // Calculate totals for each part
                const saleTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
                const returnTotal = returnItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-               const saleTaxAmount = isTaxIncluded
-                  ? Math.round(((saleTotal - (saleTotal / 1.18)) + Number.EPSILON) * 100) / 100
-                  : 0;
+               const saleTaxBreakdown = calculateTaxBreakdownFromItems(saleItems, config, {
+                  isTaxIncluded,
+               });
+               const saleTaxAmount = Math.round((
+                  saleTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0)
+                  + Number.EPSILON
+               ) * 100) / 100;
                const saleNetAmount = isTaxIncluded
                   ? Math.round(((saleTotal - saleTaxAmount) + Number.EPSILON) * 100) / 100
                   : saleTotal;
@@ -1427,6 +1411,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         ncf: finalNcf,
                         ncfType: fiscalStatus.type,
                         taxAmount: saleTaxAmount,
+                        taxBreakdown: saleTaxBreakdown,
                         netAmount: saleNetAmount,
                         pendingBalance: payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0) || undefined,
                         dueDate: payments.some(p => p.method === 'CREDIT') ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined,
@@ -1498,6 +1483,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ncf: finalNcf,
                   ncfType: fiscalStatus.type,
                   taxAmount: taxAmount,
+                  taxBreakdown,
                   netAmount: netAmount,
                   discountAmount: discountAmount,
                   customerSnapshot: selectedCustomer ? {
@@ -2024,7 +2010,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          )}
 
          {/* LEFT AREA: PRODUCTS */}
-         <div className={`flex-1 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
+         <div className={`flex-1 min-h-0 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
             <header className="bg-white px-4 md:px-8 py-3 md:py-4 border-b border-gray-200 flex items-center gap-3 md:gap-6 shadow-sm z-10 shrink-0">
                <div className="flex items-center gap-3 pr-4 border-r border-gray-100">
                   <div className="w-10 h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
@@ -2119,7 +2105,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                ))}
             </div>
 
-            <div className={`flex-1 overflow-y-auto ${isMobile ? 'p-4' : 'p-8'} custom-scrollbar dark:bg-slate-900`}>
+            <div className={`flex-1 min-h-0 overflow-y-auto ${isMobile ? 'p-4' : 'p-8'} custom-scrollbar dark:bg-slate-900`}>
                <div className={gridClass}>
                   {filteredProducts.map((product, idx) => {
                      const productName = product.name || '';
@@ -2153,11 +2139,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            }}
                            onTouchStart={handleTouchStart}
                            onTouchEnd={handleTouchEnd}
-                           className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-[2rem] p-4 shadow-sm border border-gray-100 cursor-pointer hover:shadow-xl hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group flex flex-col h-full relative overflow-hidden"
+                           className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-[2rem] p-4 shadow-sm border border-gray-100 cursor-pointer hover:shadow-xl hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group flex flex-col min-h-[250px] relative overflow-hidden"
                         >
                            {uxConfig.showProductImages && (
-                              <div className="aspect-square bg-gray-50 dark:bg-slate-800 rounded-[1.5rem] mb-4 overflow-hidden relative">
-                                 {product.image ? <img src={product.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
+                              <div className="h-32 md:h-36 bg-gray-50 dark:bg-slate-800 rounded-[1.5rem] mb-4 overflow-hidden relative flex items-center justify-center">
+                                 {product.image ? <img src={product.image} className="w-full h-full object-cover object-center" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
 
                                  {/* BADGES DE TIPO DE ARTÍCULO */}
                                  {isWeighted && (
@@ -2206,10 +2192,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
                            )}
-                           <div className="flex flex-col flex-1">
-                              <span className="text-[9px] font-bold text-purple-500 uppercase mb-1 opacity-60">{product.category}</span>
-                              <h3 className="font-bold text-gray-800 dark:text-white text-sm leading-tight mb-2 line-clamp-2 flex-1">{product.name}</h3>
-                              <div className="mt-auto pt-2 border-t border-gray-50 dark:border-slate-700"><span className="font-black text-lg text-gray-900 dark:text-white">{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+                           <div className="flex flex-col flex-1 justify-between gap-3">
+                              <div className="space-y-1.5">
+                                 <span className="block text-[9px] font-bold text-purple-500 uppercase opacity-60 line-clamp-1">{product.category}</span>
+                                 <h3 className="font-bold text-gray-800 dark:text-white text-sm leading-tight line-clamp-2 min-h-[2.75rem]">{product.name}</h3>
+                              </div>
+                              <div className="pt-2 border-t border-gray-50 dark:border-slate-700"><span className="font-black text-lg text-gray-900 dark:text-white">{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
                            </div>
                         </div>
                      );
@@ -2246,7 +2234,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          </div >
 
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
-         <div className={`w-full ${isRetailMode ? '' : 'md:w-96'} h-full bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
+         <div className={`w-full ${isRetailMode ? '' : 'md:w-96'} h-full min-h-0 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
 
             {/* MOBILE HEADER */}
             < div className="md:hidden p-4 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
@@ -2501,7 +2489,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                />
             ) : (
                // STANDARD RESTAURANT/RETAIL LIST
-               <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-gray-50/50" >
+               <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-gray-50/50">
                   {
                      processedCart.map((item, idx) => {
                         const hasDiscount = item.originalPrice && item.price < item.originalPrice;

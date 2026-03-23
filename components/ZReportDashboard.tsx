@@ -1,14 +1,14 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
    ArrowLeft, Receipt, CheckCircle, Banknote, Calendar,
    AlertTriangle, Lock, RefreshCw, Printer, Mail, Loader2
 } from 'lucide-react';
 import { Transaction, BusinessConfig, CashMovement, User, RoleDefinition, Collection } from '../types';
-import { sendZReportEmail } from '../utils/email';
 import ZReportHistory from './ZReportHistory';
 import { calculateZReportStats } from '../utils/analytics';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
+import { calculateTransactionsTaxBreakdown, formatTaxLineLabel } from '../utils/fiscalBreakdown';
 
 interface ZReportDashboardProps {
    transactions: Transaction[];
@@ -148,7 +148,8 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                   cashCounted: cashCountedByCurrency,
                   cashDiscrepancy: cashDiscrepancyByCurrency,
                   transactionCount: filteredTransactions.length,
-                  stats: calculateZReportStats(filteredTransactions, filteredCollections)
+                  stats: calculateZReportStats(filteredTransactions, filteredCollections),
+                  taxBreakdown,
                };
 
                // Calculate totals by method (Sales)
@@ -228,6 +229,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                   cashDiscrepancy: cashDiscrepancyByCurrency,
                   transactionCount: finalTxCount,
                   stats: finalStats,
+                  taxBreakdown,
                   companyName: config.companyInfo.name,
                   notes: notes
                };
@@ -270,6 +272,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                totalsByMethod: finalTotalsByMethod,
                stats: finalStats,
                transactionCount: finalTxCount,
+               taxBreakdown,
                collectionIds: filteredCollections.map(c => c.id)
             };
 
@@ -360,10 +363,15 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const cashIn = cashInByCurrency[baseCurrencyCode] || 0;
    const cashOut = cashOutByCurrency[baseCurrencyCode] || 0;
    const expectedCashInDrawer = expectedCashByCurrency[baseCurrencyCode] || 0;
-   const cashDiscrepancy = cashDiscrepancyByCurrency[baseCurrencyCode] || 0;
 
    // Calculate Stats for Preview
    const stats = calculateZReportStats(filteredTransactions, filteredCollections);
+   const taxBreakdown = useMemo(() => calculateTransactionsTaxBreakdown(filteredTransactions, config), [filteredTransactions, config]);
+   const formatMoney = (amount: number) =>
+      `${baseCurrency?.symbol || config.currencySymbol}${amount.toLocaleString('en-US', {
+         minimumFractionDigits: 2,
+         maximumFractionDigits: 2
+      })}`;
 
 
    if (showHistory) {
@@ -587,6 +595,33 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                      <p className="text-sm text-gray-400 text-center py-4">No hay movimientos de efectivo para contar</p>
                   )}
                </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+               <h3 className="font-bold text-gray-500 uppercase text-xs tracking-wider mb-4 flex items-center gap-2">
+                  <Receipt size={14} /> Impuestos Desglosados
+               </h3>
+               {taxBreakdown.length > 0 ? (
+                  <div className="space-y-3">
+                     {taxBreakdown.map((tax) => (
+                        <div key={`z-tax-${tax.id}`} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+                           <div>
+                              <p className="text-sm font-black text-slate-800">{formatTaxLineLabel(tax)}</p>
+                              <p className="text-[11px] font-medium text-slate-400 uppercase tracking-wider">
+                                 Base imponible {formatMoney(tax.taxableBase || 0)}
+                              </p>
+                           </div>
+                           <p className="text-base font-black text-slate-900">{formatMoney(tax.amount)}</p>
+                        </div>
+                     ))}
+                     <div className="flex items-center justify-between pt-3 border-t border-dashed border-slate-200">
+                        <span className="text-xs font-black uppercase tracking-wider text-slate-500">Total impuestos</span>
+                        <span className="text-lg font-black text-slate-900">{formatMoney(taxBreakdown.reduce((sum, tax) => sum + tax.amount, 0))}</span>
+                     </div>
+                  </div>
+               ) : (
+                  <p className="text-sm text-gray-400 text-center py-4">No hay impuestos aplicados en las transacciones pendientes de este cierre.</p>
+               )}
             </div>
 
             {/* Automations Preview */}

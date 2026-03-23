@@ -16,6 +16,7 @@ import CreditAccountDashboard from './CreditAccountDashboard';
 import { agendaService } from '../services/AgendaService';
 import ActivityModal from './ActivityModal';
 import LoyaltyDashboard from './LoyaltyDashboard';
+import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/fiscalBreakdown';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -1724,6 +1725,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
             const payments = Array.isArray(tx.payments) ? tx.payments : [];
             const paymentTotal = payments.reduce((acc, p: any) => acc + Number(p?.amount || 0), 0);
+            const fiscalSummary = calculateTransactionFiscalSummary(tx, config);
             const isRefundDoc = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
             const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
             const affectedNCF = (tx.affectedNCF || '').toString().trim();
@@ -1793,15 +1795,24 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                         <section className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-2">
                            <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
                               <span>Subtotal</span>
-                              <span>{config.currencySymbol}{(tx.total / (1 + config.taxRate)).toFixed(2)}</span>
+                              <span>{config.currencySymbol}{fiscalSummary.subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                            </div>
-                           <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
-                              <span>Impuestos ({config.taxRate * 100}%)</span>
-                              <span>{config.currencySymbol}{(tx.total - (tx.total / (1 + config.taxRate))).toFixed(2)}</span>
-                           </div>
+                           {fiscalSummary.taxBreakdown.length > 0 ? (
+                              fiscalSummary.taxBreakdown.map((tax) => (
+                                 <div key={`${tx.id}-${tax.id}`} className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                                    <span>{formatTaxLineLabel(tax)}</span>
+                                    <span>{config.currencySymbol}{tax.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                 </div>
+                              ))
+                           ) : (
+                              <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                                 <span>Impuestos</span>
+                                 <span>{config.currencySymbol}{fiscalSummary.taxTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              </div>
+                           )}
                            <div className="flex justify-between text-lg font-black text-blue-900 border-t border-blue-100 pt-2 mt-2">
                               <span>Total Final</span>
-                              <span>{config.currencySymbol}{tx.total.toFixed(2)}</span>
+                              <span>{config.currencySymbol}{fiscalSummary.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                            </div>
                         </section>
 

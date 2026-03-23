@@ -9,6 +9,7 @@ import {
 import { Transaction, BusinessConfig, CartItem, RoleDefinition, ZReport } from '../types';
 import { validateTerminalDocument } from '../utils/validation';
 import { printTicket } from '../utils/printer';
+import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/fiscalBreakdown';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
 import { User, DeviceRole } from '../types';
@@ -365,6 +366,8 @@ const TicketDetailDrawer: React.FC<{
       }
    };
 
+   const fiscalSummary = calculateTransactionFiscalSummary(tx, config);
+
    return (
       <div className="fixed inset-0 z-[100] overflow-hidden">
          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
@@ -448,15 +451,24 @@ const TicketDetailDrawer: React.FC<{
                <section className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-2">
                   <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
                      <span>Subtotal</span>
-                     <span>{config.currencySymbol}{(tx.total / (1 + config.taxRate)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     <span>{config.currencySymbol}{fiscalSummary.subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
-                  <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
-                     <span>Impuestos ({config.taxRate * 100}%)</span>
-                     <span>{config.currencySymbol}{(tx.total - (tx.total / (1 + config.taxRate))).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
+                  {fiscalSummary.taxBreakdown.length > 0 ? (
+                     fiscalSummary.taxBreakdown.map((tax) => (
+                        <div key={`${tx.id}-${tax.id}`} className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                           <span>{formatTaxLineLabel(tax)}</span>
+                           <span>{config.currencySymbol}{tax.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </div>
+                     ))
+                  ) : (
+                     <div className="flex justify-between text-xs font-medium text-blue-600/60 uppercase tracking-wider">
+                        <span>Impuestos</span>
+                        <span>{config.currencySymbol}{fiscalSummary.taxTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     </div>
+                  )}
                   <div className="flex justify-between text-lg font-black text-blue-900 border-t border-blue-100 pt-2 mt-2">
                      <span>Total Final</span>
-                     <span>{config.currencySymbol}{tx.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                     <span>{config.currencySymbol}{fiscalSummary.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                </section>
 
@@ -971,7 +983,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       const ticketCount = filteredTransactions.length;
       const avgTicket = ticketCount > 0 ? totalSales / ticketCount : 0;
       const refunds = filteredTransactions.reduce((acc, tx) => {
-         if (tx.documentType === 'REFUND' || tx.ncfType === 'B04' || tx.status === 'REFUNDED' || tx.status === 'PARTIAL_REFUND') {
+         const isCreditNoteOrRefundDoc = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+         const isRefundStatus = tx.status === 'PARTIAL_REFUND';
+         if (isCreditNoteOrRefundDoc || isRefundStatus) {
             return acc + tx.total;
          }
          return acc;
@@ -1088,9 +1102,14 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       }
 
       const refundSubtotal = refundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+      const refundTaxBreakdown = calculateTaxBreakdownFromItems(refundItems, config, {
+         isTaxIncluded: !!originalTx.isTaxIncluded,
+         fallbackTaxRate: config.taxRate || 0,
+      });
+      const refundTaxTotal = refundTaxBreakdown.reduce((sum, tax) => sum + tax.amount, 0);
       const refundTotal = originalTx.isTaxIncluded
          ? refundSubtotal
-         : refundSubtotal * (1 + (config.taxRate || 0));
+         : refundSubtotal + refundTaxTotal;
 
       const authorized = await requestApproval({
          permission: 'POS_VOID_PAID_TICKET',
@@ -1115,13 +1134,23 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       const tx = transactions.find(t => t.id === returnModeId);
       if (!tx) return 0;
 
-      return tx.items
+      const refundItems = tx.items
          .filter(item => selectedItemsQty.has(item.cartId))
-         .reduce((acc, item) => {
+         .map(item => {
             const qtyToReturn = selectedItemsQty.get(item.cartId) || 0;
-            return acc + (item.price * qtyToReturn);
-         }, 0) * (1 + config.taxRate);
-   }, [returnModeId, selectedItemsQty, transactions, config.taxRate]);
+            return { ...item, quantity: qtyToReturn };
+         })
+         .filter(item => item.quantity > 0);
+
+      const refundSubtotal = refundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+      const refundTaxBreakdown = calculateTaxBreakdownFromItems(refundItems, config, {
+         isTaxIncluded: !!tx.isTaxIncluded,
+         fallbackTaxRate: config.taxRate || 0,
+      });
+      const refundTaxTotal = refundTaxBreakdown.reduce((sum, tax) => sum + tax.amount, 0);
+
+      return tx.isTaxIncluded ? refundSubtotal : refundSubtotal + refundTaxTotal;
+   }, [returnModeId, selectedItemsQty, transactions, config]);
 
 
    // --- RENDER HELPERS ---

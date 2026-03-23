@@ -4158,6 +4158,11 @@ const AppContent: React.FC = () => {
     <ErrorBoundary componentName="App Root">
       <div className="fixed inset-0 w-full h-full overflow-hidden bg-gray-50 flex flex-col font-sans select-none text-gray-900">
         {renderWithLayout()}
+
+        {/* HelpCenter Flotante Global */}
+        {isDataLoaded && !licenseError && currentView !== 'LOGIN' && currentView !== 'ACTIVATION' && currentView !== 'VISOR' && (
+          <HelpCenter />
+        )}
       </div>
     </ErrorBoundary>
   );

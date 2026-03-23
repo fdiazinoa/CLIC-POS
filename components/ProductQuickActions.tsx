@@ -36,6 +36,9 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
     const [tempName, setTempName] = useState(product.name);
     const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
     const menuRef = useRef<HTMLDivElement>(null);
+    const panelWidth = 220;
+    const safeLeft = Math.max(16, Math.min(position.x, window.innerWidth - panelWidth - 16));
+    const safeTop = Math.max(16, Math.min(position.y, window.innerHeight - 520));
 
     // Check Permission
     const hasPermission = (permission: string): boolean => {
@@ -129,61 +132,61 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
         >
             <div
                 ref={menuRef}
-                className="absolute bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-gray-100 dark:border-slate-700 w-64 overflow-hidden animate-in zoom-in-95 duration-100"
-                style={{ top: position.y, left: position.x }}
+                className="absolute bg-white rounded-[1.35rem] shadow-[0_22px_60px_rgba(15,23,42,0.18)] border border-gray-100 w-[220px] max-w-[calc(100vw-2rem)] overflow-hidden animate-in zoom-in-95 duration-100"
+                style={{ top: safeTop, left: safeLeft }}
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Header */}
-                <div className="p-4 border-b border-gray-50 dark:border-slate-700 bg-gray-50/50 dark:bg-slate-800/50">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Acciones Rápidas</p>
-                    <h4 className="font-bold text-gray-800 dark:text-white text-sm line-clamp-1">{product.name}</h4>
+                <div className="px-4 pt-4 pb-3 bg-white">
+                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-[0.22em] mb-2">Acciones Rápidas</p>
+                    <h4 className="font-black text-gray-800 text-[11px] leading-tight line-clamp-2">{product.name}</h4>
                 </div>
 
                 {/* Action Groups */}
-                <div className="p-2 space-y-1">
+                <div className="px-3 pb-3">
                     {/* Grupo A: Edición Rápida */}
-                    <div className="py-1">
-                        <button onClick={() => setActiveModal('PRICE')} className="w-full flex items-center gap-3 px-3 py-2 text-sm font-bold text-gray-700 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:text-blue-600 dark:hover:text-blue-400 rounded-xl transition-all">
-                            <DollarSign size={18} /> Modificar Precio Base
+                    <div className="space-y-0.5">
+                        <button onClick={() => setActiveModal('PRICE')} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-gray-700 bg-white hover:bg-gray-50 rounded-xl transition-colors">
+                            <DollarSign size={15} strokeWidth={2.2} /> Modificar Precio Base
                         </button>
-                        <button onClick={() => setActiveModal('NAME')} className="w-full flex items-center gap-3 px-3 py-2 text-sm font-bold text-gray-700 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:text-blue-600 dark:hover:text-blue-400 rounded-xl transition-all">
-                            <Edit3 size={18} /> Renombrar Producto
+                        <button onClick={() => setActiveModal('NAME')} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-gray-700 bg-white hover:bg-gray-50 rounded-xl transition-colors">
+                            <Edit3 size={15} strokeWidth={2.2} /> Renombrar Producto
                         </button>
-                        <button onClick={() => setActiveModal('WAREHOUSE')} className="w-full flex items-center gap-3 px-3 py-2 text-sm font-bold text-gray-700 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:text-blue-600 dark:hover:text-blue-400 rounded-xl transition-all">
-                            <Box size={18} /> Asignar Almacenes
+                        <button onClick={() => setActiveModal('WAREHOUSE')} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-gray-700 bg-white hover:bg-gray-50 rounded-xl transition-colors">
+                            <Box size={15} strokeWidth={2.2} /> Asignar Almacenes
                         </button>
                     </div>
 
-                    <div className="h-px bg-gray-100 dark:bg-slate-700 mx-2" />
+                    <div className="h-px bg-gray-100 my-2 mx-3" />
 
                     {/* Grupo B: Operatividad */}
-                    <div className="py-1">
-                        <button onClick={() => setActiveModal('STOCK')} className="w-full flex items-center gap-3 px-3 py-2 text-sm font-bold text-gray-700 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl transition-all">
-                            <Globe size={18} /> Ver Stock Global
+                    <div className="space-y-0.5">
+                        <button onClick={() => setActiveModal('STOCK')} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-gray-700 bg-white hover:bg-gray-50 rounded-xl transition-colors">
+                            <Globe size={15} strokeWidth={2.2} /> Ver Stock Global
                         </button>
-                        <button onClick={() => { onViewHistory(product); onClose(); }} className="w-full flex items-center gap-3 px-3 py-2 text-sm font-bold text-gray-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-xl transition-all">
-                            <Box size={18} /> Ver Historial
+                        <button onClick={() => { onViewHistory(product); onClose(); }} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-gray-700 bg-white hover:bg-gray-50 rounded-xl transition-colors">
+                            <Box size={15} strokeWidth={2.2} /> Ver Historial
                         </button>
-                        <button className="w-full flex items-center gap-3 px-3 py-2 text-sm font-bold text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700/50 rounded-xl transition-all opacity-50 cursor-not-allowed">
-                            <Printer size={18} /> Imprimir Etiqueta
+                        <button className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-gray-300 bg-white rounded-xl transition-colors opacity-80 cursor-not-allowed">
+                            <Printer size={15} strokeWidth={2.2} /> Imprimir Etiqueta
                         </button>
-                        <button onClick={toggleStatus} className={`w-full flex items-center justify-between gap-3 px-3 py-2 text-sm font-bold rounded-xl transition-all ${(product as any).isPaused ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
+                        <button onClick={toggleStatus} className={`w-full flex items-center justify-between gap-3 px-3 py-2 text-[12px] font-bold rounded-xl transition-colors ${(product as any).isPaused ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
                             <div className="flex items-center gap-3">
-                                {(product as any).isPaused ? <PlayCircle size={18} /> : <PauseCircle size={18} />}
+                                {(product as any).isPaused ? <PlayCircle size={15} strokeWidth={2.2} /> : <PauseCircle size={15} strokeWidth={2.2} />}
                                 <span>{(product as any).isPaused ? 'Reactivar Venta' : 'Pausar Venta'}</span>
                             </div>
                         </button>
                     </div>
 
-                    <div className="h-px bg-gray-100 dark:bg-slate-700 mx-2" />
+                    <div className="h-px bg-gray-100 my-2 mx-3" />
 
                     {/* Grupo C: Navegación */}
-                    <div className="py-1">
+                    <div className="space-y-0.5">
                         <button
                             onClick={() => onAdvancedEdit(product)}
-                            className="w-full flex items-center gap-3 px-3 py-2 text-sm font-bold text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/30 rounded-xl transition-all"
+                            className="w-full flex items-center gap-3 px-3 py-2 text-[12px] font-bold text-purple-600 bg-white hover:bg-purple-50 rounded-xl transition-colors"
                         >
-                            <Settings size={18} /> Edición Avanzada
+                            <Settings size={15} strokeWidth={2.2} /> Edición Avanzada
                         </button>
                     </div>
                 </div>
