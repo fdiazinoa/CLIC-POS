@@ -63,6 +63,13 @@ const getDefaultIconByType = (type: PaymentMethod): React.ElementType => {
    }
 };
 
+const createPaymentId = (): string => {
+   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+   }
+   return `PAY-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+};
+
 const getDefaultLabelByType = (type: PaymentMethod): string => {
    switch (type) {
       case 'CASH':
@@ -246,7 +253,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       }
 
       const newPayment: PaymentEntry = {
-         id: Math.random().toString(36).substr(2, 9),
+         id: createPaymentId(),
          method: activePaymentMethod.type,
          methodId: activePaymentMethod.id,
          methodLabel: activePaymentMethod.label,
@@ -314,7 +321,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             }
 
             const autoPayment: PaymentEntry = {
-               id: Math.random().toString(36).substr(2, 9),
+               id: createPaymentId(),
                method: activePaymentMethod.type,
                methodId: activePaymentMethod.id,
                methodLabel: activePaymentMethod.label,

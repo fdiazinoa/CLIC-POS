@@ -205,6 +205,14 @@ CREATE TABLE IF NOT EXISTS transactions (
     id TEXT PRIMARY KEY,
     globalSequence INTEGER,
     displayId TEXT,
+    source_channel TEXT,
+    source_transaction_id TEXT,
+    source_display_id TEXT,
+    source_terminal_id TEXT,
+    device_id TEXT,
+    source_credit_note_id TEXT,
+    original_transaction_id TEXT,
+    original_display_id TEXT,
     documentType TEXT,
     seriesId TEXT,
     seriesNumber INTEGER,
@@ -294,6 +302,10 @@ CREATE TABLE IF NOT EXISTS transfers (
 
 CREATE TABLE IF NOT EXISTS z_reports (
     id TEXT PRIMARY KEY,
+    source_channel TEXT,
+    source_z_report_id TEXT,
+    source_terminal_id TEXT,
+    device_id TEXT,
     openedAt TEXT,
     closedAt TEXT,
     terminalId TEXT,
@@ -317,6 +329,9 @@ CREATE TABLE IF NOT EXISTS z_reports (
     transactionCount INTEGER,
     notes TEXT,
     baseCurrency TEXT,
+    cashSales REAL DEFAULT 0,
+    cashIn REAL DEFAULT 0,
+    cashOut REAL DEFAULT 0,
     status TEXT,
     syncStatus TEXT DEFAULT 'PENDING',
     syncError TEXT
@@ -324,6 +339,11 @@ CREATE TABLE IF NOT EXISTS z_reports (
 
 CREATE TABLE IF NOT EXISTS cash_movements (
     id TEXT PRIMARY KEY,
+    source_channel TEXT,
+    source_cash_movement_id TEXT,
+    source_terminal_id TEXT,
+    device_id TEXT,
+    created_at TEXT,
     createdAt TEXT,
     type TEXT,
     amount REAL,
@@ -443,8 +463,14 @@ CREATE INDEX IF NOT EXISTS idx_inventory_commitments_product ON inventory_commit
 CREATE INDEX IF NOT EXISTS idx_inventory_ledger_product ON inventory_ledger(productId);
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
 CREATE INDEX IF NOT EXISTS idx_transactions_sync ON transactions(syncStatus);
+CREATE INDEX IF NOT EXISTS idx_transactions_source_transaction_id ON transactions(source_transaction_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_source_identity ON transactions(source_channel, source_transaction_id);
 CREATE INDEX IF NOT EXISTS idx_z_reports_terminal ON z_reports(terminalId);
+CREATE INDEX IF NOT EXISTS idx_z_reports_source_id ON z_reports(source_z_report_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_z_reports_source_identity ON z_reports(source_channel, source_z_report_id);
 CREATE INDEX IF NOT EXISTS idx_cash_movements_zreport ON cash_movements(zReportId);
+CREATE INDEX IF NOT EXISTS idx_cash_movements_source_id ON cash_movements(source_cash_movement_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_movements_source_identity ON cash_movements(source_channel, source_cash_movement_id);
 CREATE INDEX IF NOT EXISTS idx_currency_audit_currency ON currency_audit_logs(currencyCode);
 CREATE INDEX IF NOT EXISTS idx_currency_audit_date ON currency_audit_logs(changedAt);
 CREATE INDEX IF NOT EXISTS idx_sync_changes_collection_version ON sync_changes(collection, version);
