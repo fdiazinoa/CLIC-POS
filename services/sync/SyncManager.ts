@@ -1387,6 +1387,14 @@ class SyncManager {
     }
 
     /**
+     * Public setup/bootstrap pull used after terminal activation.
+     * Kept as a thin wrapper so the activation flow has an explicit orchestration entrypoint.
+     */
+    async fullPull(): Promise<void> {
+        await this.forcePullAll();
+    }
+
+    /**
      * Pull global configuration (mainly for Slave terminals)
      */
     async pullConfig(force: boolean = false): Promise<void> {
