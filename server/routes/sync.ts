@@ -170,6 +170,108 @@ const safeJsonStringify = (value: any, fallback = '{}'): string => {
     }
 };
 
+const normalizeIdentityString = (value: any): string | null => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+};
+
+const normalizeTransactionIdentity = (txn: any) => {
+    const sourceChannel = normalizeIdentityString(txn?.source_channel) || 'POS';
+    const sourceTransactionId = normalizeIdentityString(txn?.source_transaction_id) || normalizeIdentityString(txn?.id);
+
+    if (!sourceTransactionId) {
+        throw new Error('Transaction payload missing source_transaction_id/id');
+    }
+
+    const sourceDisplayId = normalizeIdentityString(txn?.source_display_id) || normalizeIdentityString(txn?.displayId);
+    const sourceTerminalId = normalizeIdentityString(txn?.source_terminal_id) || normalizeIdentityString(txn?.terminalId);
+    const deviceId = normalizeIdentityString(txn?.device_id);
+    const originalTransactionId =
+        normalizeIdentityString(txn?.original_transaction_id) ||
+        normalizeIdentityString(txn?.originalTransactionId);
+    const originalDisplayId =
+        normalizeIdentityString(txn?.original_display_id) ||
+        normalizeIdentityString(txn?.affectedInvoiceNumber);
+
+    const isCreditNote = txn?.documentType === 'REFUND' || txn?.ncfType === 'B04';
+    const sourceCreditNoteId = isCreditNote
+        ? normalizeIdentityString(txn?.source_credit_note_id) || sourceTransactionId
+        : normalizeIdentityString(txn?.source_credit_note_id);
+
+    return {
+        ...txn,
+        source_channel: sourceChannel,
+        source_transaction_id: sourceTransactionId,
+        source_display_id: sourceDisplayId || undefined,
+        source_terminal_id: sourceTerminalId || undefined,
+        device_id: deviceId || undefined,
+        source_credit_note_id: sourceCreditNoteId || undefined,
+        original_transaction_id: originalTransactionId || undefined,
+        original_display_id: originalDisplayId || undefined,
+        displayId: normalizeIdentityString(txn?.displayId) || sourceDisplayId || undefined,
+        terminalId: normalizeIdentityString(txn?.terminalId) || sourceTerminalId || undefined,
+        originalTransactionId: normalizeIdentityString(txn?.originalTransactionId) || originalTransactionId || undefined,
+        affectedInvoiceNumber: normalizeIdentityString(txn?.affectedInvoiceNumber) || originalDisplayId || undefined
+    };
+};
+
+const normalizeCashMovementIdentity = (movement: any) => {
+    const sourceChannel = normalizeIdentityString(movement?.source_channel) || 'POS';
+    const sourceCashMovementId =
+        normalizeIdentityString(movement?.source_cash_movement_id) ||
+        normalizeIdentityString(movement?.id);
+
+    if (!sourceCashMovementId) {
+        throw new Error('Cash movement payload missing source_cash_movement_id/id');
+    }
+
+    const sourceTerminalId =
+        normalizeIdentityString(movement?.source_terminal_id) ||
+        normalizeIdentityString(movement?.terminalId);
+    const deviceId = normalizeIdentityString(movement?.device_id);
+    const createdAt =
+        normalizeIdentityString(movement?.created_at) ||
+        normalizeIdentityString(movement?.createdAt) ||
+        normalizeIdentityString(movement?.timestamp);
+
+    return {
+        ...movement,
+        source_channel: sourceChannel,
+        source_cash_movement_id: sourceCashMovementId,
+        source_terminal_id: sourceTerminalId || undefined,
+        device_id: deviceId || undefined,
+        created_at: createdAt || undefined,
+        terminalId: normalizeIdentityString(movement?.terminalId) || sourceTerminalId || undefined,
+        createdAt: normalizeIdentityString(movement?.createdAt) || createdAt || undefined
+    };
+};
+
+const normalizeZReportIdentity = (report: any) => {
+    const sourceChannel = normalizeIdentityString(report?.source_channel) || 'POS';
+    const sourceZReportId =
+        normalizeIdentityString(report?.source_z_report_id) ||
+        normalizeIdentityString(report?.id);
+
+    if (!sourceZReportId) {
+        throw new Error('Z report payload missing source_z_report_id/id');
+    }
+
+    const sourceTerminalId =
+        normalizeIdentityString(report?.source_terminal_id) ||
+        normalizeIdentityString(report?.terminalId);
+    const deviceId = normalizeIdentityString(report?.device_id);
+
+    return {
+        ...report,
+        source_channel: sourceChannel,
+        source_z_report_id: sourceZReportId,
+        source_terminal_id: sourceTerminalId || undefined,
+        device_id: deviceId || undefined,
+        terminalId: normalizeIdentityString(report?.terminalId) || sourceTerminalId || undefined
+    };
+};
+
 const insertChangeStmt = db.prepare(`
     INSERT INTO sync_changes (collection, itemId, version, op, payload, createdAt)
     VALUES (?, ?, ?, ?, ?, ?)
@@ -864,16 +966,24 @@ router.post('/transactions', async (req, res) => {
         let conflictResolvedCount = 0;
         const now = new Date().toISOString();
         db.transaction(() => {
-            const stmt = db.prepare(`INSERT OR IGNORE INTO transactions (id, globalSequence, displayId, documentType, seriesId, seriesNumber, date, items, total, payments, userId, userName, terminalId, status, customerId, customerName, customerSnapshot, taxAmount, netAmount, discountAmount, isTaxIncluded, ncf, ncfType, relatedTransactions, originalTransactionId, refundReason, affectedInvoiceNumber, affectedNCF, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-            const updateStmt = db.prepare(`UPDATE transactions SET globalSequence = ?, displayId = ?, documentType = ?, seriesId = ?, seriesNumber = ?, date = ?, items = ?, total = ?, payments = ?, userId = ?, userName = ?, terminalId = ?, status = ?, customerId = ?, customerName = ?, customerSnapshot = ?, taxAmount = ?, netAmount = ?, discountAmount = ?, isTaxIncluded = ?, ncf = ?, ncfType = ?, relatedTransactions = ?, originalTransactionId = ?, refundReason = ?, affectedInvoiceNumber = ?, affectedNCF = ?, syncStatus = ?, syncError = ? WHERE id = ?`);
-            const byIdStmt = db.prepare(`SELECT id, displayId, terminalId FROM transactions WHERE id = ?`);
-            const byDisplayIdStmt = db.prepare(`SELECT id, displayId, terminalId FROM transactions WHERE displayId = ?`);
+            const stmt = db.prepare(`INSERT OR IGNORE INTO transactions (id, globalSequence, displayId, source_channel, source_transaction_id, source_display_id, source_terminal_id, device_id, source_credit_note_id, original_transaction_id, original_display_id, documentType, seriesId, seriesNumber, date, items, total, payments, userId, userName, terminalId, status, customerId, customerName, customerSnapshot, taxAmount, netAmount, discountAmount, isTaxIncluded, ncf, ncfType, relatedTransactions, originalTransactionId, refundReason, affectedInvoiceNumber, affectedNCF, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            const updateStmt = db.prepare(`UPDATE transactions SET globalSequence = ?, displayId = ?, source_channel = ?, source_transaction_id = ?, source_display_id = ?, source_terminal_id = ?, device_id = ?, source_credit_note_id = ?, original_transaction_id = ?, original_display_id = ?, documentType = ?, seriesId = ?, seriesNumber = ?, date = ?, items = ?, total = ?, payments = ?, userId = ?, userName = ?, terminalId = ?, status = ?, customerId = ?, customerName = ?, customerSnapshot = ?, taxAmount = ?, netAmount = ?, discountAmount = ?, isTaxIncluded = ?, ncf = ?, ncfType = ?, relatedTransactions = ?, originalTransactionId = ?, refundReason = ?, affectedInvoiceNumber = ?, affectedNCF = ?, syncStatus = ?, syncError = ? WHERE id = ?`);
+            const byIdStmt = db.prepare(`SELECT id, displayId, terminalId, source_channel, source_transaction_id FROM transactions WHERE id = ?`);
+            const bySourceIdentityStmt = db.prepare(`SELECT id, displayId, terminalId, source_channel, source_transaction_id FROM transactions WHERE source_channel = ? AND source_transaction_id = ?`);
 
             const insertTxn = (txn: any) =>
                 stmt.run(
                     txn.id,
                     txn.globalSequence,
                     txn.displayId,
+                    txn.source_channel,
+                    txn.source_transaction_id,
+                    txn.source_display_id,
+                    txn.source_terminal_id,
+                    txn.device_id,
+                    txn.source_credit_note_id,
+                    txn.original_transaction_id,
+                    txn.original_display_id,
                     txn.documentType,
                     txn.seriesId,
                     txn.seriesNumber,
@@ -907,6 +1017,14 @@ router.post('/transactions', async (req, res) => {
                 updateStmt.run(
                     txn.globalSequence,
                     txn.displayId,
+                    txn.source_channel,
+                    txn.source_transaction_id,
+                    txn.source_display_id,
+                    txn.source_terminal_id,
+                    txn.device_id,
+                    txn.source_credit_note_id,
+                    txn.original_transaction_id,
+                    txn.original_display_id,
                     txn.documentType,
                     txn.seriesId,
                     txn.seriesNumber,
@@ -937,7 +1055,8 @@ router.post('/transactions', async (req, res) => {
                     targetId
                 );
 
-            for (const txn of items) {
+            for (const rawTxn of items) {
+                const txn = normalizeTransactionIdentity(rawTxn);
                 const result = insertTxn(txn);
                 if (result.changes > 0) {
                     addedCount++;
@@ -947,9 +1066,21 @@ router.post('/transactions', async (req, res) => {
                 }
 
                 // Conflict handling path:
-                // 1) If id already exists, update existing row with newest payload.
-                // 2) If displayId exists with different id, merge into existing display row.
-                // 3) If id collision with different displayId, synthesize deterministic id and insert.
+                // 1) If source identity already exists, update that row.
+                // 2) If id already exists, update existing row with newest payload.
+                // 3) If id collision still exists, synthesize deterministic id and insert.
+                const existingBySource = bySourceIdentityStmt.get(txn.source_channel, txn.source_transaction_id) as any;
+                if (existingBySource?.id) {
+                    const mergedTxn = { ...txn, id: existingBySource.id };
+                    const updateResult = updateTxn(existingBySource.id, mergedTxn);
+                    if (updateResult.changes > 0) {
+                        conflictResolvedCount++;
+                        const version = bumpVersion('transactions');
+                        insertChangeStmt.run('transactions', existingBySource.id, version, 'UPSERT', JSON.stringify(mergedTxn), now);
+                    }
+                    continue;
+                }
+
                 const existingById = byIdStmt.get(txn.id) as any;
                 if (existingById?.id) {
                     const updatedTxn = { ...txn, id: existingById.id };
@@ -962,22 +1093,10 @@ router.post('/transactions', async (req, res) => {
                     continue;
                 }
 
-                const existingByDisplayId = txn.displayId ? (byDisplayIdStmt.get(txn.displayId) as any) : null;
-                if (existingByDisplayId?.id) {
-                    const mergedTxn = { ...txn, id: existingByDisplayId.id };
-                    const updateResult = updateTxn(existingByDisplayId.id, mergedTxn);
-                    if (updateResult.changes > 0) {
-                        conflictResolvedCount++;
-                        const version = bumpVersion('transactions');
-                        insertChangeStmt.run('transactions', mergedTxn.id, version, 'UPSERT', JSON.stringify(mergedTxn), now);
-                    }
-                    continue;
-                }
-
                 const baseId = typeof txn.id === 'string' && txn.id.trim().length > 0 ? txn.id : 'TXN-CONFLICT';
-                const terminalIdPart = typeof txn.terminalId === 'string' && txn.terminalId.trim().length > 0 ? txn.terminalId.trim() : 'UNKNOWN';
-                const displayIdPart = typeof txn.displayId === 'string' && txn.displayId.trim().length > 0 ? txn.displayId.trim() : `${Date.now()}`;
-                const fallbackId = `${baseId}__${terminalIdPart}__${displayIdPart}`;
+                const sourceChannelPart = normalizeIdentityString(txn.source_channel) || 'POS';
+                const sourceIdPart = normalizeIdentityString(txn.source_transaction_id) || `${Date.now()}`;
+                const fallbackId = `${baseId}__${sourceChannelPart}__${sourceIdPart}`;
                 const fallbackTxn = { ...txn, id: fallbackId };
                 const fallbackResult = insertTxn(fallbackTxn);
 
@@ -985,15 +1104,21 @@ router.post('/transactions', async (req, res) => {
                     conflictResolvedCount++;
                     const version = bumpVersion('transactions');
                     insertChangeStmt.run('transactions', fallbackTxn.id, version, 'UPSERT', JSON.stringify(fallbackTxn), now);
-                    console.warn(`[Sync] Transaction ID conflict resolved with fallback id: original=${txn.id}, fallback=${fallbackTxn.id}, displayId=${txn.displayId}`);
+                    console.warn(`[Sync] Transaction ID conflict resolved with fallback id: original=${txn.id}, fallback=${fallbackTxn.id}, source=${txn.source_channel}:${txn.source_transaction_id}`);
                 } else {
-                    console.warn(`[Sync] Transaction ignored after conflict handling: id=${txn.id}, displayId=${txn.displayId}, terminalId=${txn.terminalId}`);
+                    console.warn(`[Sync] Transaction ignored after conflict handling: id=${txn.id}, source=${txn.source_channel}:${txn.source_transaction_id}, terminalId=${txn.terminalId}`);
                 }
             }
 
             const pending = getSetting('pending_transactions') || [];
-            const pendingMap = new Map(pending.map((p: any) => [p.id, p]));
-            items.forEach((it: any) => pendingMap.set(it.id, it));
+            const pendingKey = (txn: any) =>
+                normalizeIdentityString(txn?.source_transaction_id) ||
+                normalizeIdentityString(txn?.id) ||
+                `pending-${Date.now()}`;
+            const pendingMap = new Map(pending.map((p: any) => [pendingKey(p), p]));
+            items
+                .map((txn: any) => normalizeTransactionIdentity(txn))
+                .forEach((txn: any) => pendingMap.set(pendingKey(txn), txn));
             saveSetting('pending_transactions', Array.from(pendingMap.values()));
 
             updateMetadata('transactions', getCurrentVersion('transactions'));
@@ -1201,22 +1326,75 @@ router.post('/cash/movements', async (req, res) => {
 
         const collectionKey = 'cashMovements';
         let addedCount = 0;
+        let conflictResolvedCount = 0;
         const now = new Date().toISOString();
         db.transaction(() => {
-            const stmt = db.prepare(`INSERT OR IGNORE INTO cash_movements (id, createdAt, type, amount, concept, userId, userName, terminalId, zReportId, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-            for (const move of items) {
-                const result = stmt.run(move.id, move.createdAt, move.type, move.amount, move.concept, move.userId, move.userName, move.terminalId, move.zReportId, move.syncStatus, move.syncError);
+            const stmt = db.prepare(`INSERT OR IGNORE INTO cash_movements (id, source_channel, source_cash_movement_id, source_terminal_id, device_id, created_at, createdAt, type, amount, concept, userId, userName, terminalId, zReportId, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            const updateStmt = db.prepare(`UPDATE cash_movements SET source_channel = ?, source_cash_movement_id = ?, source_terminal_id = ?, device_id = ?, created_at = ?, createdAt = ?, type = ?, amount = ?, concept = ?, userId = ?, userName = ?, terminalId = ?, zReportId = ?, syncStatus = ?, syncError = ? WHERE id = ?`);
+            const byIdStmt = db.prepare(`SELECT id FROM cash_movements WHERE id = ?`);
+            const bySourceIdentityStmt = db.prepare(`SELECT id FROM cash_movements WHERE source_channel = ? AND source_cash_movement_id = ?`);
+            for (const rawMove of items) {
+                const move = normalizeCashMovementIdentity(rawMove);
+                const result = stmt.run(
+                    move.id,
+                    move.source_channel,
+                    move.source_cash_movement_id,
+                    move.source_terminal_id,
+                    move.device_id,
+                    move.created_at,
+                    move.createdAt,
+                    move.type,
+                    move.amount,
+                    move.concept,
+                    move.userId,
+                    move.userName,
+                    move.terminalId,
+                    move.zReportId,
+                    move.syncStatus,
+                    move.syncError
+                );
                 if (result.changes > 0) {
                     addedCount++;
                     const version = bumpVersion(collectionKey);
                     insertChangeStmt.run(collectionKey, move.id, version, 'UPSERT', JSON.stringify(move), now);
+                    continue;
+                }
+
+                const existingBySource = bySourceIdentityStmt.get(move.source_channel, move.source_cash_movement_id) as any;
+                const targetId = existingBySource?.id || (byIdStmt.get(move.id) as any)?.id;
+
+                if (targetId) {
+                    const updatedMove = { ...move, id: targetId };
+                    const updateResult = updateStmt.run(
+                        updatedMove.source_channel,
+                        updatedMove.source_cash_movement_id,
+                        updatedMove.source_terminal_id,
+                        updatedMove.device_id,
+                        updatedMove.created_at,
+                        updatedMove.createdAt,
+                        updatedMove.type,
+                        updatedMove.amount,
+                        updatedMove.concept,
+                        updatedMove.userId,
+                        updatedMove.userName,
+                        updatedMove.terminalId,
+                        updatedMove.zReportId,
+                        updatedMove.syncStatus,
+                        updatedMove.syncError,
+                        targetId
+                    );
+                    if (updateResult.changes > 0) {
+                        conflictResolvedCount++;
+                        const version = bumpVersion(collectionKey);
+                        insertChangeStmt.run(collectionKey, targetId, version, 'UPSERT', JSON.stringify(updatedMove), now);
+                    }
                 }
             }
 
             updateMetadata(collectionKey, getCurrentVersion(collectionKey));
         })();
 
-        res.json({ success: true, addedCount });
+        res.json({ success: true, addedCount, conflictResolvedCount });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -1241,12 +1419,17 @@ router.post('/z-reports', async (req, res) => {
 
         const collectionKey = 'zReports';
         let addedCount = 0;
+        let conflictResolvedCount = 0;
         let skippedCount = 0;
         const now = new Date().toISOString();
         db.transaction(() => {
-            const stmt = db.prepare(`INSERT OR IGNORE INTO z_reports (id, openedAt, closedAt, terminalId, userId, userName, openingBalance, closingBalance, totalSales, totalTaxes, totalDiscounts, totalCash, totalCard, totalTransfer, totalOther, status, syncStatus, syncError, sequenceNumber, totalsByMethod, cashExpected, cashCounted, cashDiscrepancy, stats, transactionCount, notes, baseCurrency, cashSales, cashIn, cashOut) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-            for (const report of items) {
+            const stmt = db.prepare(`INSERT OR IGNORE INTO z_reports (id, source_channel, source_z_report_id, source_terminal_id, device_id, openedAt, closedAt, terminalId, userId, userName, openingBalance, closingBalance, totalSales, totalTaxes, totalDiscounts, totalCash, totalCard, totalTransfer, totalOther, status, syncStatus, syncError, sequenceNumber, totalsByMethod, cashExpected, cashCounted, cashDiscrepancy, stats, transactionCount, notes, baseCurrency, cashSales, cashIn, cashOut) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            const updateStmt = db.prepare(`UPDATE z_reports SET source_channel = ?, source_z_report_id = ?, source_terminal_id = ?, device_id = ?, openedAt = ?, closedAt = ?, terminalId = ?, userId = ?, userName = ?, openingBalance = ?, closingBalance = ?, totalSales = ?, totalTaxes = ?, totalDiscounts = ?, totalCash = ?, totalCard = ?, totalTransfer = ?, totalOther = ?, status = ?, syncStatus = ?, syncError = ?, sequenceNumber = ?, totalsByMethod = ?, cashExpected = ?, cashCounted = ?, cashDiscrepancy = ?, stats = ?, transactionCount = ?, notes = ?, baseCurrency = ?, cashSales = ?, cashIn = ?, cashOut = ? WHERE id = ?`);
+            const byIdStmt = db.prepare(`SELECT id FROM z_reports WHERE id = ?`);
+            const bySourceIdentityStmt = db.prepare(`SELECT id FROM z_reports WHERE source_channel = ? AND source_z_report_id = ?`);
+            for (const rawReport of items) {
                 try {
+                    const report = normalizeZReportIdentity(rawReport);
                     if (!report?.id) {
                         skippedCount++;
                         continue;
@@ -1262,6 +1445,10 @@ router.post('/z-reports', async (req, res) => {
 
                     const result = stmt.run(
                         report.id,
+                        report.source_channel,
+                        report.source_z_report_id,
+                        report.source_terminal_id,
+                        report.device_id,
                         report.openedAt || null,
                         report.closedAt || null,
                         report.terminalId || null,
@@ -1296,17 +1483,65 @@ router.post('/z-reports', async (req, res) => {
                         addedCount++;
                         const version = bumpVersion(collectionKey);
                         insertChangeStmt.run(collectionKey, report.id, version, 'UPSERT', JSON.stringify(report), now);
+                        continue;
+                    }
+
+                    const existingBySource = bySourceIdentityStmt.get(report.source_channel, report.source_z_report_id) as any;
+                    const targetId = existingBySource?.id || (byIdStmt.get(report.id) as any)?.id;
+                    if (targetId) {
+                        const updatedReport = { ...report, id: targetId };
+                        const updateResult = updateStmt.run(
+                            updatedReport.source_channel,
+                            updatedReport.source_z_report_id,
+                            updatedReport.source_terminal_id,
+                            updatedReport.device_id,
+                            updatedReport.openedAt || null,
+                            updatedReport.closedAt || null,
+                            updatedReport.terminalId || null,
+                            updatedReport.userId || updatedReport.closedByUserId || null,
+                            updatedReport.userName || updatedReport.closedByUserName || null,
+                            toFiniteNumber(updatedReport.openingBalance, 0),
+                            toFiniteNumber(updatedReport.closingBalance, 0),
+                            totalSales,
+                            toFiniteNumber(updatedReport.totalTaxes, 0),
+                            toFiniteNumber(updatedReport.totalDiscounts, 0),
+                            toFiniteNumber(updatedReport.totalCash, 0),
+                            toFiniteNumber(updatedReport.totalCard, 0),
+                            toFiniteNumber(updatedReport.totalTransfer, 0),
+                            toFiniteNumber(updatedReport.totalOther, 0),
+                            updatedReport.status || 'CLOSED',
+                            updatedReport.syncStatus || 'PENDING',
+                            updatedReport.syncError || null,
+                            updatedReport.sequenceNumber || '',
+                            safeJsonStringify(totalsByMethod),
+                            safeJsonStringify(cashExpected),
+                            safeJsonStringify(cashCounted),
+                            safeJsonStringify(cashDiscrepancy),
+                            safeJsonStringify(updatedReport.stats, '{}'),
+                            toFiniteNumber(updatedReport.transactionCount, 0),
+                            updatedReport.notes || '',
+                            updatedReport.baseCurrency || '',
+                            toFiniteNumber(updatedReport.cashSales, 0),
+                            toFiniteNumber(updatedReport.cashIn, 0),
+                            toFiniteNumber(updatedReport.cashOut, 0),
+                            targetId
+                        );
+                        if (updateResult.changes > 0) {
+                            conflictResolvedCount++;
+                            const version = bumpVersion(collectionKey);
+                            insertChangeStmt.run(collectionKey, targetId, version, 'UPSERT', JSON.stringify(updatedReport), now);
+                        }
                     }
                 } catch (itemError: any) {
                     skippedCount++;
-                    console.warn(`[Sync] Skipping malformed z-report ${report?.id || '(no-id)'}: ${itemError?.message || itemError}`);
+                    console.warn(`[Sync] Skipping malformed z-report ${rawReport?.id || '(no-id)'}: ${itemError?.message || itemError}`);
                 }
             }
 
             updateMetadata(collectionKey, getCurrentVersion(collectionKey));
         })();
 
-        res.json({ success: true, addedCount, skippedCount });
+        res.json({ success: true, addedCount, conflictResolvedCount, skippedCount });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
     }
