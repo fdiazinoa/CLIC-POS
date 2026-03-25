@@ -11,8 +11,14 @@ import { validateTerminalDocument } from '../utils/validation';
 import { printTicket } from '../utils/printer';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
+import FiscalSyncBadge from './FiscalSyncBadge';
 import { User, DeviceRole } from '../types';
 import { RefundModal } from './RefundModal';
+import {
+   getFiscalCodeFromNcf,
+   isCreditNoteNcf,
+   isRefundLikeTransaction
+} from '../utils/fiscal/fiscalHelpers';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -168,7 +174,7 @@ const SalesHistoryTable: React.FC<{
    }, [transactions, zReports]);
 
    const getStatusBadge = (tx: Transaction) => {
-      if (tx.documentType === 'REFUND' || tx.ncfType === 'B04') {
+      if (isRefundLikeTransaction(tx)) {
          return <span className="px-2 py-0.5 bg-red-100 text-red-600 rounded-full text-[10px] font-bold">DEVOLUCIÓN</span>;
       }
       if (tx.status === 'REFUNDED') return <span className="px-2 py-0.5 bg-red-100 text-red-600 rounded-full text-[10px] font-bold">ANULADO</span>;
@@ -213,6 +219,7 @@ const SalesHistoryTable: React.FC<{
                   {transactions.map((tx) => {
                      const inferredZSeq = inferredZByTxId.get(tx.id);
                      const zSeq = tx.zReportSequence || (tx.zReportId ? zReportMap?.get(tx.zReportId) : null) || inferredZSeq;
+                     const fiscalNumber = (tx.ncf || tx.electronicNcf || tx.legacyNcf || '').toString().trim();
                      return (
                         <tr
                            key={tx.id}
@@ -223,7 +230,13 @@ const SalesHistoryTable: React.FC<{
                               }`}
                         >
                            <td className="px-4 py-3">{getStatusBadge(tx)}</td>
-                           <td className="px-4 py-3 text-xs font-medium text-gray-500">{tx.displayId || tx.id.slice(-8).toUpperCase()}</td>
+                           <td className="px-4 py-3">
+                              <p className="text-xs font-medium text-gray-500">{tx.displayId || tx.id.slice(-8).toUpperCase()}</p>
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                 <span className="text-[10px] font-bold text-gray-400">{fiscalNumber || 'Sin NCF'}</span>
+                                 <FiscalSyncBadge transaction={tx} compact />
+                              </div>
+                           </td>
                            <td className="px-4 py-3">
                               <p className="font-bold text-gray-800">{new Date(tx.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                               <p className="text-[10px] text-gray-400 font-medium">{new Date(tx.date).toLocaleDateString()}</p>
@@ -297,7 +310,7 @@ const TicketDetailDrawer: React.FC<{
    const supervisorName = tx.authorizedByName || users.find(u => u.id === tx.authorizedById)?.name || null;
    const payments = Array.isArray(tx.payments) ? tx.payments : [];
    const paymentTotal = payments.reduce((acc, p: any) => acc + Number(p?.amount || 0), 0);
-   const isRefundDoc = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+   const isRefundDoc = isRefundLikeTransaction(tx);
    const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
    const affectedNCF = (tx.affectedNCF || '').toString().trim();
 
@@ -378,7 +391,7 @@ const TicketDetailDrawer: React.FC<{
                      </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                     <div className="grid grid-cols-2 gap-4">
                      <div className="p-3 bg-white border border-gray-100 rounded-xl">
                         <p className="text-[10px] font-bold text-gray-400 uppercase">Fecha / Hora</p>
                         <p className="text-xs font-bold text-gray-700">{new Date(tx.date).toLocaleString()}</p>
@@ -436,13 +449,49 @@ const TicketDetailDrawer: React.FC<{
                         <p className="text-[10px] font-bold text-gray-400 uppercase">Terminal</p>
                         <p className="text-xs font-bold text-gray-800">{tx.terminalId || 'N/D'}</p>
                      </div>
-                     <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase">NCF</p>
-                        <p className="text-xs font-bold text-gray-800 truncate">{tx.ncf || 'Sin NCF'}</p>
-                     </div>
-                     {isRefundDoc && (
-                        <div className="p-3 bg-red-50/60 rounded-xl border border-red-100">
-                           <p className="text-[10px] font-bold text-red-400 uppercase">Factura afectada</p>
+                        <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                           <p className="text-[10px] font-bold text-gray-400 uppercase">NCF</p>
+                           <p className="text-xs font-bold text-gray-800 truncate">{tx.ncf || 'Sin NCF'}</p>
+                        </div>
+                        <div className="col-span-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                           <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                 <p className="text-[10px] font-bold text-slate-400 uppercase">Estado Fiscal</p>
+                                 <div className="mt-2 flex flex-wrap items-center gap-2">
+                                    <FiscalSyncBadge transaction={tx} />
+                                    {tx.ncfType && (
+                                       <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600">
+                                          {tx.ncfType}
+                                       </span>
+                                    )}
+                                    {tx.fiscalProvider && tx.fiscalProvider !== 'NONE' && (
+                                       <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600">
+                                          {tx.fiscalProvider}
+                                       </span>
+                                    )}
+                                 </div>
+                              </div>
+                              {tx.fiscalSyncedAt && (
+                                 <div className="text-right">
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase">Última actualización</p>
+                                    <p className="text-xs font-bold text-slate-700">{new Date(tx.fiscalSyncedAt).toLocaleString()}</p>
+                                 </div>
+                              )}
+                           </div>
+                           {tx.fiscalReferenceId && (
+                              <p className="mt-3 text-[11px] font-bold text-slate-500">
+                                 Referencia proveedor: {tx.fiscalReferenceId}
+                              </p>
+                           )}
+                           {tx.fiscalResponseMessage && (
+                              <p className={`mt-2 text-[11px] ${tx.fiscalSyncStatus === 'ERROR' ? 'text-red-600' : 'text-slate-500'}`}>
+                                 {tx.fiscalResponseMessage}
+                              </p>
+                           )}
+                        </div>
+                        {isRefundDoc && (
+                           <div className="p-3 bg-red-50/60 rounded-xl border border-red-100">
+                              <p className="text-[10px] font-bold text-red-400 uppercase">Factura afectada</p>
                            <p className="text-xs font-bold text-red-800 truncate">{affectedInvoice || 'No disponible'}</p>
                         </div>
                      )}
@@ -611,12 +660,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                if (customer?.id) customerById.set(customer.id, customer);
             }
 
-            const isRefundDocument = (tx: Transaction): boolean => {
-               const docType = typeof tx.documentType === 'string' ? tx.documentType.trim().toUpperCase() : '';
-               const ncfType = typeof tx.ncfType === 'string' ? tx.ncfType.trim().toUpperCase() : '';
-               const displayId = typeof tx.displayId === 'string' ? tx.displayId.trim().toUpperCase() : '';
-               return docType === 'REFUND' || ncfType === 'B04' || displayId.startsWith('NC');
-            };
+            const isRefundDocument = (tx: Transaction): boolean => isRefundLikeTransaction(tx);
 
             const toMillis = (value?: string): number => {
                const ts = value ? new Date(value).getTime() : NaN;
@@ -664,19 +708,21 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                return best;
             };
 
-            const extractB04NcfFromMovement = (movement: any): string | undefined => {
+            const extractCreditNoteNcfFromMovement = (movement: any): string | undefined => {
                const rawCandidates = [
                   movement?.ncf,
                   movement?.ncfB04,
+                  movement?.ncfE34,
                   movement?.fiscalNcf,
                   movement?.b04,
+                  movement?.e34,
                   movement?.metadata?.ncf,
                   movement?.meta?.ncf
                ];
                for (const raw of rawCandidates) {
                   if (typeof raw !== 'string') continue;
                   const candidate = raw.trim().toUpperCase();
-                  if (candidate.startsWith('B04')) return candidate;
+                  if (isCreditNoteNcf(candidate)) return candidate;
                }
                return undefined;
             };
@@ -698,7 +744,8 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                const affectedSale = pickAffectedInvoice(String(walletCustomerId), amount, movementDate);
                const inferredAffectedInvoice = (affectedSale?.displayId || affectedSale?.id || '').toString().trim();
                const inferredAffectedNCF = (affectedSale?.ncf || '').toString().trim();
-               const inferredNcf = extractB04NcfFromMovement(movement);
+               const inferredNcf = extractCreditNoteNcfFromMovement(movement);
+               const inferredNcfType = getFiscalCodeFromNcf(inferredNcf) || 'B04';
 
                if (displayIdSet.has(refUpper)) {
                   for (const [txId, currentTx] of mergedMap.entries()) {
@@ -713,6 +760,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                      }
                      if ((!currentTx.affectedNCF || !currentTx.affectedNCF.trim()) && inferredAffectedNCF) {
                         patch.affectedNCF = inferredAffectedNCF;
+                     }
+                     if (!currentTx.affectedInvoiceDate && affectedSale?.date) {
+                        patch.affectedInvoiceDate = affectedSale.date;
                      }
                      if (!currentTx.originalTransactionId && affectedSale?.id) patch.originalTransactionId = affectedSale.id;
                      if (Object.keys(patch).length === 0) continue;
@@ -743,9 +793,10 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                   customerId: walletCustomerId,
                   customerName: owner?.name,
                   ncf: inferredNcf,
-                  ncfType: 'B04',
+                  ncfType: inferredNcfType,
                   affectedInvoiceNumber: inferredAffectedInvoice || undefined,
                   affectedNCF: inferredAffectedNCF || undefined,
+                  affectedInvoiceDate: affectedSale?.date,
                   originalTransactionId: affectedSale?.id,
                   refundReason: 'NC registrada vía wallet',
                   syncStatus: 'COMPLETED'
@@ -925,13 +976,13 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    // --- KPI CALCULATIONS ---
    const kpis = useMemo(() => {
       const totalSales = filteredTransactions.reduce((acc, tx) => {
-         const isRefundDoc = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+         const isRefundDoc = isRefundLikeTransaction(tx);
          return acc + (!isRefundDoc && tx.status !== 'REFUNDED' ? tx.total : 0);
       }, 0);
       const ticketCount = filteredTransactions.length;
       const avgTicket = ticketCount > 0 ? totalSales / ticketCount : 0;
       const refunds = filteredTransactions.reduce((acc, tx) => {
-         if (tx.documentType === 'REFUND' || tx.ncfType === 'B04' || tx.status === 'REFUNDED' || tx.status === 'PARTIAL_REFUND') {
+         if (isRefundLikeTransaction(tx) || tx.status === 'REFUNDED' || tx.status === 'PARTIAL_REFUND') {
             return acc + tx.total;
          }
          return acc;

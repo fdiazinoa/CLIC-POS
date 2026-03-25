@@ -96,6 +96,8 @@ class TransactionService {
 
             // Optional fields
             terminalId: data.terminalId,
+            authorizedById: data.authorizedById,
+            authorizedByName: data.authorizedByName,
             customerId: data.customerId,
             customerName: data.customerName,
             customerSnapshot: data.customerSnapshot,
@@ -105,6 +107,22 @@ class TransactionService {
             isTaxIncluded: data.isTaxIncluded,
             ncf: data.ncf,
             ncfType: data.ncfType,
+            legacyNcf: data.legacyNcf,
+            electronicNcf: data.electronicNcf,
+            fiscalMode: data.fiscalMode,
+            fiscalProvider: data.fiscalProvider,
+            fiscalSyncStatus: data.fiscalSyncStatus,
+            fiscalSyncError: data.fiscalSyncError,
+            fiscalSyncedAt: data.fiscalSyncedAt,
+            fiscalReferenceId: data.fiscalReferenceId,
+            fiscalResponseMessage: data.fiscalResponseMessage,
+            affectedNCF: data.affectedNCF,
+            affectedInvoiceNumber: data.affectedInvoiceNumber,
+            affectedInvoiceDate: data.affectedInvoiceDate,
+            observations: data.observations,
+            cloudSyncStatus: data.cloudSyncStatus,
+            cloudSyncError: data.cloudSyncError,
+            cloudSyncedAt: data.cloudSyncedAt,
             relatedTransactions: data.relatedTransactions,
             originalTransactionId: data.originalTransactionId,
             refundReason: data.refundReason,
@@ -113,7 +131,13 @@ class TransactionService {
             priorAdvancePaid: data.priorAdvancePaid,
             balanceDueAtSale: data.balanceDueAtSale,
             pendingBalance: data.pendingBalance,
-            dueDate: data.dueDate
+            dueDate: data.dueDate,
+            walletDepositAmount: data.walletDepositAmount,
+            walletPaymentAmount: data.walletPaymentAmount,
+            syncStatus: data.syncStatus,
+            syncError: data.syncError,
+            zReportId: data.zReportId,
+            zReportSequence: data.zReportSequence
         };
 
         // Save only the new document to avoid full-collection rewrites that can block checkout.

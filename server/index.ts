@@ -12,6 +12,7 @@ import maintenanceRoutes from './routes/maintenance.js'; // Restore missing impo
 import dgiiRoutes from './routes/dgiiRoutes.js'; // Import new route
 import bulkRoutes from './routes/bulkRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
+import fiscalRoutes from './routes/fiscalRoutes.js';
 import os from 'os';
 import { createServer } from 'http';
 import { initSocket } from './socket.js';
@@ -140,6 +141,7 @@ server.use('/api/suppliers', supplierRoutes);
 server.use('/api/currencies', currencyRoutes);
 server.use('/api/maintenance', maintenanceRoutes);
 server.use('/api/dgii', dgiiRoutes);
+server.use('/api/fiscal', fiscalRoutes);
 server.use('/api/bulk', bulkRoutes);
 server.use('/api/audit', auditRoutes);
 

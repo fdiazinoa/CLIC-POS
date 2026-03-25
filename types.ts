@@ -99,10 +99,34 @@ export interface PrinterDevice {
 
 // --- FISCAL NCF TYPES ---
 export type NCFType = 'B01' | 'B02' | 'B04' | 'B14' | 'B15';
+export type ElectronicNCFType = 'E31' | 'E32' | 'E34';
+export type FiscalDocumentCode = NCFType | ElectronicNCFType;
+export type FiscalMode = 'LEGACY_B' | 'ECF';
+export type FiscalProviderId = 'NONE' | 'POLARIS';
+export type FiscalProviderEnvironment = 0 | 1 | 2 | 3;
+
+export interface FiscalProviderConfig {
+  id: FiscalProviderId;
+  enabled: boolean;
+  environment?: FiscalProviderEnvironment;
+  displayName?: string;
+  credentialKey?: string;
+  tipoIngreso?: number;
+  modificationCode?: number;
+  unitCodeGoods?: number;
+  unitCodeServices?: number;
+}
+
+export interface FiscalComplianceConfig {
+  mode: FiscalMode;
+  defaultProvider: FiscalProviderId;
+  allowLegacyFallback: boolean;
+  providers: FiscalProviderConfig[];
+}
 
 export interface FiscalRangeDGII {
   id: string;
-  type: NCFType;
+  type: FiscalDocumentCode;
   prefix: string;
   startNumber: number;
   endNumber: number;
@@ -114,7 +138,7 @@ export interface FiscalRangeDGII {
 export interface FiscalAllocation {
   id: string;
   terminalId: string;
-  type: NCFType;
+  type: FiscalDocumentCode;
   rangeStart: number;
   rangeEnd: number;
   assignedAt: string;
@@ -123,7 +147,7 @@ export interface FiscalAllocation {
 
 export interface LocalFiscalBuffer {
   id: string;
-  type: NCFType;
+  type: FiscalDocumentCode;
   prefix: string;
   currentNumber: number; // El que se usará en la próxima factura
   endNumber: number;     // Límite de este lote
@@ -288,6 +312,8 @@ export interface CompanyInfo {
   rnc: string;
   phone: string;
   address: string;
+  email?: string;
+  website?: string;
 }
 
 export interface ReceiptConfig {
@@ -364,7 +390,7 @@ export interface TerminalConfig {
     batchSize: number; // Deprecated but kept for compatibility
     lowBatchThreshold: number;
     // New: Configuration per NCF Type
-    typeConfigs?: Partial<Record<NCFType, NCFConfig>>;
+    typeConfigs?: Partial<Record<FiscalDocumentCode, NCFConfig>>;
   };
 
   tables?: {
@@ -683,6 +709,7 @@ export interface BusinessConfig {
   labelTemplates?: LabelTemplate[];
   tipsConfig?: TipConfiguration;
   emailConfig?: EmailConfig;
+  fiscalCompliance?: FiscalComplianceConfig;
 
   // Classifications
   departments?: ClassificationItem[];
@@ -907,6 +934,7 @@ export interface Product {
   purchaseUnit?: string;    // e.g. 'Saco', 'Caja', 'Botella'
   conversionFactor?: number; // e.g. 1 Saco = 50,000 gr. Default: 1
   batchYield?: number;      // e.g. Recipe produces 50 units. Default: 1
+  fiscalUnitCode?: number;  // Optional DGII/Polaris unit code override
 }
 
 export interface ProductStock {
@@ -1072,9 +1100,19 @@ export interface Transaction {
 
   // Fiscal
   ncf?: string;                     // NCF final del documento
-  ncfType?: NCFType;
+  ncfType?: FiscalDocumentCode;
+  legacyNcf?: string;
+  electronicNcf?: string;
+  fiscalMode?: FiscalMode;
+  fiscalProvider?: FiscalProviderId;
+  fiscalSyncStatus?: CloudSyncStatus;
+  fiscalSyncError?: string;
+  fiscalSyncedAt?: string;
+  fiscalReferenceId?: string;
+  fiscalResponseMessage?: string;
   affectedNCF?: string;             // NCF de la factura afectada (para Notas de Crédito B04)
   affectedInvoiceNumber?: string;   // No. de factura afectada (displayId para búsquedas)
+  affectedInvoiceDate?: string;
   observations?: string;
   cloudSyncStatus?: CloudSyncStatus;
   cloudSyncError?: string;

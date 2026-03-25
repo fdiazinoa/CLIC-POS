@@ -17,6 +17,7 @@ import {
     Printer
 } from 'lucide-react';
 import ProfessionalAccountStatement from './ProfessionalAccountStatement';
+import { isRefundLikeTransaction } from '../utils/fiscal/fiscalHelpers';
 
 interface CustomerStatementViewProps {
     customer: Customer;
@@ -38,12 +39,7 @@ const CustomerStatementView: React.FC<CustomerStatementViewProps> = ({
     const [viewType, setViewType] = useState<'SUMMARY' | 'DETAILED'>(initialType);
     const [expandedInvoices, setExpandedInvoices] = useState<Set<string>>(new Set());
 
-    const isRefundDocument = (tx: Transaction) => {
-        const docType = typeof tx.documentType === 'string' ? tx.documentType.trim().toUpperCase() : '';
-        const ncfType = typeof tx.ncfType === 'string' ? tx.ncfType.trim().toUpperCase() : '';
-        const displayId = typeof tx.displayId === 'string' ? tx.displayId.trim().toUpperCase() : '';
-        return docType === 'REFUND' || ncfType === 'B04' || displayId.startsWith('NC');
-    };
+    const isRefundDocument = (tx: Transaction) => isRefundLikeTransaction(tx);
 
     // Logical Join: Group allocations by transactionId
     const allocationsByTx = useMemo(() => {

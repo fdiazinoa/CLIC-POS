@@ -30,6 +30,10 @@ import {
 } from './AnalyticsLogic';
 import { useCustomerAnalytics } from '../hooks/useCustomerAnalytics';
 import { formatFiscalExcel } from '../utils/fiscalExcel';
+import {
+    isRefundLikeTransaction as isRefundLikeFiscalTransaction,
+    isReportableFiscalNcf
+} from '../utils/fiscal/fiscalHelpers';
 
 interface InventoryReportContext {
     products: Product[];
@@ -141,8 +145,7 @@ const normalizePaymentMethod = (method: unknown): PaymentMethodKey | null => {
 };
 
 const isRefundLikeTransaction = (tx: Transaction): boolean => {
-    return tx.documentType === 'REFUND'
-        || tx.ncfType === 'B04'
+    return isRefundLikeFiscalTransaction(tx)
         || tx.status === 'REFUNDED'
         || tx.status === 'PARTIAL_REFUND'
         || toNumber(tx.total) < 0;
@@ -269,8 +272,6 @@ const formatTaxRateLabel = (ratePercent: number): string => {
     if (Number.isInteger(ratePercent)) return `${ratePercent}%`;
     return `${ratePercent.toFixed(2)}%`;
 };
-
-const SALES_NCF_REGEX = /^B(01|02|04|14|15)/;
 
 const ReportViewer: React.FC<ReportViewerProps> = ({
     category,
@@ -687,7 +688,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
         const salesTransactions = Array.from(dedupedTransactions.values()).filter(tx => {
             if (!isWithinDateRange(tx.date)) return false;
             if (!isFiscalTerminalMatch(tx.terminalId)) return false;
-            return SALES_NCF_REGEX.test(String(tx.ncf || '').toUpperCase());
+            return isReportableFiscalNcf(tx.ncf);
         });
 
         const taxesById = new Map((config.taxes || []).map(tax => [tax.id, tax]));

@@ -2,7 +2,7 @@ import {
   BusinessConfig, Product, User, Customer, Transaction,
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, PurchaseOrderItem, Supplier, Watchlist,
-  NCFType, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
+  FiscalDocumentCode, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
   Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment, PaymentMethodDefinition, CartItem
 } from '../types';
 import {
@@ -139,7 +139,10 @@ const SEED_DATA = {
     { id: 'fr2', type: 'B02', prefix: 'B02', startNumber: 1, endNumber: 50000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
     { id: 'fr3', type: 'B04', prefix: 'B04', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
     { id: 'fr4', type: 'B14', prefix: 'B14', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
-    { id: 'fr5', type: 'B15', prefix: 'B15', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true }
+    { id: 'fr5', type: 'B15', prefix: 'B15', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
+    { id: 'fr6', type: 'E31', prefix: 'E31', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: false },
+    { id: 'fr7', type: 'E32', prefix: 'E32', startNumber: 1, endNumber: 50000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: false },
+    { id: 'fr8', type: 'E34', prefix: 'E34', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: false }
   ] as FiscalRangeDGII[],
   fiscalAllocations: [] as FiscalAllocation[],
   localFiscalBuffer: [] as LocalFiscalBuffer[],
@@ -847,14 +850,14 @@ export const db = {
     };
   },
 
-  canRequestMoreNCF: async (type: NCFType): Promise<boolean> => {
+  canRequestMoreNCF: async (type: FiscalDocumentCode): Promise<boolean> => {
     const ranges = await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges');
     const range = ranges?.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
     if (!range) return false;
     return range.currentGlobal < range.endNumber;
   },
 
-  requestFiscalBatch: async (terminalId: string, type: NCFType, batchSize: number): Promise<LocalFiscalBuffer | null> => {
+  requestFiscalBatch: async (terminalId: string, type: FiscalDocumentCode, batchSize: number): Promise<LocalFiscalBuffer | null> => {
     const ranges = await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges');
     const range = ranges?.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
     if (!range || range.currentGlobal >= range.endNumber) return null;
@@ -876,7 +879,7 @@ export const db = {
     return localBuffer;
   },
 
-  getNextNCF: async (type: NCFType, terminalId: string, customBatchSize?: number): Promise<string | null> => {
+  getNextNCF: async (type: FiscalDocumentCode, terminalId: string, customBatchSize?: number): Promise<string | null> => {
     let buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
     let buffer = (buffers || []).find((b: LocalFiscalBuffer) => b.type === type);
 

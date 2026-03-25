@@ -15,13 +15,14 @@ import {
    // Added Sun to fix "Cannot find name 'Sun'" error
    Sun, ScanBarcode, Layout, Minus, ArrowDownCircle, ArrowUpCircle, Wallet, UserCheck, User, CreditCard, Fingerprint
 } from 'lucide-react';
-import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice, Product, DeviceRole, AuthLevel, Room } from '../types';
+import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, FiscalDocumentCode, NCFConfig, Transaction, ScaleDevice, Product, DeviceRole, AuthLevel, Room } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG } from '../constants';
 import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
 import { getDefaultRoleConfig, getRoleDisplayInfo, getAllModules } from '../utils/deviceRoleHelpers';
 import AccessibilityToggle from './AccessibilityToggle';
 import SettingsOperational from './SettingsOperational';
+import { FISCAL_DOCUMENT_LABELS, SUPPORTED_FISCAL_CODES } from '../utils/fiscal/fiscalHelpers';
 
 interface TerminalSettingsProps {
    config: BusinessConfig;
@@ -72,13 +73,7 @@ const DOCUMENT_ROLES = [
 
 type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY' | 'LAN_BINDING' | 'CATALOG' | 'DEVICE_ROLE';
 
-const NCF_LABELS: Record<NCFType, string> = {
-   'B01': 'Crédito Fiscal',
-   'B02': 'Consumo',
-   'B04': 'Nota de Crédito',
-   'B14': 'Reg. Especiales',
-   'B15': 'Gubernamentales'
-};
+const NCF_LABELS: Record<FiscalDocumentCode, string> = FISCAL_DOCUMENT_LABELS;
 
 const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [], isAdminMode = false, currentDeviceId }) => {
    // ... existing state ...
@@ -1408,7 +1403,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  </div>
                               )}
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                 {(['B01', 'B02', 'B04', 'B14', 'B15'] as NCFType[]).map((type) => {
+                                 {SUPPORTED_FISCAL_CODES.map((type) => {
                                     const typeConfig = activeTerminal.config.fiscal?.typeConfigs?.[type] || { batchSize: 100, lowBatchThreshold: 20, lowBatchThresholdPct: 20 };
                                     return (
                                        <div key={type} className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-4">

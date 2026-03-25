@@ -16,6 +16,12 @@ import CreditAccountDashboard from './CreditAccountDashboard';
 import { agendaService } from '../services/AgendaService';
 import ActivityModal from './ActivityModal';
 import LoyaltyDashboard from './LoyaltyDashboard';
+import FiscalSyncBadge from './FiscalSyncBadge';
+import {
+   getFiscalCodeFromNcf,
+   isCreditNoteNcf,
+   isRefundLikeTransaction
+} from '../utils/fiscal/fiscalHelpers';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -445,12 +451,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             if (wallet?.id) walletById.set(wallet.id, wallet);
          }
 
-         const isRefundDocument = (tx: Transaction): boolean => {
-            const docType = typeof tx.documentType === 'string' ? tx.documentType.trim().toUpperCase() : '';
-            const ncfType = typeof tx.ncfType === 'string' ? tx.ncfType.trim().toUpperCase() : '';
-            const displayId = typeof tx.displayId === 'string' ? tx.displayId.trim().toUpperCase() : '';
-            return docType === 'REFUND' || ncfType === 'B04' || displayId.startsWith('NC');
-         };
+         const isRefundDocument = (tx: Transaction): boolean => isRefundLikeTransaction(tx);
 
          const toMillis = (value?: string): number => {
             const ts = value ? new Date(value).getTime() : NaN;
@@ -498,19 +499,21 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             return best;
          };
 
-         const extractB04NcfFromMovement = (movement: any): string | undefined => {
+         const extractCreditNoteNcfFromMovement = (movement: any): string | undefined => {
             const rawCandidates = [
                movement?.ncf,
                movement?.ncfB04,
+               movement?.ncfE34,
                movement?.fiscalNcf,
                movement?.b04,
+               movement?.e34,
                movement?.metadata?.ncf,
                movement?.meta?.ncf
             ];
             for (const raw of rawCandidates) {
                if (typeof raw !== 'string') continue;
                const candidate = raw.trim().toUpperCase();
-               if (candidate.startsWith('B04')) return candidate;
+               if (isCreditNoteNcf(candidate)) return candidate;
             }
             return undefined;
          };
@@ -531,7 +534,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             const affectedSale = pickAffectedInvoice(String(walletCustomerId), amount, movementDate);
             const inferredAffectedInvoice = (affectedSale?.displayId || affectedSale?.id || '').toString().trim();
             const inferredAffectedNCF = (affectedSale?.ncf || '').toString().trim();
-            const inferredNcf = extractB04NcfFromMovement(movement);
+            const inferredNcf = extractCreditNoteNcfFromMovement(movement);
+            const inferredNcfType = getFiscalCodeFromNcf(inferredNcf) || 'B04';
 
             if (displayIdSet.has(refUpper)) {
                for (const [txId, currentTx] of mergedMap.entries()) {
@@ -546,6 +550,9 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                   }
                   if ((!currentTx.affectedNCF || !currentTx.affectedNCF.trim()) && inferredAffectedNCF) {
                      patch.affectedNCF = inferredAffectedNCF;
+                  }
+                  if (!currentTx.affectedInvoiceDate && affectedSale?.date) {
+                     patch.affectedInvoiceDate = affectedSale.date;
                   }
                   if (!currentTx.originalTransactionId && affectedSale?.id) patch.originalTransactionId = affectedSale.id;
                   if (Object.keys(patch).length === 0) continue;
@@ -576,10 +583,11 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                customerId: walletCustomerId,
                customerName: owner?.name,
                ncf: inferredNcf,
-               ncfType: 'B04',
+               ncfType: inferredNcfType,
                refundReason: 'NC registrada vía wallet',
                affectedInvoiceNumber: inferredAffectedInvoice || undefined,
                affectedNCF: inferredAffectedNCF || undefined,
+               affectedInvoiceDate: affectedSale?.date,
                originalTransactionId: affectedSale?.id,
                syncStatus: 'COMPLETED'
             } as Transaction);
@@ -1123,12 +1131,13 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                  {customerTransactions.length > 0 ? (
                                     customerTransactions.map((tx) => {
                                        const effectivePending = getEffectivePendingBalance(tx);
-                                       const isRefund = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+                                       const isRefund = isRefundLikeTransaction(tx);
+                                       const fiscalNumber = (tx.ncf || tx.electronicNcf || tx.legacyNcf || '').toString().trim();
 
                                        // Dynamic Document Name Detection
                                        const getDocumentName = () => {
                                           if (tx.documentType === 'REFUND') return 'Nota de Crédito';
-                                          if (tx.ncfType === 'B04') return 'Devolución (NC)';
+                                          if (isRefundLikeTransaction(tx)) return 'Devolución (NC)';
                                           return 'Compra';
                                        };
 
@@ -1155,6 +1164,10 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                                    <p className="text-[10px] font-medium text-gray-400 uppercase tracking-widest">
                                                       {new Date(tx.date).toLocaleDateString()} • {tx.items.length} items
                                                    </p>
+                                                   <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                      <span className="text-[10px] font-bold text-gray-400">{fiscalNumber || 'Sin NCF'}</span>
+                                                      <FiscalSyncBadge transaction={tx} compact />
+                                                   </div>
                                                 </div>
                                              </div>
                                              <div className="text-right">
@@ -1724,7 +1737,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
             const payments = Array.isArray(tx.payments) ? tx.payments : [];
             const paymentTotal = payments.reduce((acc, p: any) => acc + Number(p?.amount || 0), 0);
-            const isRefundDoc = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+            const isRefundDoc = isRefundLikeTransaction(tx);
             const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
             const affectedNCF = (tx.affectedNCF || '').toString().trim();
 
@@ -1816,6 +1829,42 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                               <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
                                  <p className="text-[10px] font-bold text-gray-400 uppercase">NCF</p>
                                  <p className="text-xs font-bold text-gray-800 truncate">{tx.ncf || 'Sin NCF'}</p>
+                              </div>
+                              <div className="col-span-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                 <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                       <p className="text-[10px] font-bold text-slate-400 uppercase">Estado Fiscal</p>
+                                       <div className="mt-2 flex flex-wrap items-center gap-2">
+                                          <FiscalSyncBadge transaction={tx} />
+                                          {tx.ncfType && (
+                                             <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600">
+                                                {tx.ncfType}
+                                             </span>
+                                          )}
+                                          {tx.fiscalProvider && tx.fiscalProvider !== 'NONE' && (
+                                             <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600">
+                                                {tx.fiscalProvider}
+                                             </span>
+                                          )}
+                                       </div>
+                                    </div>
+                                    {tx.fiscalSyncedAt && (
+                                       <div className="text-right">
+                                          <p className="text-[10px] font-bold text-slate-400 uppercase">Última actualización</p>
+                                          <p className="text-xs font-bold text-slate-700">{new Date(tx.fiscalSyncedAt).toLocaleString()}</p>
+                                       </div>
+                                    )}
+                                 </div>
+                                 {tx.fiscalReferenceId && (
+                                    <p className="mt-3 text-[11px] font-bold text-slate-500">
+                                       Referencia proveedor: {tx.fiscalReferenceId}
+                                    </p>
+                                 )}
+                                 {tx.fiscalResponseMessage && (
+                                    <p className={`mt-2 text-[11px] ${tx.fiscalSyncStatus === 'ERROR' ? 'text-red-600' : 'text-slate-500'}`}>
+                                       {tx.fiscalResponseMessage}
+                                    </p>
+                                 )}
                               </div>
                               {isRefundDoc && (
                                  <div className="p-3 bg-red-50/60 rounded-xl border border-red-100">

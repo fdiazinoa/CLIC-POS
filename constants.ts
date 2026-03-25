@@ -1,5 +1,6 @@
 
 import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff, TaxDefinition, DeviceRole, AuthLevel, LabelTemplate } from './types';
+import { DEFAULT_FISCAL_COMPLIANCE_CONFIG } from './utils/fiscal/fiscalHelpers';
 
 export const DEFAULT_DOCUMENT_SERIES: DocumentSeries[] = [
   { id: 'TICKET', documentType: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar para todas las ventas.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
@@ -544,7 +545,8 @@ export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
     themeColor: 'blue',
     features: { stockTracking: true },
     ux: DEFAULT_TERMINAL_CONFIG.ux,
-    companyInfo: { name: 'CLIC POS DEMO', rnc: '131-12345-1', phone: '809-555-POS1', address: 'Av. Principal #1, Santo Domingo' },
+    fiscalCompliance: DEFAULT_FISCAL_COMPLIANCE_CONFIG,
+    companyInfo: { name: 'CLIC POS DEMO', rnc: '131-12345-1', phone: '809-555-POS1', address: 'Av. Principal #1, Santo Domingo', email: '', website: '' },
     currencies: [{ code: 'DOP', name: 'Peso Dominicano', symbol: 'RD$', rate: 1, isEnabled: true, isBase: true }],
     paymentMethods: [
       { id: 'cash', name: 'Efectivo', type: 'CASH', isEnabled: true, icon: 'Banknote', color: 'bg-green-500', opensDrawer: true, requiresSignature: false, integration: 'NONE' },
