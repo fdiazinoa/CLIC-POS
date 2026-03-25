@@ -40,8 +40,10 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   const [isConnecting, setIsConnecting] = useState(false);
   const [masterAdmins, setMasterAdmins] = useState<UserType[]>([]);
   const [localIps, setLocalIps] = useState<string[]>([]);
+  const [bindingMode, setBindingMode] = useState<'MASTER' | 'SLAVE'>('MASTER');
 
   const handleModeSelect = (mode: 'MASTER' | 'SLAVE') => {
+    setBindingMode(mode);
     setError(null);
     if (mode === 'MASTER') {
       setMasterIp('');
@@ -293,6 +295,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
           {step === 'SELECT' && (
             <TerminalSelector
               deviceId={deviceId}
+              bindingMode={bindingMode}
               masterIp={masterIp}
               isAlreadyBound={(config.terminals || []).some((terminal) => terminal.config?.currentDeviceId === deviceId)}
               onMasterIpChange={setMasterIp}

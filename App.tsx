@@ -1313,25 +1313,11 @@ const AppContent: React.FC = () => {
   ) => {
     setRestoringHistory(true);
     try {
-      const updatedConfig = setupResult?.boundConfig ?? {
-        ...config,
-        terminals: (config.terminals || []).map(t => {
-          if (t.config.currentDeviceId === deviceId) {
-            return { ...t, config: { ...t.config, currentDeviceId: undefined } };
-          }
-          if (t.id === terminalId) {
-            return {
-              ...t,
-              config: {
-                ...t.config,
-                currentDeviceId: deviceId,
-                lastPairingDate: new Date().toISOString()
-              }
-            };
-          }
-          return t;
-        })
-      };
+      if (!setupResult?.boundConfig) {
+        throw new Error('La vinculación debe provenir del backend central de setup. No se recibió configuración enlazada.');
+      }
+
+      const updatedConfig = setupResult.boundConfig;
 
       setConfig(updatedConfig);
       await db.save('config', updatedConfig);

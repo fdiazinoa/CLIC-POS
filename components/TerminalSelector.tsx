@@ -22,6 +22,7 @@ interface TerminalCard {
 
 interface TerminalSelectorResponse {
   tenant_id: string;
+  erp_base_url?: string | null;
   terminals: TerminalCard[];
 }
 
@@ -43,12 +44,63 @@ interface BoundTerminalPayload {
 
 interface TerminalSelectorProps {
   deviceId: string;
+  bindingMode: 'MASTER' | 'SLAVE';
   masterIp?: string;
   isAlreadyBound: boolean;
   onBound: (payload: BoundTerminalPayload) => Promise<void>;
   onBack: () => void;
   onMasterIpChange?: (nextIp: string) => void;
 }
+
+const normalizeBaseUrl = (value?: string | null): string | null => {
+  const raw = (value || '').trim();
+  if (!raw) return null;
+
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `${window.location.protocol}//${raw}`;
+
+  try {
+    const url = new URL(withProtocol);
+    return url
+      .toString()
+      .replace(/\/api\/sync\/?$/i, '')
+      .replace(/\/api\/?$/i, '')
+      .replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+};
+
+const resolveTenantId = (): string | null => {
+  const candidates = [
+    localStorage.getItem('active_tenant_id'),
+    localStorage.getItem('clic_erp_tenant_id'),
+  ];
+
+  return candidates.map((value) => (value || '').trim()).find(Boolean) || null;
+};
+
+const resolveErpBaseUrl = (): string | null => {
+  const current = new URL(window.location.origin);
+  const localErpOrigin = `${current.protocol}//${current.hostname}:4001`;
+
+  const candidates = [
+    localStorage.getItem('CLIC_ERP_BASE_URL'),
+    localStorage.getItem('erp_base_url'),
+    localStorage.getItem('CLIC_ERP_SYNC_URL'),
+    localStorage.getItem('CLIC_ERP_API_URL'),
+    (import.meta as any)?.env?.VITE_ERP_BASE_URL,
+    (import.meta as any)?.env?.VITE_ERP_SYNC_API_URL,
+    (import.meta as any)?.env?.VITE_SYNC_API_URL,
+    localErpOrigin,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeBaseUrl(candidate);
+    if (normalized) return normalized;
+  }
+
+  return null;
+};
 
 const getSetupApiBase = (masterIp?: string): string => {
   const normalized = (masterIp || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
@@ -59,6 +111,7 @@ const getSetupApiBase = (masterIp?: string): string => {
 
 export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   deviceId,
+  bindingMode,
   masterIp = '',
   isAlreadyBound,
   onBound,
@@ -73,6 +126,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [pendingTerminal, setPendingTerminal] = useState<TerminalCard | null>(null);
   const [masterIpInput, setMasterIpInput] = useState(masterIp);
+  const [erpBaseUrl, setErpBaseUrl] = useState<string | null>(() => resolveErpBaseUrl());
 
   useEffect(() => {
     setMasterIpInput(masterIp);
@@ -91,7 +145,15 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     setError(null);
 
     try {
-      const response = await fetch(`${apiBase}/terminals?pos_device_id=${encodeURIComponent(deviceId)}`);
+      const params = new URLSearchParams({
+        pos_device_id: deviceId,
+      });
+      const resolvedTenantId = resolveTenantId();
+
+      if (resolvedTenantId) params.set('tenant_id', resolvedTenantId);
+      if (erpBaseUrl) params.set('erp_base_url', erpBaseUrl);
+
+      const response = await fetch(`${apiBase}/terminals?${params.toString()}`);
       if (!response.ok) {
         throw new Error(`No se pudieron cargar las terminales (${response.status}).`);
       }
@@ -99,6 +161,17 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
       const data = (await response.json()) as TerminalSelectorResponse;
       setTerminals(Array.isArray(data.terminals) ? data.terminals : []);
       setTenantId(data.tenant_id || 'default-tenant');
+      const resolvedBase = normalizeBaseUrl(data.erp_base_url || erpBaseUrl) || erpBaseUrl;
+      setErpBaseUrl(resolvedBase);
+
+      if (data.tenant_id) {
+        localStorage.setItem('active_tenant_id', data.tenant_id);
+      }
+
+      if (resolvedBase) {
+        localStorage.setItem('CLIC_ERP_BASE_URL', resolvedBase);
+        localStorage.setItem('erp_base_url', resolvedBase);
+      }
     } catch (err) {
       console.error('Failed to fetch terminals for setup:', err);
       setError('No pudimos cargar las terminales. Verifica la conexión o valida la IP del Master local.');
@@ -106,7 +179,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [apiBase, deviceId, isAlreadyBound]);
+  }, [apiBase, deviceId, erpBaseUrl, isAlreadyBound]);
 
   useEffect(() => {
     void fetchTerminals();
@@ -123,8 +196,10 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             tenant_id: tenantId,
+            erp_base_url: erpBaseUrl,
             terminal_id: terminal.id,
             pos_device_id: deviceId,
+            binding_mode: bindingMode,
             force_transfer: forceTransfer,
           }),
         });
@@ -141,6 +216,13 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
 
         const data = (await response.json()) as BindTerminalResponse;
+        if (data.tenant_id) {
+          localStorage.setItem('active_tenant_id', data.tenant_id);
+        }
+        if (erpBaseUrl) {
+          localStorage.setItem('CLIC_ERP_BASE_URL', erpBaseUrl);
+          localStorage.setItem('erp_base_url', erpBaseUrl);
+        }
         await onBound({
           terminalId: data.terminal_id || terminal.id,
           tenantId: data.tenant_id || tenantId,
@@ -157,7 +239,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         setPendingTerminal(null);
       }
     },
-    [apiBase, deviceId, masterIpInput, onBound, tenantId]
+    [apiBase, bindingMode, deviceId, erpBaseUrl, masterIpInput, onBound, tenantId]
   );
 
   const handleCardClick = useCallback(
