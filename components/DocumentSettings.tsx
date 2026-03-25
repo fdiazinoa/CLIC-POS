@@ -13,8 +13,12 @@ import { seriesSyncService } from '../services/sync/SeriesSyncService';
 import { syncManager } from '../services/sync/SyncManager';
 import { DEFAULT_DOCUMENT_SERIES } from '../constants';
 import {
+   deleteLocalFiscalCredential as deleteLocalFiscalCredentialRequest,
+   deleteSupabaseFiscalCredential as deleteSupabaseFiscalCredentialRequest,
+   FiscalCredentialMetaResponse,
    getFiscalCredentialMetadata,
    saveLocalFiscalCredential,
+   saveSupabaseFiscalCredential,
    testFiscalProviderConnection
 } from '../services/fiscal/fiscalService';
 import {
@@ -187,6 +191,12 @@ const buildRecoveredFiscalRanges = (transactions: Transaction[]): FiscalRangeDGI
    });
 };
 
+const FISCAL_CREDENTIAL_SOURCE_LABELS: Record<'env' | 'sqlite' | 'supabase', string> = {
+   env: 'ENV',
+   sqlite: 'SQLite',
+   supabase: 'Supabase'
+};
+
 const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
    const [activeSubTab, setActiveSubTab] = useState<'SERIES' | 'FISCAL_POOL'>('SERIES');
 
@@ -196,16 +206,13 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
    const [isSavingFiscalConfig, setIsSavingFiscalConfig] = useState(false);
    const [isTestingProvider, setIsTestingProvider] = useState(false);
    const [isSavingCredential, setIsSavingCredential] = useState(false);
+   const [isSavingSupabaseCredential, setIsSavingSupabaseCredential] = useState(false);
+   const [isDeletingLocalCredential, setIsDeletingLocalCredential] = useState(false);
+   const [isDeletingSupabaseCredential, setIsDeletingSupabaseCredential] = useState(false);
    const [fiscalFeedback, setFiscalFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
    const [credentialDraft, setCredentialDraft] = useState('');
    const [credentialLabel, setCredentialLabel] = useState('');
-   const [credentialMeta, setCredentialMeta] = useState<{
-      hasCredential: boolean;
-      source?: 'env' | 'sqlite' | 'supabase';
-      resolvedCredentialKey?: string;
-      updatedAt?: string;
-      label?: string;
-   } | null>(null);
+   const [credentialMeta, setCredentialMeta] = useState<FiscalCredentialMetaResponse | null>(null);
 
    const [editingSeries, setEditingSeries] = useState<DocumentSeries | null>(null);
 
@@ -303,24 +310,49 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
       [fiscalCompliance]
    );
 
+   const refreshCredentialMeta = async () => {
+      if (!businessConfig || fiscalCompliance.defaultProvider === 'NONE') {
+         setCredentialMeta(null);
+         setCredentialLabel('');
+         return null;
+      }
+
+      const meta = await getFiscalCredentialMetadata(
+         fiscalCompliance.defaultProvider,
+         businessConfig.companyInfo,
+         selectedFiscalProviderConfig?.credentialKey
+      );
+      setCredentialMeta(meta);
+      setCredentialLabel(meta.label || '');
+      return meta;
+   };
+
+   const getCredentialRequestContext = () => {
+      if (fiscalCompliance.defaultProvider === 'NONE') {
+         setFiscalFeedback({ kind: 'error', message: 'Selecciona un proveedor fiscal antes de administrar credenciales.' });
+         return null;
+      }
+
+      if (!businessConfig) {
+         setFiscalFeedback({ kind: 'error', message: 'Configura primero la empresa antes de administrar credenciales.' });
+         return null;
+      }
+
+      return {
+         providerId: fiscalCompliance.defaultProvider,
+         companyInfo: businessConfig.companyInfo,
+         credentialKey: selectedFiscalProviderConfig?.credentialKey
+      };
+   };
+
    useEffect(() => {
       const loadCredentialMeta = async () => {
-         if (!businessConfig || fiscalCompliance.defaultProvider === 'NONE') {
-            setCredentialMeta(null);
-            return;
-         }
-
          try {
-            const meta = await getFiscalCredentialMetadata(
-               fiscalCompliance.defaultProvider,
-               businessConfig.companyInfo,
-               selectedFiscalProviderConfig?.credentialKey
-            );
-            setCredentialMeta(meta);
-            setCredentialLabel(meta.label || '');
+            await refreshCredentialMeta();
          } catch (error) {
             console.error('❌ Error loading fiscal credential metadata:', error);
             setCredentialMeta(null);
+            setCredentialLabel('');
          }
       };
 
@@ -518,15 +550,8 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
    };
 
    const handleSaveCredential = async () => {
-      if (fiscalCompliance.defaultProvider === 'NONE') {
-         setFiscalFeedback({ kind: 'error', message: 'Selecciona un proveedor fiscal antes de guardar una credencial.' });
-         return;
-      }
-
-      if (!businessConfig) {
-         setFiscalFeedback({ kind: 'error', message: 'Configura primero la empresa antes de guardar credenciales.' });
-         return;
-      }
+      const requestContext = getCredentialRequestContext();
+      if (!requestContext) return;
 
       if (!credentialDraft.trim()) {
          setFiscalFeedback({ kind: 'error', message: 'Ingresa el Authentication Token de Polaris.' });
@@ -537,10 +562,10 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
       setFiscalFeedback(null);
       try {
          const response = await saveLocalFiscalCredential(
-            fiscalCompliance.defaultProvider,
+            requestContext.providerId,
             credentialDraft,
-            businessConfig.companyInfo,
-            selectedFiscalProviderConfig?.credentialKey,
+            requestContext.companyInfo,
+            requestContext.credentialKey,
             credentialLabel
          );
          setCredentialMeta(response.meta || null);
@@ -551,6 +576,100 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
          setFiscalFeedback({ kind: 'error', message: error?.message || 'No se pudo guardar la credencial fiscal.' });
       } finally {
          setIsSavingCredential(false);
+      }
+   };
+
+   const handleSaveSupabaseCredential = async () => {
+      const requestContext = getCredentialRequestContext();
+      if (!requestContext) return;
+
+      if (!credentialDraft.trim()) {
+         setFiscalFeedback({ kind: 'error', message: 'Ingresa el Authentication Token que deseas enviar a Supabase.' });
+         return;
+      }
+
+      setIsSavingSupabaseCredential(true);
+      setFiscalFeedback(null);
+      try {
+         const response = await saveSupabaseFiscalCredential(
+            requestContext.providerId,
+            credentialDraft,
+            requestContext.companyInfo,
+            requestContext.credentialKey
+         );
+         setCredentialMeta(response.meta || null);
+         setCredentialLabel(response.meta?.label || '');
+         setCredentialDraft('');
+         setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial fiscal guardada en Supabase.' });
+      } catch (error: any) {
+         console.error('❌ Error saving Supabase fiscal credential:', error);
+         setFiscalFeedback({ kind: 'error', message: error?.message || 'No se pudo guardar la credencial en Supabase.' });
+      } finally {
+         setIsSavingSupabaseCredential(false);
+      }
+   };
+
+   const handleDeleteLocalCredential = async () => {
+      const requestContext = getCredentialRequestContext();
+      if (!requestContext) return;
+
+      if (!credentialMeta?.hasLocalCredential) {
+         setFiscalFeedback({ kind: 'error', message: 'No existe una credencial local para eliminar.' });
+         return;
+      }
+
+      if (!confirm('¿Deseas eliminar la credencial local? Si existe una en Supabase o ENV, esa pasará a ser la fuente activa.')) {
+         return;
+      }
+
+      setIsDeletingLocalCredential(true);
+      setFiscalFeedback(null);
+      try {
+         const response = await deleteLocalFiscalCredentialRequest(
+            requestContext.providerId,
+            requestContext.companyInfo,
+            requestContext.credentialKey
+         );
+         setCredentialMeta(response.meta || null);
+         setCredentialLabel(response.meta?.label || '');
+         setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial local eliminada.' });
+      } catch (error: any) {
+         console.error('❌ Error deleting local fiscal credential:', error);
+         setFiscalFeedback({ kind: 'error', message: error?.message || 'No se pudo eliminar la credencial local.' });
+      } finally {
+         setIsDeletingLocalCredential(false);
+      }
+   };
+
+   const handleDeleteSupabaseCredential = async () => {
+      const requestContext = getCredentialRequestContext();
+      if (!requestContext) return;
+
+      if (!credentialMeta?.hasSupabaseCredential) {
+         setFiscalFeedback({ kind: 'error', message: 'No existe una credencial en Supabase para eliminar.' });
+         return;
+      }
+
+      if (!confirm('¿Deseas eliminar la credencial de Supabase para esta empresa/proveedor?')) {
+         return;
+      }
+
+      setIsDeletingSupabaseCredential(true);
+      setFiscalFeedback(null);
+      try {
+         const response = await deleteSupabaseFiscalCredentialRequest(
+            requestContext.providerId,
+            requestContext.companyInfo,
+            requestContext.credentialKey
+         );
+         setCredentialMeta(response.meta || null);
+         setCredentialLabel(response.meta?.label || '');
+         setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial en Supabase eliminada.' });
+      } catch (error: any) {
+         console.error('❌ Error deleting Supabase fiscal credential:', error);
+         setFiscalFeedback({ kind: 'error', message: error?.message || 'No se pudo eliminar la credencial en Supabase.' });
+      } finally {
+         setIsDeletingSupabaseCredential(false);
       }
    };
 
@@ -823,9 +942,9 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                               <div className="md:col-span-4 mt-2 p-5 rounded-[1.75rem] border border-slate-200 bg-white shadow-sm space-y-4">
                                  <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                                     <div>
-                                       <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Credencial Local</p>
+                                       <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Credenciales del Proveedor</p>
                                        <p className="text-sm font-bold text-slate-700">
-                                          El token se guarda solo en el backend local. Nunca vuelve al navegador una vez guardado.
+                                          La precedencia activa es <span className="font-mono">SQLite -&gt; Supabase -&gt; ENV</span>. El token nunca vuelve al navegador una vez guardado.
                                        </p>
                                     </div>
                                     {credentialMeta?.hasCredential ? (
@@ -837,6 +956,20 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                                           Sin credencial resuelta
                                        </div>
                                     )}
+                                 </div>
+
+                                 <div className="flex flex-wrap gap-2">
+                                    {(['sqlite', 'supabase', 'env'] as const).map(source => {
+                                       const isAvailable = credentialMeta?.availableSources?.includes(source);
+                                       return (
+                                          <span
+                                             key={source}
+                                             className={`px-3 py-2 rounded-2xl text-[11px] font-black border ${isAvailable ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-50 text-slate-400 border-slate-200'}`}
+                                          >
+                                             {FISCAL_CREDENTIAL_SOURCE_LABELS[source]}
+                                          </span>
+                                       );
+                                    })}
                                  </div>
 
                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -862,18 +995,48 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                                     </div>
                                  </div>
 
+                                 {credentialMeta?.supportsSupabaseWrite === false && (
+                                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
+                                       El backend todavía no tiene `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`, así que por ahora solo se puede guardar localmente.
+                                    </div>
+                                 )}
+
                                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                                     <div className="text-xs text-slate-500 space-y-1">
                                        <p>Clave resuelta: {credentialMeta?.resolvedCredentialKey || selectedFiscalProviderConfig.credentialKey || businessConfig?.companyInfo?.rnc || 'N/D'}</p>
-                                       <p>Última actualización: {credentialMeta?.updatedAt ? new Date(credentialMeta.updatedAt).toLocaleString() : 'No registrada localmente'}</p>
+                                       <p>Fuentes detectadas: {credentialMeta?.availableSources?.length ? credentialMeta.availableSources.map(source => FISCAL_CREDENTIAL_SOURCE_LABELS[source]).join(', ') : 'Ninguna'}</p>
+                                       <p>Última actualización local: {credentialMeta?.updatedAt ? new Date(credentialMeta.updatedAt).toLocaleString() : 'No registrada localmente'}</p>
                                     </div>
-                                    <button
-                                       onClick={handleSaveCredential}
-                                       disabled={isSavingCredential}
-                                       className="px-5 py-3 rounded-2xl bg-emerald-600 text-white font-black shadow-lg hover:bg-emerald-700 disabled:opacity-60"
-                                    >
-                                       {isSavingCredential ? 'Guardando credencial...' : 'Guardar Credencial Local'}
-                                    </button>
+                                    <div className="flex flex-wrap gap-3">
+                                       <button
+                                          onClick={handleSaveCredential}
+                                          disabled={isSavingCredential}
+                                          className="px-5 py-3 rounded-2xl bg-emerald-600 text-white font-black shadow-lg hover:bg-emerald-700 disabled:opacity-60"
+                                       >
+                                          {isSavingCredential ? 'Guardando local...' : 'Guardar Local'}
+                                       </button>
+                                       <button
+                                          onClick={handleSaveSupabaseCredential}
+                                          disabled={isSavingSupabaseCredential || !credentialMeta?.supportsSupabaseWrite}
+                                          className="px-5 py-3 rounded-2xl bg-slate-900 text-white font-black shadow-lg hover:bg-slate-800 disabled:opacity-60"
+                                       >
+                                          {isSavingSupabaseCredential ? 'Guardando en Supabase...' : 'Guardar en Supabase'}
+                                       </button>
+                                       <button
+                                          onClick={handleDeleteLocalCredential}
+                                          disabled={isDeletingLocalCredential || !credentialMeta?.hasLocalCredential}
+                                          className="px-5 py-3 rounded-2xl border border-slate-200 font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                                       >
+                                          {isDeletingLocalCredential ? 'Eliminando local...' : 'Eliminar Local'}
+                                       </button>
+                                       <button
+                                          onClick={handleDeleteSupabaseCredential}
+                                          disabled={isDeletingSupabaseCredential || !credentialMeta?.hasSupabaseCredential}
+                                          className="px-5 py-3 rounded-2xl border border-slate-200 font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                                       >
+                                          {isDeletingSupabaseCredential ? 'Eliminando Supabase...' : 'Eliminar Supabase'}
+                                       </button>
+                                    </div>
                                  </div>
                               </div>
                            </div>

@@ -7,9 +7,14 @@ export interface FiscalCredentialMetaResponse {
     resolvedCredentialKey?: string;
     updatedAt?: string;
     label?: string;
+    availableSources?: Array<'env' | 'sqlite' | 'supabase'>;
+    hasLocalCredential?: boolean;
+    hasSupabaseCredential?: boolean;
+    hasEnvCredential?: boolean;
+    supportsSupabaseWrite?: boolean;
 }
 
-export interface SaveLocalFiscalCredentialResponse {
+export interface FiscalCredentialMutationResponse {
     success: boolean;
     message: string;
     meta?: FiscalCredentialMetaResponse;
@@ -195,7 +200,7 @@ export const saveLocalFiscalCredential = async (
     companyInfo?: CompanyInfo,
     credentialKey?: string,
     label?: string
-): Promise<SaveLocalFiscalCredentialResponse> => {
+): Promise<FiscalCredentialMutationResponse> => {
     const response = await fetch('/api/fiscal/credentials/local', {
         method: 'POST',
         headers: {
@@ -221,5 +226,100 @@ export const saveLocalFiscalCredential = async (
         throw new Error((payload as any)?.message || `Error guardando credencial fiscal (HTTP ${response.status})`);
     }
 
-    return payload as SaveLocalFiscalCredentialResponse;
+    return payload as FiscalCredentialMutationResponse;
+};
+
+export const saveSupabaseFiscalCredential = async (
+    providerId: FiscalProviderId,
+    authToken: string,
+    companyInfo?: CompanyInfo,
+    credentialKey?: string
+): Promise<FiscalCredentialMutationResponse> => {
+    const response = await fetch('/api/fiscal/credentials/supabase', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            providerId,
+            authToken,
+            companyInfo,
+            options: {
+                credentialKey
+            }
+        })
+    });
+
+    const payload = await response.json().catch(() => ({
+        success: false,
+        message: `Respuesta inválida del backend fiscal (HTTP ${response.status}).`
+    }));
+
+    if (!response.ok) {
+        throw new Error((payload as any)?.message || `Error guardando credencial fiscal en Supabase (HTTP ${response.status})`);
+    }
+
+    return payload as FiscalCredentialMutationResponse;
+};
+
+export const deleteLocalFiscalCredential = async (
+    providerId: FiscalProviderId,
+    companyInfo?: CompanyInfo,
+    credentialKey?: string
+): Promise<FiscalCredentialMutationResponse> => {
+    const response = await fetch('/api/fiscal/credentials/local', {
+        method: 'DELETE',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            providerId,
+            companyInfo,
+            options: {
+                credentialKey
+            }
+        })
+    });
+
+    const payload = await response.json().catch(() => ({
+        success: false,
+        message: `Respuesta inválida del backend fiscal (HTTP ${response.status}).`
+    }));
+
+    if (!response.ok) {
+        throw new Error((payload as any)?.message || `Error eliminando credencial fiscal local (HTTP ${response.status})`);
+    }
+
+    return payload as FiscalCredentialMutationResponse;
+};
+
+export const deleteSupabaseFiscalCredential = async (
+    providerId: FiscalProviderId,
+    companyInfo?: CompanyInfo,
+    credentialKey?: string
+): Promise<FiscalCredentialMutationResponse> => {
+    const response = await fetch('/api/fiscal/credentials/supabase', {
+        method: 'DELETE',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            providerId,
+            companyInfo,
+            options: {
+                credentialKey
+            }
+        })
+    });
+
+    const payload = await response.json().catch(() => ({
+        success: false,
+        message: `Respuesta inválida del backend fiscal (HTTP ${response.status}).`
+    }));
+
+    if (!response.ok) {
+        throw new Error((payload as any)?.message || `Error eliminando credencial fiscal en Supabase (HTTP ${response.status})`);
+    }
+
+    return payload as FiscalCredentialMutationResponse;
 };

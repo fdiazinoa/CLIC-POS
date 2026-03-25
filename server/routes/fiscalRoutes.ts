@@ -1,8 +1,11 @@
 import express from 'express';
 import { getFiscalProvider } from '../services/fiscal/providers/index.js';
 import {
+    deleteLocalFiscalCredential,
+    deleteSupabaseFiscalCredential,
     inspectFiscalProviderCredential,
-    saveLocalFiscalCredential
+    saveLocalFiscalCredential,
+    saveSupabaseFiscalCredential
 } from '../services/fiscal/credentials.js';
 import {
     ElectronicDocumentCode,
@@ -130,6 +133,80 @@ router.post('/credentials/local', async (req, res) => {
         res.status(400).json({
             success: false,
             message: error?.message || 'No se pudo guardar la credencial fiscal.'
+        });
+    }
+});
+
+router.post('/credentials/supabase', async (req, res) => {
+    try {
+        const providerId = normalizeProviderId(req.body?.providerId);
+        const companyInfo = optionalCompanyInfo(req.body?.companyInfo);
+        const options = (req.body?.options || {}) as FiscalIssueOptions;
+        const authToken = String(req.body?.authToken || '').trim();
+        const credentialKey = options?.credentialKey || companyInfo?.rnc;
+
+        if (!authToken) {
+            throw new Error('authToken es obligatorio para guardar la credencial en Supabase.');
+        }
+
+        await saveSupabaseFiscalCredential(providerId, authToken, credentialKey);
+        const meta = await inspectFiscalProviderCredential(providerId, companyInfo, options?.credentialKey);
+        res.json({
+            success: true,
+            message: 'Credencial fiscal guardada en Supabase.',
+            meta
+        });
+    } catch (error: any) {
+        console.error('❌ [Fiscal] Supabase credential save failed:', error);
+        res.status(400).json({
+            success: false,
+            message: error?.message || 'No se pudo guardar la credencial fiscal en Supabase.'
+        });
+    }
+});
+
+router.delete('/credentials/local', async (req, res) => {
+    try {
+        const providerId = normalizeProviderId(req.body?.providerId);
+        const companyInfo = optionalCompanyInfo(req.body?.companyInfo);
+        const options = (req.body?.options || {}) as FiscalIssueOptions;
+        const credentialKey = options?.credentialKey || companyInfo?.rnc;
+
+        deleteLocalFiscalCredential(providerId, credentialKey);
+        const meta = await inspectFiscalProviderCredential(providerId, companyInfo, options?.credentialKey);
+        res.json({
+            success: true,
+            message: 'Credencial fiscal local eliminada.',
+            meta
+        });
+    } catch (error: any) {
+        console.error('❌ [Fiscal] Local credential delete failed:', error);
+        res.status(400).json({
+            success: false,
+            message: error?.message || 'No se pudo eliminar la credencial fiscal local.'
+        });
+    }
+});
+
+router.delete('/credentials/supabase', async (req, res) => {
+    try {
+        const providerId = normalizeProviderId(req.body?.providerId);
+        const companyInfo = optionalCompanyInfo(req.body?.companyInfo);
+        const options = (req.body?.options || {}) as FiscalIssueOptions;
+        const credentialKey = options?.credentialKey || companyInfo?.rnc;
+
+        await deleteSupabaseFiscalCredential(providerId, credentialKey);
+        const meta = await inspectFiscalProviderCredential(providerId, companyInfo, options?.credentialKey);
+        res.json({
+            success: true,
+            message: 'Credencial fiscal en Supabase eliminada.',
+            meta
+        });
+    } catch (error: any) {
+        console.error('❌ [Fiscal] Supabase credential delete failed:', error);
+        res.status(400).json({
+            success: false,
+            message: error?.message || 'No se pudo eliminar la credencial fiscal en Supabase.'
         });
     }
 });

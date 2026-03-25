@@ -30,6 +30,11 @@ export interface FiscalCredentialMeta {
     resolvedCredentialKey?: string;
     updatedAt?: string;
     label?: string;
+    availableSources?: FiscalCredentialSource[];
+    hasLocalCredential?: boolean;
+    hasSupabaseCredential?: boolean;
+    hasEnvCredential?: boolean;
+    supportsSupabaseWrite?: boolean;
 }
 
 const SETTINGS_KEY = 'fiscalProviderCredentials';
@@ -67,6 +72,27 @@ const getCredentialStore = (): FiscalCredentialStore => {
     };
 };
 
+const getSupabaseConfig = () => {
+    const supabaseUrl = cleanString(process.env.SUPABASE_URL);
+    const serviceRoleKey = cleanString(process.env.SUPABASE_SERVICE_ROLE_KEY);
+    const tableName = cleanString(process.env.FISCAL_SUPABASE_CREDENTIALS_TABLE) || 'fiscal_provider_credentials';
+
+    return {
+        supabaseUrl,
+        serviceRoleKey,
+        tableName,
+        isConfigured: Boolean(supabaseUrl && serviceRoleKey)
+    };
+};
+
+const requireSupabaseConfig = () => {
+    const config = getSupabaseConfig();
+    if (!config.isConfigured) {
+        throw new Error('SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY son obligatorios para escribir credenciales en Supabase.');
+    }
+    return config;
+};
+
 export const saveLocalFiscalCredential = (
     providerId: FiscalProviderId,
     authToken: string,
@@ -97,6 +123,34 @@ export const saveLocalFiscalCredential = (
     }
 
     store.providers[providerId] = bucket;
+    saveSetting(SETTINGS_KEY, store);
+};
+
+export const deleteLocalFiscalCredential = (
+    providerId: FiscalProviderId,
+    credentialKey?: string
+) => {
+    const store = getCredentialStore();
+    const bucket = store.providers[providerId];
+    if (!bucket) return;
+
+    const normalizedCredentialKey = deriveFiscalCredentialKey(undefined, credentialKey);
+    if (normalizedCredentialKey && bucket.companyCredentials?.[normalizedCredentialKey]) {
+        delete bucket.companyCredentials[normalizedCredentialKey];
+    } else if (!normalizedCredentialKey) {
+        delete bucket.defaultCredential;
+    }
+
+    if (bucket.companyCredentials && Object.keys(bucket.companyCredentials).length === 0) {
+        delete bucket.companyCredentials;
+    }
+
+    if (!bucket.defaultCredential && !bucket.companyCredentials) {
+        delete store.providers[providerId];
+    } else {
+        store.providers[providerId] = bucket;
+    }
+
     saveSetting(SETTINGS_KEY, store);
 };
 
@@ -139,11 +193,8 @@ const fetchSupabaseCredential = async (
     providerId: FiscalProviderId,
     resolvedCredentialKey?: string
 ): Promise<ResolvedFiscalCredential | null> => {
-    const supabaseUrl = cleanString(process.env.SUPABASE_URL);
-    const serviceRoleKey = cleanString(process.env.SUPABASE_SERVICE_ROLE_KEY);
-    const tableName = cleanString(process.env.FISCAL_SUPABASE_CREDENTIALS_TABLE) || 'fiscal_provider_credentials';
-
-    if (!supabaseUrl || !serviceRoleKey) return null;
+    const { supabaseUrl, serviceRoleKey, tableName, isConfigured } = getSupabaseConfig();
+    if (!isConfigured) return null;
 
     const candidates = resolvedCredentialKey
         ? [resolvedCredentialKey, DEFAULT_CREDENTIAL_KEY]
@@ -186,6 +237,67 @@ const fetchSupabaseCredential = async (
     return null;
 };
 
+export const saveSupabaseFiscalCredential = async (
+    providerId: FiscalProviderId,
+    authToken: string,
+    credentialKey?: string
+) => {
+    const normalizedAuthToken = cleanString(authToken);
+    if (!normalizedAuthToken) {
+        throw new Error('authToken es obligatorio para guardar la credencial en Supabase.');
+    }
+
+    const { supabaseUrl, serviceRoleKey, tableName } = requireSupabaseConfig();
+    const companyKey = deriveFiscalCredentialKey(undefined, credentialKey) || DEFAULT_CREDENTIAL_KEY;
+    const endpoint = new URL(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/${tableName}`);
+    endpoint.searchParams.set('on_conflict', 'provider_id,company_key');
+
+    const response = await fetch(endpoint.toString(), {
+        method: 'POST',
+        headers: {
+            apikey: serviceRoleKey,
+            Authorization: `Bearer ${serviceRoleKey}`,
+            'Content-Type': 'application/json',
+            Prefer: 'resolution=merge-duplicates,return=representation'
+        },
+        body: JSON.stringify([{
+            provider_id: providerId,
+            company_key: companyKey,
+            auth_token: normalizedAuthToken,
+            is_active: true
+        }])
+    });
+
+    if (!response.ok) {
+        const message = await response.text().catch(() => '');
+        throw new Error(`No se pudo guardar la credencial en Supabase: ${message || `HTTP ${response.status}`}`);
+    }
+};
+
+export const deleteSupabaseFiscalCredential = async (
+    providerId: FiscalProviderId,
+    credentialKey?: string
+) => {
+    const { supabaseUrl, serviceRoleKey, tableName } = requireSupabaseConfig();
+    const companyKey = deriveFiscalCredentialKey(undefined, credentialKey) || DEFAULT_CREDENTIAL_KEY;
+    const endpoint = new URL(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/${tableName}`);
+    endpoint.searchParams.set('provider_id', `eq.${providerId}`);
+    endpoint.searchParams.set('company_key', `eq.${companyKey}`);
+
+    const response = await fetch(endpoint.toString(), {
+        method: 'DELETE',
+        headers: {
+            apikey: serviceRoleKey,
+            Authorization: `Bearer ${serviceRoleKey}`
+        }
+    });
+
+    if (!response.ok) {
+        const message = await response.text().catch(() => '');
+        throw new Error(`No se pudo eliminar la credencial en Supabase: ${message || `HTTP ${response.status}`}`);
+    }
+};
+
 export const inspectFiscalProviderCredential = async (
     providerId: FiscalProviderId,
     companyInfo?: FiscalCompanyInfo,
@@ -193,41 +305,28 @@ export const inspectFiscalProviderCredential = async (
 ): Promise<FiscalCredentialMeta> => {
     const resolvedCredentialKey = deriveFiscalCredentialKey(companyInfo, credentialKey);
     const local = getLocalStoredFiscalCredential(providerId, resolvedCredentialKey);
-    if (local) {
-        return {
-            providerId,
-            hasCredential: true,
-            source: 'sqlite',
-            resolvedCredentialKey: local.resolvedCredentialKey,
-            updatedAt: local.credential.updatedAt,
-            label: local.credential.label
-        };
-    }
-
     const supabaseCredential = await fetchSupabaseCredential(providerId, resolvedCredentialKey);
-    if (supabaseCredential) {
-        return {
-            providerId,
-            hasCredential: true,
-            source: 'supabase',
-            resolvedCredentialKey: supabaseCredential.resolvedCredentialKey
-        };
-    }
-
     const envAuthToken = cleanString(process.env.POLARIS_AUTH_TOKEN);
-    if (providerId === 'POLARIS' && envAuthToken) {
-        return {
-            providerId,
-            hasCredential: true,
-            source: 'env',
-            resolvedCredentialKey
-        };
-    }
+    const hasEnvCredential = providerId === 'POLARIS' && Boolean(envAuthToken);
+    const availableSources: FiscalCredentialSource[] = [];
+    if (local) availableSources.push('sqlite');
+    if (supabaseCredential) availableSources.push('supabase');
+    if (hasEnvCredential) availableSources.push('env');
+
+    const source = availableSources[0];
 
     return {
         providerId,
-        hasCredential: false,
-        resolvedCredentialKey
+        hasCredential: availableSources.length > 0,
+        source,
+        resolvedCredentialKey: local?.resolvedCredentialKey || supabaseCredential?.resolvedCredentialKey || resolvedCredentialKey,
+        updatedAt: local?.credential.updatedAt,
+        label: local?.credential.label,
+        availableSources,
+        hasLocalCredential: Boolean(local),
+        hasSupabaseCredential: Boolean(supabaseCredential),
+        hasEnvCredential,
+        supportsSupabaseWrite: getSupabaseConfig().isConfigured
     };
 };
 
