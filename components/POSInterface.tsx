@@ -402,6 +402,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
 
    const [showPaymentModal, setShowPaymentModal] = useState(false);
+   const [paymentModalSession, setPaymentModalSession] = useState(0);
    const [showTicketOptions, setShowTicketOptions] = useState(false);
    const [showParkedList, setShowParkedList] = useState(false);
    const [showGlobalDiscount, setShowGlobalDiscount] = useState(false);
@@ -1635,7 +1636,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          handlePaymentConfirm([]).catch(console.error);
          return;
       }
+      setPaymentModalSession(prev => prev + 1);
       setShowPaymentModal(true);
+   };
+
+   const handleClosePaymentModal = () => {
+      setShowPaymentModal(false);
+      setPaymentModalSession(prev => prev + 1);
    };
 
    const handleDispatchCommand = async () => {
@@ -2947,7 +2954,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                />
             )
          }
-         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={selectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} />}
+         {showPaymentModal && <UnifiedPaymentModal key={paymentModalSession} total={amountDueNow} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={handleClosePaymentModal} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={selectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr) => { addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}

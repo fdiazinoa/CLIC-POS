@@ -207,6 +207,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
    const [isTestingProvider, setIsTestingProvider] = useState(false);
    const [isSavingCredential, setIsSavingCredential] = useState(false);
    const [isSavingSupabaseCredential, setIsSavingSupabaseCredential] = useState(false);
+   const [isSavingRange, setIsSavingRange] = useState(false);
    const [isDeletingLocalCredential, setIsDeletingLocalCredential] = useState(false);
    const [isDeletingSupabaseCredential, setIsDeletingSupabaseCredential] = useState(false);
    const [fiscalFeedback, setFiscalFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
@@ -455,21 +456,58 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
    };
 
    const handleSaveRange = async () => {
-      if (!newRange.prefix || !newRange.startNumber || !newRange.endNumber) return;
-      const range: FiscalRangeDGII = {
-         ...newRange as FiscalRangeDGII,
-         id: `fr-${Date.now()}`,
-         currentGlobal: (newRange.startNumber || 1) - 1,
-         isActive: true
-      };
-      const updated = [...fiscalRanges, range];
-      setFiscalRanges(updated);
-      await db.save('fiscalRanges', updated);
+      if (isSavingRange) return;
 
-      // Push to SyncManager (Persistent/Manual Sync)
-      await syncManager.pushCatalog('fiscalRanges');
+      if (!newRange.prefix || !newRange.startNumber || !newRange.endNumber || !newRange.expiryDate) {
+         setFiscalFeedback({ kind: 'error', message: 'Completa prefijo, rango y vencimiento antes de guardar la autorización.' });
+         return;
+      }
 
-      setIsAddingRange(false);
+      if ((newRange.endNumber || 0) < (newRange.startNumber || 0)) {
+         setFiscalFeedback({ kind: 'error', message: 'El número final no puede ser menor que el inicial.' });
+         return;
+      }
+
+      try {
+         setIsSavingRange(true);
+
+         const duplicatedRange = fiscalRanges.find(range =>
+            range.type === newRange.type &&
+            range.prefix === newRange.prefix &&
+            range.startNumber === newRange.startNumber &&
+            range.endNumber === newRange.endNumber &&
+            range.expiryDate === newRange.expiryDate
+         );
+
+         if (duplicatedRange) {
+            setFiscalFeedback({ kind: 'error', message: `Ya existe una autorización ${duplicatedRange.type} con ese mismo rango.` });
+            return;
+         }
+
+         const range: FiscalRangeDGII = {
+            ...newRange as FiscalRangeDGII,
+            id: `fr-${Date.now()}`,
+            currentGlobal: (newRange.startNumber || 1) - 1,
+            isActive: true
+         };
+         const updated = [...fiscalRanges, range];
+         setFiscalRanges(updated);
+         await db.save('fiscalRanges', updated);
+         setIsAddingRange(false);
+         setFiscalFeedback({ kind: 'success', message: `Autorizacion ${range.type} guardada localmente.` });
+
+         try {
+            await syncManager.pushCatalog('fiscalRanges');
+         } catch (error) {
+            console.warn('⚠️ DocumentSettings: fiscalRanges sync failed after local save:', error);
+            setFiscalFeedback({
+               kind: 'error',
+               message: `Autorizacion ${range.type} guardada localmente, pero no se pudo sincronizar ahora mismo.`
+            });
+         }
+      } finally {
+         setIsSavingRange(false);
+      }
    };
 
    const handleToggleRange = async (id: string) => {
@@ -479,6 +517,68 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
 
       // Push to SyncManager (Persistent/Manual Sync)
       await syncManager.pushCatalog('fiscalRanges');
+   };
+
+   const handleDeleteRange = async (id: string) => {
+      const range = fiscalRanges.find(item => item.id === id);
+      if (!range) {
+         setFiscalFeedback({ kind: 'error', message: 'No se encontró la autorización seleccionada.' });
+         return;
+      }
+
+      const consumedCount = Math.max(0, range.currentGlobal - (range.startNumber - 1));
+      if (consumedCount > 0) {
+         setFiscalFeedback({ kind: 'error', message: `No se puede eliminar ${range.type} porque ya tiene comprobantes consumidos.` });
+         return;
+      }
+
+      const [rawAllocations, rawBuffers] = await Promise.all([
+         db.get('fiscalAllocations'),
+         db.get('localFiscalBuffer')
+      ]);
+
+      const allocations = (Array.isArray(rawAllocations) ? rawAllocations : []).filter((allocation: any) =>
+         allocation?.type === range.type &&
+         allocation?.status === 'ACTIVE' &&
+         Number(allocation?.rangeStart) <= range.endNumber &&
+         Number(allocation?.rangeEnd) >= range.startNumber
+      );
+
+      if (allocations.length > 0) {
+         setFiscalFeedback({ kind: 'error', message: `No se puede eliminar ${range.type} porque todavía tiene reservas asignadas a terminales.` });
+         return;
+      }
+
+      const activeBuffers = (Array.isArray(rawBuffers) ? rawBuffers : []).filter((buffer: any) =>
+         buffer?.type === range.type &&
+         Number(buffer?.currentNumber) <= Number(buffer?.endNumber) &&
+         Number(buffer?.currentNumber) <= range.endNumber &&
+         Number(buffer?.endNumber) >= range.startNumber
+      );
+
+      if (activeBuffers.length > 0) {
+         setFiscalFeedback({ kind: 'error', message: `No se puede eliminar ${range.type} porque hay una reserva activa en caja para ese rango.` });
+         return;
+      }
+
+      if (!window.confirm(`¿Desea eliminar la autorización ${range.type} ${range.prefix}-${range.startNumber} a ${range.endNumber}?`)) {
+         return;
+      }
+
+      const updated = fiscalRanges.filter(item => item.id !== id);
+      setFiscalRanges(updated);
+      await db.save('fiscalRanges', updated);
+      setFiscalFeedback({ kind: 'success', message: `Autorizacion ${range.type} eliminada localmente.` });
+
+      try {
+         await syncManager.pushCatalog('fiscalRanges');
+      } catch (error) {
+         console.warn('⚠️ DocumentSettings: fiscalRanges sync failed after local delete:', error);
+         setFiscalFeedback({
+            kind: 'error',
+            message: `Autorizacion ${range.type} eliminada localmente, pero no se pudo sincronizar ahora mismo.`
+         });
+      }
    };
 
    const updateFiscalCompliance = (updater: (current: NonNullable<BusinessConfig['fiscalCompliance']>) => NonNullable<BusinessConfig['fiscalCompliance']>) => {
@@ -511,7 +611,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
       try {
          await db.save('config', businessConfig);
          window.dispatchEvent(new CustomEvent('configUpdated', { detail: businessConfig }));
-         setFiscalFeedback({ kind: 'success', message: 'Política fiscal guardada y sincronizada.' });
+         setFiscalFeedback({ kind: 'success', message: 'Politica fiscal guardada localmente.' });
       } catch (error: any) {
          console.error('❌ Error saving fiscal config:', error);
          setFiscalFeedback({ kind: 'error', message: error?.message || 'No se pudo guardar la política fiscal.' });
@@ -831,6 +931,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                            </button>
                         </div>
 
+                        {fiscalFeedback && (
+                           <div className={`rounded-2xl px-4 py-3 text-sm font-bold ${fiscalFeedback.kind === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                              {fiscalFeedback.message}
+                           </div>
+                        )}
+
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                            <div className="md:col-span-1">
                               <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Proveedor por Defecto</label>
@@ -1042,11 +1148,6 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                            </div>
                         )}
 
-                        {fiscalFeedback && (
-                           <div className={`rounded-2xl px-4 py-3 text-sm font-bold ${fiscalFeedback.kind === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
-                              {fiscalFeedback.message}
-                           </div>
-                        )}
                      </section>
 
                      {/* CONSUMPTION DASHBOARD */}
@@ -1122,6 +1223,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                            const totalAutorizado = range.endNumber - range.startNumber + 1;
                            const progress = totalAutorizado > 0 ? (usedInCajas / totalAutorizado) * 100 : 0;
                            const disponiblesEnServidor = range.endNumber - range.currentGlobal;
+                           const canDeleteRange = usedInCajas === 0;
 
                            return (
                               <div key={range.id} className={`bg-white p-6 rounded-3xl border-2 transition-all ${range.isActive ? 'border-gray-100 shadow-sm' : 'border-dashed border-gray-200 opacity-60'}`}>
@@ -1156,7 +1258,14 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                                        >
                                           <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${range.isActive ? 'left-7' : 'left-1'}`} />
                                        </button>
-                                       <button className="p-2 text-gray-300 hover:text-red-500"><Trash2 size={20} /></button>
+                                       <button
+                                          onClick={() => handleDeleteRange(range.id)}
+                                          disabled={!canDeleteRange}
+                                          title={canDeleteRange ? 'Eliminar autorización' : 'No se puede eliminar un rango con comprobantes consumidos'}
+                                          className={`p-2 transition-colors ${canDeleteRange ? 'text-gray-400 hover:text-red-500' : 'text-gray-200 cursor-not-allowed'}`}
+                                       >
+                                          <Trash2 size={20} />
+                                       </button>
                                     </div>
                                  </div>
 
@@ -1337,8 +1446,14 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                      </div>
                   </div>
                   <div className="p-6 bg-gray-50 border-t flex gap-3">
-                     <button onClick={() => setIsAddingRange(false)} className="flex-1 py-3 text-gray-500 font-bold">Cancelar</button>
-                     <button onClick={handleSaveRange} className="flex-[2] py-3 bg-indigo-600 text-white rounded-xl font-black shadow-lg">Guardar Autorización</button>
+                      <button onClick={() => setIsAddingRange(false)} className="flex-1 py-3 text-gray-500 font-bold">Cancelar</button>
+                     <button
+                        onClick={handleSaveRange}
+                        disabled={isSavingRange}
+                        className={`flex-[2] py-3 rounded-xl font-black shadow-lg transition-all ${isSavingRange ? 'bg-indigo-300 text-white cursor-wait' : 'bg-indigo-600 text-white'}`}
+                     >
+                        {isSavingRange ? 'Guardando...' : 'Guardar Autorización'}
+                     </button>
                   </div>
                </div>
             </div>

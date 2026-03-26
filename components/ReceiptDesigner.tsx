@@ -114,6 +114,9 @@ const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({ config, onUpdateConfi
                   <LayoutTemplate size={20} className="text-blue-500" />
                   Datos de Empresa & Logo
                </h2>
+               <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-800">
+                  Los datos del emisor tambien se pueden editar desde Ajustes &gt; Empresa.
+               </div>
 
                <div className="flex gap-4 mb-6">
                   <div className="w-24 h-24 rounded-xl bg-gray-50 border-2 border-dashed border-gray-300 flex items-center justify-center relative overflow-hidden group cursor-pointer">
