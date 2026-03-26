@@ -31,6 +31,20 @@ db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sync_changes_collection_version
     ON sync_changes(collection, version);
 
+    CREATE TABLE IF NOT EXISTS sync_tokens (
+        token TEXT PRIMARY KEY,
+        terminalId TEXT NOT NULL,
+        createdAt TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS connected_terminals (
+        terminalId TEXT PRIMARY KEY,
+        lastSeen TEXT NOT NULL,
+        ip TEXT,
+        deviceToken TEXT,
+        status TEXT DEFAULT 'OFFLINE'
+    );
+
     CREATE TABLE IF NOT EXISTS inventory_discrepancies (
         id TEXT PRIMARY KEY,
         productId TEXT,
