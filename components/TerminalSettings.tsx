@@ -23,6 +23,7 @@ import { getDefaultRoleConfig, getRoleDisplayInfo, getAllModules } from '../util
 import AccessibilityToggle from './AccessibilityToggle';
 import SettingsOperational from './SettingsOperational';
 import { FISCAL_DOCUMENT_LABELS, SUPPORTED_FISCAL_CODES } from '../utils/fiscal/fiscalHelpers';
+import { isProductEnabledInWarehouse } from '../utils/validation';
 
 interface TerminalSettingsProps {
    config: BusinessConfig;
@@ -155,8 +156,33 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    }, [activeTerminal, currentDeviceId]);
 
    const allCategories = useMemo(() => {
-      return Array.from(new Set(products.map(p => p.category))).sort();
-   }, [products]);
+      const selectedCategories = Array.isArray(activeTerminal?.config.catalog?.allowedCategories)
+         ? activeTerminal.config.catalog.allowedCategories
+         : [];
+      const defaultWarehouseId = activeTerminal?.config.inventoryScope?.defaultSalesWarehouseId;
+
+      const categoryMap = new Map<string, string>();
+      const registerCategory = (value: unknown) => {
+         if (typeof value !== 'string') return;
+         const raw = value.trim();
+         if (!raw) return;
+         const normalized = raw.toLowerCase();
+         if (!categoryMap.has(normalized)) {
+            categoryMap.set(normalized, raw);
+         }
+      };
+
+      products.forEach((product) => {
+         if (!product || product.is_sellable === false) return;
+         if (defaultWarehouseId && !isProductEnabledInWarehouse(product, defaultWarehouseId)) return;
+         registerCategory(product.category);
+      });
+
+      selectedCategories.forEach(registerCategory);
+
+      return Array.from(categoryMap.values())
+         .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+   }, [products, activeTerminal]);
 
    const handleSyncSeries = async () => {
       setIsSyncing(true);
@@ -425,30 +451,37 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               </h3>
                               <p className="text-sm text-gray-500 mb-8">Selecciona qué categorías de productos estarán disponibles para la venta en esta terminal. Si no seleccionas ninguna, se mostrarán todas.</p>
 
-                              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                                 {allCategories.map(cat => {
-                                    const isSelected = activeTerminal.config.catalog?.allowedCategories?.includes(cat);
-                                    return (
-                                       <button
-                                          key={cat}
-                                          onClick={() => {
-                                             const current = activeTerminal.config.catalog?.allowedCategories || [];
-                                             const updated = isSelected
-                                                ? current.filter(c => c !== cat)
-                                                : [...current, cat];
-                                             handleUpdateActiveConfig('catalog', 'allowedCategories', updated);
-                                          }}
-                                          className={`p-4 rounded-2xl border-2 text-left transition-all ${isSelected ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                          disabled={isReadOnly}
-                                       >
-                                          <div className={`w-6 h-6 rounded-full flex items-center justify-center mb-3 ${isSelected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-300'}`}>
-                                             {isSelected ? <Check size={14} strokeWidth={3} /> : <div className="w-2 h-2 bg-gray-300 rounded-full" />}
-                                          </div>
-                                          <span className={`font-bold text-sm block truncate ${isSelected ? 'text-blue-900' : 'text-gray-600'}`}>{cat}</span>
-                                       </button>
-                                    );
-                                 })}
-                              </div>
+                              {allCategories.length > 0 ? (
+                                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                                    {allCategories.map(cat => {
+                                       const isSelected = activeTerminal.config.catalog?.allowedCategories?.includes(cat);
+                                       return (
+                                          <button
+                                             key={cat}
+                                             onClick={() => {
+                                                const current = activeTerminal.config.catalog?.allowedCategories || [];
+                                                const updated = isSelected
+                                                   ? current.filter(c => c !== cat)
+                                                   : [...current, cat];
+                                                handleUpdateActiveConfig('catalog', 'allowedCategories', updated);
+                                             }}
+                                             className={`p-4 rounded-2xl border-2 text-left transition-all ${isSelected ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                             disabled={isReadOnly}
+                                          >
+                                             <div className={`w-6 h-6 rounded-full flex items-center justify-center mb-3 ${isSelected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-300'}`}>
+                                                {isSelected ? <Check size={14} strokeWidth={3} /> : <div className="w-2 h-2 bg-gray-300 rounded-full" />}
+                                             </div>
+                                             <span className={`font-bold text-sm block truncate ${isSelected ? 'text-blue-900' : 'text-gray-600'}`}>{cat}</span>
+                                          </button>
+                                       );
+                                    })}
+                                 </div>
+                              ) : (
+                                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-medium text-amber-900">
+                                    No encontramos categorías válidas en el catálogo visible de esta terminal.
+                                    Asigna categorías a los artículos o sincroniza nuevamente el catálogo para poder limitarlo por categoría.
+                                 </div>
+                              )}
 
                               <div className="mt-8 p-4 bg-blue-50 rounded-xl border border-blue-100 flex items-start gap-3">
                                  <Info size={20} className="text-blue-600 shrink-0 mt-0.5" />
