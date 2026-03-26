@@ -61,6 +61,15 @@ class RealtimeNotificationService {
                 console.error('❌ RealtimeNotificationService: Error updating prices:', error);
             }
         });
+
+        this.socket.on('CONFIG_PUSH', async (data: { terminal_config?: unknown; terminalId?: string }) => {
+            console.log('📡 RealtimeNotificationService: Received CONFIG_PUSH. Refreshing terminal snapshot...');
+            try {
+                await syncManager.refreshTerminalResolvedConfig(data?.terminal_config || data);
+            } catch (error) {
+                console.error('❌ RealtimeNotificationService: Error applying CONFIG_PUSH:', error);
+            }
+        });
     }
 
     disconnect() {

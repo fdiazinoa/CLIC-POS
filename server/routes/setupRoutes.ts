@@ -1,5 +1,7 @@
 import express from 'express';
 import { getCollection, getSetting, saveSetting } from '../db';
+import { applyTerminalConfigSnapshot, extractTerminalConfigSnapshot } from '../../utils/terminalConfigSnapshot.js';
+import { TerminalConfigSnapshot } from '../../types.js';
 
 const router = express.Router();
 
@@ -51,6 +53,26 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
 
 const resolveStoredErpContext = (): Record<string, any> => {
   return asObject(getSetting('erp_setup_context'));
+};
+
+const getSnapshotCache = (): Record<string, TerminalConfigSnapshot> => {
+  return asObject(getSetting('terminal_snapshot_cache')) as Record<string, TerminalConfigSnapshot>;
+};
+
+const getCachedTerminalSnapshot = (terminalId: string): TerminalConfigSnapshot | null => {
+  const cache = getSnapshotCache();
+  const snapshot = asObject(cache[terminalId]);
+  return Object.keys(snapshot).length > 0 ? (snapshot as TerminalConfigSnapshot) : null;
+};
+
+const saveCachedTerminalSnapshot = (terminalId: string, snapshot: TerminalConfigSnapshot | null | undefined) => {
+  if (!snapshot) return;
+  const resolved = asObject(snapshot.resolved);
+  if (Object.keys(resolved).length === 0) return;
+
+  const cache = getSnapshotCache();
+  cache[terminalId] = snapshot;
+  saveSetting('terminal_snapshot_cache', cache);
 };
 
 const resolveTenantId = (req: express.Request): string | null => {
@@ -192,6 +214,15 @@ const fetchTerminalProfile = async (req: express.Request, baseUrl: string, tenan
   );
 };
 
+const fetchInitialConfigSnapshot = async (req: express.Request, baseUrl: string, tenantId: string, terminalId: string) => {
+  return fetchErpJson(
+    req,
+    baseUrl,
+    `/api/setup/initial-config/${encodeURIComponent(terminalId)}?tenant_id=${encodeURIComponent(tenantId)}`,
+    { tenantId }
+  );
+};
+
 const resolveOccupiedDeviceId = (terminal: any, terminalProfilePayload: any): string | undefined => {
   const profile = asObject(terminalProfilePayload?.profile);
   const metadata = asObject(profile.metadata);
@@ -276,6 +307,29 @@ const buildBoundConfig = (input: {
     ...cloneDeep(currentConfig),
     terminals: nextTerminals,
   };
+};
+
+const materializeTerminalConfigFromSnapshot = (input: {
+  currentConfig: any;
+  terminalId: string;
+  posDeviceId?: string;
+  bindingMode?: 'MASTER' | 'SLAVE';
+  snapshot: TerminalConfigSnapshot | null;
+}) => {
+  const cachedSnapshot = getCachedTerminalSnapshot(input.terminalId);
+  const applied = applyTerminalConfigSnapshot(input.currentConfig, {
+    terminalId: input.terminalId,
+    posDeviceId: input.posDeviceId,
+    bindingMode: input.bindingMode,
+    incomingSnapshot: input.snapshot,
+    cachedSnapshot,
+  });
+
+  if (applied.snapshot && !applied.hasResolutionError && Object.keys(asObject(applied.snapshot.resolved)).length > 0) {
+    saveCachedTerminalSnapshot(applied.terminalId, applied.snapshot);
+  }
+
+  return applied;
 };
 
 router.get('/terminals', async (req, res) => {
@@ -495,6 +549,107 @@ router.post('/bind-terminal', async (req, res) => {
     return res.status(500).json({
       status: 'error',
       message: error?.message || 'No se pudo vincular la terminal contra ERP.',
+    });
+  }
+});
+
+router.get('/initial-config/:terminalId', async (req, res) => {
+  const config = getSetting('config');
+  const terminalId = asString(req.params.terminalId);
+  const tenantId = resolveTenantId(req);
+  const erpBaseUrl = resolveErpBaseUrl(req);
+  const posDeviceId = asString(req.query.pos_device_id);
+  const bindingMode = asString(req.query.binding_mode).toUpperCase() === 'SLAVE' ? 'SLAVE' : 'MASTER';
+
+  if (!terminalId) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'terminalId es obligatorio.',
+    });
+  }
+
+  if (!tenantId || !erpBaseUrl) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'tenant_id y erp_base_url son obligatorios para cargar la configuración inicial.',
+    });
+  }
+
+  try {
+    const snapshotPayload = await fetchInitialConfigSnapshot(req, erpBaseUrl, tenantId, terminalId);
+    const snapshot = extractTerminalConfigSnapshot(snapshotPayload);
+
+    if (!snapshot) {
+      throw new Error('El ERP no devolvió terminal_config en la configuración inicial.');
+    }
+
+    const applied = materializeTerminalConfigFromSnapshot({
+      currentConfig: config,
+      terminalId,
+      posDeviceId,
+      bindingMode,
+      snapshot,
+    });
+
+    saveSetting('config', applied.config);
+    saveSetting('active_tenant_id', asString(snapshot.tenant_id) || tenantId);
+    saveSetting('erp_setup_context', {
+      ...resolveStoredErpContext(),
+      tenantId: asString(snapshot.tenant_id) || tenantId,
+      erpBaseUrl,
+      lastResolvedAt: new Date().toISOString(),
+    });
+
+    return res.json({
+      success: true,
+      source: applied.snapshotSource,
+      tenant_id: asString(snapshot.tenant_id) || tenantId,
+      terminal_id: applied.terminalId,
+      terminal_config: snapshot,
+      config: applied.config,
+      snapshot_meta: {
+        used_resolved: applied.usedResolved,
+        used_fallback_config: applied.usedFallbackConfig,
+        used_cached_snapshot: applied.usedCachedSnapshot,
+        resolution_error: snapshot.resolution_error ?? null,
+        full_pull_on_pairing: applied.fullPullOnPairing ?? false,
+      },
+    });
+  } catch (error: any) {
+    console.error('❌ Setup initial config error:', error?.message || error);
+
+    const cachedSnapshot = getCachedTerminalSnapshot(terminalId);
+    if (cachedSnapshot) {
+      const applied = materializeTerminalConfigFromSnapshot({
+        currentConfig: config,
+        terminalId,
+        posDeviceId,
+        bindingMode,
+        snapshot: cachedSnapshot,
+      });
+
+      saveSetting('config', applied.config);
+
+      return res.json({
+        success: true,
+        source: 'CACHED_SNAPSHOT',
+        tenant_id: asString(cachedSnapshot.tenant_id) || tenantId,
+        terminal_id: applied.terminalId,
+        terminal_config: cachedSnapshot,
+        config: applied.config,
+        snapshot_meta: {
+          used_resolved: applied.usedResolved,
+          used_fallback_config: applied.usedFallbackConfig,
+          used_cached_snapshot: true,
+          resolution_error: null,
+          full_pull_on_pairing: applied.fullPullOnPairing ?? false,
+        },
+      });
+    }
+
+    return res.status(500).json({
+      status: 'error',
+      message: error?.message || 'No se pudo cargar la configuración inicial de la terminal.',
     });
   }
 });

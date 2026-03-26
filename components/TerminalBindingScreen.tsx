@@ -8,6 +8,10 @@ interface PairingResult {
   boundConfig?: BusinessConfig;
   boundUsers?: UserType[];
   masterIp?: string;
+  snapshotMeta?: {
+    fullPullOnPairing?: boolean;
+    resolutionError?: unknown;
+  };
 }
 
 interface TerminalBindingScreenProps {
@@ -300,7 +304,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
               isAlreadyBound={(config.terminals || []).some((terminal) => terminal.config?.currentDeviceId === deviceId)}
               onMasterIpChange={setMasterIp}
               onBack={() => setStep('AUTH')}
-              onBound={async ({ terminalId, tenantId, config: boundConfig, users, masterIp: resolvedMasterIp }) => {
+              onBound={async ({ terminalId, tenantId, config: boundConfig, users, masterIp: resolvedMasterIp, snapshotMeta }) => {
                 await onConfigUpdate?.(boundConfig);
                 if (Array.isArray(users)) {
                   await onUsersUpdate?.(users);
@@ -310,6 +314,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   boundConfig,
                   boundUsers: users,
                   masterIp: resolvedMasterIp,
+                  snapshotMeta,
                 });
               }}
             />

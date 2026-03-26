@@ -34,12 +34,31 @@ interface BindTerminalResponse {
   users?: UserType[];
 }
 
+interface InitialConfigResponse {
+  success: boolean;
+  tenant_id: string;
+  terminal_id: string;
+  config: BusinessConfig;
+  terminal_config?: Record<string, any>;
+  snapshot_meta?: {
+    used_resolved?: boolean;
+    used_fallback_config?: boolean;
+    used_cached_snapshot?: boolean;
+    resolution_error?: unknown;
+    full_pull_on_pairing?: boolean;
+  };
+}
+
 interface BoundTerminalPayload {
   terminalId: string;
   tenantId: string;
   config: BusinessConfig;
   users?: UserType[];
   masterIp?: string;
+  snapshotMeta?: {
+    fullPullOnPairing?: boolean;
+    resolutionError?: unknown;
+  };
 }
 
 interface TerminalSelectorProps {
@@ -216,6 +235,25 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
 
         const data = (await response.json()) as BindTerminalResponse;
+        const initialConfigParams = new URLSearchParams({
+          tenant_id: data.tenant_id || tenantId,
+          pos_device_id: deviceId,
+          binding_mode: bindingMode,
+        });
+        if (erpBaseUrl) {
+          initialConfigParams.set('erp_base_url', erpBaseUrl);
+        }
+
+        const initialConfigResponse = await fetch(
+          `${apiBase}/initial-config/${encodeURIComponent(data.terminal_id || terminal.id)}?${initialConfigParams.toString()}`
+        );
+
+        if (!initialConfigResponse.ok) {
+          const detail = await initialConfigResponse.text().catch(() => '');
+          throw new Error(detail || `No se pudo cargar la configuración inicial (${initialConfigResponse.status}).`);
+        }
+
+        const initialConfigData = (await initialConfigResponse.json()) as InitialConfigResponse;
         if (data.tenant_id) {
           localStorage.setItem('active_tenant_id', data.tenant_id);
         }
@@ -224,11 +262,15 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           localStorage.setItem('erp_base_url', erpBaseUrl);
         }
         await onBound({
-          terminalId: data.terminal_id || terminal.id,
-          tenantId: data.tenant_id || tenantId,
-          config: data.config,
+          terminalId: initialConfigData.terminal_id || data.terminal_id || terminal.id,
+          tenantId: initialConfigData.tenant_id || data.tenant_id || tenantId,
+          config: initialConfigData.config || data.config,
           users: data.users,
           masterIp: masterIpInput.trim() || undefined,
+          snapshotMeta: {
+            fullPullOnPairing: initialConfigData.snapshot_meta?.full_pull_on_pairing,
+            resolutionError: initialConfigData.snapshot_meta?.resolution_error,
+          },
         });
       } catch (err) {
         console.error('Failed to bind terminal during setup:', err);

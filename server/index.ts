@@ -6,6 +6,7 @@ import walletRoutes from './routes/walletRoutes.js';
 import passKitRoutes from './routes/passKitRoutes.js';
 import emailRoutes from './routes/emailRoutes.js';
 import syncRoutes from './routes/sync.js';
+import terminalConfigRoutes from './routes/terminalConfigRoutes.js';
 import supplierRoutes from './routes/supplierRoutes.js';
 import currencyRoutes from './routes/currencies.js';
 import maintenanceRoutes from './routes/maintenance.js'; // Restore missing import
@@ -133,6 +134,7 @@ server.get('/api/productStocks', (req, res) => {
 });
 
 // Mount custom routes
+server.use('/api/sync/terminals', terminalConfigRoutes);
 server.use('/api/sync', syncRoutes);
 server.use('/api/wallet', walletRoutes);
 server.use('/v1', passKitRoutes);

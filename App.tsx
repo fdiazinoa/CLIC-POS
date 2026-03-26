@@ -1309,6 +1309,10 @@ const AppContent: React.FC = () => {
       boundConfig?: BusinessConfig;
       boundUsers?: User[];
       masterIp?: string;
+      snapshotMeta?: {
+        fullPullOnPairing?: boolean;
+        resolutionError?: unknown;
+      };
     }
   ) => {
     setRestoringHistory(true);
@@ -1323,6 +1327,7 @@ const AppContent: React.FC = () => {
       await db.save('config', updatedConfig);
 
       localStorage.setItem('active_terminal_id', terminalId);
+      localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
       localStorage.setItem('active_tenant_id', setupResult?.tenantId || localStorage.getItem('active_tenant_id') || 'default-tenant');
       localStorage.setItem('initial_terminal_config', JSON.stringify(updatedConfig));
 
@@ -1356,7 +1361,13 @@ const AppContent: React.FC = () => {
 
       permissionService.initialize(updatedConfig, terminalId);
       await syncManager.initialize(updatedConfig, terminalId);
-      await syncManager.fullPull();
+
+      const shouldFullPullOnPairing = setupResult?.snapshotMeta?.fullPullOnPairing ?? true;
+      if (shouldFullPullOnPairing) {
+        await syncManager.fullPull();
+      } else {
+        await syncManager.refreshTerminalResolvedConfig();
+      }
 
       const freshData = await db.init();
       setConfig(updatedConfig);
