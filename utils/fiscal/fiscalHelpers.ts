@@ -105,6 +105,26 @@ export const isRefundLikeTransaction = (tx?: Partial<Transaction> | null): boole
     || displayId.startsWith('NC');
 };
 
+export const isElectronicFiscalTransaction = (tx?: Partial<Transaction> | null): boolean => {
+  if (!tx) return false;
+  const fiscalCode = tx.ncfType
+    || getFiscalCodeFromNcf(tx.electronicNcf || tx.ncf || tx.legacyNcf);
+
+  return isElectronicFiscalCode(fiscalCode);
+};
+
+export const canRetryFiscalTransaction = (tx?: Partial<Transaction> | null): boolean => {
+  if (!tx) return false;
+  if (!isElectronicFiscalTransaction(tx)) return false;
+  if (!tx.fiscalProvider || tx.fiscalProvider === 'NONE') return false;
+  return tx.fiscalSyncStatus === 'ERROR' || tx.fiscalSyncStatus === 'PENDING';
+};
+
+export const getFiscalRetryActionLabel = (tx?: Partial<Transaction> | null): string => {
+  if (!canRetryFiscalTransaction(tx)) return '';
+  return tx?.fiscalReferenceId ? 'Consultar estado' : 'Reintentar envío';
+};
+
 export const mapLegacyFiscalCodeToElectronic = (code: NCFType): FiscalDocumentCode => {
   switch (code) {
     case 'B01':

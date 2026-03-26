@@ -106,6 +106,7 @@ import { printLabelsFromTemplate } from './utils/labelPrinter';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import {
+  canRetryFiscalTransaction,
   getDefaultFiscalProvider,
   getFiscalCodeFromNcf,
   getFiscalComplianceConfig,
@@ -2014,6 +2015,42 @@ const AppContent: React.FC = () => {
     }
   }, [config, pollFiscalDocumentStatus, upsertFiscalTransaction]);
 
+  const retryFiscalDocument = useCallback(async (transaction: Transaction): Promise<string> => {
+    const providerId = transaction.fiscalProvider;
+    if (!canRetryFiscalTransaction(transaction) || !providerId || providerId === 'NONE') {
+      throw new Error('Solo se pueden reintentar documentos electrónicos pendientes o con error.');
+    }
+
+    const fiscalCompliance = getFiscalComplianceConfig(config);
+    const environment = getProviderEnvironment(fiscalCompliance, providerId);
+    const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
+    const retryingTransaction: Transaction = {
+      ...transaction,
+      fiscalSyncStatus: 'PENDING',
+      fiscalSyncError: undefined,
+      fiscalResponseMessage: transaction.fiscalReferenceId
+        ? 'Consultando estado actualizado del e-CF en Polaris...'
+        : 'Reintentando envío del e-CF a Polaris...'
+    };
+
+    await upsertFiscalTransaction(retryingTransaction);
+
+    if (transaction.fiscalReferenceId) {
+      await pollFiscalDocumentStatus(
+        retryingTransaction,
+        providerId,
+        environment,
+        transaction.fiscalReferenceId,
+        providerConfig.credentialKey,
+        1
+      );
+      return 'Consulta de estado fiscal iniciada.';
+    }
+
+    await syncFiscalDocument(retryingTransaction);
+    return 'Reintento de envío fiscal iniciado.';
+  }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);
+
   const handleTransactionComplete = async (txn: Transaction) => {
     // Get current terminal ID before persisting.
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
@@ -3136,6 +3173,7 @@ const AppContent: React.FC = () => {
             }}
             onSelect={(c) => { setSelectedCustomer(c); setCurrentView('POS'); }}
             onClose={() => setCurrentView('POS')}
+            onRetryFiscalDocument={retryFiscalDocument}
           />
         );
 
@@ -3153,6 +3191,7 @@ const AppContent: React.FC = () => {
               setScanTargetTicketId(null); // Clear selection on close
               setCurrentView('POS');
             }}
+            onRetryFiscalDocument={retryFiscalDocument}
             onRefundTransaction={async (tx, items, conditions, reason) => {
               // Direct call support
               // If conditions is string (legacy call from somewhere else?), handle it. 

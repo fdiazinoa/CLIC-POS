@@ -18,6 +18,8 @@ import ActivityModal from './ActivityModal';
 import LoyaltyDashboard from './LoyaltyDashboard';
 import FiscalSyncBadge from './FiscalSyncBadge';
 import {
+   canRetryFiscalTransaction,
+   getFiscalRetryActionLabel,
    getFiscalCodeFromNcf,
    isCreditNoteNcf,
    isRefundLikeTransaction
@@ -37,6 +39,7 @@ interface CustomerManagementProps {
    onUpdateCollections: (collections: Collection[]) => void;
    rooms: any[];
    users: User[];
+   onRetryFiscalDocument?: (transaction: Transaction) => Promise<string>;
 }
 
 const CustomerManagement: React.FC<CustomerManagementProps> = ({
@@ -52,7 +55,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    collections,
    onUpdateCollections,
    rooms,
-   users
+   users,
+   onRetryFiscalDocument
 }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
@@ -94,6 +98,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
    // --- TRANSACTION DETAIL STATE ---
    const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
+   const [retryingFiscalTransactionId, setRetryingFiscalTransactionId] = useState<string | null>(null);
+   const [fiscalRetryFeedback, setFiscalRetryFeedback] = useState<string | null>(null);
    const [customerTransactions, setCustomerTransactions] = useState<Transaction[]>([]);
    const [walletMovements, setWalletMovements] = useState<WalletTransaction[]>([]);
 
@@ -672,6 +678,27 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       fetchActivities();
       loadWalletMovements();
    }, [loadCustomerTransactions, fetchActivities, loadWalletMovements, customers]);
+
+   useEffect(() => {
+      setRetryingFiscalTransactionId(null);
+      setFiscalRetryFeedback(null);
+   }, [selectedTransactionId]);
+
+   const handleRetryFiscal = async (transaction: Transaction) => {
+      if (!onRetryFiscalDocument || !canRetryFiscalTransaction(transaction)) return;
+
+      setRetryingFiscalTransactionId(transaction.id);
+      setFiscalRetryFeedback(null);
+      try {
+         const message = await onRetryFiscalDocument(transaction);
+         setFiscalRetryFeedback(message);
+      } catch (error: any) {
+         console.error('❌ Error retrying fiscal document:', error);
+         setFiscalRetryFeedback(error?.message || 'No se pudo iniciar el reintento fiscal.');
+      } finally {
+         setRetryingFiscalTransactionId(null);
+      }
+   };
 
 
    // --- ADDRESS LOGIC ---
@@ -1740,6 +1767,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             const isRefundDoc = isRefundLikeTransaction(tx);
             const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
             const affectedNCF = (tx.affectedNCF || '').toString().trim();
+            const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
+            const retryActionLabel = getFiscalRetryActionLabel(tx) || 'Reintentar e-CF';
 
             return (
                <div className="fixed inset-0 z-[100] overflow-hidden">
@@ -1864,6 +1893,21 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                     <p className={`mt-2 text-[11px] ${tx.fiscalSyncStatus === 'ERROR' ? 'text-red-600' : 'text-slate-500'}`}>
                                        {tx.fiscalResponseMessage}
                                     </p>
+                                 )}
+                                 {canRetryFiscal && (
+                                    <div className="mt-3 flex flex-wrap items-center gap-3">
+                                       <button
+                                          onClick={() => handleRetryFiscal(tx)}
+                                          disabled={retryingFiscalTransactionId === tx.id}
+                                          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                                       >
+                                          <ArrowRightLeft size={12} />
+                                          {retryingFiscalTransactionId === tx.id ? 'Procesando...' : retryActionLabel}
+                                       </button>
+                                       {fiscalRetryFeedback && (
+                                          <p className="text-[11px] font-bold text-slate-500">{fiscalRetryFeedback}</p>
+                                       )}
+                                    </div>
                                  )}
                               </div>
                               {isRefundDoc && (
