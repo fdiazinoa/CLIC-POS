@@ -186,6 +186,7 @@ const SETUP_FLOW_STAGE_KEY = 'clic_pos_setup_flow_stage';
 const SETUP_FLOW_VERSION_KEY = 'clic_pos_setup_flow_version';
 const TERMINAL_SETUP_MODE_KEY = 'clic_pos_terminal_setup_mode';
 const TERMINAL_SETUP_PENDING_KEY = 'clic_pos_terminal_setup_pending';
+const TERMINAL_CONFIG_RESTART_NOTICE_KEY = 'clic_pos_terminal_config_restart_notice';
 const SETUP_FLOW_VERSION = '2';
 const buildRuntimeMasterUrl = () => `${window.location.protocol}//${window.location.hostname}:3001`;
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -196,6 +197,29 @@ const normalizeMasterHost = (value: string | null | undefined) =>
     .replace(/\/.*$/, '');
 
 type TerminalSetupMode = 'SERVER' | 'CLIENT';
+
+type TerminalConfigRestartNotice = {
+  receivedAt: string;
+  eventId?: string | null;
+  terminalId?: string | null;
+};
+
+const readTerminalConfigRestartNotice = (): TerminalConfigRestartNotice | null => {
+  const raw = localStorage.getItem(TERMINAL_CONFIG_RESTART_NOTICE_KEY);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      receivedAt: typeof parsed.receivedAt === 'string' ? parsed.receivedAt : new Date().toISOString(),
+      eventId: typeof parsed.eventId === 'string' ? parsed.eventId : null,
+      terminalId: typeof parsed.terminalId === 'string' ? parsed.terminalId : null,
+    };
+  } catch {
+    return null;
+  }
+};
 
 const getStoredTerminalSetupMode = (): TerminalSetupMode | null => {
   const storedMode = localStorage.getItem(TERMINAL_SETUP_MODE_KEY);
@@ -280,6 +304,7 @@ const AppContent: React.FC = () => {
   const forceSyncHandledRef = useRef(false);
   const lockdownHandledRef = useRef(false);
   const [reconnectionStatus, setReconnectionStatus] = useState<'idle' | 'searching' | 'connected' | 'failed'>('idle');
+  const [terminalConfigRestartNotice, setTerminalConfigRestartNotice] = useState<TerminalConfigRestartNotice | null>(() => readTerminalConfigRestartNotice());
 
   // --- SECURITY BOOTSTRAP STATE ---
   const [isSecurityLoaded, setIsSecurityLoaded] = useState(false);
@@ -393,6 +418,29 @@ const AppContent: React.FC = () => {
     window.addEventListener('sync:reconnecting', handleReconnection as any);
     return () => window.removeEventListener('sync:reconnecting', handleReconnection as any);
   }, []);
+
+  useEffect(() => {
+    const handleTerminalConfigRestartRequired = (event: Event) => {
+      const incomingNotice = (event as CustomEvent<TerminalConfigRestartNotice>)?.detail || readTerminalConfigRestartNotice();
+      if (!incomingNotice) return;
+      setTerminalConfigRestartNotice(incomingNotice);
+    };
+
+    window.addEventListener('terminalConfigRestartRequired', handleTerminalConfigRestartRequired as EventListener);
+    return () => {
+      window.removeEventListener('terminalConfigRestartRequired', handleTerminalConfigRestartRequired as EventListener);
+    };
+  }, []);
+
+  const dismissTerminalConfigRestartNotice = useCallback(() => {
+    localStorage.removeItem(TERMINAL_CONFIG_RESTART_NOTICE_KEY);
+    setTerminalConfigRestartNotice(null);
+  }, []);
+
+  const restartForTerminalConfigUpdate = useCallback(() => {
+    dismissTerminalConfigRestartNotice();
+    window.location.reload();
+  }, [dismissTerminalConfigRestartNotice]);
 
   const triggerLockdown = React.useCallback((message: string) => {
     if (lockdownHandledRef.current) return;
@@ -778,6 +826,67 @@ const AppContent: React.FC = () => {
         </div>
       );
     }
+  };
+
+  const renderTerminalConfigRestartBanner = () => {
+    if (!terminalConfigRestartNotice) return null;
+
+    const bannerStyle: React.CSSProperties = {
+      position: 'fixed',
+      top: reconnectionStatus === 'idle' ? 0 : 44,
+      left: 0,
+      right: 0,
+      zIndex: 9998,
+      padding: '10px 16px',
+      backgroundColor: '#1e293b',
+      color: '#fff',
+      boxShadow: '0 2px 8px rgba(15,23,42,0.25)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: '12px',
+      flexWrap: 'wrap',
+    };
+
+    return (
+      <div style={bannerStyle}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 800 }}>Nueva configuración recibida desde ERP</div>
+          <div style={{ fontSize: '13px', opacity: 0.92 }}>
+            Reinicia el POS para aplicar por completo cambios de tarifa, catálogo y configuración operativa.
+            {terminalConfigRestartNotice.eventId ? ` Evento ${terminalConfigRestartNotice.eventId}.` : ''}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button
+            onClick={dismissTerminalConfigRestartNotice}
+            style={{
+              padding: '8px 12px',
+              borderRadius: '10px',
+              border: '1px solid rgba(255,255,255,0.18)',
+              background: 'rgba(255,255,255,0.08)',
+              color: '#fff',
+              fontWeight: 700,
+            }}
+          >
+            Entendido
+          </button>
+          <button
+            onClick={restartForTerminalConfigUpdate}
+            style={{
+              padding: '8px 14px',
+              borderRadius: '10px',
+              border: 'none',
+              background: '#22c55e',
+              color: '#052e16',
+              fontWeight: 800,
+            }}
+          >
+            Reiniciar ahora
+          </button>
+        </div>
+      </div>
+    );
   };
 
   // --- DATA STORES ---
@@ -4608,23 +4717,27 @@ const AppContent: React.FC = () => {
 
   return (
     <ErrorBoundary componentName="App Root">
-      <div
-        className={`fixed inset-0 w-full h-full bg-gray-50 flex flex-col font-sans select-none text-gray-900 ${currentView === 'SETTINGS' ? '' : 'overflow-hidden'}`}
-        style={{
-          width: '100%',
-          maxWidth: '100%',
-          minWidth: 0,
-          overflowX: 'hidden',
-          ...(currentView === 'SETTINGS'
-            ? {
-                overflowY: 'scroll',
-                WebkitOverflowScrolling: 'touch'
-              }
-            : {})
-        }}
-      >
-        {renderWithLayout()}
-      </div>
+      <>
+        {renderReconnectionBanner()}
+        {renderTerminalConfigRestartBanner()}
+        <div
+          className={`fixed inset-0 w-full h-full bg-gray-50 flex flex-col font-sans select-none text-gray-900 ${currentView === 'SETTINGS' ? '' : 'overflow-hidden'}`}
+          style={{
+            width: '100%',
+            maxWidth: '100%',
+            minWidth: 0,
+            overflowX: 'hidden',
+            ...(currentView === 'SETTINGS'
+              ? {
+                  overflowY: 'scroll',
+                  WebkitOverflowScrolling: 'touch'
+                }
+              : {})
+          }}
+        >
+          {renderWithLayout()}
+        </div>
+      </>
     </ErrorBoundary>
   );
 };

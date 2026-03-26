@@ -48,6 +48,26 @@ type SyncHeartbeatResponse = {
     terminal?: SyncTerminalRecord | null;
 };
 
+type SyncOutboxEvent = {
+    id: string;
+    event_type: string;
+    payload?: Record<string, unknown> | null;
+    status?: string;
+    created_at?: string;
+};
+
+type SyncOutboxPullResponse = {
+    status: string;
+    events?: SyncOutboxEvent[];
+    count?: number;
+};
+
+type SyncOutboxAckResponse = {
+    status: string;
+    outbox_id: string;
+    applied_status: 'APPLIED' | 'FAILED';
+};
+
 type RuntimeDeviceInfo = {
     versionName?: string | null;
     localIp?: string | null;
@@ -57,6 +77,7 @@ type RuntimeDeviceInfo = {
 type EnsureLifecycleParams = {
     deviceId: string;
     terminalId: string;
+    localTerminalId?: string | null;
     terminalName?: string | null;
     isPrimary?: boolean;
     pendingEvents?: number;
@@ -71,8 +92,13 @@ const SYNC_BINDING_COMPANY_KEY = 'clic_erp_sync_company_id';
 const SYNC_BINDING_STORE_KEY = 'clic_erp_sync_store_id';
 const SYNC_BINDING_LAST_SEEN_KEY = 'clic_erp_sync_last_seen';
 const SYNC_BINDING_STATUS_KEY = 'clic_erp_sync_status';
+const TERMINAL_CONFIG_RESTART_NOTICE_KEY = 'clic_pos_terminal_config_restart_notice';
+
+let outboxProcessingPromise: Promise<{ processed: number; applied: number; failed: number } | null> | null = null;
 
 const normalizeOptional = (value?: string | null) => (typeof value === 'string' ? value.trim() : '');
+const asObject = <T extends Record<string, unknown>>(value: unknown): T =>
+    (value && typeof value === 'object' && !Array.isArray(value) ? value as T : {} as T);
 
 const getSyncApiBase = () => {
     const env = (import.meta as any).env || {};
@@ -192,6 +218,72 @@ const postJson = async <T>(path: string, body: Record<string, unknown>): Promise
     return readJson<T>(response);
 };
 
+const getJson = async <T>(path: string, query: Record<string, string | number | null | undefined>): Promise<T> => {
+    const baseUrl = getSyncApiBase();
+    if (!baseUrl) {
+        throw new Error('ERP sync lifecycle URL is not configured');
+    }
+
+    const searchParams = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+        if (value === null || value === undefined || value === '') return;
+        searchParams.set(key, String(value));
+    });
+
+    const response = await fetch(`${baseUrl}${path}?${searchParams.toString()}`, {
+        method: 'GET',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+    });
+
+    return readJson<T>(response);
+};
+
+const persistTerminalConfigRestartNotice = (event: SyncOutboxEvent) => {
+    const payload = asObject<Record<string, unknown>>(event.payload);
+    const terminalConfig = asObject<Record<string, unknown>>(payload.terminal_config);
+    const terminalId =
+        normalizeOptional(String(payload.terminalId || ''))
+        || normalizeOptional(String(payload.terminal_id || ''))
+        || normalizeOptional(String(terminalConfig.terminal_id || ''))
+        || null;
+
+    const notice = {
+        receivedAt: new Date().toISOString(),
+        eventId: normalizeOptional(event.id || null) || null,
+        terminalId,
+    };
+
+    localStorage.setItem(TERMINAL_CONFIG_RESTART_NOTICE_KEY, JSON.stringify(notice));
+    window.dispatchEvent(new CustomEvent('terminalConfigRestartRequired', { detail: notice }));
+};
+
+const pullErpOutbox = async (bindingTerminalId: string | null, deviceId: string): Promise<SyncOutboxPullResponse | null> => {
+    if (!isConfigured()) return null;
+    if (!bindingTerminalId && !deviceId) return null;
+
+    return getJson<SyncOutboxPullResponse>('/outbox/pull', {
+        terminal_id: bindingTerminalId || undefined,
+        device_id: bindingTerminalId ? undefined : deviceId,
+        limit: 20,
+    });
+};
+
+const ackErpOutboxEvent = async (
+    outboxId: string,
+    status: 'APPLIED' | 'FAILED',
+    errorDetail?: string
+): Promise<SyncOutboxAckResponse | null> => {
+    if (!outboxId) return null;
+
+    return postJson<SyncOutboxAckResponse>('/outbox/ack', {
+        outbox_id: outboxId,
+        status,
+        error_detail: errorDetail || null,
+    });
+};
+
 export const clearStoredErpSyncBinding = () => {
     localStorage.removeItem(SYNC_BINDING_TENANT_KEY);
     localStorage.removeItem(SYNC_BINDING_TERMINAL_KEY);
@@ -300,10 +392,67 @@ export const heartbeatErpSyncTerminal = async (
     return payload;
 };
 
+export const processErpSyncOutbox = async (
+    params: Pick<EnsureLifecycleParams, 'deviceId' | 'terminalId' | 'localTerminalId' | 'terminalName'>
+): Promise<{ processed: number; applied: number; failed: number } | null> => {
+    if (!isConfigured() || !params.deviceId) return null;
+
+    if (outboxProcessingPromise) {
+        return outboxProcessingPromise;
+    }
+
+    outboxProcessingPromise = (async () => {
+        const binding = getStoredErpSyncBinding();
+        const outbox = await pullErpOutbox(binding.terminalId, params.deviceId);
+        const events = Array.isArray(outbox?.events) ? outbox.events : [];
+
+        if (events.length === 0) {
+            return { processed: 0, applied: 0, failed: 0 };
+        }
+
+        let applied = 0;
+        let failed = 0;
+
+        for (const event of events) {
+            const eventType = normalizeOptional(event.event_type || null).toUpperCase();
+
+            try {
+                if (eventType === 'CONFIG_PUSH') {
+                    console.info('[ERP SYNC] CONFIG_PUSH recibido desde outbox. Se marca reinicio requerido.');
+                    persistTerminalConfigRestartNotice(event);
+                    await ackErpOutboxEvent(event.id, 'APPLIED');
+                    applied += 1;
+                    continue;
+                }
+
+                await ackErpOutboxEvent(event.id, 'FAILED', `Evento no soportado por el POS: ${eventType || 'UNKNOWN'}`);
+                failed += 1;
+            } catch (error: any) {
+                console.warn(`[ERP SYNC] Error procesando ${eventType || 'UNKNOWN'}:`, error);
+                await ackErpOutboxEvent(event.id, 'FAILED', error?.message || 'Error procesando evento ERP outbox');
+                failed += 1;
+            }
+        }
+
+        return {
+            processed: events.length,
+            applied,
+            failed,
+        };
+    })();
+
+    try {
+        return await outboxProcessingPromise;
+    } finally {
+        outboxProcessingPromise = null;
+    }
+};
+
 export const ensureErpSyncLifecycle = async (params: EnsureLifecycleParams): Promise<{
     bootstrap?: SyncBootstrapResponse | null;
     registered?: SyncRegisterResponse | null;
     heartbeat?: SyncHeartbeatResponse | null;
+    outbox?: { processed: number; applied: number; failed: number } | null;
 } | null> => {
     if (!isConfigured()) return null;
 
@@ -326,6 +475,7 @@ export const ensureErpSyncLifecycle = async (params: EnsureLifecycleParams): Pro
     }
 
     const heartbeat = await heartbeatErpSyncTerminal(params, params.deviceId);
+    const outbox = await processErpSyncOutbox(params);
 
-    return { bootstrap, registered, heartbeat };
+    return { bootstrap, registered, heartbeat, outbox };
 };
