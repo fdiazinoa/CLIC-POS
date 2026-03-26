@@ -1,4 +1,9 @@
 import { Product } from '../../types';
+import {
+    normalizeCashMovementForSync,
+    normalizeTransactionForSync,
+    normalizeZReportForSync
+} from './sourceIdentity';
 
 /**
  * API Sync Adapter
@@ -716,13 +721,14 @@ class ApiSyncAdapter {
     async pushTransaction(transaction: any): Promise<void> {
         try {
             await this.ensurePushReady();
+            const normalizedTransaction = normalizeTransactionForSync(transaction);
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/transactions`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': this.authToken || ''
                 },
-                body: JSON.stringify({ items: [transaction] })
+                body: JSON.stringify({ items: [normalizedTransaction] })
             });
 
             if (response.status === 401) {
@@ -733,7 +739,7 @@ class ApiSyncAdapter {
             if (!response.ok) {
                 throw new Error(`Push transaction failed: ${response.statusText}`);
             }
-            console.log(`📤 ApiSyncAdapter: Pushed transaction ${transaction.id}`);
+            console.log(`📤 ApiSyncAdapter: Pushed transaction ${normalizedTransaction.source_transaction_id || normalizedTransaction.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing transaction:', error);
             this.isOnline = false;
@@ -809,13 +815,14 @@ class ApiSyncAdapter {
     async pushCashMovement(movement: any): Promise<void> {
         try {
             await this.ensurePushReady();
+            const normalizedMovement = normalizeCashMovementForSync(movement);
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/cash/movements`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': this.authToken || ''
                 },
-                body: JSON.stringify({ items: [movement] })
+                body: JSON.stringify({ items: [normalizedMovement] })
             });
 
             if (response.status === 401) {
@@ -826,7 +833,7 @@ class ApiSyncAdapter {
             if (!response.ok) {
                 throw new Error(`Push cash movement failed: ${response.statusText}`);
             }
-            console.log(`📤 ApiSyncAdapter: Pushed cash movement ${movement.id}`);
+            console.log(`📤 ApiSyncAdapter: Pushed cash movement ${normalizedMovement.source_cash_movement_id || normalizedMovement.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing cash movement:', error);
             this.isOnline = false;
@@ -840,13 +847,14 @@ class ApiSyncAdapter {
     async pushZReport(report: any): Promise<void> {
         try {
             await this.ensurePushReady();
+            const normalizedReport = normalizeZReportForSync(report);
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/z-reports`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': this.authToken || ''
                 },
-                body: JSON.stringify({ items: [report] })
+                body: JSON.stringify({ items: [normalizedReport] })
             });
 
             if (response.status === 401) {
@@ -857,7 +865,7 @@ class ApiSyncAdapter {
             if (!response.ok) {
                 throw new Error(`Push Z-Report failed: ${response.statusText}`);
             }
-            console.log(`📤 ApiSyncAdapter: Pushed Z-Report ${report.id}`);
+            console.log(`📤 ApiSyncAdapter: Pushed Z-Report ${normalizedReport.source_z_report_id || normalizedReport.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing Z-Report:', error);
             this.isOnline = false;

@@ -1,5 +1,13 @@
 import { Transaction, DocumentType } from '../types';
 import { db } from '../utils/db';
+import { normalizeTransactionForSync } from './sync/sourceIdentity';
+
+const createTechnicalId = (prefix: string): string => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return `${prefix}-${crypto.randomUUID()}`;
+    }
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+};
 
 /**
  * Transaction Service
@@ -78,7 +86,7 @@ class TransactionService {
 
         // Create transaction object
         const transaction: Transaction = {
-            id: data.id || `TXN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            id: data.id || createTechnicalId('TXN'),
             globalSequence,
             displayId,
             documentType: data.documentType,
@@ -140,10 +148,12 @@ class TransactionService {
             zReportSequence: data.zReportSequence
         };
 
-        // Save only the new document to avoid full-collection rewrites that can block checkout.
-        await db.saveDocument('transactions', transaction);
+        const normalizedTransaction = normalizeTransactionForSync(transaction);
 
-        return transaction;
+        // Save only the new document to avoid full-collection rewrites that can block checkout.
+        await db.saveDocument('transactions', normalizedTransaction);
+
+        return normalizedTransaction;
     }
 
     /**

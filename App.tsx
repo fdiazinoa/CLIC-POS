@@ -63,7 +63,6 @@ import VerticalSelector from './components/VerticalSelector';
 import SetupWizard from './components/SetupWizard';
 import FranchiseDashboard from './components/FranchiseDashboard';
 import TerminalBindingScreen from './components/TerminalBindingScreen';
-import { TerminalPairingView } from './components/TerminalPairingView';
 import CustomerVisor from './components/CustomerVisor';
 import { visorSync } from './utils/visorSync';
 
@@ -1315,95 +1314,83 @@ const AppContent: React.FC = () => {
 
   // --- CORE EVENT HANDLERS ---
 
-  const handlePairTerminal = async (terminalId: string) => {
+  const handlePairTerminal = async (
+    terminalId: string,
+    setupResult?: {
+      tenantId?: string;
+      boundConfig?: BusinessConfig;
+      boundUsers?: User[];
+      masterIp?: string;
+    }
+  ) => {
     setRestoringHistory(true);
     try {
-      const newTerminals = (config.terminals || []).map(t => {
-        // Desvincular este dispositivo de cualquier otra terminal donde estuviera
-        if (t.config.currentDeviceId === deviceId) {
-          return { ...t, config: { ...t.config, currentDeviceId: undefined } };
-        }
-        // Vincular a la terminal seleccionada
-        if (t.id === terminalId) {
-          return {
-            ...t,
-            config: {
-              ...t.config,
-              currentDeviceId: deviceId,
-              lastPairingDate: new Date().toISOString()
-            }
-          };
-        }
-        return t;
-      });
+      if (!setupResult?.boundConfig) {
+        throw new Error('La vinculación debe provenir del backend central de setup. No se recibió configuración enlazada.');
+      }
 
-      const updatedConfig = { ...config, terminals: newTerminals };
+      const updatedConfig = setupResult.boundConfig;
+
       setConfig(updatedConfig);
       await db.save('config', updatedConfig);
 
-      const selectedTerminal = (newTerminals || []).find(t => t.id === terminalId);
+      localStorage.setItem('active_terminal_id', terminalId);
+      localStorage.setItem('active_tenant_id', setupResult?.tenantId || localStorage.getItem('active_tenant_id') || 'default-tenant');
+      localStorage.setItem('initial_terminal_config', JSON.stringify(updatedConfig));
+
+      if (Array.isArray(setupResult?.boundUsers)) {
+        setUsers(setupResult.boundUsers);
+        await db.save('users', setupResult.boundUsers);
+      }
+
+      const selectedTerminal = (updatedConfig.terminals || []).find(t => t.id === terminalId);
       const isSlave = selectedTerminal?.config?.isPrimaryNode === false;
 
-      // If user takes control of a MASTER terminal, clear stale slave pointers.
-      if (!isSlave) {
+      if (setupResult?.masterIp) {
+        const normalizedMasterIp = setupResult.masterIp.trim().replace(/^https?:\/\//, '');
+        localStorage.setItem('pos_master_ip', normalizedMasterIp);
+        localStorage.setItem('CLIC_POS_MASTER_URL', `${window.location.protocol}//${normalizedMasterIp}:3001`);
+      } else if (!isSlave) {
         localStorage.removeItem('pos_master_ip');
-        const runtimeMasterUrl = `${window.location.protocol}//${window.location.hostname}:3001`;
-        localStorage.setItem('CLIC_POS_MASTER_URL', runtimeMasterUrl);
+        localStorage.setItem('CLIC_POS_MASTER_URL', `${window.location.protocol}//${window.location.hostname}:3001`);
       }
 
-      // Always persist binding to backend before re-initializing sync.
-      // This prevents pulling old config right after takeover.
-      const currentProtocol = window.location.protocol;
-      const masterIp = localStorage.getItem('pos_master_ip');
-      const targetUrl = masterIp
-        ? `${currentProtocol}//${masterIp}:3001/api/config`
-        : `${currentProtocol}//${window.location.hostname}:3001/api/config`;
-
-      try {
-        const res = await fetch(targetUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updatedConfig)
-        });
-        if (!res.ok) {
-          const detail = await res.text().catch(() => '');
-          throw new Error(`HTTP ${res.status} ${detail}`.trim());
-        }
-        console.log(`✅ Binding synced to backend at ${targetUrl}`);
-      } catch (e) {
-        console.error("❌ Failed to sync binding to backend:", e);
-        // We continue; local binding is already saved.
-      }
-
-      // If it's a slave terminal, restore history
       if (isSlave) {
         try {
-          // Re-initialize sync manager with new config
+          permissionService.initialize(updatedConfig, terminalId);
           await syncManager.initialize(updatedConfig, terminalId);
           await syncManager.restoreHistory(terminalId);
-
-          // CRITICAL: Force full catalog sync to ensure sequences are loaded immediately
-          // restoreHistory only pulls operational data (txns, z-reports), but we need sequences too.
-          console.log('🔄 Forcing full catalog sync to restore sequences...');
-          await syncManager.syncAllCatalogs();
-
-          // Reload data from DB after restoration
-          const freshData = await db.init();
-          setTransactions(freshData.transactions);
-          setProducts(freshData.products);
-          setCashMovements(freshData.cashMovements);
-          setZReports(freshData.zReports || []);
         } catch (error) {
           console.error('Failed to restore history:', error);
-          alert('No se pudo restaurar el historial desde la Maestra. El equipo funcionará, pero sin datos previos.');
+          alert('No se pudo restaurar el historial desde la Maestra. Intentaremos descargar la configuración inicial igualmente.');
         }
-      } else {
-        // CRITICAL: Even if not a slave (Master mode), we MUST re-initialize services
-        // with the new terminal ID and updated config, otherwise they stay uninitialized.
-        console.log("🛠️ Re-initializing services for Master/Local terminal...");
-        permissionService.initialize(updatedConfig, terminalId);
-        await syncManager.initialize(updatedConfig, terminalId);
       }
+
+      permissionService.initialize(updatedConfig, terminalId);
+      await syncManager.initialize(updatedConfig, terminalId);
+      await syncManager.fullPull();
+
+      const freshData = await db.init();
+      setConfig(updatedConfig);
+      if (Array.isArray(freshData.users)) setUsers(freshData.users);
+      if (Array.isArray(freshData.roles)) setRoles(freshData.roles);
+      if (Array.isArray(freshData.customers)) setCustomers(freshData.customers);
+      if (Array.isArray(freshData.transactions)) setTransactions(freshData.transactions);
+      if (Array.isArray(freshData.products)) setProducts(freshData.products);
+      if (Array.isArray(freshData.warehouses)) setWarehouses(freshData.warehouses);
+      if (Array.isArray(freshData.cashMovements)) setCashMovements(freshData.cashMovements);
+      if (Array.isArray(freshData.zReports)) setZReports(freshData.zReports);
+      if (Array.isArray(freshData.purchaseOrders)) setPurchaseOrders(freshData.purchaseOrders);
+      if (Array.isArray(freshData.suppliers)) setSuppliers(freshData.suppliers);
+      if (Array.isArray(freshData.parkedTickets)) setParkedTickets(freshData.parkedTickets);
+      if (Array.isArray(freshData.transfers)) setTransfers(freshData.transfers);
+      if (Array.isArray(freshData.internalSequences)) setInternalSequences(freshData.internalSequences);
+      if (Array.isArray(freshData.receptions)) setReceptions(freshData.receptions);
+      if (Array.isArray(freshData.productStocks)) setProductStocks(freshData.productStocks);
+      if (Array.isArray(freshData.rooms)) setRooms(freshData.rooms);
+      if (Array.isArray(freshData.tables)) setTables(freshData.tables);
+      if (Array.isArray(freshData.collections)) setCollections(freshData.collections);
+      if (Array.isArray(freshData.supplierProductPrices)) setSupplierProductPrices(freshData.supplierProductPrices);
 
       setCurrentView('LOGIN');
     } catch (error) {
@@ -2789,9 +2776,16 @@ const AppContent: React.FC = () => {
       case 'TERMINAL_PAIRING':
       case 'DEVICE_UNAUTHORIZED':
         return (
-          <TerminalPairingView
-            currentDeviceId={deviceId}
+          <TerminalBindingScreen
+            config={config}
+            deviceId={deviceId}
+            adminUsers={users}
             onPair={handlePairTerminal}
+            onConfigUpdate={handleConfigUpdate}
+            onUsersUpdate={async (newUsers) => {
+              setUsers(newUsers);
+              await db.save('users', newUsers);
+            }}
             initialMasterIp={localStorage.getItem('pos_master_ip') || ''}
           />
         );

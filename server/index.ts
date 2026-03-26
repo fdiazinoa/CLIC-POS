@@ -13,6 +13,7 @@ import dgiiRoutes from './routes/dgiiRoutes.js'; // Import new route
 import bulkRoutes from './routes/bulkRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
 import fiscalRoutes from './routes/fiscalRoutes.js';
+import setupRoutes from './routes/setupRoutes.js';
 import os from 'os';
 import { createServer } from 'http';
 import { initSocket } from './socket.js';
@@ -144,6 +145,7 @@ server.use('/api/dgii', dgiiRoutes);
 server.use('/api/fiscal', fiscalRoutes);
 server.use('/api/bulk', bulkRoutes);
 server.use('/api/audit', auditRoutes);
+server.use('/api/setup', setupRoutes);
 
 // --- Mesas & Salas Endpoints ---
 server.get('/api/mesas', (req, res) => {

@@ -1057,6 +1057,14 @@ export interface Transaction {
   id: string;
   globalSequence?: number;          // Global unique sequence number
   displayId?: string;               // User-visible ID (e.g., "TCK01-000123")
+  source_channel?: 'POS';
+  source_transaction_id?: string;
+  source_display_id?: string;
+  source_terminal_id?: string;
+  device_id?: string;
+  source_credit_note_id?: string;
+  original_transaction_id?: string;
+  original_display_id?: string;
 
   // Document Classification
   documentType?: DocumentType;      // Type of transaction
@@ -1325,6 +1333,11 @@ export interface CashMovement {
   terminalId?: string; // ID of the terminal where the movement was recorded
   syncStatus?: SyncStatus;
   syncError?: string;
+  source_channel?: 'POS';
+  source_cash_movement_id?: string;
+  source_terminal_id?: string;
+  device_id?: string;
+  created_at?: string;
 }
 
 export interface Supplier {
@@ -1443,6 +1456,12 @@ export interface PaymentEntry {
   currencyCode?: string;
   amountOriginal?: number;
   exchangeRate?: number;
+  source_channel?: 'POS';
+  source_payment_id?: string;
+  source_transaction_id?: string;
+  source_display_id?: string;
+  source_terminal_id?: string;
+  device_id?: string;
 }
 
 export interface CustomerTransaction {
@@ -1728,6 +1747,10 @@ export interface ZReport {
   id: string;
   terminalId: string;
   sequenceNumber: string; // e.g., Z-0001
+  source_channel?: 'POS';
+  source_z_report_id?: string;
+  source_terminal_id?: string;
+  device_id?: string;
   openedAt: string; // Timestamp of first transaction/movement since last Z
   closedAt: string;
   closedByUserId: string;
