@@ -30,7 +30,7 @@ import GlobalDiscountModal from './GlobalDiscountModal';
 import LoyaltyScanModal from './LoyaltyScanModal';
 import TrackingSelectionModal from './TrackingSelectionModal';
 import { db } from '../utils/db';
-import { validateTerminalDocument, validateWarehouseAccess } from '../utils/validation';
+import { isProductEnabledInWarehouse, validateTerminalDocument, validateWarehouseAccess } from '../utils/validation';
 import { isSessionExpired } from '../utils/session';
 import { FiscalRangeDGII } from '../types';
 import { parseScaleBarcode } from '../utils/barcodeParser';
@@ -973,7 +973,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const filtered = products.filter(p => {
          if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
-         const isAvailableInWarehouse = defaultSalesWarehouseId ? p.activeInWarehouses?.includes(defaultSalesWarehouseId) ?? true : true;
+         const isAvailableInWarehouse = defaultSalesWarehouseId
+            ? isProductEnabledInWarehouse(p, defaultSalesWarehouseId)
+            : true;
          const productName = p.name || '';
          const matchSearch = productName.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
 
