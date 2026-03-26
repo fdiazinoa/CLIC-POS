@@ -41,6 +41,21 @@ const toIsoDate = (value: unknown): string => {
 const normalizeTaxId = (value: unknown): string =>
     String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
+const assertCompanyCredentialAlignment = (
+    companyRnc: string | undefined,
+    resolvedCredentialKey: string | undefined
+) => {
+    const normalizedCompanyRnc = normalizeTaxId(companyRnc);
+    const normalizedCredentialKey = normalizeTaxId(resolvedCredentialKey);
+
+    if (!normalizedCompanyRnc || !normalizedCredentialKey) return;
+    if (normalizedCompanyRnc === normalizedCredentialKey) return;
+
+    throw new Error(
+        `El RNC del emisor (${normalizedCompanyRnc}) no coincide con la credencial fiscal activa (${normalizedCredentialKey}). Actualiza Ajustes > Empresa o la Referencia de credencial antes de emitir con Polaris.`
+    );
+};
+
 const endOfYearIso = (value: string): string => {
     const date = new Date(value);
     const year = Number.isFinite(date.getTime()) ? date.getFullYear() : new Date().getFullYear();
@@ -491,10 +506,11 @@ export class PolarisFiscalProvider implements FiscalProvider {
     async issueDocument(request: FiscalDocumentIssueRequest): Promise<FiscalDocumentIssueResult> {
         validateDocumentRequest(request);
 
-        const { accessToken } = await this.getAccessToken(
+        const { accessToken, resolvedCredentialKey } = await this.getAccessToken(
             request.companyInfo?.rnc,
             request.options?.credentialKey
         );
+        assertCompanyCredentialAlignment(request.companyInfo?.rnc, resolvedCredentialKey);
         const endpoint = this.resolveEndpoint(request.documentCode);
         const body = this.buildPayload(request);
 
@@ -544,10 +560,11 @@ export class PolarisFiscalProvider implements FiscalProvider {
     }
 
     async getStatus(request: FiscalStatusRequest): Promise<FiscalStatusResult> {
-        const { accessToken } = await this.getAccessToken(
+        const { accessToken, resolvedCredentialKey } = await this.getAccessToken(
             request.companyRnc,
             request.credentialKey
         );
+        assertCompanyCredentialAlignment(request.companyRnc, resolvedCredentialKey);
         const response = await fetch(
             `${POLARIS_API_BASE}/ComprobantesElectronicos/ConsultarResultado?ambiente=${request.environment}&token=${encodeURIComponent(accessToken)}&transaccionID=${encodeURIComponent(request.providerTransactionId)}`
         );
