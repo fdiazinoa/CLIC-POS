@@ -60,6 +60,12 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
       purchaseUnit: ''
    });
    const [tariffActions, setTariffActions] = useState<Record<string, TariffBulkAction>>({});
+   const generalTariff = useMemo(
+      () => (config.tariffs || []).find(tariff =>
+         tariff.id === 'trf-gen' || tariff.name?.trim().toLowerCase().includes('general')
+      ),
+      [config.tariffs]
+   );
 
    const handleToggleWarehouse = (whId: string) => {
       setWarehouseActions(prev => {
@@ -79,6 +85,14 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                : 'NO_CHANGE';
          return { ...prev, [tariffId]: next };
       });
+   };
+
+   const handleAssignGeneralTariff = () => {
+      if (!generalTariff || isSaving) return;
+      setTariffActions(prev => ({
+         ...prev,
+         [generalTariff.id]: 'ASSIGN'
+      }));
    };
 
    const handleInitialClick = () => {
@@ -250,6 +264,25 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                               Asigna o quita tarifas en lote. Cuando asignes una tarifa nueva, cada artículo usará su <span className="font-bold">precio base actual</span> como precio inicial de esa tarifa.
                            </p>
                         </div>
+
+                        {generalTariff && (
+                           <div className="mb-6 flex flex-wrap items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4">
+                              <div className="flex-1">
+                                 <p className="text-xs font-black uppercase tracking-widest text-blue-500">Acción rápida</p>
+                                 <p className="mt-1 text-sm font-semibold text-slate-700">
+                                    Asignar <span className="text-blue-600">{generalTariff.name}</span> a todos los artículos seleccionados.
+                                 </p>
+                              </div>
+                              <button
+                                 type="button"
+                                 onClick={handleAssignGeneralTariff}
+                                 disabled={isSaving}
+                                 className="rounded-2xl bg-blue-600 px-5 py-3 text-xs font-black uppercase tracking-wider text-white shadow-lg shadow-blue-500/20 transition-all hover:bg-blue-700 disabled:opacity-50"
+                              >
+                                 Asignar General
+                              </button>
+                           </div>
+                        )}
 
                         <div className="space-y-3">
                            {(config.tariffs || []).map(tariff => {
