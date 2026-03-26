@@ -264,6 +264,66 @@ const buildCommonDocumentFields = (request: FiscalDocumentIssueRequest) => {
     };
 };
 
+const validateDocumentRequest = (request: FiscalDocumentIssueRequest) => {
+    const { transaction, documentCode, companyInfo, options } = request;
+    const items = Array.isArray(transaction.items) ? transaction.items : [];
+    const total = round2(Math.abs(sanitizeNumber(transaction.total)));
+    const customerSnapshot = transaction.customerSnapshot || {};
+    const customerName = cleanString(customerSnapshot.name || transaction.customerName);
+    const customerTaxId = normalizeTaxId(customerSnapshot.taxId);
+    const issuerRnc = normalizeTaxId(companyInfo.rnc);
+    const issuerName = cleanString(companyInfo.name);
+
+    if (!issuerRnc || !issuerName) {
+        throw new Error('El emisor debe tener nombre y RNC válidos antes de emitir con Polaris.');
+    }
+
+    if (!cleanString(transaction.electronicNcf || transaction.ncf)) {
+        throw new Error('El e-NCF es obligatorio para emitir con Polaris.');
+    }
+
+    if (items.length === 0) {
+        throw new Error('El documento electrónico debe tener al menos un ítem.');
+    }
+
+    if (total <= 0) {
+        throw new Error('El total del documento electrónico debe ser mayor que cero.');
+    }
+
+    if (documentCode === 'E31') {
+        if (!customerName) {
+            throw new Error('El e-CF de Crédito Fiscal (E31) requiere nombre o razón social del comprador.');
+        }
+
+        if (!customerTaxId) {
+            throw new Error('El e-CF de Crédito Fiscal (E31) requiere RNC o cédula del comprador.');
+        }
+    }
+
+    if (documentCode === 'E34') {
+        const affectedNCF = cleanString(transaction.affectedNCF);
+        const affectedInvoiceDate = cleanString(transaction.affectedInvoiceDate);
+        const refundReason = cleanString(transaction.refundReason);
+        const modificationCode = Number(options?.modificationCode);
+
+        if (!affectedNCF) {
+            throw new Error('La Nota de Crédito electrónica (E34) requiere el NCF afectado.');
+        }
+
+        if (!affectedInvoiceDate) {
+            throw new Error('La Nota de Crédito electrónica (E34) requiere la fecha del comprobante afectado.');
+        }
+
+        if (!refundReason) {
+            throw new Error('La Nota de Crédito electrónica (E34) requiere una razón de modificación.');
+        }
+
+        if (!Number.isFinite(modificationCode) || modificationCode <= 0) {
+            throw new Error('La Nota de Crédito electrónica (E34) requiere un código de modificación válido.');
+        }
+    }
+};
+
 const buildItemPayload = (
     transaction: FiscalTransactionInput,
     options: FiscalDocumentIssueRequest['options'],
@@ -429,6 +489,8 @@ export class PolarisFiscalProvider implements FiscalProvider {
     }
 
     async issueDocument(request: FiscalDocumentIssueRequest): Promise<FiscalDocumentIssueResult> {
+        validateDocumentRequest(request);
+
         const { accessToken } = await this.getAccessToken(
             request.companyInfo?.rnc,
             request.options?.credentialKey
