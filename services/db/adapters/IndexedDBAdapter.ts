@@ -539,6 +539,35 @@ export class IndexedDBAdapter implements DatabaseAdapter {
                             if (c.purchaseUnit) product.purchaseUnit = c.purchaseUnit;
                         }
 
+                        if (updates.pricing?.tariffActions) {
+                            const tariffCatalog = new Map(
+                                (updates.pricing.tariffs || []).map((tariff: any) => [tariff.id, tariff])
+                            );
+                            const nextTariffs = [...(product.tariffs || [])];
+
+                            Object.entries(updates.pricing.tariffActions).forEach(([tariffId, action]) => {
+                                const existingIndex = nextTariffs.findIndex((tariff: any) => tariff.tariffId === tariffId);
+                                if (action === 'ASSIGN') {
+                                    if (existingIndex === -1) {
+                                        const tariffMeta = tariffCatalog.get(tariffId) as { id: string; name?: string } | undefined;
+                                        nextTariffs.push({
+                                            tariffId,
+                                            name: tariffMeta?.name,
+                                            price: Number(product.price || 0),
+                                            costBase: Number(product.cost || 0),
+                                            margin: product.cost > 0
+                                                ? ((Number(product.price || 0) - Number(product.cost || 0)) / Number(product.cost || 0)) * 100
+                                                : 30
+                                        });
+                                    }
+                                } else if (action === 'REMOVE' && existingIndex !== -1) {
+                                    nextTariffs.splice(existingIndex, 1);
+                                }
+                            });
+
+                            product.tariffs = nextTariffs;
+                        }
+
                         // --- Warehouse Actions & activeInWarehouses Sync ---
                         if (updates.warehouseActions) {
                             const activeInWarehouses = new Set(product.activeInWarehouses || []);

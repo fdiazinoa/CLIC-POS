@@ -20,7 +20,8 @@ interface BulkEditModalProps {
    onSave: (changes: any) => void;
 }
 
-type BulkTab = 'LOGISTICS' | 'FLAGS' | 'CLASSIFICATION';
+type TariffBulkAction = 'ASSIGN' | 'REMOVE' | 'NO_CHANGE';
+type BulkTab = 'LOGISTICS' | 'FLAGS' | 'PRICING' | 'CLASSIFICATION';
 
 const BulkEditModal: React.FC<BulkEditModalProps> = ({
    config, warehouses, products, seasons, groups, selectedCount, onClose, onSave
@@ -58,12 +59,25 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
       measurementUnit: '',
       purchaseUnit: ''
    });
+   const [tariffActions, setTariffActions] = useState<Record<string, TariffBulkAction>>({});
 
    const handleToggleWarehouse = (whId: string) => {
       setWarehouseActions(prev => {
          const current = prev[whId] || 'NO_CHANGE';
          const next: any = current === 'NO_CHANGE' ? 'ENABLE' : current === 'ENABLE' ? 'DISABLE' : 'NO_CHANGE';
          return { ...prev, [whId]: next };
+      });
+   };
+
+   const handleToggleTariffAction = (tariffId: string) => {
+      setTariffActions(prev => {
+         const current = prev[tariffId] || 'NO_CHANGE';
+         const next: TariffBulkAction = current === 'NO_CHANGE'
+            ? 'ASSIGN'
+            : current === 'ASSIGN'
+               ? 'REMOVE'
+               : 'NO_CHANGE';
+         return { ...prev, [tariffId]: next };
       });
    };
 
@@ -78,7 +92,11 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
          onSave({
             warehouseActions,
             flags,
-            classification
+            classification,
+            pricing: {
+               tariffActions,
+               tariffs: (config.tariffs || []).map(tariff => ({ id: tariff.id, name: tariff.name }))
+            }
          });
       }, 50);
    };
@@ -110,6 +128,7 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                {[
                   { id: 'LOGISTICS', label: 'Logística & Almacenes', icon: Building2 },
                   { id: 'FLAGS', label: 'Propiedades & Flags', icon: ShieldCheck },
+                  { id: 'PRICING', label: 'Tarifas', icon: Tag },
                   { id: 'CLASSIFICATION', label: 'Clasificación', icon: LayoutGrid },
                ].map(tab => (
                   <button
@@ -219,6 +238,51 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                            </div>
                         );
                      })}
+                  </div>
+               )}
+
+               {activeTab === 'PRICING' && (
+                  <div className="max-w-2xl mx-auto space-y-6 animate-in slide-in-from-right-4 duration-300">
+                     <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                        <div className="flex items-center gap-3 mb-6">
+                           <Info size={20} className="text-blue-500" />
+                           <p className="text-sm text-slate-500 font-medium leading-relaxed">
+                              Asigna o quita tarifas en lote. Cuando asignes una tarifa nueva, cada artículo usará su <span className="font-bold">precio base actual</span> como precio inicial de esa tarifa.
+                           </p>
+                        </div>
+
+                        <div className="space-y-3">
+                           {(config.tariffs || []).map(tariff => {
+                              const status = tariffActions[tariff.id] || 'NO_CHANGE';
+                              return (
+                                 <div
+                                    key={tariff.id}
+                                    onClick={() => !isSaving && handleToggleTariffAction(tariff.id)}
+                                    className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between group ${status === 'ASSIGN' ? 'bg-blue-50 border-blue-400' : status === 'REMOVE' ? 'bg-red-50 border-red-400' : 'bg-white border-slate-100'} ${isSaving ? 'pointer-events-none opacity-80' : ''}`}
+                                 >
+                                    <div className="flex items-center gap-4">
+                                       <div className={`p-2 rounded-xl transition-colors ${status === 'ASSIGN' ? 'bg-blue-600 text-white' : status === 'REMOVE' ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-400 group-hover:text-slate-600'}`}>
+                                          <Tag size={20} />
+                                       </div>
+                                       <div>
+                                          <h4 className={`font-bold ${status !== 'NO_CHANGE' ? 'text-slate-900' : 'text-slate-700'}`}>{tariff.name}</h4>
+                                          <p className="text-[10px] font-bold text-slate-400 uppercase">{tariff.id}</p>
+                                       </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-3">
+                                       <span className={`text-[10px] font-black uppercase tracking-widest ${status === 'ASSIGN' ? 'text-blue-600' : status === 'REMOVE' ? 'text-red-600' : 'text-slate-300'}`}>
+                                          {status === 'ASSIGN' ? 'Asignar Tarifa' : status === 'REMOVE' ? 'Quitar Tarifa' : 'Sin Cambios'}
+                                       </span>
+                                       <div className={`w-10 h-10 rounded-xl border-2 flex items-center justify-center transition-all ${status === 'ASSIGN' ? 'bg-blue-600 border-blue-600 text-white' : status === 'REMOVE' ? 'bg-red-600 border-red-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-300'}`}>
+                                          {status === 'ASSIGN' ? <Check size={20} strokeWidth={3} /> : status === 'REMOVE' ? <Ban size={20} strokeWidth={3} /> : <Minus size={20} strokeWidth={3} />}
+                                       </div>
+                                    </div>
+                                 </div>
+                              );
+                           })}
+                        </div>
+                     </div>
                   </div>
                )}
 
