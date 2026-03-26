@@ -1,6 +1,7 @@
 import { Transaction, BusinessConfig, Reservation } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { dbAdapter } from '../services/db';
+import { FISCAL_DOCUMENT_LABELS, isRefundLikeTransaction } from './fiscal/fiscalHelpers';
 
 export const printTicket = async (transaction: Transaction, config: BusinessConfig) => {
     const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
@@ -76,15 +77,20 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
 
     // NCF Type Label Map
     const ncfTypeLabels: Record<string, string> = {
-        'B01': 'FACTURA DE CRÉDITO FISCAL',
-        'B02': 'FACTURA DE CONSUMO',
-        'B04': 'NOTA DE CRÉDITO',
-        'B14': 'REGÍMENES ESPECIALES',
-        'B15': 'GUBERNAMENTAL'
+        B01: 'FACTURA DE CREDITO FISCAL',
+        B02: 'FACTURA DE CONSUMO',
+        B04: 'NOTA DE CREDITO',
+        B14: 'REGIMENES ESPECIALES',
+        B15: 'GUBERNAMENTAL',
+        E31: 'E-CF DE CREDITO FISCAL',
+        E32: 'E-CF DE CONSUMO',
+        E34: 'E-CF NOTA DE CREDITO'
     };
 
-    const documentTitle = transaction.ncfType ? (ncfTypeLabels[transaction.ncfType] || 'FACTURA DE VENTA') : 'TICKET DE VENTA';
-    const isCreditNote = transaction.ncfType === 'B04' || transaction.documentType === 'REFUND';
+    const documentTitle = transaction.ncfType
+        ? (ncfTypeLabels[transaction.ncfType] || FISCAL_DOCUMENT_LABELS[transaction.ncfType] || 'FACTURA DE VENTA')
+        : 'TICKET DE VENTA';
+    const isCreditNote = isRefundLikeTransaction(transaction);
 
     // Foreign Currency Calculation
     const foreignCurrenciesHtml = receiptConfig?.showForeignCurrencyTotals && currencies ? currencies

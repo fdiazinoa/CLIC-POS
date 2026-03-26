@@ -14,6 +14,11 @@ db.pragma('journal_mode = WAL'); // Better concurrency
 
 // Ensure sync change log exists (for versioned delta sync)
 db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS sync_changes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         collection TEXT NOT NULL,

@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { BusinessConfig, DocumentSeries, FiscalRangeDGII, Transaction } from '../types';
+import { BusinessConfig, DocumentSeries, FiscalDocumentCode, FiscalRangeDGII, Transaction } from '../types';
 import {
    FileText, Receipt, RotateCcw, FileSpreadsheet,
    Edit2, Check, X, AlertTriangle, ShieldAlert,
@@ -9,10 +9,23 @@ import {
    Save, AlignLeft, BarChart3, Activity, PieChart, ShoppingBag, Box
 } from 'lucide-react';
 import { db } from '../utils/db';
-import { NCFType } from '../types';
 import { seriesSyncService } from '../services/sync/SeriesSyncService';
 import { syncManager } from '../services/sync/SyncManager';
 import { DEFAULT_DOCUMENT_SERIES } from '../constants';
+import {
+   deleteLocalFiscalCredential as deleteLocalFiscalCredentialRequest,
+   deleteSupabaseFiscalCredential as deleteSupabaseFiscalCredentialRequest,
+   FiscalCredentialMetaResponse,
+   getFiscalCredentialMetadata,
+   saveLocalFiscalCredential,
+   saveSupabaseFiscalCredential,
+   testFiscalProviderConnection
+} from '../services/fiscal/fiscalService';
+import {
+   FISCAL_DOCUMENT_LABELS,
+   getFiscalComplianceConfig,
+   SUPPORTED_FISCAL_CODES
+} from '../utils/fiscal/fiscalHelpers';
 
 interface DocumentSettingsProps {
    onClose: () => void;
@@ -27,7 +40,7 @@ const DOCUMENT_TYPE_ORDER = [
 ] as const;
 
 const DOCUMENT_TYPE_SET = new Set<string>(DOCUMENT_TYPE_ORDER as readonly string[]);
-const NCF_TYPES: NCFType[] = ['B01', 'B02', 'B04', 'B14', 'B15'];
+const NCF_TYPES: FiscalDocumentCode[] = SUPPORTED_FISCAL_CODES;
 
 const DOCUMENT_TYPE_CONFIG: Record<string, { label: string; icon: React.ComponentType<any>; color: string }> = {
    // Ventas
@@ -142,12 +155,15 @@ const extractConfig = (raw: any): BusinessConfig | null => {
 };
 
 const buildRecoveredFiscalRanges = (transactions: Transaction[]): FiscalRangeDGII[] => {
-   const maxUsedByType: Record<NCFType, number> = {
+   const maxUsedByType: Record<FiscalDocumentCode, number> = {
       B01: 0,
       B02: 0,
       B04: 0,
       B14: 0,
-      B15: 0
+      B15: 0,
+      E31: 0,
+      E32: 0,
+      E34: 0
    };
 
    for (const tx of Array.isArray(transactions) ? transactions : []) {
@@ -175,11 +191,28 @@ const buildRecoveredFiscalRanges = (transactions: Transaction[]): FiscalRangeDGI
    });
 };
 
+const FISCAL_CREDENTIAL_SOURCE_LABELS: Record<'env' | 'sqlite' | 'supabase', string> = {
+   env: 'ENV',
+   sqlite: 'SQLite',
+   supabase: 'Supabase'
+};
+
 const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
    const [activeSubTab, setActiveSubTab] = useState<'SERIES' | 'FISCAL_POOL'>('SERIES');
 
    // Data for Series
    const [seriesList, setSeriesList] = useState<DocumentSeries[]>([]);
+   const [businessConfig, setBusinessConfig] = useState<BusinessConfig | null>(null);
+   const [isSavingFiscalConfig, setIsSavingFiscalConfig] = useState(false);
+   const [isTestingProvider, setIsTestingProvider] = useState(false);
+   const [isSavingCredential, setIsSavingCredential] = useState(false);
+   const [isSavingSupabaseCredential, setIsSavingSupabaseCredential] = useState(false);
+   const [isDeletingLocalCredential, setIsDeletingLocalCredential] = useState(false);
+   const [isDeletingSupabaseCredential, setIsDeletingSupabaseCredential] = useState(false);
+   const [fiscalFeedback, setFiscalFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+   const [credentialDraft, setCredentialDraft] = useState('');
+   const [credentialLabel, setCredentialLabel] = useState('');
+   const [credentialMeta, setCredentialMeta] = useState<FiscalCredentialMetaResponse | null>(null);
 
    const [editingSeries, setEditingSeries] = useState<DocumentSeries | null>(null);
 
@@ -230,6 +263,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
 
             console.log(`📖 DocumentSettings: Loaded ${finalSeries.length} series after recovery.`);
             setSeriesList(finalSeries);
+            setBusinessConfig(config);
 
             const ranges = (Array.isArray(rawFiscalRanges) ? rawFiscalRanges : []) as FiscalRangeDGII[];
             if (ranges.length > 0) {
@@ -245,6 +279,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
             setSeriesList([]);
             setFiscalRanges([]);
             setTransactions([]);
+            setBusinessConfig(null);
          }
       };
       loadData();
@@ -269,10 +304,73 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
 
    const [isAddingRange, setIsAddingRange] = useState(false);
    const [newRange, setNewRange] = useState<Partial<FiscalRangeDGII>>({ type: 'B01', prefix: 'B01', startNumber: 1, endNumber: 1000, expiryDate: '2026-12-31' });
+   const fiscalCompliance = useMemo(() => getFiscalComplianceConfig(businessConfig), [businessConfig]);
+   const selectedFiscalProviderConfig = useMemo(
+      () => fiscalCompliance.providers.find(provider => provider.id === fiscalCompliance.defaultProvider),
+      [fiscalCompliance]
+   );
+
+   const refreshCredentialMeta = async () => {
+      if (!businessConfig || fiscalCompliance.defaultProvider === 'NONE') {
+         setCredentialMeta(null);
+         setCredentialLabel('');
+         return null;
+      }
+
+      const meta = await getFiscalCredentialMetadata(
+         fiscalCompliance.defaultProvider,
+         businessConfig.companyInfo,
+         selectedFiscalProviderConfig?.credentialKey
+      );
+      setCredentialMeta(meta);
+      setCredentialLabel(meta.label || '');
+      return meta;
+   };
+
+   const getCredentialRequestContext = () => {
+      if (fiscalCompliance.defaultProvider === 'NONE') {
+         setFiscalFeedback({ kind: 'error', message: 'Selecciona un proveedor fiscal antes de administrar credenciales.' });
+         return null;
+      }
+
+      if (!businessConfig) {
+         setFiscalFeedback({ kind: 'error', message: 'Configura primero la empresa antes de administrar credenciales.' });
+         return null;
+      }
+
+      return {
+         providerId: fiscalCompliance.defaultProvider,
+         companyInfo: businessConfig.companyInfo,
+         credentialKey: selectedFiscalProviderConfig?.credentialKey
+      };
+   };
+
+   useEffect(() => {
+      const loadCredentialMeta = async () => {
+         try {
+            await refreshCredentialMeta();
+         } catch (error) {
+            console.error('❌ Error loading fiscal credential metadata:', error);
+            setCredentialMeta(null);
+            setCredentialLabel('');
+         }
+      };
+
+      loadCredentialMeta();
+   }, [businessConfig, fiscalCompliance.defaultProvider, selectedFiscalProviderConfig?.credentialKey]);
 
    // --- FISCAL AUDIT LOGIC ---
    const fiscalConsumption = useMemo(() => {
-      const stats: Record<NCFType, number> = { 'B01': 0, 'B02': 0, 'B04': 0, 'B14': 0, 'B15': 0 };
+      const stats: Record<FiscalDocumentCode, number> = {
+         B01: 0,
+         B02: 0,
+         B04: 0,
+         B14: 0,
+         B15: 0,
+         E31: 0,
+         E32: 0,
+         E34: 0
+      };
 
       if (Array.isArray(transactions)) {
          transactions.forEach(tx => {
@@ -383,6 +481,198 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
       await syncManager.pushCatalog('fiscalRanges');
    };
 
+   const updateFiscalCompliance = (updater: (current: NonNullable<BusinessConfig['fiscalCompliance']>) => NonNullable<BusinessConfig['fiscalCompliance']>) => {
+      setFiscalFeedback(null);
+      setBusinessConfig(prev => {
+         if (!prev) return prev;
+         const current = getFiscalComplianceConfig(prev);
+         return {
+            ...prev,
+            fiscalCompliance: updater(current)
+         };
+      });
+   };
+
+   const updateSelectedProvider = (patch: Record<string, number | string | boolean | undefined>) => {
+      updateFiscalCompliance(current => ({
+         ...current,
+         providers: current.providers.map(provider =>
+            provider.id === current.defaultProvider
+               ? { ...provider, ...patch }
+               : provider
+         )
+      }));
+   };
+
+   const handleSaveFiscalConfig = async () => {
+      if (!businessConfig) return;
+      setIsSavingFiscalConfig(true);
+      setFiscalFeedback(null);
+      try {
+         await db.save('config', businessConfig);
+         window.dispatchEvent(new CustomEvent('configUpdated', { detail: businessConfig }));
+         setFiscalFeedback({ kind: 'success', message: 'Política fiscal guardada y sincronizada.' });
+      } catch (error: any) {
+         console.error('❌ Error saving fiscal config:', error);
+         setFiscalFeedback({ kind: 'error', message: error?.message || 'No se pudo guardar la política fiscal.' });
+      } finally {
+         setIsSavingFiscalConfig(false);
+      }
+   };
+
+   const handleTestProvider = async () => {
+      if (fiscalCompliance.defaultProvider === 'NONE') {
+         setFiscalFeedback({ kind: 'error', message: 'Selecciona un proveedor fiscal antes de probar la conexión.' });
+         return;
+      }
+
+      setIsTestingProvider(true);
+      setFiscalFeedback(null);
+      try {
+         const provider = fiscalCompliance.providers.find(item => item.id === fiscalCompliance.defaultProvider);
+         const environment = provider?.environment ?? 0;
+         const result = await testFiscalProviderConnection(
+            fiscalCompliance.defaultProvider,
+            environment,
+            businessConfig?.companyInfo,
+            provider?.credentialKey
+         );
+         setFiscalFeedback({
+            kind: result.success ? 'success' : 'error',
+            message: result.message || 'Prueba de conexión completada.'
+         });
+      } catch (error: any) {
+         console.error('❌ Error testing fiscal provider:', error);
+         setFiscalFeedback({ kind: 'error', message: error?.message || 'No se pudo probar el proveedor fiscal.' });
+      } finally {
+         setIsTestingProvider(false);
+      }
+   };
+
+   const handleSaveCredential = async () => {
+      const requestContext = getCredentialRequestContext();
+      if (!requestContext) return;
+
+      if (!credentialDraft.trim()) {
+         setFiscalFeedback({ kind: 'error', message: 'Ingresa el Authentication Token de Polaris.' });
+         return;
+      }
+
+      setIsSavingCredential(true);
+      setFiscalFeedback(null);
+      try {
+         const response = await saveLocalFiscalCredential(
+            requestContext.providerId,
+            credentialDraft,
+            requestContext.companyInfo,
+            requestContext.credentialKey,
+            credentialLabel
+         );
+         setCredentialMeta(response.meta || null);
+         setCredentialDraft('');
+         setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial fiscal guardada.' });
+      } catch (error: any) {
+         console.error('❌ Error saving fiscal credential:', error);
+         setFiscalFeedback({ kind: 'error', message: error?.message || 'No se pudo guardar la credencial fiscal.' });
+      } finally {
+         setIsSavingCredential(false);
+      }
+   };
+
+   const handleSaveSupabaseCredential = async () => {
+      const requestContext = getCredentialRequestContext();
+      if (!requestContext) return;
+
+      if (!credentialDraft.trim()) {
+         setFiscalFeedback({ kind: 'error', message: 'Ingresa el Authentication Token que deseas enviar a Supabase.' });
+         return;
+      }
+
+      setIsSavingSupabaseCredential(true);
+      setFiscalFeedback(null);
+      try {
+         const response = await saveSupabaseFiscalCredential(
+            requestContext.providerId,
+            credentialDraft,
+            requestContext.companyInfo,
+            requestContext.credentialKey
+         );
+         setCredentialMeta(response.meta || null);
+         setCredentialLabel(response.meta?.label || '');
+         setCredentialDraft('');
+         setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial fiscal guardada en Supabase.' });
+      } catch (error: any) {
+         console.error('❌ Error saving Supabase fiscal credential:', error);
+         setFiscalFeedback({ kind: 'error', message: error?.message || 'No se pudo guardar la credencial en Supabase.' });
+      } finally {
+         setIsSavingSupabaseCredential(false);
+      }
+   };
+
+   const handleDeleteLocalCredential = async () => {
+      const requestContext = getCredentialRequestContext();
+      if (!requestContext) return;
+
+      if (!credentialMeta?.hasLocalCredential) {
+         setFiscalFeedback({ kind: 'error', message: 'No existe una credencial local para eliminar.' });
+         return;
+      }
+
+      if (!confirm('¿Deseas eliminar la credencial local? Si existe una en Supabase o ENV, esa pasará a ser la fuente activa.')) {
+         return;
+      }
+
+      setIsDeletingLocalCredential(true);
+      setFiscalFeedback(null);
+      try {
+         const response = await deleteLocalFiscalCredentialRequest(
+            requestContext.providerId,
+            requestContext.companyInfo,
+            requestContext.credentialKey
+         );
+         setCredentialMeta(response.meta || null);
+         setCredentialLabel(response.meta?.label || '');
+         setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial local eliminada.' });
+      } catch (error: any) {
+         console.error('❌ Error deleting local fiscal credential:', error);
+         setFiscalFeedback({ kind: 'error', message: error?.message || 'No se pudo eliminar la credencial local.' });
+      } finally {
+         setIsDeletingLocalCredential(false);
+      }
+   };
+
+   const handleDeleteSupabaseCredential = async () => {
+      const requestContext = getCredentialRequestContext();
+      if (!requestContext) return;
+
+      if (!credentialMeta?.hasSupabaseCredential) {
+         setFiscalFeedback({ kind: 'error', message: 'No existe una credencial en Supabase para eliminar.' });
+         return;
+      }
+
+      if (!confirm('¿Deseas eliminar la credencial de Supabase para esta empresa/proveedor?')) {
+         return;
+      }
+
+      setIsDeletingSupabaseCredential(true);
+      setFiscalFeedback(null);
+      try {
+         const response = await deleteSupabaseFiscalCredentialRequest(
+            requestContext.providerId,
+            requestContext.companyInfo,
+            requestContext.credentialKey
+         );
+         setCredentialMeta(response.meta || null);
+         setCredentialLabel(response.meta?.label || '');
+         setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial en Supabase eliminada.' });
+      } catch (error: any) {
+         console.error('❌ Error deleting Supabase fiscal credential:', error);
+         setFiscalFeedback({ kind: 'error', message: error?.message || 'No se pudo eliminar la credencial en Supabase.' });
+      } finally {
+         setIsDeletingSupabaseCredential(false);
+      }
+   };
+
    return (
       <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">
 
@@ -485,6 +775,280 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                {activeSubTab === 'FISCAL_POOL' && (
                   <div className="space-y-8 animate-in slide-in-from-bottom-4">
 
+                     <section className="bg-white rounded-[2.5rem] border border-gray-200 shadow-sm p-8 space-y-6">
+                        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-6">
+                           <div>
+                              <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Modo Fiscal</h3>
+                              <p className="text-2xl font-black text-slate-900">Transición Legacy B a e-CF</p>
+                              <p className="text-sm text-slate-500 mt-2 max-w-2xl">
+                                 Define si esta empresa continúa operando con comprobantes tipo B o si los documentos nuevos deben emitirse como e-CF.
+                                 El histórico existente no se altera.
+                              </p>
+                           </div>
+                           <div className="flex gap-3">
+                              <button
+                                 onClick={handleTestProvider}
+                                 disabled={isTestingProvider}
+                                 className="px-5 py-3 rounded-2xl border border-slate-200 font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                              >
+                                 {isTestingProvider ? 'Probando proveedor...' : 'Probar Conexión'}
+                              </button>
+                              <button
+                                 onClick={handleSaveFiscalConfig}
+                                 disabled={!businessConfig || isSavingFiscalConfig}
+                                 className="px-5 py-3 rounded-2xl bg-slate-900 text-white font-black shadow-lg hover:bg-slate-800 disabled:opacity-60"
+                              >
+                                 {isSavingFiscalConfig ? 'Guardando...' : 'Guardar Política Fiscal'}
+                              </button>
+                           </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                           <button
+                              onClick={() => updateFiscalCompliance(current => ({ ...current, mode: 'LEGACY_B', defaultProvider: 'NONE' }))}
+                              className={`p-6 rounded-[2rem] border-2 transition-all text-left ${fiscalCompliance.mode === 'LEGACY_B' ? 'bg-blue-50 border-blue-500 shadow-md ring-4 ring-blue-50' : 'bg-white border-gray-100 hover:border-blue-200'}`}
+                           >
+                              <p className="text-xs font-black text-blue-600 uppercase tracking-[0.2em] mb-3">Modo Actual</p>
+                              <p className="text-lg font-black text-slate-900 mb-2">Comprobantes Legacy B</p>
+                              <p className="text-sm text-slate-500 leading-relaxed">
+                                 Mantiene `B01`, `B02` y `B04` para negocios que todavía no han migrado a e-CF.
+                              </p>
+                           </button>
+
+                           <button
+                              onClick={() => updateFiscalCompliance(current => ({
+                                 ...current,
+                                 mode: 'ECF',
+                                 defaultProvider: current.defaultProvider === 'NONE' ? 'POLARIS' : current.defaultProvider
+                              }))}
+                              className={`p-6 rounded-[2rem] border-2 transition-all text-left ${fiscalCompliance.mode === 'ECF' ? 'bg-emerald-50 border-emerald-500 shadow-md ring-4 ring-emerald-50' : 'bg-white border-gray-100 hover:border-emerald-200'}`}
+                           >
+                              <p className="text-xs font-black text-emerald-600 uppercase tracking-[0.2em] mb-3">Migración</p>
+                              <p className="text-lg font-black text-slate-900 mb-2">Emitir e-CF</p>
+                              <p className="text-sm text-slate-500 leading-relaxed">
+                                 Los documentos nuevos cambian a `E31`, `E32` y `E34`, manteniendo compatibilidad con el historial ya emitido.
+                              </p>
+                           </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                           <div className="md:col-span-1">
+                              <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Proveedor por Defecto</label>
+                              <select
+                                 value={fiscalCompliance.defaultProvider}
+                                 onChange={(e) => updateFiscalCompliance(current => ({ ...current, defaultProvider: e.target.value as any }))}
+                                 className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                              >
+                                 {fiscalCompliance.providers.map(provider => (
+                                    <option key={provider.id} value={provider.id}>
+                                       {provider.displayName} ({provider.id})
+                                    </option>
+                                 ))}
+                              </select>
+                           </div>
+
+                           <div className="md:col-span-1">
+                              <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Ambiente del Proveedor</label>
+                              <select
+                                 value={fiscalCompliance.providers.find(provider => provider.id === fiscalCompliance.defaultProvider)?.environment ?? 0}
+                                 onChange={(e) => updateFiscalCompliance(current => ({
+                                    ...current,
+                                    providers: current.providers.map(provider =>
+                                       provider.id === current.defaultProvider
+                                          ? { ...provider, environment: Number(e.target.value) as any }
+                                          : provider
+                                    )
+                                 }))}
+                                 className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                              >
+                                 <option value={0}>Ambiente 0</option>
+                                 <option value={1}>Ambiente 1</option>
+                                 <option value={2}>Ambiente 2</option>
+                                 <option value={3}>Ambiente 3</option>
+                              </select>
+                           </div>
+
+                           <label className="md:col-span-1 flex items-center gap-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl">
+                              <input
+                                 type="checkbox"
+                                 checked={fiscalCompliance.allowLegacyFallback}
+                                 onChange={(e) => updateFiscalCompliance(current => ({ ...current, allowLegacyFallback: e.target.checked }))}
+                                 className="w-5 h-5 rounded border-slate-300"
+                              />
+                              <div>
+                                 <p className="text-sm font-black text-slate-900">Permitir fallback a Legacy</p>
+                                 <p className="text-xs text-slate-500">Mantiene margen operativo mientras se completa la migración a e-CF.</p>
+                              </div>
+                           </label>
+                        </div>
+
+                        {selectedFiscalProviderConfig && fiscalCompliance.defaultProvider !== 'NONE' && (
+                           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                              <div className="md:col-span-4">
+                                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Referencia de Credencial</label>
+                                 <input
+                                    type="text"
+                                    value={selectedFiscalProviderConfig.credentialKey || ''}
+                                    onChange={(e) => updateSelectedProvider({ credentialKey: e.target.value.toUpperCase() })}
+                                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                    placeholder="Opcional. Si se deja vacío, se usará el RNC de la empresa."
+                                 />
+                              </div>
+                              <div>
+                                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Tipo Ingreso</label>
+                                 <input
+                                    type="number"
+                                    min={1}
+                                    value={selectedFiscalProviderConfig.tipoIngreso ?? 1}
+                                    onChange={(e) => updateSelectedProvider({ tipoIngreso: Number(e.target.value) || 1 })}
+                                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                 />
+                              </div>
+                              <div>
+                                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Unidad Bienes</label>
+                                 <input
+                                    type="number"
+                                    min={1}
+                                    value={selectedFiscalProviderConfig.unitCodeGoods ?? 47}
+                                    onChange={(e) => updateSelectedProvider({ unitCodeGoods: Number(e.target.value) || 47 })}
+                                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                 />
+                              </div>
+                              <div>
+                                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Unidad Servicios</label>
+                                 <input
+                                    type="number"
+                                    min={1}
+                                    value={selectedFiscalProviderConfig.unitCodeServices ?? 43}
+                                    onChange={(e) => updateSelectedProvider({ unitCodeServices: Number(e.target.value) || 43 })}
+                                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                 />
+                              </div>
+                              <div>
+                                 <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Código NC</label>
+                                 <input
+                                    type="number"
+                                    min={1}
+                                    value={selectedFiscalProviderConfig.modificationCode ?? 2}
+                                    onChange={(e) => updateSelectedProvider({ modificationCode: Number(e.target.value) || 2 })}
+                                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                 />
+                              </div>
+                              <div className="md:col-span-4 p-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50">
+                                 <p className="text-xs font-bold text-slate-600">
+                                    Estos defaults técnicos se envían a Polaris al emitir e-CF. Más adelante podremos sobrescribirlos por producto si un cliente necesita un catálogo fiscal más fino.
+                                 </p>
+                              </div>
+                              <div className="md:col-span-4 mt-2 p-5 rounded-[1.75rem] border border-slate-200 bg-white shadow-sm space-y-4">
+                                 <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                                    <div>
+                                       <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Credenciales del Proveedor</p>
+                                       <p className="text-sm font-bold text-slate-700">
+                                          La precedencia activa es <span className="font-mono">SQLite -&gt; Supabase -&gt; ENV</span>. El token nunca vuelve al navegador una vez guardado.
+                                       </p>
+                                    </div>
+                                    {credentialMeta?.hasCredential ? (
+                                       <div className="px-3 py-2 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-black">
+                                          Activa desde {credentialMeta.source || 'desconocido'}
+                                       </div>
+                                    ) : (
+                                       <div className="px-3 py-2 rounded-2xl bg-amber-50 border border-amber-200 text-amber-700 text-xs font-black">
+                                          Sin credencial resuelta
+                                       </div>
+                                    )}
+                                 </div>
+
+                                 <div className="flex flex-wrap gap-2">
+                                    {(['sqlite', 'supabase', 'env'] as const).map(source => {
+                                       const isAvailable = credentialMeta?.availableSources?.includes(source);
+                                       return (
+                                          <span
+                                             key={source}
+                                             className={`px-3 py-2 rounded-2xl text-[11px] font-black border ${isAvailable ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-50 text-slate-400 border-slate-200'}`}
+                                          >
+                                             {FISCAL_CREDENTIAL_SOURCE_LABELS[source]}
+                                          </span>
+                                       );
+                                    })}
+                                 </div>
+
+                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                       <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Etiqueta</label>
+                                       <input
+                                          type="text"
+                                          value={credentialLabel}
+                                          onChange={(e) => setCredentialLabel(e.target.value)}
+                                          className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                          placeholder="Ej. Polaris Demo Naco"
+                                       />
+                                    </div>
+                                    <div>
+                                       <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Authentication Token</label>
+                                       <input
+                                          type="password"
+                                          value={credentialDraft}
+                                          onChange={(e) => setCredentialDraft(e.target.value)}
+                                          className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                          placeholder="Pega aquí el token de Polaris"
+                                       />
+                                    </div>
+                                 </div>
+
+                                 {credentialMeta?.supportsSupabaseWrite === false && (
+                                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
+                                       El backend todavía no tiene `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`, así que por ahora solo se puede guardar localmente.
+                                    </div>
+                                 )}
+
+                                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                    <div className="text-xs text-slate-500 space-y-1">
+                                       <p>Clave resuelta: {credentialMeta?.resolvedCredentialKey || selectedFiscalProviderConfig.credentialKey || businessConfig?.companyInfo?.rnc || 'N/D'}</p>
+                                       <p>Fuentes detectadas: {credentialMeta?.availableSources?.length ? credentialMeta.availableSources.map(source => FISCAL_CREDENTIAL_SOURCE_LABELS[source]).join(', ') : 'Ninguna'}</p>
+                                       <p>Última actualización local: {credentialMeta?.updatedAt ? new Date(credentialMeta.updatedAt).toLocaleString() : 'No registrada localmente'}</p>
+                                    </div>
+                                    <div className="flex flex-wrap gap-3">
+                                       <button
+                                          onClick={handleSaveCredential}
+                                          disabled={isSavingCredential}
+                                          className="px-5 py-3 rounded-2xl bg-emerald-600 text-white font-black shadow-lg hover:bg-emerald-700 disabled:opacity-60"
+                                       >
+                                          {isSavingCredential ? 'Guardando local...' : 'Guardar Local'}
+                                       </button>
+                                       <button
+                                          onClick={handleSaveSupabaseCredential}
+                                          disabled={isSavingSupabaseCredential || !credentialMeta?.supportsSupabaseWrite}
+                                          className="px-5 py-3 rounded-2xl bg-slate-900 text-white font-black shadow-lg hover:bg-slate-800 disabled:opacity-60"
+                                       >
+                                          {isSavingSupabaseCredential ? 'Guardando en Supabase...' : 'Guardar en Supabase'}
+                                       </button>
+                                       <button
+                                          onClick={handleDeleteLocalCredential}
+                                          disabled={isDeletingLocalCredential || !credentialMeta?.hasLocalCredential}
+                                          className="px-5 py-3 rounded-2xl border border-slate-200 font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                                       >
+                                          {isDeletingLocalCredential ? 'Eliminando local...' : 'Eliminar Local'}
+                                       </button>
+                                       <button
+                                          onClick={handleDeleteSupabaseCredential}
+                                          disabled={isDeletingSupabaseCredential || !credentialMeta?.hasSupabaseCredential}
+                                          className="px-5 py-3 rounded-2xl border border-slate-200 font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                                       >
+                                          {isDeletingSupabaseCredential ? 'Eliminando Supabase...' : 'Eliminar Supabase'}
+                                       </button>
+                                    </div>
+                                 </div>
+                              </div>
+                           </div>
+                        )}
+
+                        {fiscalFeedback && (
+                           <div className={`rounded-2xl px-4 py-3 text-sm font-bold ${fiscalFeedback.kind === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                              {fiscalFeedback.message}
+                           </div>
+                        )}
+                     </section>
+
                      {/* CONSUMPTION DASHBOARD */}
                      <section className="bg-slate-900 rounded-[2.5rem] p-8 text-white shadow-xl relative overflow-hidden">
                         <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl -mr-10 -mt-10"></div>
@@ -500,11 +1064,15 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                            </div>
 
                            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-                              {(['B01', 'B02', 'B04', 'B14', 'B15'] as NCFType[]).map(type => {
+                              {SUPPORTED_FISCAL_CODES.map(type => {
                                  const consumed = fiscalConsumption[type] || 0;
                                  const range = fiscalRanges.find(r => r.type === type);
                                  const totalAuthorized = range ? (range.endNumber - range.startNumber + 1) : 0;
-                                 const color = type === 'B01' ? 'text-blue-400' : type === 'B02' ? 'text-emerald-400' : 'text-purple-400';
+                                 const color = type === 'B01' || type === 'E31'
+                                    ? 'text-blue-400'
+                                    : type === 'B02' || type === 'E32'
+                                       ? 'text-emerald-400'
+                                       : 'text-purple-400';
 
                                  const progressPct = totalAuthorized > 0 ? (consumed / totalAuthorized) * 100 : 0;
 
@@ -743,11 +1311,9 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
                               onChange={(e) => setNewRange({ ...newRange, type: e.target.value as any, prefix: e.target.value })}
                               className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-bold"
                            >
-                              <option value="B01">Crédito Fiscal (B01)</option>
-                              <option value="B02">Consumo (B02)</option>
-                              <option value="B04">Nota de Crédito (B04)</option>
-                              <option value="B14">Reg. Especiales (B14)</option>
-                              <option value="B15">Gubernamentales (B15)</option>
+                              {SUPPORTED_FISCAL_CODES.map(type => (
+                                 <option key={type} value={type}>{FISCAL_DOCUMENT_LABELS[type]} ({type})</option>
+                              ))}
                            </select>
                         </div>
                         <div>

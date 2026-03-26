@@ -1,4 +1,5 @@
 import { Transaction, ZReportStats, Collection } from '../types';
+import { isRefundLikeTransaction } from './fiscal/fiscalHelpers';
 
 export const calculateZReportStats = (transactions: Transaction[], collections: Collection[] = []): ZReportStats => {
     if ((!transactions || transactions.length === 0) && (!collections || collections.length === 0)) {
@@ -18,18 +19,13 @@ export const calculateZReportStats = (transactions: Transaction[], collections: 
     }
 
     // Filter valid sales (completed) vs refunds
-    // Requirement: totalDevoluciones should be specifically documentType === 'REFUND' or ncfType === 'B04'
-    const refunds = transactions.filter(t =>
-        t.documentType === 'REFUND' ||
-        t.ncfType === 'B04'
-    );
+    const refunds = transactions.filter(t => isRefundLikeTransaction(t));
 
     // Sales: Everything that is not a refund document and not explicitly voided.
-    // If a normal sale (B01) was marked 'REFUNDED', it still counts towards Gross Sales 
-    // because the B04 document will subtract it in the Devoluciones section.
+    // If a normal sale was marked 'REFUNDED', it still counts towards Gross Sales
+    // because the credit note document will subtract it in the Devoluciones section.
     const sales = transactions.filter(t =>
-        t.documentType !== 'REFUND' &&
-        t.ncfType !== 'B04' &&
+        !isRefundLikeTransaction(t) &&
         t.documentType !== 'VOID'
     );
 

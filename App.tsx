@@ -104,6 +104,18 @@ import { useOfflineInventoryCountSync } from './hooks/useOfflineInventoryCountSy
 import { printLabelsFromTemplate } from './utils/labelPrinter';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
+import {
+  canRetryFiscalTransaction,
+  getDefaultFiscalProvider,
+  getFiscalCodeFromNcf,
+  getFiscalComplianceConfig,
+  getFiscalProviderConfig,
+  getProviderEnvironment,
+  isCreditNoteNcf,
+  isRefundLikeTransaction,
+  resolveCreditNoteFiscalCode
+} from './utils/fiscal/fiscalHelpers';
+import { getFiscalDocumentStatus, issueFiscalDocument } from './services/fiscal/fiscalService';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -1554,12 +1566,7 @@ const AppContent: React.FC = () => {
       customerById.set(customer.id, customer);
     }
 
-    const isRefundDocument = (tx: Transaction): boolean => {
-      const docType = typeof tx.documentType === 'string' ? tx.documentType.trim().toUpperCase() : '';
-      const ncfType = typeof tx.ncfType === 'string' ? tx.ncfType.trim().toUpperCase() : '';
-      const displayId = typeof tx.displayId === 'string' ? tx.displayId.trim().toUpperCase() : '';
-      return docType === 'REFUND' || ncfType === 'B04' || displayId.startsWith('NC');
-    };
+    const isRefundDocument = (tx: Transaction): boolean => isRefundLikeTransaction(tx);
 
     const toMillis = (value?: string): number => {
       const ts = value ? new Date(value).getTime() : NaN;
@@ -1607,19 +1614,21 @@ const AppContent: React.FC = () => {
       return best;
     };
 
-    const extractB04NcfFromMovement = (movement: any): string | undefined => {
+    const extractCreditNoteNcfFromMovement = (movement: any): string | undefined => {
       const rawCandidates = [
         movement?.ncf,
         movement?.ncfB04,
+        movement?.ncfE34,
         movement?.fiscalNcf,
         movement?.b04,
+        movement?.e34,
         movement?.metadata?.ncf,
         movement?.meta?.ncf
       ];
       for (const raw of rawCandidates) {
         if (typeof raw !== 'string') continue;
         const candidate = raw.trim().toUpperCase();
-        if (candidate.startsWith('B04')) return candidate;
+        if (isCreditNoteNcf(candidate)) return candidate;
       }
       return undefined;
     };
@@ -1663,7 +1672,8 @@ const AppContent: React.FC = () => {
       const movementDate = Number.isFinite(parsedMovementDate) ? String(movement.createdAt) : now;
       const roundedAmount = parseFloat(movementAmount.toFixed(2));
       const displayId = refRaw || ref;
-      const inferredB04Ncf = extractB04NcfFromMovement(movement);
+      const inferredCreditNoteNcf = extractCreditNoteNcfFromMovement(movement);
+      const inferredCreditNoteType = getFiscalCodeFromNcf(inferredCreditNoteNcf) || 'B04';
       const affectedSale = pickAffectedInvoice(customerId, roundedAmount, movementDate);
       const inferredAffectedInvoice = (affectedSale?.displayId || affectedSale?.id || '').toString().trim();
       const inferredAffectedNCF = (affectedSale?.ncf || '').toString().trim();
@@ -1677,12 +1687,15 @@ const AppContent: React.FC = () => {
           if (!isRefundDocument(existing)) continue;
 
           const patch: Partial<Transaction> = {};
-          if ((!existing.ncf || !existing.ncf.trim()) && inferredB04Ncf) patch.ncf = inferredB04Ncf;
+          if ((!existing.ncf || !existing.ncf.trim()) && inferredCreditNoteNcf) patch.ncf = inferredCreditNoteNcf;
           if ((!existing.affectedInvoiceNumber || !existing.affectedInvoiceNumber.trim()) && inferredAffectedInvoice) {
             patch.affectedInvoiceNumber = inferredAffectedInvoice;
           }
           if ((!existing.affectedNCF || !existing.affectedNCF.trim()) && inferredAffectedNCF) {
             patch.affectedNCF = inferredAffectedNCF;
+          }
+          if (!existing.affectedInvoiceDate && affectedSale?.date) {
+            patch.affectedInvoiceDate = affectedSale.date;
           }
           if (!existing.originalTransactionId && affectedSale?.id) patch.originalTransactionId = affectedSale.id;
 
@@ -1722,10 +1735,15 @@ const AppContent: React.FC = () => {
         status: 'REFUNDED',
         customerId,
         customerName: owner?.name,
-        ncf: inferredB04Ncf,
-        ncfType: 'B04',
+        ncf: inferredCreditNoteNcf,
+        ncfType: inferredCreditNoteType,
+        legacyNcf: inferredCreditNoteType.startsWith('E') ? undefined : inferredCreditNoteNcf,
+        electronicNcf: inferredCreditNoteType.startsWith('E') ? inferredCreditNoteNcf : undefined,
+        fiscalMode: inferredCreditNoteType.startsWith('E') ? 'ECF' : 'LEGACY_B',
+        fiscalProvider: inferredCreditNoteType.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
         affectedInvoiceNumber: inferredAffectedInvoice || undefined,
         affectedNCF: inferredAffectedNCF || undefined,
+        affectedInvoiceDate: affectedSale?.date,
         originalTransactionId: affectedSale?.id,
         refundReason: 'NC recuperada desde wallet',
         syncStatus: 'PENDING'
@@ -1847,7 +1865,178 @@ const AppContent: React.FC = () => {
       transactionIds: repairedIds,
       creditNoteIds: Array.from(repairedCreditNoteIdSet)
     };
-  }, [customers, transactions]);
+  }, [config, customers, transactions]);
+
+  const upsertFiscalTransaction = useCallback(async (nextTransaction: Transaction) => {
+    setTransactions(prev => {
+      const exists = prev.some(tx => tx.id === nextTransaction.id);
+      if (exists) return prev.map(tx => tx.id === nextTransaction.id ? nextTransaction : tx);
+      return [nextTransaction, ...prev];
+    });
+    await db.saveDocument('transactions', nextTransaction);
+    try {
+      await db.saveDocument('transactionHistory', nextTransaction);
+    } catch (historyMirrorError) {
+      console.warn('⚠️ Fiscal history mirror update skipped:', historyMirrorError);
+    }
+  }, []);
+
+  const pollFiscalDocumentStatus = useCallback(async (
+    transaction: Transaction,
+    providerId: Exclude<Transaction['fiscalProvider'], undefined | 'NONE'>,
+    environment: number,
+    providerTransactionId: string,
+    credentialKey?: string,
+    attempt = 1
+  ) => {
+    try {
+      const result = await getFiscalDocumentStatus(
+        providerId,
+        environment,
+        providerTransactionId,
+        config.companyInfo,
+        credentialKey
+      );
+      const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';
+      const refreshedTransaction: Transaction = {
+        ...transaction,
+        fiscalSyncStatus: finalStatus,
+        fiscalSyncError: result.success ? undefined : result.message,
+        fiscalReferenceId: providerTransactionId,
+        fiscalResponseMessage: result.message,
+        fiscalSyncedAt: result.success && !result.pending ? new Date().toISOString() : transaction.fiscalSyncedAt
+      };
+
+      await upsertFiscalTransaction(refreshedTransaction);
+
+      if (result.pending && attempt < 8) {
+        window.setTimeout(() => {
+          pollFiscalDocumentStatus(refreshedTransaction, providerId, environment, providerTransactionId, credentialKey, attempt + 1).catch(console.error);
+        }, attempt < 3 ? 3000 : 5000);
+      }
+    } catch (error: any) {
+      if (attempt >= 8) {
+        const failedTransaction: Transaction = {
+          ...transaction,
+          fiscalSyncStatus: 'ERROR',
+          fiscalSyncError: error?.message || 'No se pudo consultar el estado del e-CF.',
+          fiscalReferenceId: providerTransactionId,
+          fiscalResponseMessage: error?.message || 'No se pudo consultar el estado del e-CF.'
+        };
+        await upsertFiscalTransaction(failedTransaction);
+        return;
+      }
+
+      window.setTimeout(() => {
+        pollFiscalDocumentStatus(transaction, providerId, environment, providerTransactionId, credentialKey, attempt + 1).catch(console.error);
+      }, 5000);
+    }
+  }, [config.companyInfo, upsertFiscalTransaction]);
+
+  const syncFiscalDocument = useCallback(async (transaction: Transaction) => {
+    const providerId = transaction.fiscalProvider;
+    const documentCode = transaction.ncfType;
+    const electronicNcf = transaction.electronicNcf || transaction.ncf;
+
+    if (!providerId || providerId === 'NONE') return;
+    if (!documentCode || !documentCode.startsWith('E')) return;
+    if (!electronicNcf) return;
+
+    const fiscalCompliance = getFiscalComplianceConfig(config);
+    const environment = getProviderEnvironment(fiscalCompliance, providerId);
+    const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
+    const baseTransaction: Transaction = {
+      ...transaction,
+      fiscalSyncStatus: 'PENDING',
+      fiscalSyncError: undefined
+    };
+
+    await upsertFiscalTransaction(baseTransaction);
+
+    try {
+      const result = await issueFiscalDocument({
+        providerId,
+        environment,
+        companyInfo: config.companyInfo,
+        transaction: baseTransaction,
+        taxRate: config.taxRate,
+        sequenceExpiryDate: new Date(new Date(baseTransaction.date).getFullYear(), 11, 31).toISOString(),
+        credentialKey: providerConfig.credentialKey,
+        tipoIngreso: providerConfig.tipoIngreso,
+        modificationCode: providerConfig.modificationCode,
+        unitCodeGoods: providerConfig.unitCodeGoods,
+        unitCodeServices: providerConfig.unitCodeServices
+      });
+
+      const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';
+      const finalizedTransaction: Transaction = {
+        ...baseTransaction,
+        fiscalSyncStatus: finalStatus,
+        fiscalSyncError: result.success ? undefined : result.message,
+        fiscalReferenceId: result.providerTransactionId || baseTransaction.fiscalReferenceId,
+        fiscalResponseMessage: result.message,
+        fiscalSyncedAt: result.success && !result.pending ? new Date().toISOString() : baseTransaction.fiscalSyncedAt
+      };
+
+      await upsertFiscalTransaction(finalizedTransaction);
+
+      if (result.pending && result.providerTransactionId) {
+        window.setTimeout(() => {
+          pollFiscalDocumentStatus(
+            finalizedTransaction,
+            providerId,
+            environment,
+            result.providerTransactionId!,
+            providerConfig.credentialKey
+          ).catch(console.error);
+        }, 3000);
+      }
+    } catch (error: any) {
+      const failedTransaction: Transaction = {
+        ...baseTransaction,
+        fiscalSyncStatus: 'ERROR',
+        fiscalSyncError: error?.message || 'No se pudo emitir el comprobante electrónico.',
+        fiscalResponseMessage: error?.message || 'No se pudo emitir el comprobante electrónico.'
+      };
+      await upsertFiscalTransaction(failedTransaction);
+    }
+  }, [config, pollFiscalDocumentStatus, upsertFiscalTransaction]);
+
+  const retryFiscalDocument = useCallback(async (transaction: Transaction): Promise<string> => {
+    const providerId = transaction.fiscalProvider;
+    if (!canRetryFiscalTransaction(transaction) || !providerId || providerId === 'NONE') {
+      throw new Error('Solo se pueden reintentar documentos electrónicos pendientes o con error.');
+    }
+
+    const fiscalCompliance = getFiscalComplianceConfig(config);
+    const environment = getProviderEnvironment(fiscalCompliance, providerId);
+    const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
+    const retryingTransaction: Transaction = {
+      ...transaction,
+      fiscalSyncStatus: 'PENDING',
+      fiscalSyncError: undefined,
+      fiscalResponseMessage: transaction.fiscalReferenceId
+        ? 'Consultando estado actualizado del e-CF en Polaris...'
+        : 'Reintentando envío del e-CF a Polaris...'
+    };
+
+    await upsertFiscalTransaction(retryingTransaction);
+
+    if (transaction.fiscalReferenceId) {
+      await pollFiscalDocumentStatus(
+        retryingTransaction,
+        providerId,
+        environment,
+        transaction.fiscalReferenceId,
+        providerConfig.credentialKey,
+        1
+      );
+      return 'Consulta de estado fiscal iniciada.';
+    }
+
+    await syncFiscalDocument(retryingTransaction);
+    return 'Reintento de envío fiscal iniciado.';
+  }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);
 
   const handleTransactionComplete = async (txn: Transaction) => {
     // Get current terminal ID before persisting.
@@ -1864,6 +2053,7 @@ const AppContent: React.FC = () => {
     setTransactions(newTransactions);
     // setFilteredTransactions(newTransactions); // Assuming this is meant to be here if filtered transactions are used
     await db.saveDocument('transactions', txn);
+    syncFiscalDocument(txn).catch(console.error);
 
     // Trigger background sync
     backgroundSyncManager.triggerSync().catch(console.error);
@@ -2419,13 +2609,15 @@ const AppContent: React.FC = () => {
     const resolvedCustomerId = originalTx.customerId || matchedCustomer?.id;
     const resolvedCustomerName = originalTx.customerName || matchedCustomer?.name;
 
-    // 2. NCF B04 Generation
+    // 2. Fiscal credit-note generation
     const currentTerminalId = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
-    let ncfB04: string | null = null;
+    const fiscalCompliance = getFiscalComplianceConfig(config);
+    const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
+    let creditNoteNcf: string | null = null;
     try {
-      ncfB04 = await db.getNextNCF('B04', currentTerminalId);
+      creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, currentTerminalId);
     } catch (e) {
-      console.warn("No se pudo generar NCF B04:", e);
+      console.warn(`No se pudo generar NCF ${creditNoteFiscalType}:`, e);
     }
 
     // 3. Document Sequence (Internal Refund Series)
@@ -2454,10 +2646,15 @@ const AppContent: React.FC = () => {
       status: 'REFUNDED',
       customerId: resolvedCustomerId,
       customerName: resolvedCustomerName,
-      ncf: ncfB04 || undefined,
-      ncfType: 'B04',
+      ncf: creditNoteNcf || undefined,
+      ncfType: creditNoteFiscalType,
+      legacyNcf: creditNoteFiscalType.startsWith('E') ? undefined : creditNoteNcf || undefined,
+      electronicNcf: creditNoteFiscalType.startsWith('E') ? creditNoteNcf || undefined : undefined,
+      fiscalMode: fiscalCompliance.mode,
+      fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
       affectedNCF: originalTx.ncf,
       affectedInvoiceNumber: originalTx.displayId || originalTx.id,
+      affectedInvoiceDate: originalTx.date,
       originalTransactionId: originalTx.id,
       refundReason: reason,
       isTaxIncluded: originalTx.isTaxIncluded,
@@ -2562,6 +2759,7 @@ const AppContent: React.FC = () => {
         new Date(b.date).getTime() - new Date(a.date).getTime()
       );
     });
+    syncFiscalDocument(creditNote).catch(console.error);
 
     // Sync
     backgroundSyncManager.triggerSync().catch(console.error);
@@ -2570,7 +2768,7 @@ const AppContent: React.FC = () => {
     const freshData = await db.init();
     setProducts(freshData.products);
 
-    alert(`Devolución procesada correctamente.\nDocumento: ${displayId}\n${ncfB04 ? 'NCF: ' + ncfB04 : ''}`);
+    alert(`Devolución procesada correctamente.\nDocumento: ${displayId}\n${creditNoteNcf ? 'NCF: ' + creditNoteNcf : ''}`);
   };
 
   const renderView = () => {
@@ -2969,6 +3167,7 @@ const AppContent: React.FC = () => {
             }}
             onSelect={(c) => { setSelectedCustomer(c); setCurrentView('POS'); }}
             onClose={() => setCurrentView('POS')}
+            onRetryFiscalDocument={retryFiscalDocument}
           />
         );
 
@@ -2986,6 +3185,7 @@ const AppContent: React.FC = () => {
               setScanTargetTicketId(null); // Clear selection on close
               setCurrentView('POS');
             }}
+            onRetryFiscalDocument={retryFiscalDocument}
             onRefundTransaction={async (tx, items, conditions, reason) => {
               // Direct call support
               // If conditions is string (legacy call from somewhere else?), handle it. 

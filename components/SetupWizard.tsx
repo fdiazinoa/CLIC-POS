@@ -178,6 +178,16 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
             placeholder="+1 (000) 000-0000"
           />
         </div>
+        <div>
+          <label className="block text-sm font-bold text-gray-600 mb-2">Correo del Negocio</label>
+          <input 
+            type="email" 
+            value={config.companyInfo.email || ''}
+            onChange={(e) => handleUpdateCompany('email', e.target.value)}
+            className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+            placeholder="facturacion@negocio.com"
+          />
+        </div>
         <div className="col-span-2">
           <label className="block text-sm font-bold text-gray-600 mb-2">Dirección</label>
           <input 
@@ -186,6 +196,16 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
             onChange={(e) => handleUpdateCompany('address', e.target.value)}
             className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
             placeholder="Calle Principal #123"
+          />
+        </div>
+        <div className="col-span-2">
+          <label className="block text-sm font-bold text-gray-600 mb-2">Sitio Web</label>
+          <input 
+            type="text" 
+            value={config.companyInfo.website || ''}
+            onChange={(e) => handleUpdateCompany('website', e.target.value)}
+            className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+            placeholder="https://www.miempresa.com"
           />
         </div>
       </div>
