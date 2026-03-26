@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
    X, CreditCard, Banknote, QrCode, CheckCircle2,
    Trash2, Plus, Wallet, Printer, Mail, ShieldAlert,
@@ -397,6 +397,18 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    const [showEmailInput, setShowEmailInput] = useState(false);
    const [emailInput, setEmailInput] = useState('');
    const [isSendingEmail, setIsSendingEmail] = useState(false);
+   const isClosingSuccessRef = useRef(false);
+
+   const handleCloseSuccess = () => {
+      if (isClosingSuccessRef.current) return;
+      isClosingSuccessRef.current = true;
+      setShowEmailInput(false);
+      setEmailInput('');
+      onClose();
+      window.setTimeout(() => {
+         isClosingSuccessRef.current = false;
+      }, 0);
+   };
 
    const handleSendEmail = async () => {
       if (!completedTransaction) return;
@@ -516,7 +528,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                         <Mail size={18} />
                      </button>
                   </div>
-                  <button onClick={onClose} className={`w-full py-4 rounded-xl font-bold text-white shadow-xl flex items-center justify-center gap-2 ${themeBgClass}`}><Repeat size={20} /> Nueva Venta</button>
+                  <button
+                     type="button"
+                     onClick={handleCloseSuccess}
+                     onPointerUp={handleCloseSuccess}
+                     className={`w-full py-4 rounded-xl font-bold text-white shadow-xl flex items-center justify-center gap-2 ${themeBgClass}`}
+                  >
+                     <Repeat size={20} /> Nueva Venta
+                  </button>
                </div>
             </div>
          </div>
