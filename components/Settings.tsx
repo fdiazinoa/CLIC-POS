@@ -38,6 +38,7 @@ import CatalogManager from './CatalogManager';
 import TerminalSettings from './TerminalSettings';
 import HardwareSettings from './HardwareSettings';
 import CurrencySettings from './CurrencySettings';
+import CompanySettings from './CompanySettings';
 import ReceiptDesigner from './ReceiptDesigner';
 import EmailSettings from './EmailSettings';
 import TipsSettings from './TipsSettings';
@@ -112,7 +113,7 @@ interface SettingsProps {
   onUpdateRooms?: (rooms: Room[]) => void;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -364,6 +365,15 @@ const Settings: React.FC<SettingsProps> = (props) => {
       case 'LOYALTY':
         return (
           <LoyaltySettings
+            config={props.config}
+            onUpdateConfig={props.onUpdateConfig}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'COMPANY':
+        return (
+          <CompanySettings
             config={props.config}
             onUpdateConfig={props.onUpdateConfig}
             onClose={() => setCurrentView('HOME')}
@@ -750,6 +760,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
               <section>
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Finanzas y Legal</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <SettingsCard icon={Building2} label="Empresa" description="RNC, Nombre y Contacto Legal" color="bg-blue-700" onClick={() => setCurrentView('COMPANY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={CreditCard} label="Métodos de Pago" description="Pasarelas, Tarjetas, QR" color="bg-indigo-500" onClick={() => setCurrentView('PAYMENTS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} locked={!hasPermission('POS_CLOSE_Z')} />
