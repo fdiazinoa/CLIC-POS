@@ -325,8 +325,12 @@ export async function forwardTransactionsToErpInbox(
         const body = buildSalePostedInboxBody(txn, { fallbackTerminalId: options?.authTerminalId });
         const lineItems = asArray((body.payload as any)?.transaction?.items);
         const firstLine = lineItems[0] && typeof lineItems[0] === 'object' ? Object.keys(lineItems[0] as object).slice(0, 12).join(',') : '';
+        const fl = lineItems[0] && typeof lineItems[0] === 'object' ? (lineItems[0] as Record<string, unknown>) : null;
+        const firstRef = fl
+            ? `productId=${asString(fl.productId || fl.product_id || fl.id)} sku=${asString((fl as any).sku)} barcode=${asString((fl as any).barcode)}`
+            : 'n/a';
         console.log(
-            `[ERP_INBOX] transaction lines: count=${lineItems.length} source_tx=${asString((body.payload as any)?.summary?.transaction_id)} source_terminal=${asString((body.payload as any)?.transaction?.source_terminal_id) || asString((body.payload as any)?.transaction?.terminalId)} firstLineKeys=${firstLine || 'n/a'}`
+            `[ERP_INBOX] transaction lines: count=${lineItems.length} tx.id=${asString((body.payload as any)?.transaction?.id)} source_tx=${asString((body.payload as any)?.summary?.transaction_id)} source_terminal=${asString((body.payload as any)?.transaction?.source_terminal_id) || asString((body.payload as any)?.transaction?.terminalId)} firstLineKeys=${firstLine || 'n/a'} firstRef=${firstRef}`
         );
         const preview = JSON.stringify(body).slice(0, 1200);
         console.log(`[ERP_INBOX] payload preview (truncated): ${preview}${preview.length >= 1200 ? '…' : ''}`);
@@ -359,13 +363,37 @@ export async function forwardTransactionsToErpInbox(
                 /* non-JSON */
             }
             const duplicate = !!(parsed && (parsed.duplicate === true || parsed.response?.duplicate === true));
-            const inboxStatus = String(parsed?.status || '').toUpperCase();
-            const syncId = typeof parsed?.sync_id === 'string' && parsed.sync_id.trim() ? parsed.sync_id.trim() : '';
+            const inboxStatus = String(parsed?.status || parsed?.response?.status || '').toUpperCase();
+            const syncIdRaw =
+                (typeof parsed?.sync_id === 'string' && parsed.sync_id) ||
+                (typeof parsed?.response?.sync_id === 'string' && parsed.response.sync_id) ||
+                '';
+            const syncId = syncIdRaw.trim();
 
             if (res.ok) {
                 console.log(
-                    `[ERP_INBOX] inbox response http=${res.status} duplicate=${duplicate} status=${inboxStatus || 'n/a'} sync_id=${syncId || 'MISSING'} snip=${text.slice(0, 400)}`
+                    `[ERP_INBOX] inbox response http=${res.status} duplicate=${duplicate} status=${inboxStatus || 'n/a'} sync_id=${syncId || 'MISSING'} applyFailedCount=${parsed?.applyFailedCount ?? 'n/a'} fullKeys=${parsed && typeof parsed === 'object' ? Object.keys(parsed).join(',') : 'n/a'} snip=${text.slice(0, 600)}`
                 );
+
+                // Legacy sync_events inserts with status APPLIED but does not materialize POS sales.
+                if (
+                    inboxStatus === 'APPLIED' &&
+                    (body.event_type === 'SALE_POSTED' || body.event_type === 'SALES_CREDIT_NOTE_POSTED')
+                ) {
+                    console.error(
+                        '[ERP_INBOX] ERP returned APPLIED for a sale event (legacy sync_events path). No erp_sales_documents row. Use erp_sync_inbox-first routing on ERP (see syncInbox POST /inbox).'
+                    );
+                    results.push({
+                        eventId: body.event_id,
+                        eventType: body.event_type,
+                        ok: false,
+                        httpStatus: res.status,
+                        duplicate,
+                        syncId: syncId || undefined,
+                        error: 'ERP_INBOX_LEGACY_APPLIED_WITHOUT_SALE_MATERIALIZATION'
+                    });
+                    return { skipped: false, failed: true, results, erpBaseUrlUsed: baseUrl };
+                }
 
                 if (inboxStatus === 'APPLIED') {
                     results.push({

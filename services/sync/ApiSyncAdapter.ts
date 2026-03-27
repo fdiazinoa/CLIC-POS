@@ -800,6 +800,12 @@ class ApiSyncAdapter {
                 /* non-JSON */
             }
 
+            const erp = syncBody?.erpInbox;
+            const r0 = Array.isArray(erp?.results) ? erp.results[0] : null;
+            console.log(
+                `[SYNC_TX_PUSH] master_response applyFailedCount=${syncBody?.applyFailedCount ?? 'n/a'} erpInbox_skipped=${erp?.skipped ?? 'n/a'} erpInbox_failed=${erp?.failed ?? 'n/a'} sync_id=${r0?.syncId ?? 'n/a'} erp_document_id=${r0?.erpDocumentId ?? 'n/a'} apply_err=${r0?.error ?? 'n/a'}`
+            );
+
             // Direct POST to CLIC-ERP /api/sync/transactions returns 200 even when applySyncInboxEventById fails.
             if (
                 syncBody &&
@@ -814,8 +820,6 @@ class ApiSyncAdapter {
                     `ERP did not persist sale (apply failures): ${JSON.stringify(syncBody.applyIssues || [])}`
                 );
             }
-
-            const erp = syncBody?.erpInbox;
             if (erp?.skipped) {
                 console.warn(
                     `[SYNC_TX_PUSH] Master OK but ERP inbox skipped (${erp.reason || 'NO_ERP_URL'}). Configure CLIC_ERP_BASE_URL / erp_base_url localStorage or ERP_BASE_URL on Master. tx=${txId}`
