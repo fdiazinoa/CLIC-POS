@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
 import { emitSyncEvent } from '../socket.js';
+import { forwardTransactionsToErpInbox } from '../services/erpInboxForward.js';
 
 const router = express.Router();
 
@@ -1124,12 +1125,27 @@ router.post('/transactions', async (req, res) => {
             updateMetadata('transactions', getCurrentVersion('transactions'));
         })();
 
+        const normalizedForErp = items.map((txn: any) => normalizeTransactionIdentity(txn));
+        const erpInbox = await forwardTransactionsToErpInbox(normalizedForErp);
+
+        if (!erpInbox.skipped && erpInbox.failed) {
+            console.error('[ERP_INBOX] Forward failed after local persist; client should retry (idempotent event_id).', erpInbox.results);
+            return res.status(502).json({
+                success: false,
+                message: 'Local Master saved the sale, but forwarding to ERP failed. Retry sync.',
+                addedCount,
+                conflictResolvedCount,
+                erpInbox
+            });
+        }
+
         res.json({
             success: true,
             addedCount,
             conflictResolvedCount,
             totalCount: (getCollection('transactions')).length,
-            inventoryUpdates: 0
+            inventoryUpdates: 0,
+            erpInbox
         });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });

@@ -740,9 +740,35 @@ class ApiSyncAdapter {
             }
 
             if (!response.ok) {
-                throw new Error(`Push transaction failed: ${response.statusText}`);
+                let detail = '';
+                try {
+                    const errBody = await response.clone().json();
+                    detail = errBody?.message || errBody?.erpInbox ? JSON.stringify(errBody.erpInbox) : '';
+                } catch {
+                    /* ignore */
+                }
+                throw new Error(
+                    `Push transaction failed: ${response.status} ${response.statusText}${detail ? ` — ${detail}` : ''}`
+                );
             }
-            console.log(`📤 ApiSyncAdapter: Pushed transaction ${normalizedTransaction.source_transaction_id || normalizedTransaction.id}`);
+            let syncBody: any = null;
+            try {
+                syncBody = await response.json();
+            } catch {
+                /* non-JSON */
+            }
+            const erp = syncBody?.erpInbox;
+            const txId = normalizedTransaction.source_transaction_id || normalizedTransaction.id;
+            if (erp?.skipped) {
+                console.warn(
+                    `📤 ApiSyncAdapter: Saved on Master only; ERP inbox not configured (${erp.reason || 'NO_ERP_URL'}): ${txId}`
+                );
+            } else if (erp?.failed) {
+                console.error(`📤 ApiSyncAdapter: Unexpected erpInbox.failed in success response for ${txId}`);
+            } else {
+                const types = Array.isArray(erp?.results) ? erp.results.map((r: any) => r.eventType).join(', ') : 'SALE_POSTED';
+                console.log(`📤 ApiSyncAdapter: Transaction delivered to ERP inbox [${types}]: ${txId}`);
+            }
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing transaction:', error);
             this.isOnline = false;
