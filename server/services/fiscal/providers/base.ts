@@ -44,6 +44,7 @@ export interface FiscalTransactionInput {
     netAmount?: number;
     taxAmount?: number;
     discountAmount?: number;
+    isTaxIncluded?: boolean;
     ncf?: string;
     ncfType?: string;
     electronicNcf?: string;
