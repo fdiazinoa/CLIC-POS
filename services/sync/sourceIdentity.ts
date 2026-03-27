@@ -1,6 +1,7 @@
-import { CashMovement, PaymentEntry, Transaction, ZReport } from '../../types';
+import { CashMovement, InventoryLedgerEntry, PaymentEntry, Transaction, ZReport } from '../../types';
 
 const SOURCE_CHANNEL = 'POS' as const;
+const DEFAULT_CURRENCY = 'DOP';
 
 const normalizeString = (value: unknown): string | undefined => {
     if (typeof value !== 'string') return undefined;
@@ -28,15 +29,28 @@ const normalizePaymentEntries = (
         deviceId?: string;
     }
 ): PaymentEntry[] => {
-    return payments.map((payment) => ({
-        ...payment,
-        source_channel: SOURCE_CHANNEL,
-        source_payment_id: normalizeString(payment?.source_payment_id) || normalizeString(payment?.id),
-        source_transaction_id: context.sourceTransactionId,
-        source_display_id: context.sourceDisplayId,
-        source_terminal_id: context.sourceTerminalId,
-        device_id: context.deviceId
-    }));
+    return payments.map((payment) => {
+        const currencyCode =
+            normalizeString(payment?.currency_code) ||
+            normalizeString(payment?.currencyCode) ||
+            DEFAULT_CURRENCY;
+        const exchangeRateRaw = payment?.exchange_rate ?? payment?.exchangeRate;
+        const exchangeRate =
+            typeof exchangeRateRaw === 'number' && !Number.isNaN(exchangeRateRaw) ? exchangeRateRaw : undefined;
+
+        return {
+            ...payment,
+            source_channel: SOURCE_CHANNEL,
+            source_payment_id: normalizeString(payment?.source_payment_id) || normalizeString(payment?.id),
+            source_transaction_id: context.sourceTransactionId,
+            source_display_id: context.sourceDisplayId,
+            source_terminal_id: context.sourceTerminalId,
+            device_id: context.deviceId,
+            payment_method: payment?.payment_method ?? payment?.method,
+            currency_code: currencyCode,
+            exchange_rate: exchangeRate
+        };
+    });
 };
 
 export const normalizeTransactionForSync = (transaction: Transaction): Transaction => {
@@ -121,6 +135,106 @@ export const normalizeCashMovementForSync = (movement: CashMovement): CashMoveme
         source_cash_movement_id: sourceCashMovementId,
         source_terminal_id: sourceTerminalId,
         device_id: deviceId,
+        created_at: createdAt
+    };
+};
+
+export const normalizeInventoryLedgerForSync = (entry: InventoryLedgerEntry): InventoryLedgerEntry => {
+    const sourceInventoryMovementId =
+        normalizeString((entry as any).source_inventory_movement_id) || normalizeString(entry.id);
+
+    if (!sourceInventoryMovementId) {
+        throw new Error('Inventory ledger entry is missing a persistent technical ID');
+    }
+
+    const sourceTerminalId =
+        normalizeString((entry as any).source_terminal_id) || normalizeString(entry.terminalId);
+
+    const deviceId = normalizeString((entry as any).device_id) || resolveDeviceId();
+
+    const createdAt =
+        normalizeString((entry as any).created_at) || normalizeString(entry.createdAt);
+
+    return {
+        ...entry,
+        source_channel: SOURCE_CHANNEL,
+        source_inventory_movement_id: sourceInventoryMovementId,
+        source_terminal_id: sourceTerminalId,
+        device_id: deviceId,
+        created_at: createdAt
+    };
+};
+
+/** Wallet row from `wallet_transactions`: stable `id` is the technical source_event_id. */
+export const normalizeWalletEventForSync = (event: Record<string, unknown>): Record<string, unknown> => {
+    const sourceEventId =
+        normalizeString(event.source_event_id as string) || normalizeString(event.id as string);
+
+    if (!sourceEventId) {
+        throw new Error('Wallet event is missing a persistent technical ID');
+    }
+
+    const sourceTerminalId =
+        normalizeString(event.source_terminal_id as string) || normalizeString((event as any).terminalId);
+
+    const deviceId = normalizeString(event.device_id as string) || resolveDeviceId();
+
+    const createdAt =
+        normalizeString(event.created_at as string) ||
+        normalizeString((event as any).createdAt) ||
+        new Date().toISOString();
+
+    const sourceTransactionId =
+        normalizeString((event as any).source_transaction_id) ||
+        normalizeString((event as any).referenceId);
+
+    return {
+        ...event,
+        source_channel: SOURCE_CHANNEL,
+        source_event_id: sourceEventId,
+        source_terminal_id: sourceTerminalId,
+        device_id: deviceId,
+        source_transaction_id: sourceTransactionId,
+        event_type: (event.event_type as string) || 'WALLET',
+        amount: typeof (event as any).amount === 'number' ? (event as any).amount : undefined,
+        created_at: createdAt
+    };
+};
+
+/** Loyalty operational events (points earn/burn); stable `id` is source_event_id. */
+export const normalizeLoyaltyEventForSync = (event: Record<string, unknown>): Record<string, unknown> => {
+    const sourceEventId =
+        normalizeString(event.source_event_id as string) || normalizeString(event.id as string);
+
+    if (!sourceEventId) {
+        throw new Error('Loyalty event is missing a persistent technical ID');
+    }
+
+    const sourceTerminalId =
+        normalizeString(event.source_terminal_id as string) || normalizeString((event as any).terminalId);
+
+    const deviceId = normalizeString(event.device_id as string) || resolveDeviceId();
+
+    const createdAt =
+        normalizeString(event.created_at as string) ||
+        normalizeString((event as any).createdAt) ||
+        new Date().toISOString();
+
+    const sourceTransactionId =
+        normalizeString((event as any).source_transaction_id) || normalizeString((event as any).referenceId);
+
+    const pointsRaw = (event as any).points ?? (event as any).amount;
+    const points = typeof pointsRaw === 'number' && !Number.isNaN(pointsRaw) ? pointsRaw : undefined;
+
+    return {
+        ...event,
+        source_channel: SOURCE_CHANNEL,
+        source_event_id: sourceEventId,
+        source_terminal_id: sourceTerminalId,
+        device_id: deviceId,
+        source_transaction_id: sourceTransactionId,
+        event_type: (event.event_type as string) || 'LOYALTY_POINTS',
+        points,
         created_at: createdAt
     };
 };

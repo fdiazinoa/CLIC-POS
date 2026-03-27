@@ -194,7 +194,9 @@ const SEED_DATA = {
   tables: [] as any[],
   collections: [] as any[],
   paymentMethods: [] as PaymentMethodDefinition[],
-  activities: [] as any[]
+  activities: [] as any[],
+  wallet_transactions: [] as any[],
+  loyalty_events: [] as any[]
 };
 
 export const db = {

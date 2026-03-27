@@ -78,7 +78,9 @@ class BackgroundSyncManager {
             'inventoryLedger',
             'cashMovements',
             'zReports',
-            'transactions'
+            'transactions',
+            'wallet_transactions',
+            'loyalty_events'
         ]);
 
         if (!terminalScopedCollections.has(collectionName)) return true;
@@ -151,6 +153,20 @@ class BackgroundSyncManager {
                 collectionErrors.push(`zReports: ${error?.message || 'unknown error'}`);
             });
 
+            // 5) Wallet operational events (ERP-normalized queue)
+            await this.processCollection<any>('wallet_transactions', async (item) => {
+                await apiSyncAdapter.pushOperationalEvents([item]);
+            }).catch((error: any) => {
+                collectionErrors.push(`wallet_transactions: ${error?.message || 'unknown error'}`);
+            });
+
+            // 6) Loyalty points events (optional collection; often empty until wired to earn/burn)
+            await this.processCollection<any>('loyalty_events', async (item) => {
+                await apiSyncAdapter.pushOperationalEvents([item]);
+            }).catch((error: any) => {
+                collectionErrors.push(`loyalty_events: ${error?.message || 'unknown error'}`);
+            });
+
             this.updateState({
                 isSyncing: false,
                 hasError: collectionErrors.length > 0,
@@ -199,6 +215,13 @@ class BackgroundSyncManager {
             // Legacy safeguard: older transactions may not have syncStatus set.
             if (collectionName === 'transactions' && (status === undefined || status === null || (item as any).syncStatus === '')) {
                 return true;
+            }
+            // Wallet / loyalty: only sync rows explicitly queued (avoid replaying legacy rows without status).
+            if (
+                (collectionName === 'wallet_transactions' || collectionName === 'loyalty_events') &&
+                (status === undefined || status === null || (item as any).syncStatus === '')
+            ) {
+                return false;
             }
             return false;
         };
@@ -250,7 +273,7 @@ class BackgroundSyncManager {
 
     private async updatePendingCount() {
         let count = 0;
-        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions'];
+        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
 
         for (const col of collections) {
             const data = await db.get(col as any) || [];
@@ -298,7 +321,7 @@ class BackgroundSyncManager {
      * This handles abrupt browser/tab shutdowns during sync.
      */
     private async recoverStuckSyncItems() {
-        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions'];
+        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
         for (const colName of collections) {
             try {
                 const data = await db.get(colName as any) as any[];
@@ -390,7 +413,7 @@ class BackgroundSyncManager {
 
         console.log(`🧹 BackgroundSyncManager: Pruning synced items older than ${RETENTION_DAYS} days (Cutoff: ${cutoff.toISOString()})`);
 
-        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions'];
+        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
 
         for (const colName of collections) {
             try {

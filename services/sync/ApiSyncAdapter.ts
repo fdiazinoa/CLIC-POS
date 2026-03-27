@@ -1,9 +1,12 @@
 import { Product } from '../../types';
 import {
-    normalizeCashMovementForSync,
-    normalizeTransactionForSync,
-    normalizeZReportForSync
-} from './sourceIdentity';
+    buildErpCashMovementPayload,
+    buildErpInventoryLedgerPayload,
+    buildErpSalePayload,
+    buildErpZReportPayload,
+    buildErpWalletEventPayload,
+    buildErpLoyaltyEventPayload
+} from './erpOutboundPayloads';
 
 /**
  * API Sync Adapter
@@ -721,7 +724,7 @@ class ApiSyncAdapter {
     async pushTransaction(transaction: any): Promise<void> {
         try {
             await this.ensurePushReady();
-            const normalizedTransaction = normalizeTransactionForSync(transaction);
+            const normalizedTransaction = buildErpSalePayload(transaction);
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/transactions`, {
                 method: 'POST',
                 headers: {
@@ -753,13 +756,14 @@ class ApiSyncAdapter {
     async pushInventoryMovement(movement: any): Promise<void> {
         try {
             await this.ensurePushReady();
+            const payload = buildErpInventoryLedgerPayload(movement);
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/inventory/movements`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': this.authToken || ''
                 },
-                body: JSON.stringify({ items: [movement] })
+                body: JSON.stringify({ items: [payload] })
             });
 
             if (response.status === 401) {
@@ -770,7 +774,7 @@ class ApiSyncAdapter {
             if (!response.ok) {
                 throw new Error(`Push inventory movement failed: ${response.statusText}`);
             }
-            console.log(`📤 ApiSyncAdapter: Pushed inventory movement ${movement.id}`);
+            console.log(`📤 ApiSyncAdapter: Pushed inventory movement ${payload.source_inventory_movement_id || payload.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing inventory movement:', error);
             this.isOnline = false;
@@ -815,7 +819,7 @@ class ApiSyncAdapter {
     async pushCashMovement(movement: any): Promise<void> {
         try {
             await this.ensurePushReady();
-            const normalizedMovement = normalizeCashMovementForSync(movement);
+            const normalizedMovement = buildErpCashMovementPayload(movement);
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/cash/movements`, {
                 method: 'POST',
                 headers: {
@@ -847,7 +851,7 @@ class ApiSyncAdapter {
     async pushZReport(report: any): Promise<void> {
         try {
             await this.ensurePushReady();
-            const normalizedReport = normalizeZReportForSync(report);
+            const normalizedReport = buildErpZReportPayload(report);
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/z-reports`, {
                 method: 'POST',
                 headers: {
@@ -868,6 +872,45 @@ class ApiSyncAdapter {
             console.log(`📤 ApiSyncAdapter: Pushed Z-Report ${normalizedReport.source_z_report_id || normalizedReport.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing Z-Report:', error);
+            this.isOnline = false;
+            throw error;
+        }
+    }
+
+    /**
+     * Push wallet / loyalty operational events (normalized, idempotent by source_event_id on Master).
+     */
+    async pushOperationalEvents(items: Record<string, unknown>[]): Promise<void> {
+        if (!items.length) return;
+        try {
+            await this.ensurePushReady();
+            const normalized = items.map((row) => {
+                const channel = String((row as any).operationalChannel || '').toUpperCase();
+                if (channel === 'LOYALTY') {
+                    return buildErpLoyaltyEventPayload(row);
+                }
+                return buildErpWalletEventPayload(row);
+            });
+            const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/operational/events`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Token': this.authToken || ''
+                },
+                body: JSON.stringify({ items: normalized })
+            });
+
+            if (response.status === 401) {
+                await this.authenticate();
+                return this.pushOperationalEvents(items);
+            }
+
+            if (!response.ok) {
+                throw new Error(`Push operational events failed: ${response.statusText}`);
+            }
+            console.log(`📤 ApiSyncAdapter: Pushed ${normalized.length} operational event(s)`);
+        } catch (error) {
+            console.error('❌ ApiSyncAdapter: Error pushing operational events:', error);
             this.isOnline = false;
             throw error;
         }

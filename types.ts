@@ -255,6 +255,11 @@ export interface InventoryLedgerEntry {
   balanceQty: number;
   balanceAvgCost: number;
   terminalId?: string; // Terminal ID or Series
+  source_channel?: 'POS';
+  source_inventory_movement_id?: string;
+  source_terminal_id?: string;
+  device_id?: string;
+  created_at?: string;
   syncStatus?: SyncStatus;
   syncError?: string;
   variantId?: string; // NEW: Specific variant ID
@@ -1456,6 +1461,10 @@ export interface PaymentEntry {
   currencyCode?: string;
   amountOriginal?: number;
   exchangeRate?: number;
+  /** ERP / outbound sync (snake_case mirrors camelCase; stable id remains `id` / source_payment_id). */
+  payment_method?: PaymentMethod | string;
+  currency_code?: string;
+  exchange_rate?: number;
   source_channel?: 'POS';
   source_payment_id?: string;
   source_transaction_id?: string;
