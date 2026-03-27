@@ -739,12 +739,16 @@ class ApiSyncAdapter {
 
     async pushTransaction(transaction: any): Promise<void> {
         try {
+            console.log(
+                `[SYNC_TX_PUSH] start masterUrl=${this.config?.masterUrl || 'n/a'} hasToken=${!!this.authToken}`
+            );
             await this.ensurePushReady();
+            console.log(`[SYNC_TX_PUSH] after ensurePushReady hasToken=${!!this.authToken}`);
             const normalizedTransaction = buildErpSalePayload(transaction);
             const erpBaseUrl = this.resolveClientErpBaseUrlForInbox();
             const txId = normalizedTransaction.source_transaction_id || normalizedTransaction.id;
             console.log(
-                `[SYNC_TX_PUSH] POST ${this.config?.masterUrl}/api/sync/transactions tx=${txId} erp_base_url=${erpBaseUrl ? 'sent' : 'MISSING'}`
+                `[SYNC_TX_PUSH] POST ${this.config?.masterUrl}/api/sync/transactions tx=${txId} source_tx=${normalizedTransaction.source_transaction_id} terminal=${normalizedTransaction.source_terminal_id || normalizedTransaction.terminalId} erp_base_url=${erpBaseUrl ? 'sent' : 'MISSING'}`
             );
 
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/transactions`, {
@@ -782,6 +786,22 @@ class ApiSyncAdapter {
             } catch {
                 /* non-JSON */
             }
+
+            // Direct POST to CLIC-ERP /api/sync/transactions returns 200 even when applySyncInboxEventById fails.
+            if (
+                syncBody &&
+                typeof syncBody.applyFailedCount === 'number' &&
+                syncBody.applyFailedCount > 0
+            ) {
+                console.error(
+                    `[SYNC_TX_PUSH] ERP /api/sync/transactions applyFailedCount=${syncBody.applyFailedCount}`,
+                    syncBody.applyIssues
+                );
+                throw new Error(
+                    `ERP did not persist sale (apply failures): ${JSON.stringify(syncBody.applyIssues || [])}`
+                );
+            }
+
             const erp = syncBody?.erpInbox;
             if (erp?.skipped) {
                 console.warn(

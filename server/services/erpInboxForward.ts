@@ -191,6 +191,9 @@ export interface ErpInboxForwardResult {
     httpStatus?: number;
     duplicate?: boolean;
     error?: string;
+    /** ERP inbox row id — required to run `/inbox/apply/:id` (inbox POST alone only queues RECEIVED). */
+    syncId?: string;
+    applyHttpStatus?: number;
 }
 
 export interface ErpInboxForwardSummary {
@@ -214,6 +217,23 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
     } finally {
         clearTimeout(t);
     }
+}
+
+/**
+ * CLIC-ERP: `POST /api/sync/inbox` inserts `erp_sync_inbox` with status RECEIVED only.
+ * `POST /api/sync/transactions` on ERP auto-applies; inbox alone does not — must call apply.
+ * @see CLIC-ERP server/routes/syncInbox.js router.post('/inbox') vs storePosEventBatch
+ */
+async function applyErpInboxRow(baseUrl: string, syncId: string): Promise<{ ok: boolean; status: number; text: string }> {
+    const applyUrl = `${normalizeBaseUrl(baseUrl)}/api/sync/inbox/apply/${encodeURIComponent(syncId)}`;
+    console.log(`[ERP_INBOX] POST ${applyUrl} (immediate apply after inbox)`);
+    const applyRes = await fetchWithTimeout(applyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+    });
+    const applyText = await applyRes.text();
+    return { ok: applyRes.ok, status: applyRes.status, text: applyText };
 }
 
 export async function forwardTransactionsToErpInbox(
@@ -266,17 +286,66 @@ export async function forwardTransactionsToErpInbox(
                 /* non-JSON */
             }
             const duplicate = !!(parsed && (parsed.duplicate === true || parsed.response?.duplicate === true));
+            const inboxStatus = String(parsed?.status || '').toUpperCase();
+            const syncId = typeof parsed?.sync_id === 'string' && parsed.sync_id.trim() ? parsed.sync_id.trim() : '';
 
             if (res.ok) {
                 console.log(
-                    `[ERP_INBOX] ERP OK http=${res.status} duplicate=${duplicate} response_snip=${text.slice(0, 400)}`
+                    `[ERP_INBOX] inbox response http=${res.status} duplicate=${duplicate} status=${inboxStatus || 'n/a'} sync_id=${syncId || 'MISSING'} snip=${text.slice(0, 400)}`
                 );
+
+                if (inboxStatus === 'APPLIED') {
+                    results.push({
+                        eventId: body.event_id,
+                        eventType: body.event_type,
+                        ok: true,
+                        httpStatus: res.status,
+                        duplicate,
+                        syncId: syncId || undefined
+                    });
+                    continue;
+                }
+
+                if (!syncId) {
+                    console.error('[ERP_INBOX] inbox OK but missing sync_id — cannot apply; sale will not appear in ERP');
+                    results.push({
+                        eventId: body.event_id,
+                        eventType: body.event_type,
+                        ok: false,
+                        httpStatus: res.status,
+                        duplicate,
+                        error: 'INBOX_MISSING_SYNC_ID'
+                    });
+                    return { skipped: false, failed: true, results, erpBaseUrlUsed: baseUrl };
+                }
+
+                const applied = await applyErpInboxRow(baseUrl, syncId);
+                if (!applied.ok) {
+                    console.error(
+                        `[ERP_INBOX] apply FAILED sync_id=${syncId} http=${applied.status} body=${applied.text.slice(0, 800)}`
+                    );
+                    results.push({
+                        eventId: body.event_id,
+                        eventType: body.event_type,
+                        ok: false,
+                        httpStatus: res.status,
+                        duplicate,
+                        syncId,
+                        applyHttpStatus: applied.status,
+                        error: applied.text.slice(0, 400)
+                    });
+                    return { skipped: false, failed: true, results, erpBaseUrlUsed: baseUrl };
+                }
+
+                console.log(`[ERP_INBOX] apply OK sync_id=${syncId} http=${applied.status} snip=${applied.text.slice(0, 500)}`);
                 results.push({
                     eventId: body.event_id,
                     eventType: body.event_type,
                     ok: true,
                     httpStatus: res.status,
-                    duplicate
+                    duplicate,
+                    syncId,
+                    applyHttpStatus: applied.status
                 });
             } else {
                 console.error(`[ERP_INBOX] ERP REJECT http=${res.status} body=${text.slice(0, 800)}`);
