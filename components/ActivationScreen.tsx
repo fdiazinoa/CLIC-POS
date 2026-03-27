@@ -291,6 +291,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             };
 
             localStorage.setItem('clic_tenant_id', tenantData.tenantId);
+            localStorage.setItem('active_tenant_id', tenantData.tenantId);
             localStorage.setItem('clic_tenant_email', tenantData.email);
             localStorage.removeItem('clic_tenant_unverified');
             if (tenantData.slug) {
@@ -321,6 +322,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         };
 
         localStorage.setItem('clic_tenant_id', tenantData.tenantId);
+        localStorage.setItem('active_tenant_id', tenantData.tenantId);
         localStorage.setItem('clic_tenant_email', tenantData.email);
         if (!resolvedTenant?.id) {
             localStorage.setItem('clic_tenant_unverified', '1');

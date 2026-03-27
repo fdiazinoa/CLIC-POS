@@ -344,6 +344,53 @@ export interface DocumentSeries {
   businessUnit?: string;  // Optional: "Tienda Norte", "Caja Express"
 }
 
+export interface TerminalConfigResolvedPricingSnapshot {
+  default_tariff_id?: string;
+  allowed_tariff_ids?: string[];
+  tariffs?: any[];
+}
+
+export interface TerminalConfigResolvedInventorySnapshot {
+  default_warehouse_id?: string;
+  transfer_warehouse_id?: string;
+  allowed_warehouse_ids?: string[];
+  default_warehouse?: any;
+  warehouses?: any[];
+}
+
+export interface TerminalConfigResolvedDocumentsSnapshot {
+  assignments?: Record<string, any> | any[];
+  default_fiscal_range_id?: string;
+  document_series?: any[];
+  fiscal_ranges?: any[];
+}
+
+export interface TerminalConfigResolvedCatalogSnapshot {
+  allowed_categories?: string[] | any[];
+  full_pull_on_pairing?: boolean;
+}
+
+export interface TerminalConfigResolvedSnapshot {
+  pricing?: TerminalConfigResolvedPricingSnapshot;
+  inventory?: TerminalConfigResolvedInventorySnapshot;
+  documents?: TerminalConfigResolvedDocumentsSnapshot;
+  catalog?: TerminalConfigResolvedCatalogSnapshot;
+}
+
+export interface TerminalConfigSnapshot {
+  terminal_id?: string;
+  tenant_id?: string;
+  company_id?: string;
+  store_id?: string;
+  device_id?: string;
+  terminal_name?: string;
+  station_number?: string | number;
+  role?: string;
+  resolved?: TerminalConfigResolvedSnapshot;
+  config?: Record<string, any>;
+  resolution_error?: any;
+}
+
 export interface NCFConfig {
   batchSize: number;
   lowBatchThreshold: number;
@@ -355,6 +402,9 @@ export interface TerminalConfig {
   lastPairingDate?: string;
   isBlocked?: boolean;
   deviceBindingToken: string;
+  erpTerminalId?: string;
+  terminalName?: string;
+  stationNumber?: string | null;
   isPrimaryNode?: boolean; // Rol jerárquico de la terminal
   governedByMaster?: boolean; // NEW: If true, this terminal follows the configuration defined by the Master
   startWithAgenda?: boolean; // NEW: Boot directly into Agenda view
@@ -365,6 +415,8 @@ export interface TerminalConfig {
     lowBatchThreshold: number;
     // New: Configuration per NCF Type
     typeConfigs?: Partial<Record<NCFType, NCFConfig>>;
+    defaultFiscalRangeId?: string;
+    fiscalRanges?: FiscalRangeDGII[];
   };
 
   tables?: {
@@ -384,6 +436,7 @@ export interface TerminalConfig {
   pricing: {
     allowedTariffIds: string[];
     defaultTariffId: string;
+    tariffs?: Tariff[];
   };
   workflow: {
     inventory: {
@@ -456,11 +509,28 @@ export interface TerminalConfig {
   };
   catalog?: {
     allowedCategories: string[];
+    fullPullOnPairing?: boolean;
   };
   inventoryScope?: {
     defaultSalesWarehouseId: string;
     visibleWarehouseIds: string[];
+    transferWarehouseId?: string;
+    defaultWarehouse?: Warehouse;
+    warehouses?: Warehouse[];
   };
+  erpBinding?: {
+    terminalId?: string;
+    tenantId?: string;
+    companyId?: string;
+    storeId?: string;
+    deviceId?: string;
+    terminalName?: string;
+    stationNumber?: string;
+    role?: string;
+  };
+  erpSnapshot?: TerminalConfigSnapshot;
+  metadata?: Record<string, any>;
+  lan?: Record<string, any>;
   wallet?: WalletConfig;
   syncConfig?: SyncConfig;
 }
@@ -726,6 +796,7 @@ export interface BusinessConfig {
     quickKeysLayout: 'A' | 'B';
     viewMode: 'VISUAL' | 'RETAIL';
   };
+  terminalSnapshots?: Record<string, TerminalConfigSnapshot>;
 }
 
 export interface RoleDefinition {
@@ -1030,6 +1101,14 @@ export interface Transaction {
   id: string;
   globalSequence?: number;          // Global unique sequence number
   displayId?: string;               // User-visible ID (e.g., "TCK01-000123")
+  source_channel?: 'POS';
+  source_transaction_id?: string;
+  source_display_id?: string;
+  source_terminal_id?: string;
+  device_id?: string;
+  source_credit_note_id?: string;
+  original_transaction_id?: string;
+  original_display_id?: string;
 
   // Document Classification
   documentType?: DocumentType;      // Type of transaction
@@ -1291,6 +1370,11 @@ export interface CashMovement {
   terminalId?: string; // ID of the terminal where the movement was recorded
   syncStatus?: SyncStatus;
   syncError?: string;
+  source_channel?: 'POS';
+  source_cash_movement_id?: string;
+  source_terminal_id?: string;
+  device_id?: string;
+  created_at?: string;
 }
 
 export interface Supplier {
@@ -1410,6 +1494,12 @@ export interface PaymentEntry {
   currencyCode?: string;
   amountOriginal?: number;
   exchangeRate?: number;
+  source_channel?: 'POS';
+  source_payment_id?: string;
+  source_transaction_id?: string;
+  source_display_id?: string;
+  source_terminal_id?: string;
+  device_id?: string;
 }
 
 export interface CustomerTransaction {
@@ -1697,6 +1787,10 @@ export interface ZReport {
   id: string;
   terminalId: string;
   sequenceNumber: string; // e.g., Z-0001
+  source_channel?: 'POS';
+  source_z_report_id?: string;
+  source_terminal_id?: string;
+  device_id?: string;
   openedAt: string; // Timestamp of first transaction/movement since last Z
   closedAt: string;
   closedByUserId: string;

@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { Capacitor } from '@capacitor/core';
 import { Layout } from 'lucide-react';
 import {
@@ -52,7 +53,7 @@ import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 
 // Component Imports
-import LoginScreen from './components/LoginScreen';
+import ModernLoginScreen from './components/ModernLoginScreen';
 import ErrorBoundary from './components/ErrorBoundary';
 import POSInterface from './components/POSInterface';
 import AgendaManager from './components/AgendaManager';
@@ -67,7 +68,7 @@ import SetupWizard from './components/SetupWizard';
 import ActivationScreen from './components/ActivationScreen';
 import FranchiseDashboard from './components/FranchiseDashboard';
 import TerminalModeSelector from './components/TerminalModeSelector';
-import { TerminalPairingView } from './components/TerminalPairingView';
+import TerminalBindingScreen from './components/TerminalBindingScreen';
 import CustomerVisor from './components/CustomerVisor';
 import { visorSync } from './utils/visorSync';
 
@@ -112,7 +113,7 @@ import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { persistStandaloneRefundTransaction } from './services/localRefundPersistence';
 import { checkLicenseStatus, clearTenantIdentity, resolveTenantId } from './utils/licenseGuard';
 import { getStoredTenantIdentity, publishMasterEndpointToCloud, resolveMasterEndpointFromCloud } from './utils/cloudMasterRegistry';
-import { clearStoredErpSyncBinding, ensureErpSyncLifecycle } from './utils/erpSyncLifecycle';
+import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, persistStoredErpSyncBinding } from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 
 type ReceivableRepairSummary = {
@@ -126,6 +127,51 @@ type ReceivableRepairSummary = {
   totalPendingAfter: number;
   transactionIds: string[];
   creditNoteIds: string[];
+};
+
+const resolveSetupTenantId = (): string => {
+  const candidates = [
+    localStorage.getItem('active_tenant_id'),
+    localStorage.getItem('clic_tenant_id'),
+  ];
+
+  return candidates.map((value) => (value || '').trim()).find(Boolean) || 'default-tenant';
+};
+
+const normalizeSetupBaseUrl = (value?: string | null): string | null => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `${window.location.protocol}//${raw}`;
+
+  try {
+    const url = new URL(withProtocol);
+    return url
+      .toString()
+      .replace(/\/api\/sync\/?$/i, '')
+      .replace(/\/api\/?$/i, '')
+      .replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+};
+
+const resolveSetupErpBaseUrl = (): string | null => {
+  const env = (import.meta as any).env || {};
+  const candidates = [
+    localStorage.getItem('CLIC_ERP_BASE_URL'),
+    localStorage.getItem('erp_base_url'),
+    env.VITE_ERP_BASE_URL,
+    env.VITE_ERP_SYNC_API_URL,
+    env.VITE_SYNC_API_URL,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeSetupBaseUrl(candidate);
+    if (normalized) return normalized;
+  }
+
+  return null;
 };
 
 const normalizeTerminalDocumentAssignments = (
@@ -527,7 +573,21 @@ const AppContent: React.FC = () => {
 
   // Helper: Get current terminal configuration
   const getCurrentTerminal = React.useCallback(() => {
-    return (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+    const terminals = config.terminals || [];
+    const byDeviceId = terminals.find(t => t.config?.currentDeviceId === deviceId);
+    if (byDeviceId) return byDeviceId;
+
+    const activeTerminalId =
+      localStorage.getItem('active_terminal_id')
+      || localStorage.getItem('CLIC_POS_TERMINAL_ID')
+      || '';
+
+    if (!activeTerminalId) return undefined;
+
+    return terminals.find((terminal) =>
+      terminal.id === activeTerminalId
+      || terminal.config?.erpTerminalId === activeTerminalId
+    );
   }, [config.terminals, deviceId]);
 
   // Helper: Get current device role
@@ -694,6 +754,9 @@ const AppContent: React.FC = () => {
   }, [getStandalonePrimaryBinding]);
 
   const handleVerticalSelection = React.useCallback(async (selectedConfig: BusinessConfig) => {
+    clearStoredErpSyncBinding();
+    localStorage.removeItem('active_terminal_id');
+    localStorage.removeItem('initial_terminal_config');
     localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
     localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER');
     localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'VERTICAL_SELECTED');
@@ -704,6 +767,9 @@ const AppContent: React.FC = () => {
   }, []);
 
   const handleTerminalModeSelection = React.useCallback((mode: TerminalSetupMode) => {
+    clearStoredErpSyncBinding();
+    localStorage.removeItem('active_terminal_id');
+    localStorage.removeItem('initial_terminal_config');
     localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
     localStorage.setItem(TERMINAL_SETUP_MODE_KEY, mode);
 
@@ -720,39 +786,51 @@ const AppContent: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    const setupPending = hasPendingTerminalSetup();
+    const isSetupView =
+      currentView === 'ACTIVATION'
+      || currentView === 'VERTICAL_SELECTOR'
+      || currentView === 'TERMINAL_PAIRING';
     const currentTerminal = getCurrentTerminal();
     const tenantIdentity = getStoredTenantIdentity();
 
+    if (setupPending || isSetupView) return;
     if (!deviceId || !currentTerminal?.id) return;
     if (!tenantIdentity.tenantId && !tenantIdentity.tenantSlug && !tenantIdentity.tenantEmail) return;
 
     let disposed = false;
 
     const publishEndpoint = async () => {
+      const operationalTerminalId = currentTerminal.config?.stationNumber || currentTerminal.id;
+      const terminalName = currentTerminal.config?.terminalName || operationalTerminalId;
       const endpoint = await publishMasterEndpointToCloud({
         deviceId,
-        terminalId: currentTerminal.id,
-        terminalName: currentTerminal.id,
+        terminalId: operationalTerminalId,
+        terminalName,
         isPrimary: currentTerminal.config?.isPrimaryNode !== false,
       });
 
       if (!disposed && endpoint?.localIp) {
-        console.log(`[CLOUD] Terminal ${currentTerminal.id} publicada en cloud: ${endpoint.localIp}`);
+        console.log(`[CLOUD] Terminal ${terminalName} publicada en cloud: ${endpoint.localIp}`);
       }
     };
 
     const syncLifecycle = async () => {
       try {
+        const operationalTerminalId = currentTerminal.config?.stationNumber || currentTerminal.id;
+        const erpTerminalId = currentTerminal.config?.erpTerminalId || operationalTerminalId;
+        const terminalName = currentTerminal.config?.terminalName || operationalTerminalId;
         const result = await ensureErpSyncLifecycle({
           deviceId,
-          terminalId: currentTerminal.id,
-          terminalName: currentTerminal.id,
+          terminalId: erpTerminalId,
+          localTerminalId: operationalTerminalId,
+          terminalName,
           isPrimary: currentTerminal.config?.isPrimaryNode !== false,
           pendingEvents: 0,
         });
 
         if (!disposed && result?.heartbeat?.terminal?.id) {
-          console.log(`[ERP SYNC] Terminal ${currentTerminal.id} enlazada con ${result.heartbeat.terminal.id}`);
+          console.log(`[ERP SYNC] Terminal ${terminalName} enlazada con ${result.heartbeat.terminal.id}`);
         }
       } catch (error) {
         console.warn('[ERP SYNC] lifecycle registration skipped:', error);
@@ -785,7 +863,7 @@ const AppContent: React.FC = () => {
       window.removeEventListener('online', republish);
       window.removeEventListener('focus', republish);
     };
-  }, [deviceId, getCurrentTerminal]);
+  }, [currentView, deviceId, getCurrentTerminal]);
 
   // --- RECONNECTION BANNER ---
   const renderReconnectionBanner = () => {
@@ -1469,20 +1547,12 @@ const AppContent: React.FC = () => {
         // --- PAIRING CHECK & REDIRECT ---
         // If no local pairing exists and we have no master IP, we are definitely unpaired.
         // We must bail OUT of the loading sequence to let the user pair.
-        if (!localPairedTerminal && !masterIp && setupWizardCompleted) {
-          const standaloneBinding = getStandalonePrimaryBinding(currentConfig, storedDeviceId);
-
-          if (standaloneBinding?.wasAutoBound) {
-            console.log(`[BOOT] Standalone install detected. Auto-binding ${standaloneBinding.terminalId} to ${storedDeviceId}...`);
-            currentConfig = standaloneBinding.nextConfig;
-            await db.save('config', currentConfig);
-          } else {
-            console.warn('[BOOT] Dispositivo no vinculado. Redirigiendo a pantalla de vinculación...');
-            setIsDataLoaded(true); // Stop "Loading CLIC POS..."
-            setIsSecurityLoaded(true); // Bypass "Loading Security..."
-            setCurrentView('TERMINAL_PAIRING');
-            return;
-          }
+        if (!localPairedTerminal && setupWizardCompleted) {
+          console.warn('[BOOT] Dispositivo no vinculado. Redirigiendo a selección de terminal para evitar autoasignaciones silenciosas...');
+          setIsDataLoaded(true); // Stop "Loading CLIC POS..."
+          setIsSecurityLoaded(true); // Bypass "Loading Security..."
+          setCurrentView('TERMINAL_PAIRING');
+          return;
         }
 
         // --- AGENDA STARTUP CHECK ---
@@ -1610,7 +1680,7 @@ const AppContent: React.FC = () => {
           };
 
           // 1. Cargar persistencia - PRIORITIZE currentConfig (which might be from Master)
-          const finalConfig = (currentConfig && !Array.isArray(currentConfig) && Object.keys(currentConfig).length > 0) ? currentConfig : config;
+          let finalConfig = (currentConfig && !Array.isArray(currentConfig) && Object.keys(currentConfig).length > 0) ? currentConfig : config;
 
           setConfig({
             ...config,
@@ -1675,12 +1745,33 @@ const AppContent: React.FC = () => {
 
           // 4. Initialize Sync Manager
           if (pairedTerminal) {
-            if (pairedTerminal.config.isPrimaryNode === false && pairedTerminal.config.governedByMaster) {
-              console.log(`🛡️ Master Governance active for ${pairedTerminal.id}. Enforcing Master config.`);
+            let effectivePairedTerminal = pairedTerminal;
+
+            if (effectivePairedTerminal.config.isPrimaryNode === false && effectivePairedTerminal.config.governedByMaster) {
+              console.log(`🛡️ Master Governance active for ${effectivePairedTerminal.id}. Enforcing Master config.`);
               // We already have finalConfig from Master if IP was set, but we re-enforce the terminals part
             }
 
-            await syncManager.initialize(finalConfig, pairedTerminal.id);
+            await syncManager.initialize(finalConfig, effectivePairedTerminal.id);
+
+            try {
+              const refreshedTerminalConfig = await syncManager.refreshTerminalResolvedConfig(undefined, {
+                baseConfig: finalConfig,
+                dispatchEvent: false,
+              });
+
+              if (refreshedTerminalConfig) {
+                finalConfig = refreshedTerminalConfig;
+                currentConfig = refreshedTerminalConfig;
+                setConfig(refreshedTerminalConfig);
+                effectivePairedTerminal =
+                  (refreshedTerminalConfig.terminals || []).find(
+                    (t: any) => t.id === pairedTerminal.id || t.config?.currentDeviceId === storedDeviceId
+                  ) || effectivePairedTerminal;
+              }
+            } catch (refreshError) {
+              console.warn('⚠️ Startup terminal snapshot refresh failed. Using last known local config.', refreshError);
+            }
 
             // Auto-heal catalog/config drift on startup.
             // This catches the "2 categories / old products" mixed-state on both master and slaves.
@@ -1697,7 +1788,7 @@ const AppContent: React.FC = () => {
                   .filter(Boolean)
               );
 
-              const terminalAllowedCategories = (pairedTerminal.config?.catalog?.allowedCategories || [])
+              const terminalAllowedCategories = (effectivePairedTerminal.config?.catalog?.allowedCategories || [])
                 .map((cat: any) => normalizeCategory(cat))
                 .filter(Boolean);
               const matchedAllowedCategoriesCount = terminalAllowedCategories.filter(cat => sellableCategories.has(cat)).length;
@@ -1712,7 +1803,7 @@ const AppContent: React.FC = () => {
 
               if (hasTinyCatalog || hasCategoryMismatch) {
                 console.warn(
-                  `⚠️ Catalog drift detected on ${pairedTerminal.id}. ` +
+                  `⚠️ Catalog drift detected on ${effectivePairedTerminal.id}. ` +
                   `localProducts=${localCount}, sellableCategories=${sellableCategories.size}, allowedCategories=${terminalAllowedCategories.length}, matchedAllowed=${matchedAllowedCategoriesCount}. ` +
                   `Running forcePullAll...`
                 );
@@ -1757,7 +1848,7 @@ const AppContent: React.FC = () => {
               console.warn('⚠️ Post-init rehydration failed:', rehydrationError);
             }
 
-            if (pairedTerminal.config.isPrimaryNode === false) {
+            if (effectivePairedTerminal.config.isPrimaryNode === false) {
               syncManager.startAutoSync(30000);
               console.log('🔄 Auto-sync enabled for slave terminal');
             } else {
@@ -1765,9 +1856,9 @@ const AppContent: React.FC = () => {
               console.log('🔄 Auto-sync backup enabled for master terminal');
             }
 
-            permissionService.initialize(finalConfig, pairedTerminal.id);
-            authLevelService.init(finalConfig, pairedTerminal.id);
-            terminalRouter.init(finalConfig, pairedTerminal.id, pairedTerminal.config.deviceRole || null);
+            permissionService.initialize(finalConfig, effectivePairedTerminal.id);
+            authLevelService.init(finalConfig, effectivePairedTerminal.id);
+            terminalRouter.init(finalConfig, effectivePairedTerminal.id, effectivePairedTerminal.config.deviceRole || null);
 
             // --- CRITICAL SECURITY BOOTSTRAP ---
             try {
@@ -2099,37 +2190,78 @@ const AppContent: React.FC = () => {
 
   // --- CORE EVENT HANDLERS ---
 
-  const handlePairTerminal = async (terminalId: string, resolvedMasterIp?: string) => {
+  const handlePairTerminal = async (
+    terminalId: string,
+    pairingContext?: string | {
+      tenantId?: string;
+      erpTerminalId?: string;
+      terminalName?: string;
+      companyId?: string;
+      storeId?: string;
+      boundConfig?: BusinessConfig;
+      boundUsers?: User[];
+      masterIp?: string;
+      snapshotMeta?: {
+        fullPullOnPairing?: boolean;
+        resolutionError?: unknown;
+      };
+    },
+    options?: { forceTakeover?: boolean }
+  ) => {
     setRestoringHistory(true);
     try {
-      const newTerminals = (config.terminals || []).map(t => {
-        // Desvincular este dispositivo de cualquier otra terminal donde estuviera
-        if (t.config.currentDeviceId === deviceId) {
-          return { ...t, config: { ...t.config, currentDeviceId: undefined } };
-        }
-        // Vincular a la terminal seleccionada
-        if (t.id === terminalId) {
-          return {
-            ...t,
-            config: {
-              ...t.config,
-              currentDeviceId: deviceId,
-              lastPairingDate: new Date().toISOString()
-            }
-          };
-        }
-        return t;
-      });
+      const setupResult = typeof pairingContext === 'object' && pairingContext !== null ? pairingContext : undefined;
+      const resolvedMasterIp = typeof pairingContext === 'string' ? pairingContext : setupResult?.masterIp;
+      const previouslyAssignedTerminal = (config.terminals || []).find(t => t.id === terminalId);
+      const normalizedResolvedMasterIp = normalizeMasterHost(resolvedMasterIp || '');
+      if (!setupResult?.boundConfig) {
+        throw new Error('La vinculación debe provenir del backend central de setup. No se recibió configuración enlazada.');
+      }
+      const updatedConfig = setupResult.boundConfig;
+      const selectedTerminal = (updatedConfig.terminals || []).find(t => t.id === terminalId);
+      const resolvedTerminalName =
+        setupResult?.terminalName
+        || selectedTerminal?.config?.terminalName
+        || selectedTerminal?.config?.stationNumber
+        || selectedTerminal?.id
+        || terminalId;
+      const resolvedErpTerminalId =
+        setupResult?.erpTerminalId
+        || selectedTerminal?.config?.erpTerminalId
+        || terminalId;
+      const isSlave = selectedTerminal?.config?.isPrimaryNode === false;
+      const wasOccupiedByAnotherDevice =
+        !!previouslyAssignedTerminal?.config?.currentDeviceId &&
+        previouslyAssignedTerminal.config.currentDeviceId !== deviceId;
+      const shouldTakeover = options?.forceTakeover || wasOccupiedByAnotherDevice;
+      const configSyncUrl = normalizedResolvedMasterIp
+        ? `${window.location.protocol}//${normalizedResolvedMasterIp}:3001/api/config`
+        : buildConfigSyncUrl();
 
-      const updatedConfig = { ...config, terminals: newTerminals };
       setConfig(updatedConfig);
       await db.save('config', updatedConfig);
-
-      const selectedTerminal = (newTerminals || []).find(t => t.id === terminalId);
-      const isSlave = selectedTerminal?.config?.isPrimaryNode === false;
-      const normalizedResolvedMasterIp = normalizeMasterHost(resolvedMasterIp || '');
       localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
       localStorage.setItem(TERMINAL_SETUP_MODE_KEY, isSlave ? 'CLIENT' : 'SERVER');
+      localStorage.setItem('active_terminal_id', terminalId);
+      localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
+      localStorage.setItem(
+        'active_tenant_id',
+        setupResult?.tenantId || localStorage.getItem('active_tenant_id') || 'default-tenant'
+      );
+      localStorage.setItem('initial_terminal_config', JSON.stringify(updatedConfig));
+      persistStoredErpSyncBinding({
+        tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
+        terminalId: resolvedErpTerminalId,
+        localTerminalId: terminalId,
+        terminalName: resolvedTerminalName,
+        companyId: setupResult?.companyId || null,
+        storeId: setupResult?.storeId || null,
+      });
+
+      if (Array.isArray(setupResult?.boundUsers)) {
+        setUsers(setupResult.boundUsers);
+        await db.save('users', setupResult.boundUsers);
+      }
 
       if (isSlave && normalizedResolvedMasterIp) {
         localStorage.setItem('pos_master_ip', normalizedResolvedMasterIp);
@@ -2145,11 +2277,9 @@ const AppContent: React.FC = () => {
 
       // Always persist binding to backend before re-initializing sync.
       // This prevents pulling old config right after takeover.
-      const targetUrl = buildConfigSyncUrl();
-
-      if (targetUrl) {
+      if (configSyncUrl) {
         try {
-          const res = await fetch(targetUrl, {
+          const res = await fetch(configSyncUrl, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updatedConfig)
@@ -2158,7 +2288,7 @@ const AppContent: React.FC = () => {
             const detail = await res.text().catch(() => '');
             throw new Error(`HTTP ${res.status} ${detail}`.trim());
           }
-          console.log(`✅ Binding synced to backend at ${targetUrl}`);
+          console.log(`✅ Binding synced to backend at ${configSyncUrl}`);
         } catch (e) {
           console.error("❌ Failed to sync binding to backend:", e);
           // We continue; local binding is already saved.
@@ -2170,19 +2300,36 @@ const AppContent: React.FC = () => {
       void publishMasterEndpointToCloud({
         deviceId,
         terminalId,
-        terminalName: terminalId,
+        terminalName: resolvedTerminalName,
         isPrimary: !isSlave,
       });
 
-      // If it's a slave terminal, restore history
-      if (isSlave) {
+      const shouldRestoreRemoteData = !!normalizedResolvedMasterIp && (isSlave || shouldTakeover);
+
+      // If we're taking over a previous server or pairing as slave, hydrate from the remote box first.
+      if (shouldRestoreRemoteData) {
         try {
-          // Re-initialize sync manager with new config
-          await syncManager.initialize(updatedConfig, terminalId);
+          const remoteRestoreConfig: BusinessConfig = {
+            ...updatedConfig,
+            terminals: (updatedConfig.terminals || []).map((terminal) => {
+              if (terminal.id !== terminalId) return terminal;
+              return {
+                ...terminal,
+                config: {
+                  ...terminal.config,
+                  isPrimaryNode: false
+                }
+              };
+            })
+          };
+
+          localStorage.setItem('pos_master_ip', normalizedResolvedMasterIp);
+          localStorage.setItem('CLIC_POS_MASTER_URL', `${window.location.protocol}//${normalizedResolvedMasterIp}:3001`);
+
+          // Re-initialize sync manager with a temporary slave profile to pull history/catalogs
+          await syncManager.initialize(remoteRestoreConfig, terminalId);
           await syncManager.restoreHistory(terminalId);
 
-          // CRITICAL: Force full catalog sync to ensure sequences are loaded immediately
-          // restoreHistory only pulls operational data (txns, z-reports), but we need sequences too.
           console.log('🔄 Forcing full catalog sync to restore sequences...');
           await syncManager.syncAllCatalogs();
 
@@ -2194,15 +2341,53 @@ const AppContent: React.FC = () => {
           setZReports(freshData.zReports || []);
         } catch (error) {
           console.error('Failed to restore history:', error);
-          alert('No se pudo restaurar el historial desde la Maestra. El equipo funcionará, pero sin datos previos.');
+          alert(shouldTakeover
+            ? 'Se tomó control de la terminal, pero no se pudo restaurar la información del equipo anterior. Revisa conectividad cloud/red local.'
+            : 'No se pudo restaurar el historial desde la Maestra. El equipo funcionará, pero sin datos previos.');
         }
-      } else {
-        // CRITICAL: Even if not a slave (Master mode), we MUST re-initialize services
-        // with the new terminal ID and updated config, otherwise they stay uninitialized.
-        console.log("🛠️ Re-initializing services for Master/Local terminal...");
-        permissionService.initialize(updatedConfig, terminalId);
-        await syncManager.initialize(updatedConfig, terminalId);
       }
+
+      // CRITICAL: Re-initialize services with the final terminal role after any restore.
+      console.log(`🛠️ Re-initializing services for ${isSlave ? 'Slave' : 'Master'} terminal...`);
+      if (!isSlave) {
+        localStorage.removeItem('pos_master_ip');
+        localStorage.setItem('CLIC_POS_MASTER_URL', buildRuntimeMasterUrl());
+      }
+      permissionService.initialize(updatedConfig, terminalId);
+      await syncManager.initialize(updatedConfig, terminalId);
+      const shouldFullPullOnPairing = setupResult?.snapshotMeta?.fullPullOnPairing ?? true;
+      if (shouldFullPullOnPairing) {
+        await syncManager.fullPull();
+      } else {
+        await syncManager.refreshTerminalResolvedConfig();
+      }
+
+      const freshData = await db.init();
+      flushSync(() => {
+        setConfig(updatedConfig);
+        if (Array.isArray(freshData.users)) {
+          setUsers(freshData.users);
+        }
+      });
+      if (Array.isArray(freshData.users)) setUsers(freshData.users);
+      if (Array.isArray(freshData.roles)) setRoles(freshData.roles);
+      if (Array.isArray(freshData.customers)) setCustomers(freshData.customers);
+      if (Array.isArray(freshData.transactions)) setTransactions(freshData.transactions);
+      if (Array.isArray(freshData.products)) setProducts(freshData.products);
+      if (Array.isArray(freshData.warehouses)) setWarehouses(freshData.warehouses);
+      if (Array.isArray(freshData.cashMovements)) setCashMovements(freshData.cashMovements);
+      if (Array.isArray(freshData.zReports)) setZReports(freshData.zReports);
+      if (Array.isArray(freshData.purchaseOrders)) setPurchaseOrders(freshData.purchaseOrders);
+      if (Array.isArray(freshData.suppliers)) setSuppliers(freshData.suppliers);
+      if (Array.isArray(freshData.parkedTickets)) setParkedTickets(freshData.parkedTickets);
+      if (Array.isArray(freshData.transfers)) setTransfers(freshData.transfers);
+      if (Array.isArray(freshData.internalSequences)) setInternalSequences(freshData.internalSequences);
+      if (Array.isArray(freshData.receptions)) setReceptions(freshData.receptions);
+      if (Array.isArray(freshData.productStocks)) setProductStocks(freshData.productStocks);
+      if (Array.isArray(freshData.rooms)) setRooms(freshData.rooms);
+      if (Array.isArray(freshData.tables)) setTables(freshData.tables);
+      if (Array.isArray(freshData.collections)) setCollections(freshData.collections);
+      if (Array.isArray(freshData.supplierProductPrices)) setSupplierProductPrices(freshData.supplierProductPrices);
 
       setCurrentView('LOGIN');
     } catch (error) {
@@ -2226,15 +2411,6 @@ const AppContent: React.FC = () => {
       localStorage.setItem(SETUP_WIZARD_COMPLETED_KEY, '1');
       localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'COMPLETE');
       localStorage.setItem(SETUP_FLOW_VERSION_KEY, SETUP_FLOW_VERSION);
-
-      const standaloneBinding = !localStorage.getItem('pos_master_ip')
-        ? await activateLocalPrimaryTerminal(nextConfig, effectiveDeviceId)
-        : null;
-
-      if (standaloneBinding) {
-        setCurrentView('LOGIN');
-        return;
-      }
 
       setConfig(nextConfig);
       await db.save('config', nextConfig);
@@ -3499,6 +3675,7 @@ const AppContent: React.FC = () => {
                 console.log('✅ Sistema activado para:', tenantData?.name || tenantData?.email || 'tenant');
 
                 const activatedTenantId = String(tenantData?.tenantId || '').trim();
+                const activatedErpBaseUrl = resolveSetupErpBaseUrl();
                 const resolvedDeviceId = deviceId || localStorage.getItem('pos_device_id') || '';
                 const storedSetupMode = getStoredTerminalSetupMode();
                 const setupWizardCompleted = localStorage.getItem(SETUP_WIZARD_COMPLETED_KEY) === '1';
@@ -3528,6 +3705,15 @@ const AppContent: React.FC = () => {
                   console.log('[ACTIVATION] Se detectó una configuración previa. Reanudando flujo operativo...');
                   window.location.reload();
                   return;
+                }
+
+                if (activatedTenantId) {
+                  localStorage.setItem('active_tenant_id', activatedTenantId);
+                }
+
+                if (activatedErpBaseUrl) {
+                  localStorage.setItem('CLIC_ERP_BASE_URL', activatedErpBaseUrl);
+                  localStorage.setItem('erp_base_url', activatedErpBaseUrl);
                 }
 
                 localStorage.removeItem(SETUP_WIZARD_COMPLETED_KEY);
@@ -3570,20 +3756,48 @@ const AppContent: React.FC = () => {
       case 'TERMINAL_PAIRING':
       case 'DEVICE_UNAUTHORIZED':
         return (
-          <TerminalPairingView
-            currentDeviceId={deviceId}
+          <TerminalBindingScreen
+            config={config}
+            deviceId={deviceId}
+            adminUsers={users}
+            tenantId={resolveSetupTenantId()}
+            erpBaseUrl={resolveSetupErpBaseUrl() || undefined}
             onPair={handlePairTerminal}
-            initialMasterIp={localStorage.getItem('pos_master_ip') || ''}
-            onBack={() => {
-              localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
-              localStorage.removeItem(TERMINAL_SETUP_MODE_KEY);
-              setCurrentView('TERMINAL_MODE_SELECTOR');
+            onConfigUpdate={handleConfigUpdate}
+            onUsersUpdate={async (newUsers) => {
+              setUsers(newUsers);
+              await db.save('users', newUsers);
             }}
+            initialMasterIp={localStorage.getItem('pos_master_ip') || ''}
           />
         );
 
       case 'LOGIN':
         if (!getCurrentTerminal()) {
+          const storedInitialConfig = localStorage.getItem('initial_terminal_config');
+          const activeTerminalId =
+            localStorage.getItem('active_terminal_id')
+            || localStorage.getItem('CLIC_POS_TERMINAL_ID')
+            || '';
+
+          if (storedInitialConfig && activeTerminalId) {
+            try {
+              const parsedConfig = JSON.parse(storedInitialConfig) as BusinessConfig;
+              const hydratedTerminal = (parsedConfig.terminals || []).find((terminal) =>
+                terminal.id === activeTerminalId
+                || terminal.config?.currentDeviceId === deviceId
+                || terminal.config?.erpTerminalId === activeTerminalId
+              );
+
+              if (hydratedTerminal) {
+                setConfig(parsedConfig);
+                return null;
+              }
+            } catch (error) {
+              console.warn('⚠️ No se pudo rehidratar la terminal desde initial_terminal_config:', error);
+            }
+          }
+
           // If we are in LOGIN state but have no terminal config, 
           // we must have failed to load key data. 
           // Redirect to Pairing to attempt recovery/re-pair.
@@ -3591,7 +3805,7 @@ const AppContent: React.FC = () => {
           return null;
         }
         return (
-          <LoginScreen
+          <ModernLoginScreen
             config={getCurrentTerminal()!.config as any}
             availableUsers={users}
             subVertical={config.subVertical}

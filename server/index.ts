@@ -14,6 +14,8 @@ import bulkRoutes from './routes/bulkRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
 import activationRoutes from './routes/activationRoutes.js';
 import cloudRegistryRoutes from './routes/cloudRegistry.js';
+import setupRoutes from './routes/setupRoutes.js';
+import terminalConfigRoutes from './routes/terminalConfigRoutes.js';
 import os from 'os';
 import { createServer } from 'http';
 import { initSocket } from './socket.js';
@@ -146,6 +148,8 @@ server.use('/api/dgii', dgiiRoutes);
 server.use('/api/bulk', bulkRoutes);
 server.use('/api/audit', auditRoutes);
 server.use('/api/activation', activationRoutes);
+server.use('/api/setup', setupRoutes);
+server.use('/api/sync/terminals', terminalConfigRoutes);
 
 // --- Mesas & Salas Endpoints ---
 server.get('/api/mesas', (req, res) => {
