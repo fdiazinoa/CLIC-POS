@@ -344,12 +344,19 @@ const buildItemPayload = (
     options: FiscalDocumentIssueRequest['options'],
     taxRatePercent: number
 ) => {
+    const hasExplicitItemTaxes = (transaction.items || []).some(item => Array.isArray(item.appliedTaxIds));
+
     return (transaction.items || []).map(item => {
         const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
-        const unitPrice = round2(Math.abs(sanitizeNumber(item.price)));
+        const rawUnitPrice = round2(Math.abs(sanitizeNumber(item.price)));
+        const isTaxed = hasExplicitItemTaxes
+            ? Boolean(item.appliedTaxIds?.length)
+            : taxRatePercent > 0;
+        const unitPrice = transaction.isTaxIncluded && isTaxed && taxRatePercent > 0
+            ? round2(rawUnitPrice / (1 + (taxRatePercent / 100)))
+            : rawUnitPrice;
         const montoItem = round2(quantity * unitPrice);
         const isService = cleanString(item.type).toUpperCase() === 'SERVICE';
-        const isTaxed = taxRatePercent > 0;
 
         return {
             IndicadorAgenteRetencionOPercepcion: 0,
