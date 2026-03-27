@@ -721,17 +721,46 @@ class ApiSyncAdapter {
     /**
      * Push a single transaction to Master
      */
+    /** Same sources as TerminalSelector: APK stores ERP URL in localStorage, not on Master Node env. */
+    private resolveClientErpBaseUrlForInbox(): string | undefined {
+        if (typeof window === 'undefined') return undefined;
+        try {
+            const a = localStorage.getItem('CLIC_ERP_BASE_URL')?.trim();
+            const b = localStorage.getItem('erp_base_url')?.trim();
+            const vite =
+                typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_ERP_BASE_URL
+                    ? String((import.meta as any).env.VITE_ERP_BASE_URL).trim()
+                    : '';
+            return a || b || vite || undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
     async pushTransaction(transaction: any): Promise<void> {
         try {
+            console.log(
+                `[SYNC_TX_PUSH] start masterUrl=${this.config?.masterUrl || 'n/a'} hasToken=${!!this.authToken}`
+            );
             await this.ensurePushReady();
+            console.log(`[SYNC_TX_PUSH] after ensurePushReady hasToken=${!!this.authToken}`);
             const normalizedTransaction = buildErpSalePayload(transaction);
+            const erpBaseUrl = this.resolveClientErpBaseUrlForInbox();
+            const txId = normalizedTransaction.source_transaction_id || normalizedTransaction.id;
+            console.log(
+                `[SYNC_TX_PUSH] POST ${this.config?.masterUrl}/api/sync/transactions tx=${txId} source_tx=${normalizedTransaction.source_transaction_id} terminal=${normalizedTransaction.source_terminal_id || normalizedTransaction.terminalId} erp_base_url=${erpBaseUrl ? 'sent' : 'MISSING'}`
+            );
+
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/transactions`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': this.authToken || ''
                 },
-                body: JSON.stringify({ items: [normalizedTransaction] })
+                body: JSON.stringify({
+                    items: [normalizedTransaction],
+                    ...(erpBaseUrl ? { erp_base_url: erpBaseUrl } : {})
+                })
             });
 
             if (response.status === 401) {
@@ -740,9 +769,50 @@ class ApiSyncAdapter {
             }
 
             if (!response.ok) {
-                throw new Error(`Push transaction failed: ${response.statusText}`);
+                let detail = '';
+                try {
+                    const errBody = await response.clone().json();
+                    detail = errBody?.message || (errBody?.erpInbox ? JSON.stringify(errBody.erpInbox) : '');
+                } catch {
+                    /* ignore */
+                }
+                throw new Error(
+                    `Push transaction failed: ${response.status} ${response.statusText}${detail ? ` — ${detail}` : ''}`
+                );
             }
-            console.log(`📤 ApiSyncAdapter: Pushed transaction ${normalizedTransaction.source_transaction_id || normalizedTransaction.id}`);
+            let syncBody: any = null;
+            try {
+                syncBody = await response.json();
+            } catch {
+                /* non-JSON */
+            }
+
+            // Direct POST to CLIC-ERP /api/sync/transactions returns 200 even when applySyncInboxEventById fails.
+            if (
+                syncBody &&
+                typeof syncBody.applyFailedCount === 'number' &&
+                syncBody.applyFailedCount > 0
+            ) {
+                console.error(
+                    `[SYNC_TX_PUSH] ERP /api/sync/transactions applyFailedCount=${syncBody.applyFailedCount}`,
+                    syncBody.applyIssues
+                );
+                throw new Error(
+                    `ERP did not persist sale (apply failures): ${JSON.stringify(syncBody.applyIssues || [])}`
+                );
+            }
+
+            const erp = syncBody?.erpInbox;
+            if (erp?.skipped) {
+                console.warn(
+                    `[SYNC_TX_PUSH] Master OK but ERP inbox skipped (${erp.reason || 'NO_ERP_URL'}). Configure CLIC_ERP_BASE_URL / erp_base_url localStorage or ERP_BASE_URL on Master. tx=${txId}`
+                );
+            } else if (erp?.failed) {
+                console.error(`[SYNC_TX_PUSH] Unexpected erpInbox.failed in 200 response tx=${txId}`);
+            } else {
+                const types = Array.isArray(erp?.results) ? erp.results.map((r: any) => r.eventType).join(', ') : 'SALE_POSTED';
+                console.log(`[SYNC_TX_PUSH] ERP inbox OK [${types}] tx=${txId} host=${erp?.erpBaseUrlUsed || 'n/a'}`);
+            }
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing transaction:', error);
             this.isOnline = false;
