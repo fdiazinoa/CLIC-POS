@@ -946,7 +946,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             setStatus({
                isConnected: true,
-               currentNCF: `${localBuffer.prefix}${current.toString().padStart(8, '0')}`,
+               currentNCF: `${localBuffer.prefix}${current.toString().padStart(type.startsWith('E') ? 10 : 8, '0')}`,
                remaining,
                expiryDate: localBuffer.expiryDate,
                batteryLevel: 100
