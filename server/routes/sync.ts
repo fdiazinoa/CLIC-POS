@@ -1835,4 +1835,41 @@ router.post('/inventory/movements', async (req, res) => {
     }
 });
 
+/**
+ * POST /api/sync/operational/events
+ * Wallet & loyalty outbound queue for ERP ingestion (deduped by source_event_id).
+ */
+router.post('/operational/events', async (req, res) => {
+    const { items } = req.body;
+    const authToken = req.headers['x-sync-token'] as string;
+    const tokens = getTerminalTokens();
+
+    if (!authToken || !tokens[authToken]) {
+        return res.status(401).json({ success: false, message: 'Invalid or missing sync token' });
+    }
+
+    try {
+        if (!Array.isArray(items)) {
+            return res.status(400).json({ success: false, message: 'items must be an array' });
+        }
+
+        const pending = getSetting('pending_operational_events') || [];
+        const pendingMap = new Map((pending as any[]).map((p: any) => [p.source_event_id || p.id, p]));
+        const processedIds: string[] = [];
+
+        for (const it of items) {
+            const id = it?.source_event_id || it?.id;
+            if (!id) continue;
+            pendingMap.set(id, { ...it, receivedAt: new Date().toISOString() });
+            processedIds.push(id);
+        }
+
+        saveSetting('pending_operational_events', Array.from(pendingMap.values()));
+
+        res.json({ success: true, processedIds });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 export default router;

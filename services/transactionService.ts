@@ -471,13 +471,18 @@ class TransactionService {
 
         // Record wallet transaction
         const walletTxns = await db.get('wallet_transactions' as any) as any[] || [];
+        const terminalId =
+            typeof window !== 'undefined' ? localStorage.getItem('CLIC_POS_TERMINAL_ID') || undefined : undefined;
         walletTxns.push({
-            id: `WLT-TXN-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            id: createTechnicalId('WLT-TXN'),
             walletId: wallet.id,
             type,
             amount,
             referenceId,
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            terminalId,
+            operationalChannel: 'WALLET',
+            syncStatus: 'PENDING' as const
         });
         await db.save('wallet_transactions' as any, walletTxns);
     }
