@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
 import { emitSyncEvent } from '../socket.js';
+import { coerceTransactionItemsForErp } from '../../services/sync/erpOutboundPayloads.js';
 import { forwardTransactionsToErpInbox } from '../services/erpInboxForward.js';
 
 const router = express.Router();
@@ -1134,7 +1135,9 @@ router.post('/transactions', async (req, res) => {
             `[SYNC_TX_POST] persisted_local items=${items.length} erp_base_url_from_client=${erpBaseFromBody ? 'yes' : 'no'} auth_terminal=${authenticatedTerminalId || 'none'}`
         );
 
-        const normalizedForErp = items.map((txn: any) => normalizeTransactionIdentity(txn));
+        const normalizedForErp = items.map((txn: any) =>
+            coerceTransactionItemsForErp(normalizeTransactionIdentity(txn))
+        );
         console.log('[SYNC_TX_POST] calling forwardTransactionsToErpInbox...');
         const erpInbox = await forwardTransactionsToErpInbox(normalizedForErp, {
             erpBaseUrlOverride: erpBaseFromBody || null,

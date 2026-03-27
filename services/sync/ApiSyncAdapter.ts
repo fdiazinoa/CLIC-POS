@@ -737,18 +737,31 @@ class ApiSyncAdapter {
         }
     }
 
+    private maskSyncToken(token: string | null): string {
+        if (!token) return 'none';
+        if (token.length <= 10) return '(short)';
+        return `${token.slice(0, 4)}…${token.slice(-4)}`;
+    }
+
     async pushTransaction(transaction: any): Promise<void> {
         try {
             console.log(
-                `[SYNC_TX_PUSH] start masterUrl=${this.config?.masterUrl || 'n/a'} hasToken=${!!this.authToken}`
+                `[SYNC_TX_PUSH] pre-auth masterUrl=${this.config?.masterUrl || 'n/a'} terminalId=${this.config?.terminalId || 'n/a'} hasToken=${!!this.authToken}`
             );
             await this.ensurePushReady();
-            console.log(`[SYNC_TX_PUSH] after ensurePushReady hasToken=${!!this.authToken}`);
+            console.log(
+                `[SYNC_TX_PUSH] post-auth hasToken=${!!this.authToken} X-Sync-Token=${this.maskSyncToken(this.authToken)}`
+            );
             const normalizedTransaction = buildErpSalePayload(transaction);
             const erpBaseUrl = this.resolveClientErpBaseUrlForInbox();
             const txId = normalizedTransaction.source_transaction_id || normalizedTransaction.id;
+            const itemsCount = Array.isArray((normalizedTransaction as any).items)
+                ? (normalizedTransaction as any).items.length
+                : typeof (normalizedTransaction as any).items === 'string'
+                  ? `string(len=${String((normalizedTransaction as any).items).length})`
+                  : 'none';
             console.log(
-                `[SYNC_TX_PUSH] POST ${this.config?.masterUrl}/api/sync/transactions tx=${txId} source_tx=${normalizedTransaction.source_transaction_id} terminal=${normalizedTransaction.source_terminal_id || normalizedTransaction.terminalId} erp_base_url=${erpBaseUrl ? 'sent' : 'MISSING'}`
+                `[SYNC_TX_PUSH] POST ${this.config?.masterUrl}/api/sync/transactions tx=${txId} source_tx=${normalizedTransaction.source_transaction_id} source_terminal=${normalizedTransaction.source_terminal_id || normalizedTransaction.terminalId} items=${itemsCount} erp_base_url=${erpBaseUrl ? 'sent' : 'MISSING'}`
             );
 
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/transactions`, {
@@ -811,7 +824,12 @@ class ApiSyncAdapter {
                 console.error(`[SYNC_TX_PUSH] Unexpected erpInbox.failed in 200 response tx=${txId}`);
             } else {
                 const types = Array.isArray(erp?.results) ? erp.results.map((r: any) => r.eventType).join(', ') : 'SALE_POSTED';
-                console.log(`[SYNC_TX_PUSH] ERP inbox OK [${types}] tx=${txId} host=${erp?.erpBaseUrlUsed || 'n/a'}`);
+                const docIds = Array.isArray(erp?.results)
+                    ? erp.results.map((r: any) => r.erpDocumentId).filter(Boolean).join(', ')
+                    : '';
+                console.log(
+                    `[SYNC_TX_PUSH] ERP inbox OK [${types}] tx=${txId} host=${erp?.erpBaseUrlUsed || 'n/a'} erp_document_id=${docIds || 'n/a'}`
+                );
             }
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing transaction:', error);

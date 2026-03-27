@@ -14,6 +14,39 @@ import {
 
 const DEFAULT_CURRENCY = 'DOP';
 
+/**
+ * SQLite / sync layers often persist `items` as JSON text. If that string reaches the ERP payload,
+ * CLIC-ERP's `asArray(transaction.items)` becomes [] and SALE_POSTED apply fails or never materializes lines.
+ */
+export function coerceTransactionItemsForErp<T extends { items?: unknown }>(txn: T): T {
+    const raw = txn.items;
+    if (Array.isArray(raw)) {
+        return txn;
+    }
+    if (typeof raw === 'string') {
+        const trimmed = raw.trim();
+        if (!trimmed) {
+            return { ...txn, items: [] };
+        }
+        try {
+            let parsed: unknown = JSON.parse(trimmed);
+            if (typeof parsed === 'string') {
+                try {
+                    parsed = JSON.parse(parsed);
+                } catch {
+                    /* keep inner string */
+                }
+            }
+            if (Array.isArray(parsed)) {
+                return { ...txn, items: parsed };
+            }
+        } catch {
+            /* keep original txn */
+        }
+    }
+    return txn;
+}
+
 const pickTransactionCurrency = (tx: Transaction): string => {
     const fromPayments = Array.isArray(tx.payments)
         ? tx.payments.map((p: any) => p?.currencyCode).find((c: unknown) => typeof c === 'string' && c.trim())
@@ -38,7 +71,7 @@ export function buildErpSalePayload(transaction: Transaction): Transaction & {
     original_source_transaction_id?: string;
     original_source_display_id?: string;
 } {
-    const base = normalizeTransactionForSync(transaction);
+    const base = normalizeTransactionForSync(coerceTransactionItemsForErp(transaction));
     const isCreditNote = base.documentType === 'REFUND' || base.ncfType === 'B04';
     return {
         ...base,

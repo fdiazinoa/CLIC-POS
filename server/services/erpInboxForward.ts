@@ -3,6 +3,7 @@
  * Align with CLIC-ERP `server/routes/syncInbox.js` (event_id, toStableUuid, payload).
  */
 import { createHash } from 'node:crypto';
+import { coerceTransactionItemsForErp } from '../../services/sync/erpOutboundPayloads.js';
 import { getSetting, saveSetting } from '../db.js';
 
 const FETCH_TIMEOUT_MS = 15000;
@@ -87,24 +88,25 @@ export interface BuildSaleInboxBodyOptions {
 }
 
 export function buildSalePostedInboxBody(txn: any, options?: BuildSaleInboxBodyOptions) {
-    const summary = buildTransactionSummary(txn);
+    const txnForErp = coerceTransactionItemsForErp(txn);
+    const summary = buildTransactionSummary(txnForErp);
     const documentType = summary.document_type;
     const isCreditNote = documentType === 'REFUND' || summary.ncf_type === 'B04';
     const eventBase = summary.transaction_id || `${documentType || 'TXN'}-${Date.now()}`;
     const eventType = isCreditNote ? 'SALES_CREDIT_NOTE_POSTED' : 'SALE_POSTED';
     const eventId = toStableUuid(`${eventBase}:${eventType}`);
     const terminalId =
-        asString(txn.terminalId) ||
-        asString(txn.source_terminal_id) ||
-        asString(txn.sourceTerminalId) ||
-        asString(txn.terminal_id) ||
+        asString(txnForErp.terminalId) ||
+        asString(txnForErp.source_terminal_id) ||
+        asString(txnForErp.sourceTerminalId) ||
+        asString(txnForErp.terminal_id) ||
         asString(options?.fallbackTerminalId);
 
     const tenantRaw = asString(getSetting('active_tenant_id')) || asString(getSetting('tenant_id'));
     const payload: Record<string, unknown> = {
-        occurred_at: asString(txn.date) || new Date().toISOString(),
+        occurred_at: asString(txnForErp.date) || new Date().toISOString(),
         summary,
-        transaction: txn
+        transaction: txnForErp
     };
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(tenantRaw)) {
         payload.tenant_id = tenantRaw;
@@ -194,6 +196,8 @@ export interface ErpInboxForwardResult {
     /** ERP inbox row id — required to run `/inbox/apply/:id` (inbox POST alone only queues RECEIVED). */
     syncId?: string;
     applyHttpStatus?: number;
+    /** Present when apply validated materialization (erp_sales_documents.id). */
+    erpDocumentId?: string;
 }
 
 export interface ErpInboxForwardSummary {
@@ -220,20 +224,84 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
 }
 
 /**
+ * ERP returns HTTP 200 with `{ status, result }` even when `result.skipped` or materialization failed.
+ * Treat missing `document_id` for sale/credit-note events as forward failure so POS does not mark COMPLETED.
+ */
+function validateErpApplyResponse(
+    eventType: string,
+    applyText: string
+): { ok: boolean; error?: string; documentId?: string } {
+    let parsed: any;
+    try {
+        parsed = JSON.parse(applyText);
+    } catch {
+        return { ok: false, error: 'APPLY_RESPONSE_NOT_JSON' };
+    }
+    const top = String(parsed?.status || '').toLowerCase();
+    if (top && top !== 'success') {
+        return { ok: false, error: `APPLY_TOP_STATUS_${parsed?.status}` };
+    }
+    const result = parsed?.result;
+    if (!result || typeof result !== 'object') {
+        return { ok: false, error: 'APPLY_MISSING_RESULT' };
+    }
+    const docId =
+        typeof result.applicationResult?.document_id === 'string' && result.applicationResult.document_id.trim()
+            ? result.applicationResult.document_id.trim()
+            : undefined;
+    if (result.skipped === true) {
+        const reason = String(result.reason || '');
+        if (reason === 'ALREADY_APPLIED' && docId) {
+            return { ok: true, documentId: docId };
+        }
+        return { ok: false, error: `APPLY_SKIPPED:${reason || 'unknown'}` };
+    }
+    if (eventType === 'SALE_POSTED' || eventType === 'SALES_CREDIT_NOTE_POSTED') {
+        if (!docId) {
+            return { ok: false, error: 'APPLY_MISSING_DOCUMENT_ID' };
+        }
+        return { ok: true, documentId: docId };
+    }
+    return { ok: true, documentId: docId };
+}
+
+/**
  * CLIC-ERP: `POST /api/sync/inbox` inserts `erp_sync_inbox` with status RECEIVED only.
  * `POST /api/sync/transactions` on ERP auto-applies; inbox alone does not — must call apply.
  * @see CLIC-ERP server/routes/syncInbox.js router.post('/inbox') vs storePosEventBatch
  */
-async function applyErpInboxRow(baseUrl: string, syncId: string): Promise<{ ok: boolean; status: number; text: string }> {
+async function applyErpInboxRow(
+    baseUrl: string,
+    syncId: string,
+    eventType: string
+): Promise<{ ok: boolean; status: number; text: string; documentId?: string; applyError?: string }> {
     const applyUrl = `${normalizeBaseUrl(baseUrl)}/api/sync/inbox/apply/${encodeURIComponent(syncId)}`;
-    console.log(`[ERP_INBOX] POST ${applyUrl} (immediate apply after inbox)`);
+    console.log(`[ERP_INBOX] POST ${applyUrl} (immediate apply after inbox) event_type=${eventType}`);
     const applyRes = await fetchWithTimeout(applyUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}'
     });
     const applyText = await applyRes.text();
-    return { ok: applyRes.ok, status: applyRes.status, text: applyText };
+    if (!applyRes.ok) {
+        return { ok: false, status: applyRes.status, text: applyText };
+    }
+    const validated = validateErpApplyResponse(eventType, applyText);
+    if (!validated.ok) {
+        console.error(
+            `[ERP_INBOX] apply HTTP 200 but invalid materialization: ${validated.error} snip=${applyText.slice(0, 1200)}`
+        );
+        return {
+            ok: false,
+            status: applyRes.status,
+            text: applyText,
+            applyError: validated.error
+        };
+    }
+    console.log(
+        `[ERP_INBOX] apply validated event_type=${eventType} document_id=${validated.documentId || '(n/a)'} snip=${applyText.slice(0, 500)}`
+    );
+    return { ok: true, status: applyRes.status, text: applyText, documentId: validated.documentId };
 }
 
 export async function forwardTransactionsToErpInbox(
@@ -255,6 +323,11 @@ export async function forwardTransactionsToErpInbox(
 
     for (const txn of normalizedTxns) {
         const body = buildSalePostedInboxBody(txn, { fallbackTerminalId: options?.authTerminalId });
+        const lineItems = asArray((body.payload as any)?.transaction?.items);
+        const firstLine = lineItems[0] && typeof lineItems[0] === 'object' ? Object.keys(lineItems[0] as object).slice(0, 12).join(',') : '';
+        console.log(
+            `[ERP_INBOX] transaction lines: count=${lineItems.length} source_tx=${asString((body.payload as any)?.summary?.transaction_id)} source_terminal=${asString((body.payload as any)?.transaction?.source_terminal_id) || asString((body.payload as any)?.transaction?.terminalId)} firstLineKeys=${firstLine || 'n/a'}`
+        );
         const preview = JSON.stringify(body).slice(0, 1200);
         console.log(`[ERP_INBOX] payload preview (truncated): ${preview}${preview.length >= 1200 ? '…' : ''}`);
         console.log(
@@ -319,10 +392,13 @@ export async function forwardTransactionsToErpInbox(
                     return { skipped: false, failed: true, results, erpBaseUrlUsed: baseUrl };
                 }
 
-                const applied = await applyErpInboxRow(baseUrl, syncId);
+                const applied = await applyErpInboxRow(baseUrl, syncId, body.event_type);
                 if (!applied.ok) {
+                    const errDetail =
+                        applied.applyError ||
+                        (applied.status >= 400 ? applied.text.slice(0, 400) : applied.text.slice(0, 800));
                     console.error(
-                        `[ERP_INBOX] apply FAILED sync_id=${syncId} http=${applied.status} body=${applied.text.slice(0, 800)}`
+                        `[ERP_INBOX] apply FAILED sync_id=${syncId} http=${applied.status} detail=${errDetail}`
                     );
                     results.push({
                         eventId: body.event_id,
@@ -332,12 +408,14 @@ export async function forwardTransactionsToErpInbox(
                         duplicate,
                         syncId,
                         applyHttpStatus: applied.status,
-                        error: applied.text.slice(0, 400)
+                        error: errDetail
                     });
                     return { skipped: false, failed: true, results, erpBaseUrlUsed: baseUrl };
                 }
 
-                console.log(`[ERP_INBOX] apply OK sync_id=${syncId} http=${applied.status} snip=${applied.text.slice(0, 500)}`);
+                console.log(
+                    `[ERP_INBOX] apply OK sync_id=${syncId} http=${applied.status} erp_document_id=${applied.documentId || 'n/a'}`
+                );
                 results.push({
                     eventId: body.event_id,
                     eventType: body.event_type,
@@ -345,7 +423,8 @@ export async function forwardTransactionsToErpInbox(
                     httpStatus: res.status,
                     duplicate,
                     syncId,
-                    applyHttpStatus: applied.status
+                    applyHttpStatus: applied.status,
+                    erpDocumentId: applied.documentId
                 });
             } else {
                 console.error(`[ERP_INBOX] ERP REJECT http=${res.status} body=${text.slice(0, 800)}`);
