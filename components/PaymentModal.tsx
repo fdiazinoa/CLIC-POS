@@ -544,119 +544,97 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
    return (
       <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-0 md:p-4">
-         <div className="w-full max-w-[420px] h-full md:h-[880px] bg-[#f8f9fc] md:rounded-[2.5rem] shadow-2xl md:border-[8px] md:border-gray-900 flex flex-col relative overflow-hidden animate-in fade-in zoom-in-95">
-            
-            {/* Top Bar / Header */}
-            <div className="px-6 pt-6 flex justify-between items-center shrink-0">
-               <button onClick={onClose} className="p-2 -ml-2 text-gray-400 hover:bg-gray-100 rounded-full transition-colors border border-transparent active:scale-95">
-                  <X size={24} />
-               </button>
-               <div className="flex gap-2">
-                  {currencies.filter(c => c.isEnabled).map(c => (
-                     <button
-                        key={c.code}
-                        onClick={() => setSelectedCurrency(c)}
-                        className={`px-3 py-1 rounded-lg text-[10px] font-black tracking-widest transition-all border ${selectedCurrency.code === c.code ? `border-current ${themeTextClass} bg-white shadow-sm` : 'border-slate-200 text-gray-400 bg-white hover:bg-gray-50'}`}
-                     >
-                        {c.code}
-                     </button>
-                  ))}
-               </div>
-            </div>
+         <div className="relative flex h-full w-full max-w-[420px] flex-col overflow-hidden bg-[#f8f9fc] animate-in fade-in zoom-in-95 md:h-[880px] md:max-w-[1240px] md:flex-row md:rounded-[2.5rem] md:border-[8px] md:border-gray-900 md:shadow-2xl">
+            <div className="flex min-h-0 flex-1 flex-col md:w-[62%] md:bg-white md:border-r md:border-slate-200">
+               <div className="flex shrink-0 items-start justify-between gap-4 px-6 pt-6 md:px-8 md:pt-8">
+                  <button onClick={onClose} className="shrink-0 rounded-full border border-transparent p-2 -ml-2 text-gray-400 transition-colors hover:bg-gray-100 active:scale-95">
+                     <X size={24} />
+                  </button>
 
-            {/* Total Display */}
-            <div className="px-6 py-4 flex flex-col items-center shrink-0">
-               <p className={`text-[11px] font-black uppercase tracking-[0.2em] mb-1.5 ${isRefund ? 'text-rose-500' : 'text-slate-400'}`}>
-                  {isRefund ? 'Monto a Devolver' : 'Total a Cobrar'}
-               </p>
-               <h1 className={`text-[40px] font-black leading-none tracking-tight ${isRefund ? 'text-rose-600' : 'text-[#0f172a]'}`}>
-                  {currencySymbol}{absTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-               </h1>
-            </div>
-
-            {/* Content Area (Scrollable Payments List) */}
-            <div className="flex-1 overflow-y-auto px-6 py-2 space-y-3 no-scrollbar">
-               {payments.length === 0 ? (
-                  <div className="h-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-200 rounded-2xl bg-white/50">
-                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Sin pagos registrados</p>
-                  </div>
-               ) : (
-                  payments.map(p => {
-                     const EntryIcon = getEntryIcon(p);
-                     return (
-                        <div key={p.id} className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-slate-100 animate-in slide-in-from-bottom-2">
-                           <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center text-slate-500 border border-slate-100">
-                                 <EntryIcon size={20} />
-                              </div>
-                              <div>
-                                 <span className="font-bold text-[14px] text-[#0f172a] block">{getEntryLabel(p)}</span>
-                                 {p.currencyCode !== baseCurrency.code && (
-                                    <span className="text-[10px] text-slate-400 font-bold">{p.amountOriginal} {p.currencyCode}</span>
-                                 )}
-                              </div>
-                           </div>
-                           <div className="flex items-center gap-3">
-                              <span className="font-black text-[15px] text-[#0f172a]">{currencySymbol}{p.amount.toFixed(2)}</span>
-                              <button onClick={() => handleRemovePayment(p.id)} className="p-2 bg-red-50 text-red-400 hover:text-red-500 rounded-full transition-colors active:scale-90">
-                                 <X size={16} />
+                  <div className="hidden min-w-0 flex-1 justify-center md:flex">
+                     <div className="flex w-full max-w-[620px] gap-2 overflow-x-auto no-scrollbar pb-1">
+                        {configuredMethods.map(method => {
+                           const isSelected = activePaymentMethod?.key === method.key;
+                           const isExceeded = method.type === 'CREDIT' && isDelinquent && !isOverrideActive;
+                           return (
+                              <button
+                                 key={method.key}
+                                 onClick={() => setActiveMethodKey(method.key)}
+                                 className={`flex min-h-[72px] min-w-[108px] flex-1 flex-col items-center justify-center gap-1.5 rounded-2xl border-2 px-3 py-3 transition-all ${isSelected ? `border-[#3070f0] text-[#3070f0] bg-[#f4f7ff] shadow-sm` : 'border-slate-200 text-slate-400 bg-white hover:bg-slate-50'} ${isExceeded ? 'bg-red-50/50' : ''}`}
+                              >
+                                 <method.Icon size={24} />
+                                 <span className="whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.1em]">{method.label}</span>
                               </button>
-                           </div>
-                        </div>
-                     );
-                  })
-               )}
-
-               {finalizeError && (
-                  <div className="mt-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-bold text-red-600 flex items-start gap-2 shadow-sm">
-                     <ShieldAlert size={14} className="shrink-0 mt-0.5" />
-                     <span>{finalizeError}</span>
+                           );
+                        })}
+                     </div>
                   </div>
-               )}
-            </div>
 
-            {/* Summary Banner (Remaining/Change & Complete) */}
-            <div className="px-6 py-5 bg-white border-t border-slate-100 shrink-0">
-               <div className="flex justify-between items-end mb-4">
-                  {change > 0 ? (
-                     <div>
-                        <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-0.5">{isRefund ? 'Diferencia AF' : 'Cambio'}</p>
-                        <p className="text-3xl font-black text-emerald-600 leading-none">{currencySymbol}{change.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                  <div className="flex shrink-0 gap-2">
+                     {currencies.filter(c => c.isEnabled).map(c => (
+                        <button
+                           key={c.code}
+                           onClick={() => setSelectedCurrency(c)}
+                           className={`px-3 py-1 rounded-lg text-[10px] font-black tracking-widest transition-all border ${selectedCurrency.code === c.code ? `border-current ${themeTextClass} bg-white shadow-sm` : 'border-slate-200 text-gray-400 bg-white hover:bg-gray-50'}`}
+                        >
+                           {c.code}
+                        </button>
+                     ))}
+                  </div>
+               </div>
+
+               <div className="flex shrink-0 flex-col items-center px-6 py-4 md:items-start md:px-8 md:text-left">
+                  <p className={`mb-1.5 text-[11px] font-black uppercase tracking-[0.2em] ${isRefund ? 'text-rose-500' : 'text-slate-400'}`}>
+                     {isRefund ? 'Monto a Devolver' : 'Total a Cobrar'}
+                  </p>
+                  <h1 className={`text-[40px] font-black leading-none tracking-tight md:text-[68px] ${isRefund ? 'text-rose-600' : 'text-[#0f172a]'}`}>
+                     {currencySymbol}{absTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </h1>
+               </div>
+
+               <div className="flex-1 space-y-3 overflow-y-auto px-6 py-2 no-scrollbar md:px-8 md:pb-8">
+                  {payments.length === 0 ? (
+                     <div className="flex h-24 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-white/50 md:h-full md:min-h-[360px]">
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Sin pagos registrados</p>
                      </div>
                   ) : (
-                     <div>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Restante</p>
-                        <p className={`text-3xl font-black leading-none ${remaining > 0 ? (isRefund ? 'text-rose-500' : 'text-amber-500') : 'text-emerald-500'}`}>{currencySymbol}{remaining.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                     payments.map(p => {
+                        const EntryIcon = getEntryIcon(p);
+                        return (
+                           <div key={p.id} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-white p-4 shadow-sm animate-in slide-in-from-bottom-2">
+                              <div className="flex items-center gap-3">
+                                 <div className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-100 bg-slate-50 text-slate-500">
+                                    <EntryIcon size={20} />
+                                 </div>
+                                 <div>
+                                    <span className="block text-[14px] font-bold text-[#0f172a]">{getEntryLabel(p)}</span>
+                                    {p.currencyCode !== baseCurrency.code && (
+                                       <span className="text-[10px] font-bold text-slate-400">{p.amountOriginal} {p.currencyCode}</span>
+                                    )}
+                                 </div>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                 <span className="text-[15px] font-black text-[#0f172a]">{currencySymbol}{p.amount.toFixed(2)}</span>
+                                 <button onClick={() => handleRemovePayment(p.id)} className="rounded-full bg-red-50 p-2 text-red-400 transition-colors hover:text-red-500 active:scale-90">
+                                    <X size={16} />
+                                 </button>
+                              </div>
+                           </div>
+                        );
+                     })
+                  )}
+
+                  {finalizeError && (
+                     <div className="mt-2 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-bold text-red-600 shadow-sm">
+                        <ShieldAlert size={14} className="mt-0.5 shrink-0" />
+                        <span>{finalizeError}</span>
                      </div>
                   )}
-                  <div className="text-right">
-                     {isRefund && (
-                        <div className="px-3 py-1 bg-rose-50 border border-rose-100 rounded-full text-[9px] font-black text-rose-600 uppercase tracking-widest">
-                           Modo Devolución
-                        </div>
-                     )}
-                  </div>
                </div>
-               
-               <button
-                  onClick={handleFinalize}
-                  disabled={!canFinalize || isFinalizing}
-                  className={`w-full py-5 rounded-[1.25rem] font-black text-base text-white transition-all shadow-lg active:scale-[0.98] ${!canFinalize || isFinalizing ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : 'bg-[#3070f0] hover:bg-blue-600'}`}`}
-               >
-                  {isFinalizing
-                     ? 'PROCESANDO...'
-                     : !canFinalize
-                        ? 'PAGO INCOMPLETO'
-                        : isRefund
-                           ? 'PROCESAR DEVOLUCIÓN'
-                           : 'FINALIZAR VENTA'}
-               </button>
             </div>
 
-            {/* Input & Keypad Section */}
-            <div className="bg-slate-50/80 border-t border-slate-100 p-6 pb-8 md:pb-10 flex flex-col gap-4 shrink-0">
-               {/* Payment Methods Tabs */}
-               <div className="flex gap-2.5 overflow-x-auto no-scrollbar pb-1">
+            <div className="flex shrink-0 flex-col gap-4 border-t border-slate-100 bg-slate-50/80 p-6 pb-8 md:w-[38%] md:border-l md:border-t-0 md:border-slate-200 md:bg-slate-50 md:p-6">
+               <div className="flex gap-2.5 overflow-x-auto no-scrollbar pb-1 md:hidden">
                   {configuredMethods.map(method => {
                      const isSelected = activePaymentMethod?.key === method.key;
                      const isExceeded = method.type === 'CREDIT' && isDelinquent && !isOverrideActive;
@@ -667,48 +645,97 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                            className={`flex-1 min-w-[90px] py-4 flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 transition-all ${isSelected ? `border-[#3070f0] text-[#3070f0] bg-[#f4f7ff] shadow-sm` : 'border-slate-200 text-slate-400 bg-white hover:bg-slate-50'} ${isExceeded ? 'bg-red-50/50' : ''}`}
                         >
                            <method.Icon size={24} />
-                           <span className="font-bold text-[10px] uppercase tracking-[0.1em]">{method.label}</span>
+                           <span className="text-[10px] font-bold uppercase tracking-[0.1em]">{method.label}</span>
                         </button>
                      );
                   })}
                </div>
 
-               {/* Amount Input Display */}
-               <div className="bg-[#f1f5f9] rounded-2xl px-5 py-4 flex items-center justify-between border border-slate-200 shadow-inner">
-                  <span className="text-xl font-bold text-slate-400">{selectedCurrency.symbol}</span>
-                  <span className="text-4xl font-extrabold text-[#0f172a] font-mono">{inputAmount || '0.00'}</span>
+               <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-[#f1f5f9] px-5 py-4 shadow-inner md:py-5">
+                  <span className="text-xl font-bold text-slate-400 md:text-2xl">{selectedCurrency.symbol}</span>
+                  <span className="font-mono text-4xl font-extrabold text-[#0f172a] md:text-[44px]">{inputAmount || '0.00'}</span>
                </div>
 
-               {/* Numeric Keypad Grid */}
-               <div className="grid grid-cols-4 gap-2.5 h-[280px]">
+               {activeMethod === 'CASH' && (
+                  <div className="grid grid-cols-3 gap-3 md:grid-cols-3 md:gap-3.5">
+                     {denominations.map(d => (
+                        <button
+                           key={d}
+                           onClick={() => handleAddPayment(d)}
+                           className="min-h-[58px] rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-black text-slate-600 shadow-sm transition-all hover:border-blue-500 hover:text-blue-600 md:min-h-[68px] md:text-base"
+                        >
+                           {selectedCurrency.symbol}{d}
+                        </button>
+                     ))}
+                  </div>
+               )}
+
+               <div className="grid h-[280px] grid-cols-4 gap-2.5 md:h-[340px]">
                   {[1, 2, 3].map(n => (
-                     <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-slate-200 rounded-xl text-[26px] font-black text-[#0f172a] shadow-sm hover:bg-slate-50 active:scale-95 transition-all flex items-center justify-center">{n}</button>
+                     <button key={n} onClick={() => handleNumPad(n.toString())} className="flex items-center justify-center rounded-xl border border-slate-200 bg-white text-[26px] font-black text-[#0f172a] shadow-sm transition-all hover:bg-slate-50 active:scale-95 md:text-[30px]">{n}</button>
                   ))}
-                  
+
                   <button
                      onClick={() => handleAddPayment()}
-                     className="bg-[#3070f0] hover:bg-blue-600 text-white rounded-xl font-black text-[11px] uppercase tracking-widest flex flex-col items-center justify-center gap-2 shadow-lg row-span-2 transition-all active:scale-95"
+                     className="row-span-2 flex flex-col items-center justify-center gap-2 rounded-xl bg-[#3070f0] text-[11px] font-black uppercase tracking-widest text-white shadow-lg transition-all hover:bg-blue-600 active:scale-95"
                   >
                      <Plus size={24} strokeWidth={3} />
                      Agregar
                   </button>
 
                   {[4, 5, 6].map(n => (
-                     <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-slate-200 rounded-xl text-[26px] font-black text-[#0f172a] shadow-sm hover:bg-slate-50 active:scale-95 transition-all flex items-center justify-center">{n}</button>
-                  ))}
-                  
-                  {[7, 8, 9].map(n => (
-                     <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-slate-200 rounded-xl text-[26px] font-black text-[#0f172a] shadow-sm hover:bg-slate-50 active:scale-95 transition-all flex items-center justify-center">{n}</button>
+                     <button key={n} onClick={() => handleNumPad(n.toString())} className="flex items-center justify-center rounded-xl border border-slate-200 bg-white text-[26px] font-black text-[#0f172a] shadow-sm transition-all hover:bg-slate-50 active:scale-95 md:text-[30px]">{n}</button>
                   ))}
 
-                  <button onClick={() => handleNumPad('BACK')} className="flex items-center justify-center text-red-400 hover:text-red-500 transition-colors active:scale-90">
+                  {[7, 8, 9].map(n => (
+                     <button key={n} onClick={() => handleNumPad(n.toString())} className="flex items-center justify-center rounded-xl border border-slate-200 bg-white text-[26px] font-black text-[#0f172a] shadow-sm transition-all hover:bg-slate-50 active:scale-95 md:text-[30px]">{n}</button>
+                  ))}
+
+                  <button onClick={() => handleNumPad('BACK')} className="flex items-center justify-center rounded-xl bg-red-50 text-red-400 transition-colors hover:text-red-500 active:scale-90">
                      <Trash2 size={28} />
                   </button>
 
-                  <button onClick={() => handleNumPad('C')} className="bg-[#e2e8f0] border border-slate-200 rounded-xl text-xl font-black text-[#0f172a] shadow-sm hover:bg-slate-300 active:scale-95 transition-all flex items-center justify-center">C</button>
-                  <button onClick={() => handleNumPad('0')} className="bg-white border border-slate-200 rounded-xl text-[26px] font-black text-[#0f172a] shadow-sm hover:bg-slate-50 active:scale-95 transition-all flex items-center justify-center">0</button>
-                  <button onClick={() => handleNumPad('.')} className="bg-white border border-slate-200 rounded-xl text-[26px] font-black text-[#0f172a] shadow-sm hover:bg-slate-50 active:scale-95 transition-all flex items-center justify-center">.</button>
-                  <div></div>
+                  <button onClick={() => handleNumPad('C')} className="flex items-center justify-center rounded-xl border border-slate-200 bg-[#e2e8f0] text-xl font-black text-[#0f172a] shadow-sm transition-all hover:bg-slate-300 active:scale-95 md:text-2xl">C</button>
+                  <button onClick={() => handleNumPad('0')} className="flex items-center justify-center rounded-xl border border-slate-200 bg-white text-[26px] font-black text-[#0f172a] shadow-sm transition-all hover:bg-slate-50 active:scale-95 md:text-[30px]">0</button>
+                  <button onClick={() => handleNumPad('.')} className="flex items-center justify-center rounded-xl border border-slate-200 bg-white text-[26px] font-black text-[#0f172a] shadow-sm transition-all hover:bg-slate-50 active:scale-95 md:text-[30px]">.</button>
+                  <div />
+               </div>
+
+               <div className="mt-auto shrink-0 rounded-[1.5rem] border border-slate-100 bg-white px-5 py-5 shadow-sm">
+                  <div className="mb-4 flex items-end justify-between">
+                     {change > 0 ? (
+                        <div>
+                           <p className="mb-0.5 text-[10px] font-black uppercase tracking-widest text-emerald-600">{isRefund ? 'Diferencia AF' : 'Cambio'}</p>
+                           <p className="text-3xl font-black leading-none text-emerald-600">{currencySymbol}{change.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                        </div>
+                     ) : (
+                        <div>
+                           <p className="mb-0.5 text-[10px] font-black uppercase tracking-widest text-slate-400">Restante</p>
+                           <p className={`text-3xl font-black leading-none ${remaining > 0 ? (isRefund ? 'text-rose-500' : 'text-amber-500') : 'text-emerald-500'}`}>{currencySymbol}{remaining.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                        </div>
+                     )}
+                     <div className="text-right">
+                        {isRefund && (
+                           <div className="rounded-full border border-rose-100 bg-rose-50 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-rose-600">
+                              Modo Devolución
+                           </div>
+                        )}
+                     </div>
+                  </div>
+
+                  <button
+                     onClick={handleFinalize}
+                     disabled={!canFinalize || isFinalizing}
+                     className={`w-full rounded-[1.25rem] py-5 text-base font-black text-white transition-all shadow-lg active:scale-[0.98] md:min-h-[64px] ${!canFinalize || isFinalizing ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : 'bg-[#3070f0] hover:bg-blue-600'}`}`}
+                  >
+                     {isFinalizing
+                        ? 'PROCESANDO...'
+                        : !canFinalize
+                           ? 'PAGO INCOMPLETO'
+                           : isRefund
+                              ? 'PROCESAR DEVOLUCIÓN'
+                              : 'FINALIZAR VENTA'}
+                  </button>
                </div>
             </div>
          </div>
