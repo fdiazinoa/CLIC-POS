@@ -1,6 +1,11 @@
-import { Transaction, DocumentType } from '../types';
+import { Transaction, DocumentType, DocumentSeries } from '../types';
 import { db } from '../utils/db';
 import { normalizeTransactionForSync } from './sync/sourceIdentity';
+import {
+  mergeDocumentSeriesCollection,
+  resolveDocumentAssignmentId,
+  resolveEffectiveSeriesIdForDocumentType,
+} from '../utils/documentSeriesIdentity';
 
 const EPSILON = 0.01;
 
@@ -145,6 +150,36 @@ const createTechnicalId = (prefix: string): string => {
  */
 class TransactionService {
     /**
+     * Prefer terminal.config.documentAssignments[documentType] when present (merged with
+     * internalSequences + terminal documentSeries); otherwise keep caller seriesId with
+     * global resolveDocumentAssignmentId fallback.
+     */
+    private async resolveSeriesIdForEmission(
+        documentType: DocumentType,
+        terminalId: string | undefined,
+        callerSeriesId: string
+    ): Promise<string> {
+        const rawSequences = ((await db.get('internalSequences')) as DocumentSeries[]) || [];
+        const configRaw = await db.get('config' as any);
+        const currentConfig = resolveCurrentConfig(configRaw);
+        const terminals = Array.isArray(currentConfig?.terminals) ? currentConfig.terminals : [];
+        const terminal = terminalId ? terminals.find((t: any) => t?.id === terminalId) : undefined;
+        const fromTerminalConfig = (Array.isArray(terminal?.config?.documentSeries)
+            ? terminal.config.documentSeries
+            : []) as DocumentSeries[];
+        const merged = mergeDocumentSeriesCollection([...rawSequences, ...fromTerminalConfig]);
+
+        const assignment = terminal?.config?.documentAssignments?.[documentType];
+        if (typeof assignment === 'string' && assignment.trim()) {
+            const trimmed = assignment.trim();
+            const effective = resolveEffectiveSeriesIdForDocumentType(documentType, merged, trimmed);
+            return effective || trimmed;
+        }
+
+        return resolveDocumentAssignmentId(documentType, merged, callerSeriesId) || callerSeriesId;
+    }
+
+    /**
      * Generate next transaction ID with global sequence
      * Uses internal series counters as single source of truth.
      */
@@ -210,9 +245,15 @@ class TransactionService {
             throw new Error('seriesId is required');
         }
 
+        const resolvedSeriesId = await this.resolveSeriesIdForEmission(
+            data.documentType,
+            data.terminalId,
+            data.seriesId
+        );
+
         // Generate IDs
         const { globalSequence, displayId, seriesNumber } =
-            await this.generateTransactionId(data.documentType, data.seriesId);
+            await this.generateTransactionId(data.documentType, resolvedSeriesId);
         const normalizedFiscalAmounts = await normalizeFiscalAmounts(data);
 
         // Create transaction object
@@ -221,7 +262,7 @@ class TransactionService {
             globalSequence,
             displayId,
             documentType: data.documentType,
-            seriesId: data.seriesId,
+            seriesId: resolvedSeriesId,
             seriesNumber,
 
             // Required fields

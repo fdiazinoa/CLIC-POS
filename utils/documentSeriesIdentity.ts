@@ -79,6 +79,33 @@ export const mergeDocumentSeriesCollection = (rows: DocumentSeries[] = []): Docu
   return Array.from(merged.values());
 };
 
+/**
+ * When the terminal has an explicit assignment for a document type, resolve it to a
+ * concrete DocumentSeries.id present in `availableSeries` (by id or unique prefix match).
+ * Returns undefined if the assignment cannot be matched — caller may still fall back to
+ * the raw assignment string for offline/sync edge cases.
+ */
+export const resolveEffectiveSeriesIdForDocumentType = (
+  documentType: string,
+  availableSeries: DocumentSeries[],
+  terminalAssignmentId?: string | null
+): string | undefined => {
+  const key = normalizeDocumentTypeKey(terminalAssignmentId);
+  if (!key) return undefined;
+
+  const byId = availableSeries.find((series) => normalizeDocumentTypeKey(series.id) === key);
+  if (byId?.id) return byId.id;
+
+  const typeNorm = normalizeDocumentTypeKey(documentType);
+  const sameType = availableSeries.filter(
+    (series) => normalizeDocumentTypeKey(series.documentType) === typeNorm
+  );
+  const byPrefix = sameType.filter((series) => normalizeString(series.prefix) === key);
+  if (byPrefix.length === 1) return byPrefix[0].id;
+
+  return undefined;
+};
+
 export const resolveDocumentAssignmentId = (
   documentType: string,
   availableSeries: DocumentSeries[],

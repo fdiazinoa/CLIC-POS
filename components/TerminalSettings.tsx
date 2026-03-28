@@ -1032,7 +1032,28 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               <div className="space-y-4">
                                  {DOCUMENT_ROLES.map((role) => {
                                     const assignedId = activeTerminal.config.documentAssignments?.[role.id] || '';
-                                    const assignedSeq = masterSequences.find(s => s.id === assignedId);
+                                    const allForRole = masterSequences.filter((s) => s.documentType === role.id);
+                                    const sequenceOptions =
+                                       activeTerminal.config.governedByMaster && assignedId
+                                          ? (() => {
+                                               const hit = allForRole.filter((s) => s.id === assignedId);
+                                               if (hit.length > 0) return hit;
+                                               return [
+                                                  {
+                                                     id: assignedId,
+                                                     documentType: role.id,
+                                                     name: `Asignada (${assignedId})`,
+                                                     description: '',
+                                                     prefix: '—',
+                                                     nextNumber: 1,
+                                                     padding: 6,
+                                                     icon: 'FileText',
+                                                     color: 'blue',
+                                                  } as DocumentSeries,
+                                               ];
+                                            })()
+                                          : allForRole;
+                                    const assignedSeq = sequenceOptions.find((s) => s.id === assignedId);
 
                                     return (
                                        <div key={role.id} className={`p-6 rounded-3xl border-2 transition-all flex flex-col gap-6 ${assignedId ? 'bg-white border-slate-100 shadow-sm' : 'bg-orange-50 border-orange-200 border-dashed'}`}>
@@ -1056,11 +1077,11 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                                    className={`w-full p-3 bg-gray-50 border border-slate-200 rounded-xl font-bold text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-100 transition-all ${activeTerminal.config.governedByMaster ? 'opacity-50 cursor-not-allowed' : ''}`}
                                                 >
                                                    <option value="">-- Sin Vincular --</option>
-                                                   {masterSequences
-                                                      .filter(s => s.documentType === role.id)
-                                                      .map(s => (
-                                                         <option key={s.id} value={s.id}>{s.name} ({s.prefix})</option>
-                                                      ))}
+                                                   {sequenceOptions.map((s) => (
+                                                      <option key={s.id} value={s.id}>
+                                                         {s.name} ({s.prefix})
+                                                      </option>
+                                                   ))}
                                                 </select>
                                              </div>
                                           </div>

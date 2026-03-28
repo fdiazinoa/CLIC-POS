@@ -339,6 +339,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
         return (
           <DocumentSettings
             onClose={() => setCurrentView('HOME')}
+            config={props.config}
+            terminalId={props.terminalId}
+            currentDeviceId={props.currentDeviceId}
           />
         );
 
