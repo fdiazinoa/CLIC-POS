@@ -4,6 +4,8 @@ import fs from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
 import { emitSyncEvent } from '../socket.js';
+import { coerceTransactionItemsForErp } from '../../services/sync/erpOutboundPayloads.js';
+import { forwardTransactionsToErpInbox } from '../services/erpInboxForward.js';
 
 const router = express.Router();
 
@@ -1124,12 +1126,51 @@ router.post('/transactions', async (req, res) => {
             updateMetadata('transactions', getCurrentVersion('transactions'));
         })();
 
+        const authenticatedTerminalId = tokens[authToken];
+        const erpBaseFromBody =
+            typeof req.body?.erp_base_url === 'string' && req.body.erp_base_url.trim()
+                ? String(req.body.erp_base_url).trim()
+                : '';
+        console.log(
+            `[SYNC_TX_POST] persisted_local items=${items.length} erp_base_url_from_client=${erpBaseFromBody ? 'yes' : 'no'} auth_terminal=${authenticatedTerminalId || 'none'}`
+        );
+
+        const normalizedForErp = items.map((txn: any) =>
+            coerceTransactionItemsForErp(normalizeTransactionIdentity(txn))
+        );
+        console.log('[SYNC_TX_POST] calling forwardTransactionsToErpInbox...');
+        const erpInbox = await forwardTransactionsToErpInbox(normalizedForErp, {
+            erpBaseUrlOverride: erpBaseFromBody || null,
+            authTerminalId: authenticatedTerminalId || null
+        });
+
+        if (!erpInbox.skipped && erpInbox.failed) {
+            console.error(
+                '[SYNC_TX_POST] returning 502 — ERP inbox forward failed after local persist',
+                erpInbox.results
+            );
+            return res.status(502).json({
+                success: false,
+                message: 'Local Master saved the sale, but forwarding to ERP failed. Retry sync.',
+                addedCount,
+                conflictResolvedCount,
+                erpInbox
+            });
+        }
+
+        if (erpInbox.skipped) {
+            console.warn('[SYNC_TX_POST] returning 200 with erpInbox.skipped=true (NO_ERP_URL or not configured)');
+        } else {
+            console.log('[SYNC_TX_POST] returning 200 — ERP inbox accepted', erpInbox.erpBaseUrlUsed);
+        }
+
         res.json({
             success: true,
             addedCount,
             conflictResolvedCount,
             totalCount: (getCollection('transactions')).length,
-            inventoryUpdates: 0
+            inventoryUpdates: 0,
+            erpInbox
         });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });

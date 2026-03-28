@@ -259,6 +259,12 @@ class BackgroundSyncManager {
                     item._forceSyncReplay = false;
                 }
                 await db.saveDocument(collectionName as any, item as any);
+                if (collectionName === 'transactions') {
+                    const t = item as any;
+                    console.log(
+                        `[SYNC_BSM] marked COMPLETED collection=transactions id=${t.id} source_transaction_id=${t.source_transaction_id || 'n/a'}`
+                    );
+                }
             } catch (error: any) {
                 console.error(`❌ BackgroundSyncManager: Failed to sync ${collectionName} item ${item.id}:`, error);
                 item.syncStatus = 'ERROR';
