@@ -212,6 +212,79 @@ const buildLocalBoundConfig = (input: {
   };
 };
 
+const resolveLocalBinding = (input: {
+  currentConfig: any;
+  selectedTerminalId: string;
+  posDeviceId: string;
+  bindingMode: 'MASTER' | 'SLAVE';
+  forceTransfer: boolean;
+  tenantId: string | null;
+  users: any[];
+}) => {
+  const {
+    currentConfig,
+    selectedTerminalId,
+    posDeviceId,
+    bindingMode,
+    forceTransfer,
+    tenantId,
+    users,
+  } = input;
+
+  const terminals = Array.isArray(currentConfig?.terminals) ? currentConfig.terminals : [];
+  const targetTerminal = terminals.find((terminal: any) => asString(terminal?.id) === selectedTerminalId);
+
+  if (!targetTerminal) {
+    return {
+      ok: false as const,
+      statusCode: 404,
+      payload: {
+        status: 'error',
+        message: 'La terminal no existe en la configuración local de POS.',
+      },
+    };
+  }
+
+  const occupiedDeviceId = asString(targetTerminal?.config?.currentDeviceId);
+  if (occupiedDeviceId && occupiedDeviceId !== posDeviceId && !forceTransfer) {
+    return {
+      ok: false as const,
+      statusCode: 409,
+      payload: {
+        status: 'error',
+        code: 'TERMINAL_OCCUPIED',
+        message: 'La terminal ya está ocupada por otro equipo.',
+        current_device_id: occupiedDeviceId,
+      },
+    };
+  }
+
+  const nextConfig = buildLocalBoundConfig({
+    currentConfig,
+    selectedTerminalId,
+    posDeviceId,
+    bindingMode,
+  });
+
+  saveSetting('config', nextConfig);
+
+  return {
+    ok: true as const,
+    statusCode: 200,
+    payload: {
+      success: true,
+      tenant_id: tenantId || 'default-tenant',
+      terminal_id: selectedTerminalId,
+      source: 'LOCAL',
+      transferred: Boolean(occupiedDeviceId && occupiedDeviceId !== posDeviceId),
+      current_device_id: posDeviceId,
+      previous_device_id: occupiedDeviceId && occupiedDeviceId !== posDeviceId ? occupiedDeviceId : null,
+      config: nextConfig,
+      users,
+    },
+  };
+};
+
 const fetchErpOverview = async (req: express.Request, baseUrl: string, tenantId: string) => {
   const overview = await fetchErpJson(
     req,
@@ -420,42 +493,17 @@ router.post('/bind-terminal', async (req, res) => {
   const forceTransfer = Boolean(body.force_transfer);
 
   if ((!tenantId || !erpBaseUrl) && hasLocalTerminalCatalog(config)) {
-    const targetTerminal = (config.terminals || []).find((terminal: any) => asString(terminal?.id) === terminalId);
-
-    if (!targetTerminal) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'La terminal no existe en la configuración local de POS.',
-      });
-    }
-
-    const occupiedDeviceId = asString(targetTerminal?.config?.currentDeviceId);
-    if (occupiedDeviceId && occupiedDeviceId !== posDeviceId && !forceTransfer) {
-      return res.status(409).json({
-        status: 'error',
-        code: 'TERMINAL_OCCUPIED',
-        message: 'La terminal ya está ocupada por otro equipo.',
-        current_device_id: occupiedDeviceId,
-      });
-    }
-
-    const nextConfig = buildLocalBoundConfig({
+    const localBinding = resolveLocalBinding({
       currentConfig: config,
       selectedTerminalId: terminalId,
       posDeviceId,
       bindingMode,
-    });
-
-    saveSetting('config', nextConfig);
-
-    return res.json({
-      success: true,
-      tenant_id: tenantId || 'default-tenant',
-      terminal_id: terminalId,
-      source: 'LOCAL',
-      config: nextConfig,
+      forceTransfer,
+      tenantId,
       users,
     });
+
+    return res.status(localBinding.statusCode).json(localBinding.payload);
   }
 
   if (!tenantId || !erpBaseUrl) {
@@ -579,6 +627,21 @@ router.post('/bind-terminal', async (req, res) => {
     });
   } catch (error: any) {
     console.error('❌ Bind terminal error:', error?.message || error);
+
+    if (hasLocalTerminalCatalog(config)) {
+      const localBinding = resolveLocalBinding({
+        currentConfig: config,
+        selectedTerminalId: terminalId,
+        posDeviceId,
+        bindingMode,
+        forceTransfer,
+        tenantId,
+        users,
+      });
+
+      return res.status(localBinding.statusCode).json(localBinding.payload);
+    }
+
     return res.status(500).json({
       status: 'error',
       message: error?.message || 'No se pudo vincular la terminal contra ERP.',
