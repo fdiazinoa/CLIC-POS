@@ -56,6 +56,7 @@ import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryServi
 
 // Component Imports
 import ModernLoginScreen from './components/ModernLoginScreen';
+import LoginScreen from './components/LoginScreen';
 import ErrorBoundary from './components/ErrorBoundary';
 import POSInterface from './components/POSInterface';
 import AgendaManager from './components/AgendaManager';
@@ -384,6 +385,13 @@ const AppContent: React.FC = () => {
   const [restoringHistory, setRestoringHistory] = useState(false);
   const [config, setConfig] = useState<BusinessConfig>(() => getInitialConfig('Supermercado' as any));
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isLandscape, setIsLandscape] = useState(window.innerWidth > window.innerHeight);
+
+  useEffect(() => {
+    const handleResize = () => setIsLandscape(window.innerWidth > window.innerHeight);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // --- SECURITY & DEVICE HANDSHAKE ---
   const [deviceId, setDeviceId] = useState<string>('');
@@ -3874,34 +3882,38 @@ const AppContent: React.FC = () => {
           setCurrentView('TERMINAL_PAIRING');
           return null;
         }
-        return (
-          <ModernLoginScreen
-            config={getCurrentTerminal()!.config as any}
-            availableUsers={users}
-            subVertical={config.subVertical}
-            onLogin={(u) => {
-              setCurrentUser(u);
-              const terminal = getCurrentTerminal();
-              const role = terminal?.config?.deviceRole?.role || DeviceRole.STANDARD_POS;
+        const loginProps = {
+          config: getCurrentTerminal()!.config as any,
+          availableUsers: users,
+          subVertical: config.subVertical,
+          onLogin: (u: User) => {
+            setCurrentUser(u);
+            const terminal = getCurrentTerminal();
+            const role = terminal?.config?.deviceRole?.role || DeviceRole.STANDARD_POS;
 
-              if (role === DeviceRole.HANDHELD_INVENTORY) setCurrentView('INVENTORY_HOME');
-              else if (role === DeviceRole.KITCHEN_DISPLAY) setCurrentView('KITCHEN_ORDERS');
-              else if (role === DeviceRole.SELF_CHECKOUT) setCurrentView('KIOSK_WELCOME');
-              else if (role === DeviceRole.PRICE_CHECKER) setCurrentView('CHECKER_SCAN');
-              else {
-                // Multi-Vertical Startup Flow
-                const pantalla = terminal?.config?.operational?.pantalla_inicio;
-                const isRetail = terminal?.config?.ux?.viewMode === 'RETAIL';
-                const usaMesas = terminal?.config?.operational?.usa_mesas;
+            if (role === DeviceRole.HANDHELD_INVENTORY) setCurrentView('INVENTORY_HOME');
+            else if (role === DeviceRole.KITCHEN_DISPLAY) setCurrentView('KITCHEN_ORDERS');
+            else if (role === DeviceRole.SELF_CHECKOUT) setCurrentView('KIOSK_WELCOME');
+            else if (role === DeviceRole.PRICE_CHECKER) setCurrentView('CHECKER_SCAN');
+            else {
+              // Multi-Vertical Startup Flow
+              const pantalla = terminal?.config?.operational?.pantalla_inicio;
+              const isRetail = terminal?.config?.ux?.viewMode === 'RETAIL';
+              const usaMesas = terminal?.config?.operational?.usa_mesas;
 
-                if (pantalla === 'MAPA_MESAS' && !isRetail && usaMesas) {
-                  setCurrentView('TABLE_MAP');
-                } else {
-                  setCurrentView('POS');
-                }
+              if (pantalla === 'MAPA_MESAS' && !isRetail && usaMesas) {
+                setCurrentView('TABLE_MAP');
+              } else {
+                setCurrentView('POS');
               }
-            }}
-          />
+            }
+          }
+        };
+
+        return isLandscape ? (
+          <ModernLoginScreen {...loginProps} />
+        ) : (
+          <LoginScreen {...loginProps} />
         );
 
 
