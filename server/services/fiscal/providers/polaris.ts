@@ -23,6 +23,9 @@ const sanitizeNumber = (value: unknown): number => {
 const round2 = (value: number): number =>
     Math.round((value + Number.EPSILON) * 100) / 100;
 
+const amountsMatch = (left: number, right: number, tolerance = 0.02): boolean =>
+    Math.abs(round2(left) - round2(right)) <= tolerance;
+
 const cleanString = (value: unknown): string =>
     typeof value === 'string' ? value.trim() : '';
 
@@ -345,6 +348,24 @@ const buildItemPayload = (
     taxRatePercent: number
 ) => {
     const hasExplicitItemTaxes = (transaction.items || []).some(item => Array.isArray(item.appliedTaxIds));
+    const total = round2(Math.abs(sanitizeNumber(transaction.total)));
+    const taxAmount = round2(Math.abs(sanitizeNumber(transaction.taxAmount)));
+    const netAmount = round2(
+        Math.abs(sanitizeNumber(transaction.netAmount)) || Math.max(0, total - taxAmount)
+    );
+    const grossItemsTotal = round2(
+        (transaction.items || []).reduce((sum, item) => {
+            const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
+            const unitPrice = round2(Math.abs(sanitizeNumber(item.price)));
+            return sum + (quantity * unitPrice);
+        }, 0)
+    );
+    const inferredTaxIncluded =
+        taxRatePercent > 0
+        && taxAmount > 0
+        && amountsMatch(grossItemsTotal, total)
+        && !amountsMatch(grossItemsTotal, netAmount);
+    const useTaxIncludedPricing = transaction.isTaxIncluded === true || inferredTaxIncluded;
 
     return (transaction.items || []).map(item => {
         const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
@@ -352,7 +373,7 @@ const buildItemPayload = (
         const isTaxed = hasExplicitItemTaxes
             ? Boolean(item.appliedTaxIds?.length)
             : taxRatePercent > 0;
-        const unitPrice = transaction.isTaxIncluded && isTaxed && taxRatePercent > 0
+        const unitPrice = useTaxIncludedPricing && isTaxed && taxRatePercent > 0
             ? round2(rawUnitPrice / (1 + (taxRatePercent / 100)))
             : rawUnitPrice;
         const montoItem = round2(quantity * unitPrice);

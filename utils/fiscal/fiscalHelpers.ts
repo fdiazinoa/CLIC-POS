@@ -122,7 +122,9 @@ export const canRetryFiscalTransaction = (tx?: Partial<Transaction> | null): boo
 
 export const getFiscalRetryActionLabel = (tx?: Partial<Transaction> | null): string => {
   if (!canRetryFiscalTransaction(tx)) return '';
-  return tx?.fiscalReferenceId ? 'Consultar estado' : 'Reintentar envío';
+  return tx?.fiscalReferenceId && tx.fiscalSyncStatus === 'PENDING'
+    ? 'Consultar estado'
+    : 'Reintentar envío';
 };
 
 export const mapLegacyFiscalCodeToElectronic = (code: NCFType): FiscalDocumentCode => {
