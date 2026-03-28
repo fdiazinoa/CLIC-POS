@@ -143,6 +143,9 @@ const isDeviceAlreadyLocallyBound = (config: any, deviceId: string): boolean => 
     && config.terminals.some((terminal: any) => asString(terminal?.config?.currentDeviceId) === deviceId);
 };
 
+const hasLocalTerminalCatalog = (config: any): boolean =>
+  Array.isArray(config?.terminals) && config.terminals.length > 0;
+
 const buildLocalFallback = (config: any, deviceId: string, tenantId: string | null, erpBaseUrl: string | null) => {
   const terminals = Array.isArray(config?.terminals) ? config.terminals : [];
   return {
@@ -159,6 +162,51 @@ const buildLocalFallback = (config: any, deviceId: string, tenantId: string | nu
         occupied: Boolean(currentDeviceId && currentDeviceId !== deviceId),
         currentDeviceId,
         config: terminalConfig,
+      };
+    }),
+  };
+};
+
+const buildLocalBoundConfig = (input: {
+  currentConfig: any;
+  selectedTerminalId: string;
+  posDeviceId: string;
+  bindingMode: 'MASTER' | 'SLAVE';
+}) => {
+  const { currentConfig, selectedTerminalId, posDeviceId, bindingMode } = input;
+  const now = new Date().toISOString();
+
+  return {
+    ...cloneDeep(currentConfig),
+    terminals: (Array.isArray(currentConfig?.terminals) ? currentConfig.terminals : []).map((terminal: any) => {
+      const terminalId = asString(terminal?.id);
+      const nextConfig = cloneDeep(asObject(terminal?.config));
+      const deviceBindingToken = asString(nextConfig.deviceBindingToken) || `token-${terminalId}`;
+      const currentDeviceId = asString(nextConfig.currentDeviceId);
+
+      nextConfig.deviceBindingToken = deviceBindingToken;
+      nextConfig.security = {
+        ...asObject(nextConfig.security),
+        deviceBindingToken,
+      };
+      nextConfig.currentDeviceId =
+        terminalId === selectedTerminalId
+          ? posDeviceId
+          : currentDeviceId === posDeviceId
+            ? undefined
+            : currentDeviceId || undefined;
+      nextConfig.lastPairingDate = terminalId === selectedTerminalId ? now : nextConfig.lastPairingDate;
+      nextConfig.isPrimaryNode = terminalId === selectedTerminalId ? bindingMode === 'MASTER' : Boolean(nextConfig.isPrimaryNode);
+      nextConfig.governedByMaster = terminalId === selectedTerminalId ? bindingMode === 'SLAVE' : Boolean(nextConfig.governedByMaster);
+      nextConfig.syncConfig = {
+        ...asObject(nextConfig.syncConfig),
+        mode: terminalId === selectedTerminalId ? bindingMode : asString(nextConfig?.syncConfig?.mode) || 'MASTER',
+        isEnabled: true,
+      };
+
+      return {
+        ...cloneDeep(terminal),
+        config: nextConfig,
       };
     }),
   };
@@ -338,7 +386,7 @@ router.get('/terminals', async (req, res) => {
       });
     }
 
-    if (config && isDeviceAlreadyLocallyBound(config, posDeviceId)) {
+    if (config && (hasLocalTerminalCatalog(config) || isDeviceAlreadyLocallyBound(config, posDeviceId))) {
       return res.json(buildLocalFallback(config, posDeviceId, tenantId, erpBaseUrl));
     }
 
@@ -349,7 +397,7 @@ router.get('/terminals', async (req, res) => {
   } catch (error: any) {
     console.error('❌ Setup terminals error:', error?.message || error);
 
-    if (config && isDeviceAlreadyLocallyBound(config, posDeviceId)) {
+    if (config && (hasLocalTerminalCatalog(config) || isDeviceAlreadyLocallyBound(config, posDeviceId))) {
       return res.json(buildLocalFallback(config, posDeviceId, tenantId, erpBaseUrl));
     }
 
@@ -370,6 +418,45 @@ router.post('/bind-terminal', async (req, res) => {
   const posDeviceId = asString(body.pos_device_id);
   const bindingMode = asString(body.binding_mode).toUpperCase() === 'SLAVE' ? 'SLAVE' : 'MASTER';
   const forceTransfer = Boolean(body.force_transfer);
+
+  if ((!tenantId || !erpBaseUrl) && hasLocalTerminalCatalog(config)) {
+    const targetTerminal = (config.terminals || []).find((terminal: any) => asString(terminal?.id) === terminalId);
+
+    if (!targetTerminal) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'La terminal no existe en la configuración local de POS.',
+      });
+    }
+
+    const occupiedDeviceId = asString(targetTerminal?.config?.currentDeviceId);
+    if (occupiedDeviceId && occupiedDeviceId !== posDeviceId && !forceTransfer) {
+      return res.status(409).json({
+        status: 'error',
+        code: 'TERMINAL_OCCUPIED',
+        message: 'La terminal ya está ocupada por otro equipo.',
+        current_device_id: occupiedDeviceId,
+      });
+    }
+
+    const nextConfig = buildLocalBoundConfig({
+      currentConfig: config,
+      selectedTerminalId: terminalId,
+      posDeviceId,
+      bindingMode,
+    });
+
+    saveSetting('config', nextConfig);
+
+    return res.json({
+      success: true,
+      tenant_id: tenantId || 'default-tenant',
+      terminal_id: terminalId,
+      source: 'LOCAL',
+      config: nextConfig,
+      users,
+    });
+  }
 
   if (!tenantId || !erpBaseUrl) {
     return res.status(400).json({
