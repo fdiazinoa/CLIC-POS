@@ -2,6 +2,7 @@ import express from 'express';
 import { getSetting, saveSetting } from '../db';
 import { applyTerminalConfigSnapshot, extractTerminalConfigSnapshot } from '../../utils/terminalConfigSnapshot';
 import { TerminalConfigSnapshot } from '../../types';
+import { persistOperationalDocumentState } from '../services/terminalOperationalState';
 
 const router = express.Router();
 
@@ -321,6 +322,7 @@ router.get('/:terminalId/config', async (req, res) => {
     }
 
     saveSetting('config', applied.config);
+    persistOperationalDocumentState(applied.config, applied.terminalId);
     saveSetting('active_tenant_id', asString(snapshot.tenant_id) || effectiveTenantId);
     saveSetting('erp_setup_context', {
       ...resolveStoredErpContext(),
@@ -361,6 +363,7 @@ router.get('/:terminalId/config', async (req, res) => {
       });
 
       saveSetting('config', applied.config);
+      persistOperationalDocumentState(applied.config, applied.terminalId);
 
       return res.json({
         success: true,

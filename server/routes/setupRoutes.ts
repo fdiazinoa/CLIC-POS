@@ -2,6 +2,7 @@ import express from 'express';
 import { getCollection, getSetting, saveSetting } from '../db';
 import { applyTerminalConfigSnapshot, extractTerminalConfigSnapshot } from '../../utils/terminalConfigSnapshot';
 import { TerminalConfigSnapshot } from '../../types';
+import { persistOperationalDocumentState } from '../services/terminalOperationalState';
 
 const router = express.Router();
 
@@ -131,10 +132,16 @@ const buildErpHeaders = (req: express.Request, tenantId: string | null, includeJ
 
   const authorization = asString(req.headers.authorization);
   const cookie = asString(req.headers.cookie);
+  const deviceId =
+    asString(req.headers['x-device-id']) ||
+    asString(req.query.pos_device_id) ||
+    asString(asObject(req.body).pos_device_id) ||
+    asString(asObject(req.body).device_id);
 
   if (authorization) headers.Authorization = authorization;
   if (cookie) headers.Cookie = cookie;
   if (tenantId) headers['X-Tenant-Id'] = tenantId;
+  if (deviceId) headers['X-Device-Id'] = deviceId;
 
   return headers;
 };
@@ -398,7 +405,7 @@ const fetchInitialConfigSnapshot = async (req: express.Request, baseUrl: string,
   return fetchErpJson(
     req,
     baseUrl,
-    `/api/setup/initial-config/${encodeURIComponent(terminalId)}?tenant_id=${encodeURIComponent(tenantId)}`,
+    `/api/sync/terminals/${encodeURIComponent(terminalId)}/config`,
     { tenantId }
   );
 };
@@ -810,6 +817,7 @@ router.post('/bind-terminal', async (req, res) => {
     });
 
     saveSetting('config', boundConfig);
+    persistOperationalDocumentState(boundConfig, terminalId);
     saveSetting('active_tenant_id', resolvedErpTenantId);
     saveSetting('erp_setup_context', {
       tenantId: resolvedErpTenantId,
@@ -886,6 +894,7 @@ router.get('/initial-config/:terminalId', async (req, res) => {
     });
 
     saveSetting('config', applied.config);
+    persistOperationalDocumentState(applied.config, applied.terminalId);
     saveSetting('active_tenant_id', asString(snapshot.tenant_id) || tenantId);
     saveSetting('erp_setup_context', {
       ...resolveStoredErpContext(),
@@ -924,6 +933,7 @@ router.get('/initial-config/:terminalId', async (req, res) => {
       });
 
       saveSetting('config', applied.config);
+      persistOperationalDocumentState(applied.config, applied.terminalId);
 
       return res.json({
         success: true,

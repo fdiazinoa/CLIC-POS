@@ -23,6 +23,7 @@ import { syncManager } from '../services/sync/SyncManager';
 import { getDefaultRoleConfig, getRoleDisplayInfo, getAllModules } from '../utils/deviceRoleHelpers';
 import AccessibilityToggle from './AccessibilityToggle';
 import SettingsOperational from './SettingsOperational';
+import { mergeDocumentSeriesCollection } from '../utils/documentSeriesIdentity';
 
 interface TerminalSettingsProps {
    config: BusinessConfig;
@@ -112,19 +113,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
             .flatMap(t => (Array.isArray(t.config?.documentSeries) ? t.config.documentSeries : []))
             .filter((s: any) => !!s?.id && !!s?.documentType) as DocumentSeries[];
 
-         // Keep internalSequences as canonical source, but backfill missing IDs from terminal-level config.
-         const mergedMap = new Map<string, DocumentSeries>();
-         seqs.forEach(s => {
-            if (!s?.id || !s?.documentType) return;
-            mergedMap.set(s.id, s);
-         });
-         configSeries.forEach(s => {
-            if (!mergedMap.has(s.id)) {
-               mergedMap.set(s.id, s);
-            }
-         });
-
-         const merged = Array.from(mergedMap.values());
+         const merged = mergeDocumentSeriesCollection([...seqs, ...configSeries]);
          if (merged.length !== seqs.length) {
             await db.save('internalSequences', merged);
          }

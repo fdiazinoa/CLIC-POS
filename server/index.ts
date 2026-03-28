@@ -21,6 +21,7 @@ import { createServer } from 'http';
 import { initSocket } from './socket.js';
 
 import { db, getCollection, getSetting, saveSetting } from './db';
+import { persistOperationalDocumentState } from './services/terminalOperationalState.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -617,6 +618,15 @@ server.put('/api/:collection', (req, res) => {
         }
 
         saveSetting(dbName, data);
+        if (collection === 'config') {
+            const storedActiveTerminal = getSetting('active_terminal_id');
+            const activeTerminalId =
+                (typeof req.headers['x-active-terminal-id'] === 'string' ? req.headers['x-active-terminal-id'].trim() : '')
+                || (typeof req.headers['x-terminal-id'] === 'string' ? req.headers['x-terminal-id'].trim() : '')
+                || (typeof storedActiveTerminal === 'string' ? storedActiveTerminal.trim() : '');
+
+            persistOperationalDocumentState(data, activeTerminalId);
+        }
 
         // SYNC LOGGING (Singleton uses 'singleton' as ID)
         logChange(collection, 'singleton', 'UPSERT', data);

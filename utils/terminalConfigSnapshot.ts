@@ -11,6 +11,11 @@ import {
   Warehouse,
 } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG, INITIAL_TARIFFS } from '../constants';
+import {
+  canonicalizeDocumentSeries,
+  mergeDocumentSeriesCollection,
+  resolveDocumentAssignmentId,
+} from './documentSeriesIdentity';
 
 const asObject = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -127,7 +132,7 @@ const normalizeDocumentSeries = (raw: unknown, index: number): DocumentSeries | 
   const id = asString(data.id || data.series_id || data.code || data.prefix || `SERIES-${index + 1}`);
   if (!id) return null;
 
-  return {
+  return canonicalizeDocumentSeries({
     id,
     documentType: normalizeDocumentType(data.documentType || data.document_type || data.type, 'TICKET'),
     name: asString(data.name || data.label || id) || id,
@@ -138,7 +143,7 @@ const normalizeDocumentSeries = (raw: unknown, index: number): DocumentSeries | 
     icon: asString(data.icon || 'Receipt') || 'Receipt',
     color: asString(data.color || 'blue') || 'blue',
     businessUnit: asString(data.businessUnit || data.business_unit) || undefined,
-  };
+  });
 };
 
 const normalizeFiscalRange = (raw: unknown, index: number): FiscalRangeDGII | null => {
@@ -236,6 +241,12 @@ export interface ApplyTerminalConfigSnapshotResult {
   usedCachedSnapshot: boolean;
   hasResolutionError: boolean;
   fullPullOnPairing?: boolean;
+}
+
+export interface TerminalOperationalDocumentState {
+  terminalId: string;
+  documentSeries: DocumentSeries[];
+  fiscalRanges: FiscalRangeDGII[];
 }
 
 export const applyTerminalConfigSnapshot = (
@@ -336,8 +347,26 @@ export const applyTerminalConfigSnapshot = (
     effectiveAllowedWarehouseIds[0] ||
     '';
 
-  const effectiveDocumentSeries = documentSeries.length > 0 ? documentSeries : terminalTemplate.documentSeries || DEFAULT_DOCUMENT_SERIES;
+  const effectiveDocumentSeries = mergeDocumentSeriesCollection(
+    documentSeries.length > 0 ? documentSeries : terminalTemplate.documentSeries || DEFAULT_DOCUMENT_SERIES
+  );
   const effectiveFiscalRanges = fiscalRanges.length > 0 ? fiscalRanges : terminalTemplate.fiscal.fiscalRanges || [];
+  const fallbackAssignments = terminalTemplate.documentAssignments || {};
+  const requestedAssignments =
+    Object.keys(documentAssignments).length > 0
+      ? { ...fallbackAssignments, ...documentAssignments }
+      : fallbackAssignments;
+  const effectiveDocumentAssignments = Object.keys(requestedAssignments).reduce<Record<string, string>>((acc, key) => {
+    const resolvedId = resolveDocumentAssignmentId(
+      key,
+      effectiveDocumentSeries,
+      requestedAssignments[key]
+    );
+    if (resolvedId) {
+      acc[key] = resolvedId;
+    }
+    return acc;
+  }, {});
 
   const nextTerminalConfig: TerminalConfig = {
     ...terminalTemplate,
@@ -397,8 +426,8 @@ export const applyTerminalConfigSnapshot = (
     },
     documentSeries: effectiveDocumentSeries,
     documentAssignments:
-      Object.keys(documentAssignments).length > 0
-        ? documentAssignments
+      Object.keys(effectiveDocumentAssignments).length > 0
+        ? effectiveDocumentAssignments
         : terminalTemplate.documentAssignments,
     inventoryScope: {
       ...terminalTemplate.inventoryScope,
@@ -515,5 +544,18 @@ export const applyTerminalConfigSnapshot = (
       typeof resolvedCatalog.full_pull_on_pairing === 'boolean'
         ? Boolean(resolvedCatalog.full_pull_on_pairing)
         : nextTerminalConfig.catalog?.fullPullOnPairing,
+  };
+};
+
+export const extractTerminalOperationalDocumentState = (
+  config: BusinessConfig,
+  terminalId: string
+): TerminalOperationalDocumentState => {
+  const terminalTemplate = resolveTerminalTemplate(config, terminalId);
+
+  return {
+    terminalId,
+    documentSeries: cloneDeep(terminalTemplate.documentSeries || []),
+    fiscalRanges: cloneDeep(terminalTemplate.fiscal?.fiscalRanges || []),
   };
 };

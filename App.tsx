@@ -50,6 +50,8 @@ import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
 import { calculateZReportStats } from './utils/analytics';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
+import { extractTerminalOperationalDocumentState } from './utils/terminalConfigSnapshot';
+import { resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 
 // Component Imports
@@ -112,7 +114,13 @@ import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueSe
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { persistStandaloneRefundTransaction } from './services/localRefundPersistence';
 import { checkLicenseStatus, clearTenantIdentity, resolveTenantId } from './utils/licenseGuard';
-import { getStoredTenantIdentity, publishMasterEndpointToCloud, resolveMasterEndpointFromCloud } from './utils/cloudMasterRegistry';
+import {
+  buildMasterUrlCandidates,
+  buildMasterUrlFromHost,
+  getStoredTenantIdentity,
+  publishMasterEndpointToCloud,
+  resolveMasterEndpointFromCloud
+} from './utils/cloudMasterRegistry';
 import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, persistStoredErpSyncBinding } from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 
@@ -184,16 +192,29 @@ const normalizeTerminalDocumentAssignments = (
   let changed = false;
   const terminals = sourceConfig.terminals.map((terminal) => {
     const currentAssignments = terminal.config?.documentAssignments || {};
-    const nextAssignments = {
-      ...DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS,
-      ...currentAssignments
-    };
+    const availableSeries = Array.isArray(terminal.config?.documentSeries) ? terminal.config.documentSeries : [];
+    const nextAssignments = Object.entries(DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS).reduce<Record<string, string>>(
+      (acc, [key, value]) => {
+        const resolvedId = resolveDocumentAssignmentId(
+          key,
+          availableSeries,
+          currentAssignments[key as keyof typeof DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS] || value
+        );
+        acc[key] = resolvedId || value;
+        return acc;
+      },
+      { ...currentAssignments }
+    );
 
     const assignmentsChanged = Object.entries(DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS).some(
       ([key, value]) => currentAssignments[key as keyof typeof DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS] !== value
     );
 
-    if (!assignmentsChanged) {
+    const resolvedAssignmentsChanged = Object.entries(nextAssignments).some(
+      ([key, value]) => currentAssignments[key as keyof typeof DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS] !== value
+    );
+
+    if (!assignmentsChanged && !resolvedAssignmentsChanged) {
       return terminal;
     }
 
@@ -234,7 +255,7 @@ const TERMINAL_SETUP_MODE_KEY = 'clic_pos_terminal_setup_mode';
 const TERMINAL_SETUP_PENDING_KEY = 'clic_pos_terminal_setup_pending';
 const TERMINAL_CONFIG_RESTART_NOTICE_KEY = 'clic_pos_terminal_config_restart_notice';
 const SETUP_FLOW_VERSION = '2';
-const buildRuntimeMasterUrl = () => `${window.location.protocol}//${window.location.hostname}:3001`;
+const buildRuntimeMasterUrl = () => buildMasterUrlFromHost(window.location.hostname);
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
 const normalizeMasterHost = (value: string | null | undefined) =>
   (value || '')
@@ -275,20 +296,43 @@ const getStoredTerminalSetupMode = (): TerminalSetupMode | null => {
 const hasPendingTerminalSetup = (): boolean => localStorage.getItem(TERMINAL_SETUP_PENDING_KEY) === '1';
 
 const buildConfigSyncUrl = (): string | null => {
-  const currentProtocol = window.location.protocol;
   const masterHost = normalizeMasterHost(localStorage.getItem('pos_master_ip'));
   const isLoopbackMaster = masterHost === 'localhost' || masterHost === '127.0.0.1';
 
   if (masterHost && !isLoopbackMaster) {
-    const hostWithPort = masterHost.includes(':') ? masterHost : `${masterHost}:3001`;
-    return `${currentProtocol}//${hostWithPort}/api/config`;
+    const baseUrl = buildMasterUrlFromHost(masterHost);
+    return baseUrl ? `${baseUrl}/api/config` : null;
   }
 
   if (isNativeAndroidRuntime()) {
     return null;
   }
 
-  return `${currentProtocol}//${window.location.hostname}:3001/api/config`;
+  return `${buildRuntimeMasterUrl()}/api/config`;
+};
+
+const resolveReachableMasterBinding = async (host: string): Promise<{ host: string; baseUrl: string } | null> => {
+  const normalizedHost = normalizeMasterHost(host);
+  if (!normalizedHost) return null;
+
+  for (const baseUrl of buildMasterUrlCandidates(normalizedHost)) {
+    try {
+      const response = await fetch(`${baseUrl}/api/sync/ping`);
+      if (!response.ok) continue;
+
+      return {
+        host: new URL(baseUrl).hostname,
+        baseUrl,
+      };
+    } catch {
+      // try next candidate
+    }
+  }
+
+  return {
+    host: normalizedHost,
+    baseUrl: buildMasterUrlFromHost(normalizedHost),
+  };
 };
 
 const isSeedSetupBusinessConfig = (config: BusinessConfig | null | undefined): boolean => {
@@ -1575,19 +1619,25 @@ const AppContent: React.FC = () => {
         if (shouldFetchConfigFromMaster) {
           console.log("🔄 Slave Mode: Fetching latest config from Master...");
           const fetchConfigFromMaster = async (host: string) => {
-            const currentProtocol = window.location.protocol;
-            const targetUrl = `${currentProtocol}//${host}:3001/api/config`;
+            for (const baseUrl of buildMasterUrlCandidates(host)) {
+              const targetUrl = `${baseUrl}/api/config`;
+              const controller = new AbortController();
+              const timeoutId = setTimeout(() => controller.abort(), 3000);
 
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 3000);
+              try {
+                const res = await fetch(targetUrl, { signal: controller.signal });
+                if (!res.ok) continue;
 
-            try {
-              const res = await fetch(targetUrl, { signal: controller.signal });
-              if (!res.ok) return null;
-              return await res.json();
-            } finally {
-              clearTimeout(timeoutId);
+                const payload = await res.json();
+                localStorage.setItem('CLIC_POS_MASTER_URL', baseUrl);
+                localStorage.setItem('pos_master_ip', new URL(baseUrl).hostname);
+                return payload;
+              } finally {
+                clearTimeout(timeoutId);
+              }
             }
+
+            return null;
           };
 
           try {
@@ -2214,6 +2264,11 @@ const AppContent: React.FC = () => {
       const resolvedMasterIp = typeof pairingContext === 'string' ? pairingContext : setupResult?.masterIp;
       const previouslyAssignedTerminal = (config.terminals || []).find(t => t.id === terminalId);
       const normalizedResolvedMasterIp = normalizeMasterHost(resolvedMasterIp || '');
+      const reachableMasterBinding = normalizedResolvedMasterIp
+        ? await resolveReachableMasterBinding(normalizedResolvedMasterIp)
+        : null;
+      const finalResolvedMasterIp = reachableMasterBinding?.host || normalizedResolvedMasterIp;
+      const finalResolvedMasterUrl = reachableMasterBinding?.baseUrl || (finalResolvedMasterIp ? buildMasterUrlFromHost(finalResolvedMasterIp) : '');
       if (!setupResult?.boundConfig) {
         throw new Error('La vinculación debe provenir del backend central de setup. No se recibió configuración enlazada.');
       }
@@ -2234,12 +2289,17 @@ const AppContent: React.FC = () => {
         !!previouslyAssignedTerminal?.config?.currentDeviceId &&
         previouslyAssignedTerminal.config.currentDeviceId !== deviceId;
       const shouldTakeover = options?.forceTakeover || wasOccupiedByAnotherDevice;
-      const configSyncUrl = normalizedResolvedMasterIp
-        ? `${window.location.protocol}//${normalizedResolvedMasterIp}:3001/api/config`
+      const configSyncUrl = finalResolvedMasterUrl
+        ? `${finalResolvedMasterUrl}/api/config`
         : buildConfigSyncUrl();
 
       setConfig(updatedConfig);
       await db.save('config', updatedConfig);
+      const operationalDocumentState = extractTerminalOperationalDocumentState(updatedConfig, terminalId);
+      await db.rehydrateOperationalDocumentState(
+        operationalDocumentState.documentSeries,
+        operationalDocumentState.fiscalRanges
+      );
       localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
       localStorage.setItem(TERMINAL_SETUP_MODE_KEY, isSlave ? 'CLIENT' : 'SERVER');
       localStorage.setItem('active_terminal_id', terminalId);
@@ -2263,15 +2323,15 @@ const AppContent: React.FC = () => {
         await db.save('users', setupResult.boundUsers);
       }
 
-      if (isSlave && normalizedResolvedMasterIp) {
-        localStorage.setItem('pos_master_ip', normalizedResolvedMasterIp);
-        localStorage.setItem('CLIC_POS_MASTER_URL', `${window.location.protocol}//${normalizedResolvedMasterIp}:3001`);
+      if (isSlave && finalResolvedMasterIp) {
+        localStorage.setItem('pos_master_ip', finalResolvedMasterIp);
+        localStorage.setItem('CLIC_POS_MASTER_URL', finalResolvedMasterUrl);
       }
 
       // If user takes control of a MASTER terminal, clear stale slave pointers.
       if (!isSlave) {
         localStorage.removeItem('pos_master_ip');
-        const runtimeMasterUrl = `${window.location.protocol}//${window.location.hostname}:3001`;
+        const runtimeMasterUrl = buildRuntimeMasterUrl();
         localStorage.setItem('CLIC_POS_MASTER_URL', runtimeMasterUrl);
       }
 
@@ -2281,7 +2341,11 @@ const AppContent: React.FC = () => {
         try {
           const res = await fetch(configSyncUrl, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Active-Terminal-Id': terminalId,
+              'X-Device-Id': deviceId,
+            },
             body: JSON.stringify(updatedConfig)
           });
           if (!res.ok) {
@@ -2304,7 +2368,7 @@ const AppContent: React.FC = () => {
         isPrimary: !isSlave,
       });
 
-      const shouldRestoreRemoteData = !!normalizedResolvedMasterIp && (isSlave || shouldTakeover);
+      const shouldRestoreRemoteData = !!finalResolvedMasterIp && (isSlave || shouldTakeover);
 
       // If we're taking over a previous server or pairing as slave, hydrate from the remote box first.
       if (shouldRestoreRemoteData) {
@@ -2323,8 +2387,8 @@ const AppContent: React.FC = () => {
             })
           };
 
-          localStorage.setItem('pos_master_ip', normalizedResolvedMasterIp);
-          localStorage.setItem('CLIC_POS_MASTER_URL', `${window.location.protocol}//${normalizedResolvedMasterIp}:3001`);
+          localStorage.setItem('pos_master_ip', finalResolvedMasterIp);
+          localStorage.setItem('CLIC_POS_MASTER_URL', finalResolvedMasterUrl);
 
           // Re-initialize sync manager with a temporary slave profile to pull history/catalogs
           await syncManager.initialize(remoteRestoreConfig, terminalId);
@@ -2361,6 +2425,12 @@ const AppContent: React.FC = () => {
       } else {
         await syncManager.refreshTerminalResolvedConfig();
       }
+
+      const refreshedOperationalDocumentState = extractTerminalOperationalDocumentState(updatedConfig, terminalId);
+      await db.rehydrateOperationalDocumentState(
+        refreshedOperationalDocumentState.documentSeries,
+        refreshedOperationalDocumentState.fiscalRanges
+      );
 
       const freshData = await db.init();
       flushSync(() => {

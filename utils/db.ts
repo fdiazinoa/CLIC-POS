@@ -12,6 +12,7 @@ import {
 } from '../constants';
 import { dbAdapter } from '../services/db';
 import { permissionService } from '../services/sync/PermissionService';
+import { mergeDocumentSeriesCollection } from './documentSeriesIdentity';
 
 const DB_KEY = 'clic_pos_db_v1';
 let initPromise: Promise<any> | null = null;
@@ -191,7 +192,96 @@ const SEED_DATA = {
   tables: [] as any[],
   collections: [] as any[],
   paymentMethods: [] as PaymentMethodDefinition[],
-  activities: [] as any[]
+  activities: [] as any[],
+  wallet_transactions: [] as any[],
+  loyalty_events: [] as any[]
+};
+
+const normalizeSequenceKey = (value?: string | null): string =>
+  typeof value === 'string' ? value.trim().toUpperCase() : '';
+
+const matchesDocumentSeries = (left: DocumentSeries, right: DocumentSeries): boolean => {
+  const leftId = normalizeSequenceKey(left.id);
+  const rightId = normalizeSequenceKey(right.id);
+  if (leftId && rightId && leftId === rightId) return true;
+
+  const leftPrefix = normalizeSequenceKey(left.prefix);
+  const rightPrefix = normalizeSequenceKey(right.prefix);
+  const leftType = normalizeSequenceKey(left.documentType);
+  const rightType = normalizeSequenceKey(right.documentType);
+
+  return Boolean(leftPrefix && rightPrefix && leftPrefix === rightPrefix && leftType && rightType && leftType === rightType);
+};
+
+const matchesFiscalRange = (left: FiscalRangeDGII, right: FiscalRangeDGII): boolean => {
+  const leftId = normalizeSequenceKey(left.id);
+  const rightId = normalizeSequenceKey(right.id);
+  if (leftId && rightId && leftId === rightId) return true;
+
+  const leftType = normalizeSequenceKey(left.type);
+  const rightType = normalizeSequenceKey(right.type);
+  if (leftType && rightType && leftType === rightType) return true;
+
+  const leftPrefix = normalizeSequenceKey(left.prefix);
+  const rightPrefix = normalizeSequenceKey(right.prefix);
+  return Boolean(leftPrefix && rightPrefix && leftPrefix === rightPrefix);
+};
+
+const mergeDocumentSeriesState = (
+  existingSeries: DocumentSeries[],
+  incomingSeries: DocumentSeries[]
+): DocumentSeries[] => {
+  const normalizedIncoming = (incomingSeries || []).map((incoming) => ({
+    ...incoming,
+    nextNumber: Math.max(1, Number(incoming?.nextNumber) || 1),
+    padding: Math.max(1, Number(incoming?.padding) || 6),
+  }));
+
+  return mergeDocumentSeriesCollection([...(existingSeries || []), ...normalizedIncoming]);
+};
+
+const mergeFiscalRangesState = (
+  existingRanges: FiscalRangeDGII[],
+  incomingRanges: FiscalRangeDGII[]
+): { mergedRanges: FiscalRangeDGII[]; bufferTypesToReset: Set<NCFType> } => {
+  const merged = [...(existingRanges || [])];
+  const bufferTypesToReset = new Set<NCFType>();
+
+  incomingRanges.forEach((incoming) => {
+    const matchIndex = merged.findIndex((candidate) => matchesFiscalRange(candidate, incoming));
+    const normalizedIncoming: FiscalRangeDGII = {
+      ...incoming,
+      currentGlobal: Math.max(0, Number(incoming.currentGlobal) || 0),
+      startNumber: Math.max(0, Number(incoming.startNumber) || 0),
+      endNumber: Math.max(0, Number(incoming.endNumber) || 0),
+      isActive: Boolean(incoming.isActive),
+    };
+
+    if (matchIndex === -1) {
+      merged.push(normalizedIncoming);
+      bufferTypesToReset.add(normalizedIncoming.type);
+      return;
+    }
+
+    const current = merged[matchIndex];
+    const authoritativeAdvance = normalizedIncoming.currentGlobal > (Number(current?.currentGlobal) || 0);
+    const rangeShapeChanged =
+      normalizeSequenceKey(current?.prefix) !== normalizeSequenceKey(normalizedIncoming.prefix) ||
+      Number(current?.startNumber) !== normalizedIncoming.startNumber ||
+      Number(current?.endNumber) !== normalizedIncoming.endNumber;
+
+    if (authoritativeAdvance || rangeShapeChanged) {
+      bufferTypesToReset.add(normalizedIncoming.type);
+    }
+
+    merged[matchIndex] = {
+      ...current,
+      ...normalizedIncoming,
+      currentGlobal: Math.max(Number(current?.currentGlobal) || 0, normalizedIncoming.currentGlobal),
+    };
+  });
+
+  return { mergedRanges: merged, bufferTypesToReset };
 };
 
 export const db = {
@@ -900,6 +990,35 @@ export const db = {
     buffer.currentNumber += 1;
     await dbAdapter.saveCollection('localFiscalBuffer', buffers);
     return ncf;
+  },
+
+  rehydrateOperationalDocumentState: async (
+    documentSeries: DocumentSeries[] = [],
+    fiscalRanges: FiscalRangeDGII[] = []
+  ): Promise<void> => {
+    if ((!documentSeries || documentSeries.length === 0) && (!fiscalRanges || fiscalRanges.length === 0)) {
+      return;
+    }
+
+    if (documentSeries && documentSeries.length > 0) {
+      const existingSeries = await dbAdapter.getCollection<DocumentSeries>('internalSequences') || [];
+      const mergedSeries = mergeDocumentSeriesState(existingSeries, documentSeries);
+      await dbAdapter.saveCollection('internalSequences', mergedSeries);
+    }
+
+    if (fiscalRanges && fiscalRanges.length > 0) {
+      const existingRanges = await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges') || [];
+      const { mergedRanges, bufferTypesToReset } = mergeFiscalRangesState(existingRanges, fiscalRanges);
+      await dbAdapter.saveCollection('fiscalRanges', mergedRanges);
+
+      if (bufferTypesToReset.size > 0) {
+        const existingBuffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
+        const filteredBuffers = existingBuffers.filter((buffer) => !bufferTypesToReset.has(buffer.type));
+        if (filteredBuffers.length !== existingBuffers.length) {
+          await dbAdapter.saveCollection('localFiscalBuffer', filteredBuffers);
+        }
+      }
+    }
   },
 
   getNextSequenceNumber: async (sequenceId: string): Promise<string | null> => {

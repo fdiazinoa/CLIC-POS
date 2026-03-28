@@ -13,6 +13,7 @@ import { NCFType } from '../types';
 import { seriesSyncService } from '../services/sync/SeriesSyncService';
 import { syncManager } from '../services/sync/SyncManager';
 import { DEFAULT_DOCUMENT_SERIES } from '../constants';
+import { canonicalizeDocumentSeries, mergeDocumentSeriesCollection } from '../utils/documentSeriesIdentity';
 
 interface DocumentSettingsProps {
    onClose: () => void;
@@ -98,7 +99,7 @@ const normalizeSequence = (raw: any): DocumentSeries | null => {
    const nextNumberRaw = Number(raw.nextNumber);
    const paddingRaw = Number(raw.padding);
 
-   return {
+   return canonicalizeDocumentSeries({
       id: safeId,
       documentType: documentType as DocumentSeries['documentType'],
       name: String(raw.name || fallback?.name || `Serie ${documentType}`).trim(),
@@ -109,26 +110,14 @@ const normalizeSequence = (raw: any): DocumentSeries | null => {
       icon: String(raw.icon || fallback?.icon || 'FileText'),
       color: String(raw.color || fallback?.color || 'blue'),
       businessUnit: typeof raw.businessUnit === 'string' ? raw.businessUnit : undefined
-   };
+   });
 };
 
 const normalizeSequenceCollection = (rows: any[]): DocumentSeries[] => {
-   const map = new Map<string, DocumentSeries>();
-   for (const row of Array.isArray(rows) ? rows : []) {
-      const normalized = normalizeSequence(row);
-      if (!normalized) continue;
-      const existing = map.get(normalized.id);
-      if (!existing) {
-         map.set(normalized.id, normalized);
-         continue;
-      }
-      map.set(normalized.id, {
-         ...existing,
-         ...normalized,
-         nextNumber: Math.max(existing.nextNumber || 1, normalized.nextNumber || 1)
-      });
-   }
-   return Array.from(map.values());
+   const normalized = (Array.isArray(rows) ? rows : [])
+      .map((row) => normalizeSequence(row))
+      .filter(Boolean) as DocumentSeries[];
+   return mergeDocumentSeriesCollection(normalized);
 };
 
 const extractConfig = (raw: any): BusinessConfig | null => {
