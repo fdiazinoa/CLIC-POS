@@ -2011,18 +2011,20 @@ const AppContent: React.FC = () => {
     const fiscalCompliance = getFiscalComplianceConfig(config);
     const environment = getProviderEnvironment(fiscalCompliance, providerId);
     const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
+    const shouldPollExistingAttempt = transaction.fiscalSyncStatus === 'PENDING' && Boolean(transaction.fiscalReferenceId);
     const retryingTransaction: Transaction = {
       ...transaction,
       fiscalSyncStatus: 'PENDING',
       fiscalSyncError: undefined,
-      fiscalResponseMessage: transaction.fiscalReferenceId
+      fiscalReferenceId: shouldPollExistingAttempt ? transaction.fiscalReferenceId : undefined,
+      fiscalResponseMessage: shouldPollExistingAttempt
         ? 'Consultando estado actualizado del e-CF en Polaris...'
         : 'Reintentando envío del e-CF a Polaris...'
     };
 
     await upsertFiscalTransaction(retryingTransaction);
 
-    if (transaction.fiscalReferenceId) {
+    if (shouldPollExistingAttempt && transaction.fiscalReferenceId) {
       await pollFiscalDocumentStatus(
         retryingTransaction,
         providerId,
