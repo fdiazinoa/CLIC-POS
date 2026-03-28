@@ -2,10 +2,10 @@ import { Product } from '../../types';
 import {
     buildErpCashMovementPayload,
     buildErpInventoryLedgerPayload,
+    buildErpLoyaltyEventPayload,
     buildErpSalePayload,
-    buildErpZReportPayload,
     buildErpWalletEventPayload,
-    buildErpLoyaltyEventPayload
+    buildErpZReportPayload
 } from './erpOutboundPayloads';
 
 /**
@@ -57,7 +57,12 @@ interface SyncConfig {
 class ApiSyncAdapter {
     private config: SyncConfig | null = null;
     private authToken: string | null = null;
+    private erpAuthToken: string | null = null;
     private isOnline: boolean = true;
+    private authInFlight: Promise<void> | null = null;
+    private erpAuthInFlight: Promise<string> | null = null;
+    private onlineListener: (() => void) | null = null;
+    private offlineListener: (() => void) | null = null;
 
     // Circuit Breaker State
     private consecutiveFailures: number = 0;
@@ -66,6 +71,8 @@ class ApiSyncAdapter {
     private readonly CIRCUIT_RESET_TIMEOUT = 30000; // 30 seconds
     private readonly CIRCUIT_BREAKER_OPEN_ERROR = 'Circuit Breaker Open: Master unreachable';
     private onConnectionRestored: (() => void) | null = null;
+    private lastAuthLogAt: Record<'master' | 'erp', number> = { master: 0, erp: 0 };
+    private readonly AUTH_LOG_THROTTLE_MS = 5000;
 
     private isCircuitBreakerOpenError(error: unknown): boolean {
         const message = error instanceof Error ? error.message : String(error || '');
@@ -73,6 +80,17 @@ class ApiSyncAdapter {
     }
 
     private onConnectionLostCallback: (() => void) | null = null;
+
+    private logAuthFailure(kind: 'master' | 'erp', error: unknown) {
+        const now = Date.now();
+        if (now - this.lastAuthLogAt[kind] < this.AUTH_LOG_THROTTLE_MS) {
+            return;
+        }
+
+        this.lastAuthLogAt[kind] = now;
+        const prefix = kind === 'master' ? '❌ Authentication failed:' : '❌ ERP authentication failed:';
+        console.error(prefix, error);
+    }
 
     setOnConnectionLost(callback: () => void) {
         this.onConnectionLostCallback = callback;
@@ -82,6 +100,7 @@ class ApiSyncAdapter {
         if (this.config) {
             console.log(`🔄 ApiSyncAdapter: Updating Master URL to ${newUrl}`);
             this.config.masterUrl = newUrl;
+            this.authToken = null;
             this.resetCircuitBreaker();
         }
     }
@@ -217,49 +236,227 @@ class ApiSyncAdapter {
     /**
      * Authenticate with the Master terminal
      */
-    async authenticate(): Promise<void> {
+    async authenticate(force = false): Promise<void> {
         this.ensureConfig();
         if (!this.config) throw new Error('ApiSyncAdapter not initialized'); // Should be caught by ensureConfig
 
-        try {
-            const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/auth`, {
+        if (!force && this.authToken) {
+            return;
+        }
+
+        if (!force && this.authInFlight) {
+            return this.authInFlight;
+        }
+
+        const authPromise = (async () => {
+            try {
+                const response = await this.fetchWithRetry(`${this.config!.masterUrl}/api/sync/auth`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        terminalId: this.config!.terminalId,
+                        deviceToken: localStorage.getItem('CLIC_POS_DEVICE_TOKEN')
+                    })
+                });
+
+                if (!response.ok) {
+                    let errorMessage = `Authentication failed: ${response.status} ${response.statusText}`;
+                    try {
+                        const errorData = await response.json();
+                        errorMessage += ` - ${errorData.message} (${errorData.code})`;
+
+                        if (errorData.code === 'DEVICE_MISMATCH') {
+                            console.error('🛑 CRITICAL: DEVICE MISMATCH. This terminal ID is bound to another device.');
+                        }
+                    } catch {
+                        // Ignore json parse error
+                    }
+                    throw new Error(errorMessage);
+                }
+
+                const data = await response.json();
+                this.authToken = data.token;
+                this.isOnline = true;
+                console.log(`✅ Authenticated with Master terminal: ${this.config!.terminalId}`);
+            } catch (error: unknown) {
+                if (this.isCircuitBreakerOpenError(error)) {
+                    console.warn('⚠️ Authentication deferred: circuit breaker open, waiting before retry.');
+                } else {
+                    this.logAuthFailure('master', error);
+                }
+                this.isOnline = false;
+                throw error;
+            }
+        })();
+
+        this.authInFlight = authPromise.finally(() => {
+            this.authInFlight = null;
+        });
+
+        return this.authInFlight;
+    }
+
+    private buildSyncApiBase(url: string): string {
+        const trimmed = url.replace(/\/$/, '');
+        return /\/api\/sync$/i.test(trimmed) ? trimmed : `${trimmed}/api/sync`;
+    }
+
+    private resolveOperationalTarget(): { baseUrl: string; terminalId: string; useLocalTarget: boolean } | null {
+        const boundErpTerminalId =
+            localStorage.getItem('clic_erp_sync_terminal_id') ||
+            localStorage.getItem('CLIC_POS_TERMINAL_ID');
+        const erpBaseUrl =
+            localStorage.getItem('CLIC_ERP_SYNC_URL') ||
+            localStorage.getItem('CLIC_ERP_BASE_URL') ||
+            localStorage.getItem('erp_base_url');
+
+        if (boundErpTerminalId && erpBaseUrl) {
+            return {
+                baseUrl: this.buildSyncApiBase(erpBaseUrl),
+                terminalId: boundErpTerminalId,
+                useLocalTarget: false
+            };
+        }
+
+        if (this.config?.masterUrl && this.config?.terminalId) {
+            return {
+                baseUrl: this.buildSyncApiBase(this.config.masterUrl),
+                terminalId: this.config.terminalId,
+                useLocalTarget: true
+            };
+        }
+
+        return null;
+    }
+
+    private async authenticateOperationalTarget(force = false): Promise<{
+        baseUrl: string;
+        terminalId: string;
+        token: string;
+        useLocalTarget: boolean;
+    }> {
+        const target = this.resolveOperationalTarget();
+        if (!target) {
+            throw new Error('Operational sync target is not configured');
+        }
+
+        if (target.useLocalTarget) {
+            if (!this.authToken || force) {
+                await this.authenticate(force);
+            }
+
+            if (!this.authToken) {
+                throw new Error('Operational sync token unavailable for local target');
+            }
+
+            return {
+                ...target,
+                token: this.authToken
+            };
+        }
+
+        if (!navigator.onLine) {
+            throw new Error('Browser offline');
+        }
+
+        if (!force && this.erpAuthToken) {
+            return {
+                ...target,
+                token: this.erpAuthToken
+            };
+        }
+
+        if (!force && this.erpAuthInFlight) {
+            const token = await this.erpAuthInFlight;
+            return {
+                ...target,
+                token
+            };
+        }
+
+        const erpAuthPromise = (async () => {
+            const response = await this.fetchWithRetry(`${target.baseUrl}/auth`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    terminalId: this.config.terminalId,
+                    terminalId: target.terminalId,
                     deviceToken: localStorage.getItem('CLIC_POS_DEVICE_TOKEN')
                 })
             });
 
             if (!response.ok) {
-                let errorMessage = `Authentication failed: ${response.status} ${response.statusText}`;
+                let errorMessage = `ERP authentication failed: ${response.status} ${response.statusText}`;
                 try {
                     const errorData = await response.json();
-                    errorMessage += ` - ${errorData.message} (${errorData.code})`;
-
-                    // Critical: If device mismatch, we should probably warn the user or clear local state
-                    if (errorData.code === 'DEVICE_MISMATCH') {
-                        console.error('🛑 CRITICAL: DEVICE MISMATCH. This terminal ID is bound to another device.');
-                        // TODO: Triggers UI event for re-binding
-                    }
-                } catch (e) {
-                    // Ignore json parse error
+                    errorMessage += ` - ${errorData.message || errorData.error || 'unknown error'}`;
+                } catch {
+                    // ignore JSON parse issues here
                 }
                 throw new Error(errorMessage);
             }
 
             const data = await response.json();
-            this.authToken = data.token;
-            this.isOnline = true;
-            console.log(`✅ Authenticated with Master terminal: ${this.config.terminalId}`);
-        } catch (error: unknown) {
-            if (this.isCircuitBreakerOpenError(error)) {
-                console.warn('⚠️ Authentication deferred: circuit breaker open, waiting before retry.');
-            } else {
-                console.error('❌ Authentication failed:', error);
-            }
-            this.isOnline = false;
+            return String(data.token || '');
+        })();
+
+        this.erpAuthInFlight = erpAuthPromise.finally(() => {
+            this.erpAuthInFlight = null;
+        });
+
+        try {
+            this.erpAuthToken = await this.erpAuthInFlight;
+        } catch (error) {
+            this.logAuthFailure('erp', error);
             throw error;
+        }
+
+        if (!this.erpAuthToken) {
+            throw new Error('Operational sync token unavailable for ERP target');
+        }
+
+        return {
+            ...target,
+            token: this.erpAuthToken
+        };
+    }
+
+    private async postOperationalPayload(path: string, body: Record<string, unknown>): Promise<void> {
+        const target = await this.authenticateOperationalTarget();
+        const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Sync-Token': target.token
+            },
+            body: JSON.stringify(body)
+        });
+
+        if (response.status === 401) {
+            if (target.useLocalTarget) {
+                this.authToken = null;
+            } else {
+                this.erpAuthToken = null;
+            }
+
+            const retriedTarget = await this.authenticateOperationalTarget(true);
+            const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}${path}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Token': retriedTarget.token
+                },
+                body: JSON.stringify(body)
+            });
+
+            if (!retryResponse.ok) {
+                throw new Error(`Operational sync failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
+            }
+
+            return;
+        }
+
+        if (!response.ok) {
+            throw new Error(`Operational sync failed: ${response.status} ${response.statusText}`);
         }
     }
 
@@ -322,16 +519,32 @@ class ApiSyncAdapter {
      * Setup online/offline detection
      */
     private setupOnlineDetection(): void {
-        window.addEventListener('online', () => {
+        if (this.onlineListener) {
+            window.removeEventListener('online', this.onlineListener);
+        }
+        if (this.offlineListener) {
+            window.removeEventListener('offline', this.offlineListener);
+        }
+
+        this.onlineListener = () => {
             console.log('📶 Network connection restored');
             this.isOnline = true;
-            this.authenticate().catch(console.error);
-        });
+            this.ensureAuthenticated().catch((error) => {
+                if (this.isCircuitBreakerOpenError(error) || this.isRecoverableConnectionError(error)) {
+                    console.warn('⚠️ ApiSyncAdapter: Deferred auth after network restore.', error instanceof Error ? error.message : error);
+                    return;
+                }
+                this.logAuthFailure('master', error);
+            });
+        };
 
-        window.addEventListener('offline', () => {
+        this.offlineListener = () => {
             console.log('📡 Network connection lost');
             this.isOnline = false;
-        });
+        };
+
+        window.addEventListener('online', this.onlineListener);
+        window.addEventListener('offline', this.offlineListener);
     }
 
     /**
@@ -721,17 +934,120 @@ class ApiSyncAdapter {
     /**
      * Push a single transaction to Master
      */
+    private resolveClientErpBaseUrlForInbox(): string | undefined {
+        if (typeof window === 'undefined') return undefined;
+        try {
+            const a = localStorage.getItem('CLIC_ERP_BASE_URL')?.trim();
+            const b = localStorage.getItem('erp_base_url')?.trim();
+            const vite =
+                typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_ERP_BASE_URL
+                    ? String((import.meta as any).env.VITE_ERP_BASE_URL).trim()
+                    : '';
+            return a || b || vite || undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    private maskSyncToken(token: string | null): string {
+        if (!token) return 'none';
+        if (token.length <= 10) return '(short)';
+        return `${token.slice(0, 4)}…${token.slice(-4)}`;
+    }
+
     async pushTransaction(transaction: any): Promise<void> {
         try {
-            await this.ensurePushReady();
             const normalizedTransaction = buildErpSalePayload(transaction);
-            const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/transactions`, {
+            const operationalTarget = this.resolveOperationalTarget();
+            const txId = normalizedTransaction.source_transaction_id || normalizedTransaction.id;
+            const itemsCount = Array.isArray((normalizedTransaction as any).items)
+                ? (normalizedTransaction as any).items.length
+                : typeof (normalizedTransaction as any).items === 'string'
+                  ? `string(len=${String((normalizedTransaction as any).items).length})`
+                  : 'none';
+
+            if (operationalTarget && !operationalTarget.useLocalTarget) {
+                console.log(
+                    `[SYNC_TX_PUSH] ERP direct start base=${operationalTarget.baseUrl} terminal=${operationalTarget.terminalId} tx=${txId} items=${itemsCount}`
+                );
+                let target = await this.authenticateOperationalTarget();
+                console.log(
+                    `[SYNC_TX_PUSH] ERP direct auth token=${this.maskSyncToken(target.token)} terminal=${target.terminalId}`
+                );
+                let response = await this.fetchWithRetry(`${target.baseUrl}/transactions`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Sync-Token': target.token
+                    },
+                    body: JSON.stringify({ items: [normalizedTransaction] })
+                });
+
+                if (response.status === 401) {
+                    this.erpAuthToken = null;
+                    target = await this.authenticateOperationalTarget(true);
+                    console.log(
+                        `[SYNC_TX_PUSH] ERP direct re-auth token=${this.maskSyncToken(target.token)} terminal=${target.terminalId}`
+                    );
+                    response = await this.fetchWithRetry(`${target.baseUrl}/transactions`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Sync-Token': target.token
+                        },
+                        body: JSON.stringify({ items: [normalizedTransaction] })
+                    });
+                }
+
+                const text = await response.text();
+                let syncBody: any = null;
+                try {
+                    syncBody = JSON.parse(text);
+                } catch {
+                    // non-JSON response
+                }
+
+                if (!response.ok) {
+                    throw new Error(
+                        `ERP transaction sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`
+                    );
+                }
+
+                if (syncBody && typeof syncBody.applyFailedCount === 'number' && syncBody.applyFailedCount > 0) {
+                    console.error(
+                        `[SYNC_TX_PUSH] ERP /api/sync/transactions applyFailedCount=${syncBody.applyFailedCount}`,
+                        syncBody.applyIssues
+                    );
+                    throw new Error(`ERP did not persist sale (apply failures): ${JSON.stringify(syncBody.applyIssues || [])}`);
+                }
+
+                console.log(
+                    `[SYNC_TX_PUSH] ERP direct OK tx=${txId} host=${target.baseUrl} terminal=${target.terminalId} body=${text.slice(0, 400)}`
+                );
+                return;
+            }
+
+            console.log(
+                `[SYNC_TX_PUSH] pre-auth masterUrl=${this.config?.masterUrl || 'n/a'} terminalId=${this.config?.terminalId || 'n/a'} hasToken=${!!this.authToken}`
+            );
+            await this.ensurePushReady();
+            console.log(
+                `[SYNC_TX_PUSH] post-auth hasToken=${!!this.authToken} X-Sync-Token=${this.maskSyncToken(this.authToken)}`
+            );
+            const erpBaseUrl = this.resolveClientErpBaseUrlForInbox();
+            console.log(
+                `[SYNC_TX_PUSH] POST ${this.config?.masterUrl}/api/sync/transactions tx=${txId} source_tx=${normalizedTransaction.source_transaction_id} source_terminal=${normalizedTransaction.source_terminal_id || normalizedTransaction.terminalId} items=${itemsCount} erp_base_url=${erpBaseUrl ? 'sent' : 'MISSING'}`
+            );
+            const response = await this.fetchWithRetry(`${this.config!.masterUrl}/api/sync/transactions`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': this.authToken || ''
                 },
-                body: JSON.stringify({ items: [normalizedTransaction] })
+                body: JSON.stringify({
+                    items: [normalizedTransaction],
+                    ...(erpBaseUrl ? { erp_base_url: erpBaseUrl } : {})
+                })
             });
 
             if (response.status === 401) {
@@ -740,9 +1056,51 @@ class ApiSyncAdapter {
             }
 
             if (!response.ok) {
-                throw new Error(`Push transaction failed: ${response.statusText}`);
+                let detail = '';
+                try {
+                    const errBody = await response.clone().json();
+                    detail = errBody?.message || (errBody?.erpInbox ? JSON.stringify(errBody.erpInbox) : '');
+                } catch {
+                    // ignore
+                }
+                throw new Error(
+                    `Push transaction failed: ${response.status} ${response.statusText}${detail ? ` — ${detail}` : ''}`
+                );
             }
-            console.log(`📤 ApiSyncAdapter: Pushed transaction ${normalizedTransaction.source_transaction_id || normalizedTransaction.id}`);
+
+            let syncBody: any = null;
+            try {
+                syncBody = await response.json();
+            } catch {
+                // non-JSON response
+            }
+            const erp = syncBody?.erpInbox;
+            const r0 = Array.isArray(erp?.results) ? erp.results[0] : null;
+            console.log(
+                `[SYNC_TX_PUSH] master_response applyFailedCount=${syncBody?.applyFailedCount ?? 'n/a'} erpInbox_skipped=${erp?.skipped ?? 'n/a'} erpInbox_failed=${erp?.failed ?? 'n/a'} sync_id=${r0?.syncId ?? 'n/a'} erp_document_id=${r0?.erpDocumentId ?? 'n/a'} apply_err=${r0?.error ?? 'n/a'}`
+            );
+            if (syncBody && typeof syncBody.applyFailedCount === 'number' && syncBody.applyFailedCount > 0) {
+                console.error(
+                    `[SYNC_TX_PUSH] ERP /api/sync/transactions applyFailedCount=${syncBody.applyFailedCount}`,
+                    syncBody.applyIssues
+                );
+                throw new Error(`ERP did not persist sale (apply failures): ${JSON.stringify(syncBody.applyIssues || [])}`);
+            }
+            if (erp?.skipped) {
+                console.warn(
+                    `[SYNC_TX_PUSH] Master OK but ERP inbox skipped (${erp.reason || 'NO_ERP_URL'}). Configure CLIC_ERP_BASE_URL / erp_base_url localStorage or ERP_BASE_URL on Master. tx=${txId}`
+                );
+            } else if (erp?.failed) {
+                console.error(`[SYNC_TX_PUSH] Unexpected erpInbox.failed in 200 response tx=${txId}`);
+            } else {
+                const types = Array.isArray(erp?.results) ? erp.results.map((r: any) => r.eventType).join(', ') : 'SALE_POSTED';
+                const docIds = Array.isArray(erp?.results)
+                    ? erp.results.map((r: any) => r.erpDocumentId).filter(Boolean).join(', ')
+                    : '';
+                console.log(
+                    `[SYNC_TX_PUSH] ERP inbox OK [${types}] tx=${txId} host=${erp?.erpBaseUrlUsed || 'n/a'} erp_document_id=${docIds || 'n/a'}`
+                );
+            }
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing transaction:', error);
             this.isOnline = false;
@@ -755,25 +1113,8 @@ class ApiSyncAdapter {
      */
     async pushInventoryMovement(movement: any): Promise<void> {
         try {
-            await this.ensurePushReady();
             const payload = buildErpInventoryLedgerPayload(movement);
-            const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/inventory/movements`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Sync-Token': this.authToken || ''
-                },
-                body: JSON.stringify({ items: [payload] })
-            });
-
-            if (response.status === 401) {
-                await this.authenticate();
-                return this.pushInventoryMovement(movement);
-            }
-
-            if (!response.ok) {
-                throw new Error(`Push inventory movement failed: ${response.statusText}`);
-            }
+            await this.postOperationalPayload('/inventory/movements', { items: [payload] });
             console.log(`📤 ApiSyncAdapter: Pushed inventory movement ${payload.source_inventory_movement_id || payload.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing inventory movement:', error);
@@ -818,25 +1159,8 @@ class ApiSyncAdapter {
      */
     async pushCashMovement(movement: any): Promise<void> {
         try {
-            await this.ensurePushReady();
             const normalizedMovement = buildErpCashMovementPayload(movement);
-            const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/cash/movements`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Sync-Token': this.authToken || ''
-                },
-                body: JSON.stringify({ items: [normalizedMovement] })
-            });
-
-            if (response.status === 401) {
-                await this.authenticate();
-                return this.pushCashMovement(movement);
-            }
-
-            if (!response.ok) {
-                throw new Error(`Push cash movement failed: ${response.statusText}`);
-            }
+            await this.postOperationalPayload('/cash/movements', { items: [normalizedMovement] });
             console.log(`📤 ApiSyncAdapter: Pushed cash movement ${normalizedMovement.source_cash_movement_id || normalizedMovement.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing cash movement:', error);
@@ -850,25 +1174,8 @@ class ApiSyncAdapter {
      */
     async pushZReport(report: any): Promise<void> {
         try {
-            await this.ensurePushReady();
             const normalizedReport = buildErpZReportPayload(report);
-            const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/z-reports`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Sync-Token': this.authToken || ''
-                },
-                body: JSON.stringify({ items: [normalizedReport] })
-            });
-
-            if (response.status === 401) {
-                await this.authenticate();
-                return this.pushZReport(report);
-            }
-
-            if (!response.ok) {
-                throw new Error(`Push Z-Report failed: ${response.statusText}`);
-            }
+            await this.postOperationalPayload('/z-reports', { items: [normalizedReport] });
             console.log(`📤 ApiSyncAdapter: Pushed Z-Report ${normalizedReport.source_z_report_id || normalizedReport.id}`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing Z-Report:', error);
@@ -883,7 +1190,6 @@ class ApiSyncAdapter {
     async pushOperationalEvents(items: Record<string, unknown>[]): Promise<void> {
         if (!items.length) return;
         try {
-            await this.ensurePushReady();
             const normalized = items.map((row) => {
                 const channel = String((row as any).operationalChannel || '').toUpperCase();
                 if (channel === 'LOYALTY') {
@@ -891,23 +1197,7 @@ class ApiSyncAdapter {
                 }
                 return buildErpWalletEventPayload(row);
             });
-            const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/operational/events`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Sync-Token': this.authToken || ''
-                },
-                body: JSON.stringify({ items: normalized })
-            });
-
-            if (response.status === 401) {
-                await this.authenticate();
-                return this.pushOperationalEvents(items);
-            }
-
-            if (!response.ok) {
-                throw new Error(`Push operational events failed: ${response.statusText}`);
-            }
+            await this.postOperationalPayload('/operational/events', { items: normalized });
             console.log(`📤 ApiSyncAdapter: Pushed ${normalized.length} operational event(s)`);
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pushing operational events:', error);

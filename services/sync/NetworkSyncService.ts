@@ -1,13 +1,17 @@
 import { db } from '../../utils/db';
 import { dbAdapter } from '../db';
+import { buildMasterUrlFromHost } from '../../utils/cloudMasterRegistry';
 
 const ENABLE_NETWORK_SYNC = (import.meta as any).env?.VITE_ENABLE_NETWORK_SYNC === 'true';
 
 const getApiUrl = () => {
+    const storedMasterUrl = localStorage.getItem('CLIC_POS_MASTER_URL');
+    if (storedMasterUrl) {
+        return `${storedMasterUrl.replace(/\/$/, '')}/api`;
+    }
     const masterIp = localStorage.getItem('pos_master_ip');
     if (masterIp) {
-        const protocol = window.location.protocol;
-        return `${protocol}//${masterIp}:3001/api`;
+        return `${buildMasterUrlFromHost(masterIp)}/api`;
     }
     return '/api';
 };

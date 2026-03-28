@@ -26,6 +26,15 @@ export const RNCValidationWidget: React.FC<RNCValidationWidgetProps> = ({
   const [isValidating, setIsValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const buildInactiveMessage = (dgiiData: Pick<DGIIResponse, 'status' | 'name' | 'rnc'>) => {
+    if (dgiiData.status === 'NO_REGISTRADO') {
+      return `Empresa no encontrada en DGII para el RNC ${dgiiData.rnc}. No se puede facturar B01.`;
+    }
+
+    const companyName = dgiiData.name?.trim() || `RNC ${dgiiData.rnc}`;
+    return `${companyName} no está activa en DGII (${dgiiData.status}). No se puede facturar B01.`;
+  };
+
   const handleValidate = async () => {
     if (!value || value.length < 9) {
       setError('RNC/Cédula debe tener al menos 9 dígitos');
@@ -43,15 +52,9 @@ export const RNCValidationWidget: React.FC<RNCValidationWidgetProps> = ({
         return;
       }
 
-      // Warn if not ACTIVO
       if (dgiiData.status !== 'ACTIVO') {
-        alert(
-          `⚠️ ATENCIÓN: Contribuyente ${dgiiData.status}\n\n` +
-          `RNC: ${dgiiData.rnc} \n` +
-          `Nombre: ${dgiiData.name} \n\n` +
-          `Este contribuyente NO está vigente en DGII.\n` +
-          `No se puede emitir crédito fiscal B01.`
-        );
+        setError(buildInactiveMessage(dgiiData));
+        return;
       }
 
       // Callback with validated data
@@ -65,7 +68,7 @@ export const RNCValidationWidget: React.FC<RNCValidationWidgetProps> = ({
             economicActivity: dgiiData.economicActivity,
             regimeType: dgiiData.regimeType
           },
-          defaultNcfType: dgiiData.status === 'ACTIVO' ? 'B01' : 'B02'
+          defaultNcfType: 'B01'
         });
       }
     } catch (err) {

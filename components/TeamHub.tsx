@@ -311,42 +311,44 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
       <div className="h-screen w-full bg-gray-100 flex flex-col overflow-hidden animate-in fade-in">
 
          {/* Header Tabs */}
-         <div className="bg-white border-b border-gray-200 px-6 pt-6 pb-0 flex justify-between items-center shrink-0">
-            <div className="flex gap-8">
+         <div className="bg-white border-b border-gray-200 px-4 md:px-6 pt-4 md:pt-6 pb-0 shrink-0">
+            <div className="flex items-center gap-3 md:gap-4">
+               <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 md:mx-0 md:px-0 flex-1 min-w-0">
                <button
                   onClick={() => setActiveTab('CLOCK')}
-                  className={`pb-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === 'CLOCK' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'CLOCK' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <Clock size={18} /> Fichaje
                </button>
                <button
                   onClick={() => setActiveTab('USERS')}
-                  className={`pb-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === 'USERS' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'USERS' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <Users size={18} /> Equipo
                </button>
                <button
                   onClick={() => setActiveTab('SCHEDULE')}
-                  className={`pb-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === 'SCHEDULE' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'SCHEDULE' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <Calendar size={18} /> Turnos & Horarios
                </button>
                <button
                   onClick={() => setActiveTab('REPORTS')}
-                  className={`pb-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === 'REPORTS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'REPORTS' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <FileBarChart size={18} /> Reporte de Horas
                </button>
                <button
                   onClick={() => setActiveTab('ROLES')}
-                  className={`pb-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === 'ROLES' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                  className={`mobile-tab-item pb-4 pt-4 text-[11px] md:text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === 'ROLES' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                >
                   <ShieldCheck size={18} /> Roles & Permisos
                </button>
-            </div>
-            <button onClick={onClose} className="mb-4 p-2 bg-gray-100 rounded-full text-gray-500 hover:bg-gray-200">
+               </div>
+            <button onClick={onClose} className="mb-4 shrink-0 p-2 bg-gray-100 rounded-full text-gray-500 hover:bg-gray-200">
                <X size={20} />
             </button>
+            </div>
          </div>
 
          <div className="flex-1 overflow-hidden relative">
@@ -657,14 +659,14 @@ const TeamHub: React.FC<TeamHubProps> = ({ users, roles, onUpdateUsers, onUpdate
                         </button>
                      </div>
 
-                     <div className="flex-1 overflow-y-auto">
+                     <div className="flex-1 overflow-y-auto bg-slate-50/70 p-3">
                         {roles.map(role => (
                            <button
                               key={role.id}
                               onClick={() => setEditingRole(role)}
-                              className={`w-full p-4 text-left border-l-4 transition-all hover:bg-gray-50 flex items-center justify-between group ${editingRole?.id === role.id
-                                 ? 'border-purple-500 bg-purple-50 text-purple-900'
-                                 : 'border-transparent text-gray-600'
+                              className={`w-full p-4 mb-3 text-left rounded-2xl border transition-all shadow-sm hover:shadow-md flex items-center justify-between group bg-white ${editingRole?.id === role.id
+                                 ? 'border-purple-500 bg-white text-purple-900 ring-2 ring-purple-100'
+                                 : 'border-gray-200 text-gray-700 hover:border-gray-300'
                                  }`}
                            >
                               <span className="font-bold text-sm truncate pr-2">{role.name}</span>

@@ -63,9 +63,14 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
 
    // -- Discovery State --
    const [isScanning, setIsScanning] = useState<ConnectionType | null>(null);
+   const [isDiscoveryLoading, setIsDiscoveryLoading] = useState(false);
+   const [discoveryNotice, setDiscoveryNotice] = useState<string | null>(null);
    const [discoveredDevices, setDiscoveredDevices] = useState<Partial<PrinterDevice>[]>([]);
    const [isManualMode, setIsManualMode] = useState(false);
    const [manualData, setManualData] = useState({ name: '', address: '' });
+   const [manualTestResult, setManualTestResult] = useState<{ success: boolean; message: string } | null>(null);
+   const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null);
+   const [printerTestFeedback, setPrinterTestFeedback] = useState<Record<string, { success: boolean; message: string }>>({});
 
    // -- Customer Display State --
    const currentTerminalConfig = useMemo(() => {
@@ -93,6 +98,31 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          setCurrentPreviewAdIndex(0);
       }
    }, [previewMode, displayConfig.ads?.length]);
+
+   useEffect(() => {
+      let cancelled = false;
+
+      const prefillUsbPort = async () => {
+         if (!isManualMode || isScanning !== 'USB') return;
+         if (manualData.address.trim()) return;
+
+         const detected = await nativePrintBridge.discoverPrinters('USB');
+         if (cancelled || detected.length === 0) {
+            setDiscoveryNotice(prev => prev || 'No se detectó automáticamente un puerto USB. Revise cable, OTG y energía de la impresora.');
+            return;
+         }
+
+         const first = detected[0];
+         setManualData(prev => ({
+            name: prev.name || first.name || 'Impresora USB',
+            address: prev.address || first.address || ''
+         }));
+         setDiscoveryNotice(`Puerto USB detectado automáticamente: ${first.address || first.name}`);
+      };
+
+      prefillUsbPort();
+      return () => { cancelled = true; };
+   }, [isManualMode, isScanning, manualData.address]);
 
    // -- Scale Label State --
    const [scaleLabelConfig, setScaleLabelConfig] = useState<ScaleLabelConfig>(globalConfig.scaleLabelConfig || {
@@ -188,24 +218,90 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
 
    const handleStartDiscovery = async (type: ConnectionType) => {
       setIsScanning(type);
+      setIsDiscoveryLoading(true);
+      setDiscoveryNotice(null);
       setIsManualMode(false);
       setManualData({ name: '', address: '' });
+      setManualTestResult(null);
       setDiscoveredDevices([]);
+
+      const runtime = nativePrintBridge.getRuntime();
+      const isNativeRuntime = runtime === 'ANDROID' || runtime === 'ELECTRON' || runtime === 'WINDOWS';
 
       if (nativePrintBridge.supportsPeripheralBinding()) {
          try {
             const nativeDevices = await nativePrintBridge.discoverPrinters(type);
-            if (nativeDevices.length > 0) {
-               setDiscoveredDevices(nativeDevices);
-               return;
+            setDiscoveredDevices(nativeDevices);
+            if (nativeDevices.length === 0) {
+               if (runtime === 'ANDROID' && type === 'USB') {
+                  setDiscoveryNotice('No se detectó una impresora USB conectada. Revise cable, OTG, permisos y energía del equipo.');
+               } else if (runtime === 'ANDROID' && type === 'NETWORK') {
+                  setDiscoveryNotice('La búsqueda automática por red no está disponible en APK. Use configuración manual para IP y puerto.');
+               } else if (runtime === 'ANDROID') {
+                  setDiscoveryNotice('No se encontraron impresoras Bluetooth vinculadas en Android.');
+               } else {
+                  setDiscoveryNotice(`No se encontraron impresoras ${type.toLowerCase()}.`);
+               }
             }
+            setIsDiscoveryLoading(false);
+            return;
          } catch (error) {
             console.warn('Native printer discovery failed, using local fallback:', error);
+            if (isNativeRuntime) {
+               setDiscoveryNotice(error instanceof Error ? error.message : 'No se pudo completar el reconocimiento nativo.');
+               setIsDiscoveryLoading(false);
+               return;
+            }
          }
       }
 
-      setTimeout(() => { setDiscoveredDevices(MOCK_DISCOVERY[type] || []); }, 1500);
+      setTimeout(() => {
+         setDiscoveredDevices(MOCK_DISCOVERY[type] || []);
+         setDiscoveryNotice('Modo demostración: mostrando dispositivos simulados.');
+         setIsDiscoveryLoading(false);
+      }, 1500);
    };
+
+   const resolveUsbAddress = async () => {
+      const detected = await nativePrintBridge.discoverPrinters('USB');
+      if (detected.length === 0) {
+         return null;
+      }
+
+      const first = detected[0];
+      setManualData(prev => ({
+         name: prev.name || first.name || 'Impresora USB',
+         address: prev.address || first.address || ''
+      }));
+      return first.address || null;
+   };
+
+   const buildPrinterTestHtml = (printer: Partial<PrinterDevice>) => `
+      <!DOCTYPE html>
+      <html>
+      <head>
+         <meta charset="utf-8" />
+         <style>
+            body { font-family: monospace; width: 72mm; margin: 0 auto; padding: 6mm; color: #111; }
+            h1 { font-size: 18px; margin: 0 0 8px; text-align: center; }
+            .row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
+            .divider { border-top: 1px dashed #222; margin: 10px 0; }
+            .center { text-align: center; }
+         </style>
+      </head>
+      <body>
+         <h1>CLIC POS</h1>
+         <div class="center">Ticket de prueba de impresora</div>
+         <div class="divider"></div>
+         <div class="row"><span>Impresora</span><strong>${printer.name || 'Sin nombre'}</strong></div>
+         <div class="row"><span>Conexión</span><strong>${printer.connection || 'N/D'}</strong></div>
+         <div class="row"><span>Puerto / Dirección</span><strong>${printer.address || 'N/D'}</strong></div>
+         <div class="row"><span>Fecha</span><strong>${new Date().toLocaleString()}</strong></div>
+         <div class="divider"></div>
+         <div class="center">Si este ticket salió impreso, la conexión está operativa.</div>
+      </body>
+      </html>
+   `;
 
    const handlePairPrinter = async (dev: Partial<PrinterDevice>) => {
       const detectedConnection = isScanning || dev.connection || 'BLUETOOTH';
@@ -232,10 +328,17 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       };
       setPrinters([...printers, newPrinter]);
       setIsScanning(null);
+      setIsDiscoveryLoading(false);
+      setManualTestResult(null);
    };
 
    const handleSaveManualPrinter = async () => {
-      if (!manualData.name || !manualData.address) {
+      let resolvedAddress = manualData.address.trim();
+      if (isScanning === 'USB' && !resolvedAddress) {
+         resolvedAddress = (await resolveUsbAddress()) || '';
+      }
+
+      if (!manualData.name || !resolvedAddress) {
          alert("Por favor completa el nombre y la dirección.");
          return;
       }
@@ -245,7 +348,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          const paired = await nativePrintBridge.pairPrinter({
             name: manualData.name,
             connection: isScanning || 'BLUETOOTH',
-            address: manualData.address,
+            address: resolvedAddress,
             type: 'TICKET'
          });
          if (paired?.id) generatedId = paired.id;
@@ -255,13 +358,84 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          id: generatedId,
          name: manualData.name,
          connection: isScanning || 'BLUETOOTH',
-         address: manualData.address,
+         address: resolvedAddress,
          status: 'CONNECTED',
          type: 'TICKET'
       };
       setPrinters([...printers, newPrinter]);
       setIsScanning(null);
+      setIsDiscoveryLoading(false);
       setIsManualMode(false);
+      setManualTestResult(null);
+   };
+
+   const handleTestPrinter = async (printer: Partial<PrinterDevice>, feedbackKey?: string) => {
+      const printerKey = feedbackKey || printer.id || printer.address || printer.name || `printer-${Date.now()}`;
+      setTestingPrinterId(printerKey);
+
+      try {
+         const printed = await nativePrintBridge.printHtml({
+            html: buildPrinterTestHtml(printer),
+            printerId: printer.id,
+            printerName: printer.name,
+            printerAddress: printer.address,
+            connection: printer.connection,
+            role: 'TICKET',
+            jobType: 'HARDWARE_TEST',
+            referenceId: `test-${printerKey}`
+         });
+
+         let success = printed;
+         let message = printed
+            ? `Se imprimió correctamente el ticket de prueba en ${printer.name || 'la impresora seleccionada'}.`
+            : `No se pudo imprimir el ticket de prueba en ${printer.name || 'la impresora seleccionada'}.`;
+
+         if (!printed) {
+            const status = await nativePrintBridge.testPrinterConnection({
+               id: printer.id,
+               name: printer.name,
+               address: printer.address,
+               connection: printer.connection,
+               type: printer.type
+            });
+
+            if (status === 'ONLINE') {
+               message = `La impresora ${printer.name || 'seleccionada'} responde, pero no aceptó el trabajo de impresión.`;
+            }
+            success = false;
+         }
+
+         setPrinterTestFeedback(prev => ({
+            ...prev,
+            [printerKey]: { success, message }
+         }));
+
+         return { success, message };
+      } finally {
+         setTestingPrinterId(null);
+      }
+   };
+
+   const handleTestManualPrinter = async () => {
+      let resolvedAddress = manualData.address.trim();
+      if (isScanning === 'USB' && !resolvedAddress) {
+         resolvedAddress = (await resolveUsbAddress()) || '';
+      }
+
+      if (!resolvedAddress) {
+         setManualTestResult({ success: false, message: 'No se pudo detectar automáticamente el puerto o dirección para esta impresora.' });
+         return;
+      }
+
+      const result = await handleTestPrinter({
+         id: `manual-${resolvedAddress}`,
+         name: manualData.name || 'Impresora manual',
+         address: resolvedAddress,
+         connection: isScanning || 'BLUETOOTH',
+         type: 'TICKET'
+      }, 'manual-draft');
+
+      setManualTestResult(result);
    };
 
    const addAd = (e: React.MouseEvent) => {
@@ -591,14 +765,24 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                                           </div>
                                        </div>
                                     </div>
+                                    {manualTestResult && (
+                                       <div className={`p-4 rounded-2xl border flex items-center gap-3 ${manualTestResult.success ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                                          {manualTestResult.success ? <CheckCircle size={18} /> : <AlertTriangle size={18} />}
+                                          <span className="text-sm font-semibold">{manualTestResult.message}</span>
+                                       </div>
+                                    )}
                                     <div className="flex gap-4 mt-8 pt-4 border-t border-slate-50">
                                        <button onClick={() => setIsManualMode(false)} className="flex-1 py-4 font-black text-slate-400 hover:bg-slate-50 rounded-2xl">Volver al Escaneo</button>
+                                       <button onClick={handleTestManualPrinter} className="flex-1 py-4 bg-slate-100 text-slate-700 rounded-[1.5rem] font-black text-sm shadow-sm active:scale-95 transition-all flex items-center justify-center gap-2">
+                                          {testingPrinterId === 'manual-draft' ? <Loader2 size={16} className="animate-spin" /> : <Activity size={16} />}
+                                          Imprimir prueba
+                                       </button>
                                        <button onClick={handleSaveManualPrinter} className="flex-[2] py-4 bg-blue-600 text-white rounded-[1.5rem] font-black text-lg shadow-xl shadow-blue-200 active:scale-95 transition-all">Vincular Manualmente</button>
                                     </div>
                                  </div>
                               ) : (
                                  <>
-                                    {discoveredDevices.length === 0 ? (
+                                    {isDiscoveryLoading ? (
                                        <div className="py-12 flex flex-col items-center">
                                           <Loader2 className="animate-spin text-blue-500 mb-4" size={56} />
                                           <p className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em]">Escaneando puerto {isScanning}...</p>
@@ -606,8 +790,29 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                                              <Keyboard size={14} /> NO DETECTADO? CONFIGURAR MANUAL
                                           </button>
                                        </div>
+                                    ) : discoveredDevices.length === 0 ? (
+                                       <div className="py-12 flex flex-col items-center text-center">
+                                          <AlertTriangle className="text-amber-500 mb-4" size={56} />
+                                          <p className="text-xs font-bold text-slate-500 uppercase tracking-[0.2em]">No se detectaron impresoras {isScanning?.toLowerCase()}</p>
+                                          {discoveryNotice && (
+                                             <p className="mt-4 max-w-md text-sm font-medium text-slate-500 leading-relaxed">{discoveryNotice}</p>
+                                          )}
+                                          <div className="mt-8 flex gap-3">
+                                             <button onClick={() => isScanning && handleStartDiscovery(isScanning)} className="px-6 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-black hover:bg-slate-200 transition-colors flex items-center gap-2">
+                                                <RefreshCw size={14} /> REINTENTAR
+                                             </button>
+                                             <button onClick={() => setIsManualMode(true)} className="px-6 py-2 bg-blue-600 text-white rounded-xl text-xs font-black hover:bg-blue-700 transition-colors flex items-center gap-2">
+                                                <Keyboard size={14} /> CONFIGURAR MANUAL
+                                             </button>
+                                          </div>
+                                       </div>
                                     ) : (
                                        <div className="space-y-3">
+                                          {discoveryNotice && (
+                                             <div className="px-4 py-3 bg-blue-50 border border-blue-100 rounded-2xl text-sm font-medium text-blue-700">
+                                                {discoveryNotice}
+                                             </div>
+                                          )}
                                           {discoveredDevices.map((dev, i) => (
                                              <div key={i} className="flex justify-between items-center p-5 bg-slate-50 border border-slate-100 rounded-2xl hover:border-blue-300 transition-all group">
                                                 <div><p className="font-black text-slate-700">{dev.name}</p><p className="text-[10px] text-slate-400 font-mono">{dev.address}</p></div>
@@ -634,9 +839,26 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                            <div key={p.id} className="p-5 flex justify-between items-center hover:bg-slate-50/50 group transition-colors">
                               <div className="flex gap-4 items-center">
                                  <div className="p-3 bg-slate-100 rounded-xl text-slate-400 group-hover:bg-blue-50 group-hover:text-blue-500 transition-colors"><Printer size={24} /></div>
-                                 <div><p className="font-black text-slate-800">{p.name}</p><p className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">{p.connection} • {p.address}</p></div>
+                                 <div>
+                                    <p className="font-black text-slate-800">{p.name}</p>
+                                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">{p.connection} • {p.address}</p>
+                                    {printerTestFeedback[p.id] && (
+                                       <p className={`mt-2 text-[11px] font-semibold ${printerTestFeedback[p.id].success ? 'text-green-600' : 'text-red-500'}`}>
+                                          {printerTestFeedback[p.id].message}
+                                       </p>
+                                    )}
+                                 </div>
                               </div>
-                              <button onClick={() => setPrinters(printers.filter(x => x.id !== p.id))} className="p-2 text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={20} /></button>
+                              <div className="flex items-center gap-2">
+                                 <button
+                                    onClick={() => handleTestPrinter(p)}
+                                    className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-black hover:bg-slate-200 transition-colors flex items-center gap-2"
+                                 >
+                                    {testingPrinterId === p.id ? <Loader2 size={14} className="animate-spin" /> : <Activity size={14} />}
+                                    Imprimir prueba
+                                 </button>
+                                 <button onClick={() => setPrinters(printers.filter(x => x.id !== p.id))} className="p-2 text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={20} /></button>
+                              </div>
                            </div>
                         ))}
                         {printers.length === 0 && (

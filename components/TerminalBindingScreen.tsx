@@ -2,19 +2,34 @@ import React, { useState } from 'react';
 import { ChevronRight, Lock, Server, Smartphone, Wifi } from 'lucide-react';
 import { BusinessConfig, User as UserType } from '../types';
 import TerminalSelector from './TerminalSelector';
+import { buildMasterUrlCandidates, buildMasterUrlFromHost, normalizeMasterHost } from '../utils/cloudMasterRegistry';
 
 interface PairingResult {
   tenantId?: string;
+  erpTerminalId?: string;
+  terminalName?: string;
+  companyId?: string | null;
+  storeId?: string | null;
   boundConfig?: BusinessConfig;
   boundUsers?: UserType[];
   masterIp?: string;
+  snapshotMeta?: {
+    fullPullOnPairing?: boolean;
+    resolutionError?: unknown;
+  };
+}
+
+interface PairingOptions {
+  forceTakeover?: boolean;
 }
 
 interface TerminalBindingScreenProps {
   config: BusinessConfig;
   deviceId: string;
   adminUsers: UserType[];
-  onPair: (terminalId: string, result?: PairingResult) => Promise<void>;
+  tenantId?: string;
+  erpBaseUrl?: string;
+  onPair: (terminalId: string, result?: PairingResult, options?: PairingOptions) => Promise<void>;
   onConfigUpdate?: (newConfig: BusinessConfig) => void | Promise<void>;
   onUsersUpdate?: (users: UserType[]) => void | Promise<void>;
   initialError?: string | null;
@@ -25,6 +40,8 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   config,
   deviceId,
   adminUsers,
+  tenantId,
+  erpBaseUrl,
   onPair,
   onConfigUpdate,
   onUsersUpdate,
@@ -41,6 +58,38 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   const [masterAdmins, setMasterAdmins] = useState<UserType[]>([]);
   const [localIps, setLocalIps] = useState<string[]>([]);
   const [bindingMode, setBindingMode] = useState<'MASTER' | 'SLAVE'>('MASTER');
+
+  const resolveReachableMaster = async (host: string) => {
+    const normalizedHost = normalizeMasterHost(host);
+    const candidates = buildMasterUrlCandidates(normalizedHost);
+    let lastError: Error | null = null;
+
+    for (const baseUrl of candidates) {
+      try {
+        const [configResponse, usersResponse] = await Promise.all([
+          fetch(`${baseUrl}/api/config`),
+          fetch(`${baseUrl}/api/users`),
+        ]);
+
+        if (!configResponse.ok) {
+          throw new Error(`El servidor respondió con error ${configResponse.status}`);
+        }
+
+        const fetchedConfig = await configResponse.json();
+        const fetchedUsers = usersResponse.ok ? await usersResponse.json() : [];
+        return {
+          baseUrl,
+          host: new URL(baseUrl).hostname,
+          config: fetchedConfig,
+          users: Array.isArray(fetchedUsers) ? fetchedUsers : [],
+        };
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+
+    throw lastError || new Error('No se pudo conectar a la Maestra');
+  };
 
   const handleModeSelect = (mode: 'MASTER' | 'SLAVE') => {
     setBindingMode(mode);
@@ -68,32 +117,19 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
     setError(null);
 
     try {
-      const normalizedHost = masterIp.trim().replace(/^https?:\/\//, '');
-      const hostWithPort = normalizedHost.includes(':') ? normalizedHost : `${normalizedHost}:3001`;
-      const targetUrl = `${window.location.protocol}//${hostWithPort}`;
-
-      const [configResponse, usersResponse] = await Promise.all([
-        fetch(`${targetUrl}/api/config`),
-        fetch(`${targetUrl}/api/users`),
-      ]);
-
-      if (!configResponse.ok) {
-        throw new Error(`El servidor respondió con error ${configResponse.status}`);
-      }
-
-      const fetchedConfig = await configResponse.json();
+      const connection = await resolveReachableMaster(masterIp);
+      const fetchedConfig = connection.config;
       await onConfigUpdate?.(fetchedConfig);
 
-      if (usersResponse.ok) {
-        const fetchedUsers = await usersResponse.json();
-        const fetchedAdmins = fetchedUsers.filter((u: any) =>
-          u.role?.toUpperCase() === 'ADMIN' || u.role?.toUpperCase() === 'ADMINISTRADOR'
-        );
-        setMasterAdmins(fetchedAdmins);
-        await onUsersUpdate?.(fetchedUsers);
-      }
+      const fetchedAdmins = connection.users.filter((u: any) =>
+        u.role?.toUpperCase() === 'ADMIN' || u.role?.toUpperCase() === 'ADMINISTRADOR'
+      );
+      setMasterAdmins(fetchedAdmins);
+      await onUsersUpdate?.(connection.users);
 
-      localStorage.setItem('pos_master_ip', normalizedHost);
+      localStorage.setItem('pos_master_ip', connection.host);
+      localStorage.setItem('CLIC_POS_MASTER_URL', connection.baseUrl || buildMasterUrlFromHost(connection.host));
+      setMasterIp(connection.host);
       setStep('AUTH');
     } catch (err) {
       console.error('Failed to connect to master during terminal activation:', err);
@@ -294,23 +330,43 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
 
           {step === 'SELECT' && (
             <TerminalSelector
+              currentConfig={config}
               deviceId={deviceId}
               bindingMode={bindingMode}
+              tenantId={tenantId}
+              erpBaseUrl={erpBaseUrl}
               masterIp={masterIp}
               isAlreadyBound={(config.terminals || []).some((terminal) => terminal.config?.currentDeviceId === deviceId)}
               onMasterIpChange={setMasterIp}
               onBack={() => setStep('AUTH')}
-              onBound={async ({ terminalId, tenantId, config: boundConfig, users, masterIp: resolvedMasterIp }) => {
+              onBound={async ({
+                terminalId,
+                tenantId,
+                erpTerminalId,
+                terminalName,
+                companyId,
+                storeId,
+                forceTakeover,
+                config: boundConfig,
+                users,
+                masterIp: resolvedMasterIp,
+                snapshotMeta
+              }) => {
                 await onConfigUpdate?.(boundConfig);
                 if (Array.isArray(users)) {
                   await onUsersUpdate?.(users);
                 }
                 await onPair(terminalId, {
                   tenantId,
+                  erpTerminalId,
+                  terminalName,
+                  companyId,
+                  storeId,
                   boundConfig,
                   boundUsers: users,
                   masterIp: resolvedMasterIp,
-                });
+                  snapshotMeta,
+                }, { forceTakeover: Boolean(forceTakeover) });
               }}
             />
           )}

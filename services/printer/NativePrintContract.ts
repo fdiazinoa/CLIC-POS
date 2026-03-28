@@ -39,8 +39,31 @@ export interface NativePrintResult {
   errorCode?: string;
 }
 
+export interface NativePrinterHealthResult {
+  status?: 'ONLINE' | 'OFFLINE' | 'UNKNOWN' | 'CONNECTED' | 'DISCONNECTED' | 'READY' | 'ERROR';
+  success?: boolean;
+  message?: string;
+}
+
 export interface NativePrinterBridge {
   platform?: string;
+  validateDgiiRnc?: (payload?: { rnc?: string }) => Promise<{
+    rnc?: string;
+    name?: string;
+    commercialName?: string;
+    status?: 'ACTIVO' | 'INACTIVO' | 'NO_REGISTRADO';
+    regimeType?: string;
+    economicActivity?: string;
+    error?: string;
+  }> | {
+    rnc?: string;
+    name?: string;
+    commercialName?: string;
+    status?: 'ACTIVO' | 'INACTIVO' | 'NO_REGISTRADO';
+    regimeType?: string;
+    economicActivity?: string;
+    error?: string;
+  };
 
   discoverPrinters?: (payload?: { connection?: ConnectionType }) => Promise<NativePrinterDevice[] | { devices?: NativePrinterDevice[]; printers?: NativePrinterDevice[] }> | NativePrinterDevice[] | { devices?: NativePrinterDevice[]; printers?: NativePrinterDevice[] };
   scanPrinters?: (payload?: { connection?: ConnectionType }) => Promise<NativePrinterDevice[] | { devices?: NativePrinterDevice[]; printers?: NativePrinterDevice[] }> | NativePrinterDevice[] | { devices?: NativePrinterDevice[]; printers?: NativePrinterDevice[] };
@@ -49,6 +72,10 @@ export interface NativePrinterBridge {
   pairPrinter?: (payload?: Partial<NativePrinterDevice>) => Promise<NativePrinterDevice | { printer?: NativePrinterDevice }> | NativePrinterDevice | { printer?: NativePrinterDevice };
   connectPrinter?: (payload?: Partial<NativePrinterDevice>) => Promise<NativePrinterDevice | { printer?: NativePrinterDevice }> | NativePrinterDevice | { printer?: NativePrinterDevice };
   bindPrinter?: (payload?: Partial<NativePrinterDevice>) => Promise<NativePrinterDevice | { printer?: NativePrinterDevice }> | NativePrinterDevice | { printer?: NativePrinterDevice };
+  testPrinter?: (payload?: Partial<NativePrinterDevice>) => Promise<NativePrinterHealthResult> | NativePrinterHealthResult;
+  testPrinterConnection?: (payload?: Partial<NativePrinterDevice>) => Promise<NativePrinterHealthResult> | NativePrinterHealthResult;
+  getPrinterStatus?: (payload?: Partial<NativePrinterDevice> | { printerId?: string }) => Promise<NativePrinterHealthResult> | NativePrinterHealthResult;
+  checkStatus?: (payload?: Partial<NativePrinterDevice> | { printerId?: string }) => Promise<NativePrinterHealthResult> | NativePrinterHealthResult;
 
   printEscPos?: (payload: NativeEscPosBridgePayload) => Promise<boolean | NativePrintResult> | boolean | NativePrintResult;
   printEscpos?: (payload: NativeEscPosBridgePayload) => Promise<boolean | NativePrintResult> | boolean | NativePrintResult;

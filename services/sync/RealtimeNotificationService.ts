@@ -1,6 +1,46 @@
 import { io, Socket } from 'socket.io-client';
 import { syncManager } from './SyncManager';
 
+const TERMINAL_CONFIG_RESTART_NOTICE_KEY = 'clic_pos_terminal_config_restart_notice';
+
+type TerminalConfigRestartNotice = {
+    receivedAt: string;
+    eventId?: string | null;
+    terminalId?: string | null;
+};
+
+const asObject = (value: unknown): Record<string, any> => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return value as Record<string, any>;
+};
+
+const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+
+const extractConfigPushEventId = (value: unknown): string | null => {
+    const data = asObject(value);
+    const snapshot = asObject(data.terminal_config);
+
+    return (
+        asString(data.event_id) ||
+        asString(data.eventId) ||
+        asString(snapshot.event_id) ||
+        asString(snapshot.eventId) ||
+        null
+    );
+};
+
+const persistRestartNotice = (value: unknown) => {
+    const payload = asObject(value);
+    const notice: TerminalConfigRestartNotice = {
+        receivedAt: new Date().toISOString(),
+        eventId: extractConfigPushEventId(value),
+        terminalId: asString(payload.terminalId) || asString(asObject(payload.terminal_config).terminal_id) || null,
+    };
+
+    localStorage.setItem(TERMINAL_CONFIG_RESTART_NOTICE_KEY, JSON.stringify(notice));
+    window.dispatchEvent(new CustomEvent('terminalConfigRestartRequired', { detail: notice }));
+};
+
 class RealtimeNotificationService {
     private socket: Socket | null = null;
     private masterUrl: string = '';
@@ -59,6 +99,17 @@ class RealtimeNotificationService {
                 await syncManager.pullCatalog('products', true);
             } catch (error) {
                 console.error('❌ RealtimeNotificationService: Error updating prices:', error);
+            }
+        });
+
+        this.socket.on('CONFIG_PUSH', async (data: { terminal_config?: unknown; terminalId?: string }) => {
+            console.log('📡 RealtimeNotificationService: Received CONFIG_PUSH. Refreshing terminal snapshot...');
+            try {
+                await syncManager.refreshTerminalResolvedConfig(data?.terminal_config || data);
+                persistRestartNotice(data);
+            } catch (error) {
+                console.error('❌ RealtimeNotificationService: Error applying CONFIG_PUSH:', error);
+                persistRestartNotice(data);
             }
         });
     }

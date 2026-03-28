@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { Capacitor } from '@capacitor/core';
 import {
    Search, ShoppingCart, Trash2, MoreVertical,
    CreditCard, User, Tag, Grid, Save,
@@ -17,8 +18,8 @@ import {
 import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
-   Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, FiscalDocumentCode, NCFType,
-   PaymentEntry, Table, Reservation, ZReport, Room
+   Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType,
+   PaymentEntry, Table, Reservation, ZReport, Room, Permission
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import UnifiedPaymentModal from './PaymentModal';
@@ -30,7 +31,7 @@ import GlobalDiscountModal from './GlobalDiscountModal';
 import LoyaltyScanModal from './LoyaltyScanModal';
 import TrackingSelectionModal from './TrackingSelectionModal';
 import { db } from '../utils/db';
-import { isProductEnabledInWarehouse, validateTerminalDocument, validateWarehouseAccess } from '../utils/validation';
+import { validateTerminalDocument } from '../utils/validation';
 import { isSessionExpired } from '../utils/session';
 import { FiscalRangeDGII } from '../types';
 import { parseScaleBarcode } from '../utils/barcodeParser';
@@ -43,6 +44,7 @@ import { transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useBottomSafeOffset } from '../hooks/useBottomSafeOffset';
 import MobileConfigModal from './MobileConfigModal';
 import ReturnModal from './ReturnModal';
 import PromoBottomSheet from './PromoBottomSheet';
@@ -58,12 +60,9 @@ import VirtualKeyboard from './VirtualKeyboard';
 import SafetyGateModal from './SafetyGateModal';
 import { printReservation } from '../utils/printer';
 import MobileCartButton from './MobileCartButton';
-import {
-   getDefaultFiscalProvider,
-   getFiscalComplianceConfig,
-   resolveCreditNoteFiscalCode,
-   resolveSaleFiscalCode
-} from '../utils/fiscal/fiscalHelpers';
+import { calculateTaxBreakdownFromItems, formatTaxLineLabel, resolveEffectiveTaxIds } from '../utils/fiscalBreakdown';
+import { formatCurrency } from '../utils/format';
+import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from '../services/localRefundPersistence';
 
 // ... existing imports
 
@@ -151,6 +150,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    rooms = []
 }) => {
    const cartEndRef = useRef<HTMLDivElement>(null);
+   const posRootRef = useRef<HTMLDivElement>(null);
+   const mobileFooterRef = useRef<HTMLDivElement>(null);
+   const mobileCartButtonRef = useRef<HTMLButtonElement>(null);
+   const desktopActionGridRef = useRef<HTMLDivElement>(null);
    const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
    const isMaster = useMemo(() => {
       const terminal = config.terminals?.find(t => t.id === activeTerminalId);
@@ -188,6 +191,141 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const terminalId = activeTerminal?.id || 'T1';
    const defaultSalesWarehouseId = activeTerminalConfig?.inventoryScope?.defaultSalesWarehouseId;
    const uxConfig = activeTerminalConfig?.ux || { showProductImages: true, gridDensity: 'COMFORTABLE', theme: 'LIGHT', quickKeysLayout: 'A' };
+   const normalizeScopeKey = useCallback((value: unknown) => {
+      return typeof value === 'string' ? value.trim().toLowerCase() : '';
+   }, []);
+   const categoryLookup = useMemo(() => {
+      const aliasToCanonical = new Map<string, string>();
+      const canonicalToDisplay = new Map<string, string>();
+
+      for (const category of config.posCategories || []) {
+         const aliases = [category.id, category.code, category.name]
+            .map((value) => normalizeScopeKey(value))
+            .filter(Boolean);
+         const canonical = normalizeScopeKey(category.name || category.code || category.id);
+         const displayName = category.name || category.code || category.id;
+         if (!canonical || !displayName) continue;
+
+         canonicalToDisplay.set(canonical, displayName);
+         aliases.forEach((alias) => aliasToCanonical.set(alias, canonical));
+      }
+
+      return { aliasToCanonical, canonicalToDisplay };
+   }, [config.posCategories, normalizeScopeKey]);
+   const canonicalizeCategory = useCallback((value: unknown) => {
+      const normalized = normalizeScopeKey(value);
+      return categoryLookup.aliasToCanonical.get(normalized) || normalized;
+   }, [categoryLookup.aliasToCanonical, normalizeScopeKey]);
+   const displayCategory = useCallback((value: unknown) => {
+      const canonical = canonicalizeCategory(value);
+      if (!canonical) return '';
+      return categoryLookup.canonicalToDisplay.get(canonical) || (typeof value === 'string' ? value.trim() : canonical);
+   }, [canonicalizeCategory, categoryLookup.canonicalToDisplay]);
+   const warehouseAliasMap = useMemo(() => {
+      const aliasMap = new Map<string, Set<string>>();
+      const displayMap = new Map<string, string>();
+
+      const registerWarehouse = (warehouse?: Partial<Warehouse> | null) => {
+         if (!warehouse) return;
+         const aliases = [warehouse.id, warehouse.code, warehouse.name]
+            .map((value) => normalizeScopeKey(value))
+            .filter(Boolean);
+         if (aliases.length === 0) return;
+
+         const mergedAliases = new Set(aliases);
+         aliases.forEach((alias) => {
+            const existing = aliasMap.get(alias);
+            if (existing) {
+               existing.forEach((item) => mergedAliases.add(item));
+            }
+         });
+
+         aliases.forEach((alias) => {
+            aliasMap.set(alias, new Set(mergedAliases));
+            if (warehouse.name) {
+               displayMap.set(alias, warehouse.name);
+            }
+         });
+      };
+
+      (warehouses || []).forEach(registerWarehouse);
+      (activeTerminalConfig?.inventoryScope?.warehouses || []).forEach(registerWarehouse);
+      registerWarehouse(activeTerminalConfig?.inventoryScope?.defaultWarehouse as Warehouse | undefined);
+
+      return { aliasMap, displayMap };
+   }, [
+      warehouses,
+      activeTerminalConfig?.inventoryScope?.warehouses,
+      activeTerminalConfig?.inventoryScope?.defaultWarehouse,
+      normalizeScopeKey
+   ]);
+   const effectiveWarehouseKeys = useMemo(() => {
+      const keys = new Set<string>();
+      const addWarehouseValue = (value: unknown) => {
+         const normalized = normalizeScopeKey(value);
+         if (!normalized) return;
+         keys.add(normalized);
+         const aliases = warehouseAliasMap.aliasMap.get(normalized);
+         aliases?.forEach((alias) => keys.add(alias));
+      };
+
+      addWarehouseValue(defaultSalesWarehouseId);
+      addWarehouseValue(activeTerminalConfig?.inventoryScope?.defaultWarehouse?.id);
+      addWarehouseValue(activeTerminalConfig?.inventoryScope?.defaultWarehouse?.code);
+      addWarehouseValue(activeTerminalConfig?.inventoryScope?.defaultWarehouse?.name);
+      (activeTerminalConfig?.inventoryScope?.visibleWarehouseIds || []).forEach(addWarehouseValue);
+
+      return keys;
+   }, [
+      activeTerminalConfig?.inventoryScope?.defaultWarehouse?.code,
+      activeTerminalConfig?.inventoryScope?.defaultWarehouse?.id,
+      activeTerminalConfig?.inventoryScope?.defaultWarehouse?.name,
+      activeTerminalConfig?.inventoryScope?.visibleWarehouseIds,
+      defaultSalesWarehouseId,
+      normalizeScopeKey,
+      warehouseAliasMap.aliasMap
+   ]);
+   const getTerminalWarehouseName = useCallback(() => {
+      for (const key of effectiveWarehouseKeys) {
+         const display = warehouseAliasMap.displayMap.get(key);
+         if (display) return display;
+      }
+      return 'Almacén Actual';
+   }, [effectiveWarehouseKeys, warehouseAliasMap.displayMap]);
+   const productMatchesTerminalWarehouse = useCallback((product: Product) => {
+      const activeWarehouses = (product.activeInWarehouses || [])
+         .map((warehouseId) => normalizeScopeKey(warehouseId))
+         .filter(Boolean);
+      if (activeWarehouses.length === 0) return false;
+      if (effectiveWarehouseKeys.size === 0) return true;
+      return activeWarehouses.some((warehouseId) => effectiveWarehouseKeys.has(warehouseId));
+   }, [effectiveWarehouseKeys, normalizeScopeKey]);
+   const getScopedProductStock = useCallback((product: Product) => {
+      const stockEntries = Object.entries(product.stockBalances || {});
+      const matchedEntry = stockEntries.find(([warehouseId]) => effectiveWarehouseKeys.has(normalizeScopeKey(warehouseId)));
+      if (matchedEntry) {
+         return Number(matchedEntry[1] ?? 0);
+      }
+      return Number(product.stock ?? 0);
+   }, [effectiveWarehouseKeys, normalizeScopeKey]);
+   const effectiveAllowedCategorySet = useMemo(() => {
+      const configuredCategories = new Set(
+         (activeTerminalConfig?.catalog?.allowedCategories || [])
+            .map((category) => canonicalizeCategory(category))
+            .filter(Boolean)
+      );
+      if (configuredCategories.size === 0) return configuredCategories;
+
+      const localSellableCategories = new Set(
+         (products || [])
+            .filter((product) => product && product.is_sellable !== false)
+            .map((product) => canonicalizeCategory(product.category))
+            .filter(Boolean)
+      );
+
+      const matchedCategories = Array.from(configuredCategories).filter((category) => localSellableCategories.has(category));
+      return matchedCategories.length > 0 ? configuredCategories : new Set<string>();
+   }, [activeTerminalConfig?.catalog?.allowedCategories, canonicalizeCategory, products]);
 
    const isRetailMode = activeTerminalConfig?.ux?.viewMode === 'RETAIL';
    const reservationPolicy = activeTerminalConfig?.operational?.reservationPolicy || {
@@ -327,28 +465,67 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, [activeTable, parkedTickets]); // Re-run if table changes or tickets sync
 
+   const isMobile = useIsMobile();
+   const tariffSelectorRef = useRef<HTMLDivElement>(null);
+
+   const userPermissions = useMemo(() => {
+      const rolesSource = roles || config.roles || [];
+      const role = rolesSource.find(r => r.id === currentUser.roleId || r.id === currentUser.role);
+      return role?.permissions || [];
+   }, [config.roles, currentUser.role, currentUser.roleId, roles]);
+
+   const hasPermission = useCallback(
+      (perm: Permission) => userPermissions.includes('ALL') || userPermissions.includes(perm),
+      [userPermissions]
+   );
+
+   const canChangeTariff = hasPermission('POS_CHANGE_TARIFF');
+
+   const usesExpandedCatalog = useMemo(
+      () => Boolean(!isMobile && activeTerminalConfig?.operational?.expandTicket),
+      [activeTerminalConfig?.operational?.expandTicket, isMobile]
+   );
+
    const gridClass = useMemo(() => {
-      if (uxConfig.gridDensity === 'COMPACT') {
-         return "grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-4 pb-32";
+      if (usesExpandedCatalog) {
+        return "grid grid-cols-4 gap-x-4 gap-y-4 content-start auto-rows-fr";
       }
-      return "grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6 pb-32";
-   }, [uxConfig.gridDensity]);
+      if (uxConfig.gridDensity === 'COMPACT') {
+         return "grid [grid-template-columns:repeat(auto-fill,minmax(145px,1fr))] gap-3 content-start";
+      }
+      return "grid [grid-template-columns:repeat(auto-fill,minmax(160px,1fr))] gap-3 md:gap-4 content-start";
+   }, [usesExpandedCatalog, uxConfig.gridDensity]);
 
    const categoryContainerClass = useMemo(() => {
       if (uxConfig.quickKeysLayout === 'B') {
-         return "bg-white border-b border-gray-200 px-8 py-3 flex flex-wrap gap-2 shrink-0 max-h-32 overflow-y-auto custom-scrollbar";
+         return "bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex flex-wrap gap-2 shrink-0 max-h-32 overflow-y-auto custom-scrollbar";
       }
-      return "bg-white border-b border-gray-200 px-8 py-3 flex gap-2 overflow-x-auto no-scrollbar shrink-0";
+      return "bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex gap-2 overflow-x-auto no-scrollbar shrink-0";
    }, [uxConfig.quickKeysLayout]);
 
    const allowedTariffs = useMemo(() => {
       const allowedIds = activeTerminalConfig?.pricing?.allowedTariffIds || [];
-      return config.tariffs.filter(t => allowedIds.includes(t.id));
+      if (allowedIds.length === 0) return config.tariffs;
+      const filteredTariffs = config.tariffs.filter(t => allowedIds.includes(t.id));
+      return filteredTariffs.length > 0 ? filteredTariffs : config.tariffs;
    }, [config.tariffs, activeTerminalConfig]);
 
    const [activeTariffId, setActiveTariffId] = useState<string>(() => {
       return activeTerminalConfig?.pricing?.defaultTariffId || allowedTariffs[0]?.id || config.tariffs[0]?.id || '';
    });
+   const desiredTariffId = useMemo(
+      () => activeTerminalConfig?.pricing?.defaultTariffId || allowedTariffs[0]?.id || config.tariffs[0]?.id || '',
+      [activeTerminalConfig?.pricing?.defaultTariffId, allowedTariffs, config.tariffs]
+   );
+
+   useEffect(() => {
+      if (!desiredTariffId) return;
+
+      const isCurrentAllowed = allowedTariffs.some((tariff) => tariff.id === activeTariffId);
+      if (!activeTariffId || !isCurrentAllowed || activeTariffId !== desiredTariffId) {
+         setActiveTariffId(desiredTariffId);
+      }
+   }, [activeTariffId, allowedTariffs, desiredTariffId]);
 
    // FILTER: Only pending transactions (after latest Z close for this terminal)
    const terminalTransactions = useMemo(() => {
@@ -402,9 +579,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
 
    const [showPaymentModal, setShowPaymentModal] = useState(false);
-   const [paymentModalSession, setPaymentModalSession] = useState(0);
    const [showTicketOptions, setShowTicketOptions] = useState(false);
    const [showParkedList, setShowParkedList] = useState(false);
+   const [showParkAliasModal, setShowParkAliasModal] = useState(false);
+   const [parkTicketAlias, setParkTicketAlias] = useState('');
    const [showGlobalDiscount, setShowGlobalDiscount] = useState(false);
    const [showCouponModal, setShowCouponModal] = useState(false);
    const [couponCode, setCouponCode] = useState('');
@@ -414,6 +592,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    useEffect(() => {
       return backgroundSyncManager.subscribe(setSyncState);
    }, []);
+
+   useEffect(() => {
+      if (!canChangeTariff && showTariffSelector) {
+         setShowTariffSelector(false);
+      }
+   }, [canChangeTariff, showTariffSelector]);
+
+   useEffect(() => {
+      if (!showTariffSelector) return;
+
+      const handlePointerDown = (event: MouseEvent) => {
+         if (!tariffSelectorRef.current?.contains(event.target as Node)) {
+            setShowTariffSelector(false);
+         }
+      };
+
+      document.addEventListener('mousedown', handlePointerDown);
+      return () => document.removeEventListener('mousedown', handlePointerDown);
+   }, [showTariffSelector]);
    const [globalDiscount, setGlobalDiscount] = useState<{ type: 'PERCENT' | 'FIXED', value: number }>({ type: 'PERCENT', value: 0 });
 
    useEffect(() => {
@@ -433,10 +630,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [isScannerOpen, setIsScannerOpen] = useState(false);
    const scannerRef = useRef<Html5Qrcode | null>(null);
    const searchInputRef = useRef<HTMLInputElement>(null);
+   const parkAliasInputRef = useRef<HTMLInputElement>(null);
    const [showVirtualKeyboard, setShowVirtualKeyboard] = useState(false);
 
    const [fiscalStatus, setFiscalStatus] = useState<{
-      type: FiscalDocumentCode;
+      type: NCFType;
       number?: string;
       rangeExpiry?: string;
       hasNCF: boolean;
@@ -451,7 +649,48 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [status, setStatus] = useState<{ isConnected: boolean, currentNCF: string, remaining: number, expiryDate: string, batteryLevel: number } | null>(null);
 
    // --- MOBILE ADAPTATION ---
-   const isMobile = useIsMobile();
+   const bottomOverlayRefs = useMemo(
+      () => [mobileFooterRef, mobileCartButtonRef, desktopActionGridRef],
+      []
+   );
+   const posShellStyle = useMemo(
+      () =>
+         ({
+            ['--bottom-bar-height' as string]: '0px',
+            ['--bottom-safe-offset' as string]: '12px',
+            ['--viewport-bottom-inset' as string]: '0px',
+            ['--pos-viewport-height' as string]: '100dvh',
+            height: 'var(--pos-viewport-height, 100dvh)',
+            maxHeight: 'var(--pos-viewport-height, 100dvh)',
+         }) as React.CSSProperties,
+      []
+   );
+   const bottomAwareScrollStyle = useMemo(
+      () =>
+         ({
+            paddingBottom: isMobile
+               ? 'calc(var(--bottom-safe-offset, 12px) + env(safe-area-inset-bottom))'
+               : usesExpandedCatalog
+                  ? 'calc(var(--bottom-safe-offset, 12px) + 0.75rem)'
+                  : '1.25rem',
+         }) as React.CSSProperties,
+      [isMobile, usesExpandedCatalog]
+   );
+   const mobileFooterStyle = useMemo(
+      () =>
+         ({
+            bottom: 'var(--viewport-bottom-inset, 0px)',
+            paddingBottom: 'calc(env(safe-area-inset-bottom) + 1rem)',
+         }) as React.CSSProperties,
+      []
+   );
+   const mobileCartButtonStyle = useMemo(
+      () =>
+         ({
+            bottom: 'calc(var(--viewport-bottom-inset, 0px) + env(safe-area-inset-bottom) + 1.5rem)',
+         }) as React.CSSProperties,
+      []
+   );
    const [showMobileConfigModal, setShowMobileConfigModal] = useState(false);
    const [pendingProductToAdd, setPendingProductToAdd] = useState<Product | null>(null);
    const [pendingTrackingProduct, setPendingTrackingProduct] = useState<{ product: Product, quantity: number, price?: number, modifiers?: string[] } | null>(null);
@@ -464,10 +703,50 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showPromoSheet, setShowPromoSheet] = useState(false);
    const [selectedPromoProduct, setSelectedPromoProduct] = useState<Product | null>(null);
 
+   const buildParkedTicketName = useCallback(() => {
+      if (activeTable) {
+         return `Mesa: ${activeTable.nombre || activeTable.name}`;
+      }
+
+      if (selectedCustomer?.name) {
+         return selectedCustomer.name;
+      }
+
+      return `Ticket #${(Array.isArray(parkedTickets) ? parkedTickets : []).length + 1}`;
+   }, [activeTable, selectedCustomer, parkedTickets]);
+
+   const closeParkAliasModal = useCallback(() => {
+      setShowParkAliasModal(false);
+      setParkTicketAlias('');
+   }, []);
+
+   const openParkAliasModal = useCallback(() => {
+      if (cart.length === 0) return;
+
+      const existingParked = activeTable?.currentOrderId
+         ? parkedTickets.find((ticket) => ticket.id === activeTable.currentOrderId)
+         : undefined;
+
+      setParkTicketAlias(existingParked?.alias || '');
+      setShowParkAliasModal(true);
+   }, [activeTable, cart.length, parkedTickets]);
+
+   useEffect(() => {
+      if (!showParkAliasModal) return;
+
+      const focusTimer = window.setTimeout(() => {
+         parkAliasInputRef.current?.focus();
+         parkAliasInputRef.current?.select();
+      }, 40);
+
+      return () => window.clearTimeout(focusTimer);
+   }, [showParkAliasModal]);
+
    // --- RESERVAS / PRE-FACTURACION ---
    const [reservations, setReservations] = useState<Reservation[]>([]);
    const [showReservationModal, setShowReservationModal] = useState(false);
    const [showReservationReceipt, setShowReservationReceipt] = useState<Reservation | null>(null);
+   const [isPrintingReservationReceipt, setIsPrintingReservationReceipt] = useState(false);
    const [showRecoverReservationModal, setShowRecoverReservationModal] = useState(false);
    const [reservationCustomerId, setReservationCustomerId] = useState<string>('');
    const [reservationAdvanceInput, setReservationAdvanceInput] = useState<string>('0');
@@ -476,6 +755,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [reservationCustomerFilterId, setReservationCustomerFilterId] = useState<string | null>(null);
    const [activeRecoveredReservation, setActiveRecoveredReservation] = useState<Reservation | null>(null);
    const [committedByProduct, setCommittedByProduct] = useState<Record<string, number>>({});
+
+   useBottomSafeOffset({
+      rootRef: posRootRef,
+      overlayRefs: bottomOverlayRefs,
+      dependencyKey: `${isMobile}-${mobileView}-${usesExpandedCatalog}`,
+   });
 
    // --- SUPERVISOR AUTH ---
    const { requestApproval, supervisorModalProps } = useSupervisorAuth({
@@ -645,7 +930,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const getProductPrice = useCallback((p: Product) => (p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price || p.price || 0, [activeTariffId]);
+   const getTariffPrice = useCallback((p: Product) => {
+      const tariffPrice = (p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price;
+      return typeof tariffPrice === 'number' && Number.isFinite(tariffPrice) ? tariffPrice : null;
+   }, [activeTariffId]);
+
+   const productHasActiveTariff = useCallback((p: Product) => getTariffPrice(p) !== null, [getTariffPrice]);
+
+   const getProductPrice = useCallback((p: Product) => getTariffPrice(p) ?? 0, [getTariffPrice]);
 
    const handleLoyaltyScan = useCallback((code: string) => {
       // Find customer by loyalty card or gift card
@@ -672,15 +964,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return false;
       }
 
+      if (!productHasActiveTariff(product)) {
+         setErrorToast('Artículo no disponible en la tarifa activa.');
+         setTimeout(() => setErrorToast(null), 3500);
+         return false;
+      }
+
+      const activeWarehouses = (product.activeInWarehouses || []).filter(Boolean);
+      if (activeWarehouses.length === 0) {
+         setErrorToast('Artículo sin almacén asignado. Configure el producto antes de venderlo.');
+         setTimeout(() => setErrorToast(null), 3500);
+         return false;
+      }
+
       // 1. Warehouse enablement check
-      if (defaultSalesWarehouseId) {
-         const validation = validateWarehouseAccess(product, defaultSalesWarehouseId);
-         if (!validation.isValid) {
-            const whName = (warehouses || []).find(w => w.id === defaultSalesWarehouseId)?.name || 'Almacén Actual';
-            setErrorToast(`${validation.error} (${whName})`);
-            setTimeout(() => setErrorToast(null), 3500);
-            return false;
-         }
+      if (!productMatchesTerminalWarehouse(product)) {
+         setErrorToast(`Artículo no habilitado en este almacén. (${getTerminalWarehouseName()})`);
+         setTimeout(() => setErrorToast(null), 3500);
+         return false;
       }
 
       // 2. Stock validation
@@ -691,7 +992,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          // If negative stock is NOT allowed (at either level), check availability
          if (!productAllowsNegative || !terminalAllowsNegative) {
-            const currentStock = product.stockBalances?.[defaultSalesWarehouseId] ?? product.stock ?? 0;
+            const currentStock = getScopedProductStock(product);
             const committedQty = committedByProduct[product.id] || 0;
             const availableStock = Math.max(0, currentStock - committedQty);
             const inCartQty = cart.filter(item => item.id === product.id).reduce((sum, item) => sum + item.quantity, 0);
@@ -706,7 +1007,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return true;
-   }, [defaultSalesWarehouseId, warehouses, config.features.stockTracking, activeTerminalConfig, cart, committedByProduct]);
+   }, [config.features.stockTracking, activeTerminalConfig, cart, committedByProduct, getScopedProductStock, getTerminalWarehouseName, productHasActiveTariff, productMatchesTerminalWarehouse]);
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 
@@ -723,12 +1024,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const finalPrice = priceOverride || getProductPrice(product);
       const modifiersString = modifiers ? modifiers.sort().join('|') : '';
+      const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
+      const taxSignature = effectiveTaxIds.slice().sort().join('|');
 
       // We look for existing item in the stable 'cart' prop/state instead of inside the setter
       // to avoid using setter for logic that triggers side effects.
       const existing = (cart || []).find(i => {
          const iMods = i.modifiers ? i.modifiers.sort().join('|') : '';
-         return i.id === product.id && iMods === modifiersString && i.price === finalPrice;
+         const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig).slice().sort().join('|');
+         return i.id === product.id && iMods === modifiersString && i.price === finalPrice && existingTaxSignature === taxSignature;
       });
 
       let targetCartId: string;
@@ -736,7 +1040,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (existing && !usesSerial) {
          targetCartId = existing.cartId!;
          onUpdateCart(prev => {
-            const updatedItem = { ...existing, quantity: existing.quantity + quantity };
+            const updatedItem = { ...existing, quantity: existing.quantity + quantity, appliedTaxIds: effectiveTaxIds };
             return [updatedItem, ...prev.filter(i => i.cartId !== existing.cartId)];
          });
       } else {
@@ -748,6 +1052,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             quantity,
             price: finalPrice,
             modifiers,
+            appliedTaxIds: effectiveTaxIds,
             originalPrice: getProductPrice(product),
             trackingData
          };
@@ -756,7 +1061,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // SIDE EFFECT: Move outside the state update sequence to avoid React "rendering update" warning
       setLastAddedCartId(targetCartId);
-   }, [canAddItemToCart, getProductPrice, onUpdateCart, cart]); // Added cart to dependencies
+   }, [canAddItemToCart, getProductPrice, onUpdateCart, cart, activeTerminalConfig]); // Added cart to dependencies
 
    const handleProductClick = useCallback((product: Product) => {
       // MOBILE INTERCEPTION
@@ -795,7 +1100,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // A. Check Variants (SKU or Barcode)
          if (p.variants && p.variants.length > 0) {
             for (const v of p.variants) {
-               if (v.sku === searchCode || (v.barcode && v.barcode.includes(searchCode))) {
+               if ((v.sku === searchCode || (v.barcode && v.barcode.includes(searchCode))) && productHasActiveTariff(p)) {
                   // Map attribute values to a simple list of modifiers
                   const modifiersList = Object.entries(v.attributeValues || {}).map(([_, val]) => val);
                   return { product: p, quantity, price: v.price || getProductPrice(p), modifiers: modifiersList };
@@ -804,12 +1109,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          // B. Check Parent (ID, SKU, or Barcode)
-         if (p.id === searchCode || p.barcode === searchCode) {
+         if ((p.id === searchCode || p.barcode === searchCode) && productHasActiveTariff(p)) {
             return { product: p, quantity, price: getProductPrice(p), modifiers: [] };
          }
       }
       return null;
-   }, [products, getProductPrice]);
+   }, [products, getProductPrice, productHasActiveTariff]);
 
    const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter') {
@@ -927,14 +1232,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    useEffect(() => {
       const checkFiscalStatus = async () => {
-         const fiscalCompliance = getFiscalComplianceConfig(config);
          const threshold = activeTerminalConfig?.operational?.fiscalThreshold || 0;
          const isOverThreshold = threshold > 0 && cartTotal > threshold;
 
-         const baseLegacyType: NCFType = isOverThreshold
+         const type: NCFType = isOverThreshold
             ? 'B01'
             : (selectedCustomer?.defaultNcfType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02'));
-         const type = resolveSaleFiscalCode(fiscalCompliance.mode, baseLegacyType);
          const buffers = await db.get('localFiscalBuffer') || [];
          const localBuffer = (buffers || []).find((b: any) => b.type === type && b.isActive) as FiscalRangeDGII | undefined;
 
@@ -946,7 +1249,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             setStatus({
                isConnected: true,
-               currentNCF: `${localBuffer.prefix}${current.toString().padStart(type.startsWith('E') ? 10 : 8, '0')}`,
+               currentNCF: `${localBuffer.prefix}${current.toString().padStart(8, '0')}`,
                remaining,
                expiryDate: localBuffer.expiryDate,
                batteryLevel: 100
@@ -962,32 +1265,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
    const filteredProducts = useMemo(() => {
-      const allowedCats = activeTerminalConfig?.catalog?.allowedCategories || [];
-      const allowedCategorySet = new Set(
-         allowedCats
-            .map(cat => (typeof cat === 'string' ? cat.trim().toLowerCase() : ''))
-            .filter(Boolean)
-      );
       const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
-         : (typeof categoryFilter === 'string' ? categoryFilter.trim().toLowerCase() : '');
+         : canonicalizeCategory(categoryFilter);
 
       const filtered = products.filter(p => {
          if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
-         const isAvailableInWarehouse = defaultSalesWarehouseId
-            ? isProductEnabledInWarehouse(p, defaultSalesWarehouseId)
-            : true;
+         const activeWarehouses = (p.activeInWarehouses || []).filter(Boolean);
+         const hasAssignedWarehouse = activeWarehouses.length > 0;
+         const isAvailableInWarehouse = productMatchesTerminalWarehouse(p);
          const productName = p.name || '';
          const matchSearch = productName.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
 
          // Category Scope Check
-         const normalizedProductCategory = typeof p.category === 'string' ? p.category.trim().toLowerCase() : '';
+         const normalizedProductCategory = canonicalizeCategory(p.category);
          const matchCat = normalizedCategoryFilter === 'ALL' || normalizedProductCategory === normalizedCategoryFilter;
-         const matchAllowedCat = allowedCategorySet.size === 0 || allowedCategorySet.has(normalizedProductCategory);
+         const matchAllowedCat = effectiveAllowedCategorySet.size === 0 || effectiveAllowedCategorySet.has(normalizedProductCategory);
 
          const isSellable = p.is_sellable !== false;
+         const hasActiveTariff = productHasActiveTariff(p);
 
-         return matchSearch && matchCat && isAvailableInWarehouse && matchAllowedCat && isSellable;
+         return matchSearch && matchCat && hasAssignedWarehouse && isAvailableInWarehouse && matchAllowedCat && isSellable && hasActiveTariff;
       });
 
       // Defensive: Ensure unique IDs to prevent React key warnings
@@ -997,35 +1295,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          seenIds.add(p.id);
          return true;
       });
-   }, [products, searchTerm, categoryFilter, defaultSalesWarehouseId, activeTerminalConfig]);
+   }, [products, searchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff, productMatchesTerminalWarehouse]);
 
    const categories = useMemo(() => {
-      const allowedCats = activeTerminalConfig?.catalog?.allowedCategories || [];
       const allowedDisplayCategories = Array.from(
-         new Set(
-            allowedCats
-               .map(cat => (typeof cat === 'string' ? cat.trim() : ''))
-               .filter(Boolean)
-         )
-      );
-      const allowedCategorySet = new Set(
-         allowedCats
-            .map(cat => (typeof cat === 'string' ? cat.trim().toLowerCase() : ''))
-            .filter(Boolean)
+         new Set(Array.from(effectiveAllowedCategorySet).map((category) => displayCategory(category)).filter(Boolean))
       );
       const availableProducts = products.filter(p => {
          if (!p || p.is_sellable === false) return false;
-         if (allowedCategorySet.size > 0) {
-            const normalizedCategory = typeof p.category === 'string' ? p.category.trim().toLowerCase() : '';
-            if (!allowedCategorySet.has(normalizedCategory)) return false;
+         if (!productHasActiveTariff(p)) return false;
+         if (effectiveAllowedCategorySet.size > 0) {
+            const normalizedCategory = canonicalizeCategory(p.category);
+            if (!effectiveAllowedCategorySet.has(normalizedCategory)) return false;
          }
          return true;
       });
 
       const availableCategoryMap = new Map<string, string>();
       for (const product of availableProducts) {
-         const rawCategory = typeof product?.category === 'string' ? product.category.trim() : '';
-         const normalizedCategory = rawCategory.toLowerCase();
+         const normalizedCategory = canonicalizeCategory(product?.category);
+         const rawCategory = displayCategory(product?.category);
          if (!rawCategory || availableCategoryMap.has(normalizedCategory)) continue;
          availableCategoryMap.set(normalizedCategory, rawCategory);
       }
@@ -1040,7 +1329,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const cats = ['ALL', ...scopedCategories];
       console.log('[POS] Categories:', cats);
       return cats;
-   }, [products, activeTerminalConfig]);
+   }, [products, canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, productHasActiveTariff]);
 
    useEffect(() => {
       if (categoryFilter !== 'ALL' && !categories.includes(categoryFilter)) {
@@ -1062,32 +1351,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const discountAmount = globalDiscount.type === 'PERCENT' ? grossLineTotal * (globalDiscount.value / 100) : Math.min(globalDiscount.value, grossLineTotal);
 
    const taxBreakdown = useMemo(() => {
-      const breakdown: Record<string, { name: string, amount: number }> = {};
-
-      processedCart.forEach(item => {
-         const lineGross = item.price * item.quantity;
-         const itemRatio = lineGross / (grossLineTotal || 1);
-         const lineDiscount = discountAmount * itemRatio;
-         const lineBaseAfterDiscount = lineGross - lineDiscount;
-
-         let itemTaxRate = 0;
-         const itemTaxes = (item.appliedTaxIds || []).map(id => (config.taxes || []).find(t => t.id === id)).filter(Boolean);
-         itemTaxes.forEach(t => itemTaxRate += t!.rate);
-
-         let lineNet = 0;
-         if (isTaxIncluded) {
-            lineNet = lineBaseAfterDiscount / (1 + itemTaxRate);
-         } else {
-            lineNet = lineBaseAfterDiscount;
-         }
-
-         itemTaxes.forEach(t => {
-            if (!breakdown[t!.id]) breakdown[t!.id] = { name: t!.name, amount: 0 };
-            breakdown[t!.id].amount += lineNet * t!.rate;
-         });
+      return calculateTaxBreakdownFromItems(processedCart, config, {
+         discountAmount,
+         isTaxIncluded,
+         terminalConfig: activeTerminalConfig,
       });
-      return Object.values(breakdown);
-   }, [processedCart, grossLineTotal, config.taxes, discountAmount, isTaxIncluded]);
+   }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig]);
 
    const cartTax = taxBreakdown.reduce((sum, t) => sum + t.amount, 0);
 
@@ -1105,6 +1374,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    // Alias for compatibility if needed, though netSubtotal is what we usually display as "Subtotal"
    const cartSubtotal = grossLineTotal; // This represents the sum of list prices
    const baseCurrency = (config.currencies || []).find(c => c.isBase) || (config.currencies || [])[0];
+   const getCartItemTaxSummary = useCallback((item: CartItem) => {
+      const lineTaxBreakdown = calculateTaxBreakdownFromItems([item], config, {
+         isTaxIncluded,
+         terminalConfig: activeTerminalConfig,
+         absoluteLineValues: true,
+      });
+      if (lineTaxBreakdown.length === 0) {
+         return 'Sin impuestos';
+      }
+      const lineTaxAmount = Math.abs(lineTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0));
+      return `${lineTaxBreakdown.map((tax) => formatTaxLineLabel(tax)).join(' + ')} (${baseCurrency.symbol}${lineTaxAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`;
+   }, [config, isTaxIncluded, activeTerminalConfig, baseCurrency.symbol]);
    const reservationAdvanceApplied = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
    const reservationBalanceDue = Math.max(0, cartTotal - reservationAdvanceApplied);
    const amountDueNow = activeRecoveredReservation ? reservationBalanceDue : cartTotal;
@@ -1130,6 +1411,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const syncedTicket: ParkedTicket = {
          id: orderId,
          name: existing?.name || `Mesa: ${activeTable.nombre || activeTable.name || orderId}`,
+         alias: existing?.alias,
          items: [...cart],
          total: cartTotal,
          customerId: selectedCustomer?.id,
@@ -1356,44 +1638,87 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       };
 
       try {
+         const terminalId = activeTerminalId || 't1';
+         const hasReturns = processedCart.some(i => i.quantity < 0);
+         const hasSales = processedCart.some(i => i.quantity > 0);
+         const productsById = new Map(products.map(product => [product.id, product] as const));
+         const isRefundOnly = hasReturns && !hasSales;
+         const refundSeriesId = activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND';
+         const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
+         const normalizedRefundItems = processedCart
+            .filter(i => i.quantity < 0)
+            .map(item => ({ ...item, quantity: Math.abs(item.quantity) }));
+         const sellableConditions = new Map<string, 'SELLABLE' | 'DAMAGED'>();
+         normalizedRefundItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
+
          // --- FISCAL COMPLIANCE CHECK (DGII RNC VALIDATION) ---
-         if (fiscalStatus && ['B01', 'E31'].includes(fiscalStatus.type) && selectedCustomer) {
+         if (!isRefundOnly && fiscalStatus && fiscalStatus.type === 'B01' && selectedCustomer) {
             if (selectedCustomer.fiscalStatus && selectedCustomer.fiscalStatus !== 'ACTIVO') {
                alert(
                   `⛔ COMPROBANTE BLOQUEADO\n\n` +
                   `El contribuyente ${selectedCustomer.name} tiene estatus: ${selectedCustomer.fiscalStatus || 'DESCONOCIDO'}.\n` +
-                  `No se puede emitir un comprobante fiscal de crédito según normas de la DGII.\n\n` +
-                  `Acción requerida: Cambie el tipo de comprobante a consumo o seleccione otro cliente.`
+                  `No se puede emitir Crédito Fiscal (B01) según normas de la DGII.\n\n` +
+                  `Acción requerida: Cambie el tipo de comprobante a Consumo (B02) o seleccione otro cliente.`
                );
                return null;
             }
          }
 
-         const terminalId = activeTerminalId || 't1';
-         const fiscalCompliance = getFiscalComplianceConfig(config);
-         const hasReturns = processedCart.some(i => i.quantity < 0);
-         const hasSales = processedCart.some(i => i.quantity > 0);
-         const requestedFiscalType = hasReturns && !hasSales
-            ? resolveCreditNoteFiscalCode(fiscalCompliance.mode)
-            : fiscalStatus.type;
-         const finalNcf = await withTimeout(
-            db.getNextNCF(requestedFiscalType, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[requestedFiscalType]?.batchSize || 100),
-            8000,
-            'TIMEOUT_GET_NCF'
-         );
-
-         if (!finalNcf) {
-            alert(`CRÍTICO: No hay numeración fiscal disponible para ${requestedFiscalType}. Verifique el pool fiscal configurado.`);
-            return null;
-         }
-
-         const validation = validateTerminalSeries(activeTerminalConfig, 'TICKET');
+         const validation = validateTerminalSeries(activeTerminalConfig, isRefundOnly ? 'REFUND' : 'TICKET');
          if (!validation.isValid) {
             alert(validation.message);
             return null;
          }
 
-         const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
+         if (hasReturns && hasSales) {
+            const refundValidation = validateTerminalSeries(activeTerminalConfig, 'REFUND');
+            if (!refundValidation.isValid) {
+               alert(refundValidation.message);
+               return null;
+            }
+         }
+
+         for (const item of processedCart) {
+            const sourceProduct = productsById.get(item.id);
+            if (!sourceProduct) {
+               alert(`No se pudo validar el artículo ${item.name}. Refresque la lista e intente nuevamente.`);
+               return null;
+            }
+            if (!canAddItemToCart(sourceProduct, 0)) {
+               alert(`El artículo "${sourceProduct.name}" no tiene un almacén válido para esta terminal. Corrija la ficha del producto antes de continuar.`);
+               return null;
+            }
+         }
+
+         let finalNcf: string | undefined;
+         let finalNcfType: NCFType | undefined;
+
+         if (isRefundOnly) {
+            try {
+               finalNcf = await withTimeout(
+                  db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50),
+                  8000,
+                  'TIMEOUT_GET_REFUND_ONLY_NCF'
+               );
+               finalNcfType = finalNcf ? 'B04' : undefined;
+            } catch (refundNcfError) {
+               console.warn('No se pudo generar NCF B04 para devolución:', refundNcfError);
+            }
+         } else {
+            finalNcf = await withTimeout(
+               db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100),
+               8000,
+               'TIMEOUT_GET_NCF'
+            );
+
+            if (!finalNcf) {
+               alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
+               return null;
+            }
+
+            finalNcfType = fiscalStatus.type;
+         }
+
          const reservationAdvance = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
          const paymentsForTransaction = reservationAdvance > 0
             ? [...payments, { id: `ADV-${Date.now()}`, method: 'ADVANCE', amount: reservationAdvance, timestamp: new Date() }]
@@ -1412,18 +1737,40 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                // Calculate totals for each part
                const saleTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-               const returnTotal = returnItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               const normalizedSplitRefundItems = returnItems.map(item => ({ ...item, quantity: Math.abs(item.quantity) }));
+               const returnTotal = normalizedSplitRefundItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+               const saleTaxBreakdown = calculateTaxBreakdownFromItems(saleItems, config, {
+                  isTaxIncluded,
+                  terminalConfig: activeTerminalConfig,
+               });
+               const saleTaxAmount = Math.round((
+                  saleTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0)
+                  + Number.EPSILON
+               ) * 100) / 100;
+               const saleNetAmount = isTaxIncluded
+                  ? Math.round(((saleTotal - saleTaxAmount) + Number.EPSILON) * 100) / 100
+                  : saleTotal;
 
                // Prepare wallet operations
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
+               let refundNcf: string | undefined;
 
-               const response = await withTimeout(fetch('/api/transactions/split', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
+               if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+                  try {
+                     refundNcf = await withTimeout(
+                        db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50),
+                        8000,
+                        'TIMEOUT_GET_REFUND_NCF'
+                     );
+                  } catch (refundNcfError) {
+                     console.warn('No se pudo generar NCF B04 para devolución mixta:', refundNcfError);
+                  }
+               }
+
+               const splitPayload: Parameters<typeof transactionService.createSplitTransaction>[0] = {
                      saleTransaction: {
-                        documentType: 'TICKET',
+                        documentType: 'TICKET' as const,
                         seriesId: assignedSequenceId,
                         items: saleItems,
                         total: saleTotal,
@@ -1434,13 +1781,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         customerId: selectedCustomer?.id,
                         customerName: selectedCustomer?.name,
                         ncf: finalNcf,
-                        ncfType: requestedFiscalType,
-                        legacyNcf: requestedFiscalType.startsWith('E') ? undefined : finalNcf,
-                        electronicNcf: requestedFiscalType.startsWith('E') ? finalNcf : undefined,
-                        fiscalMode: fiscalCompliance.mode,
-                        fiscalProvider: requestedFiscalType.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
-                        taxAmount: isTaxIncluded ? saleTotal * 0.18 : 0,
-                        netAmount: isTaxIncluded ? saleTotal / 1.18 : saleTotal,
+                        ncfType: fiscalStatus.type,
+                        taxAmount: saleTaxAmount,
+                        netAmount: saleNetAmount,
                         pendingBalance: payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0) || undefined,
                         dueDate: payments.some(p => p.method === 'CREDIT') ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined,
                         customerSnapshot: selectedCustomer ? {
@@ -1450,9 +1793,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined
                      },
                      refundTransaction: {
-                        documentType: 'REFUND',
-                        seriesId: activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC',
-                        items: returnItems,
+                        documentType: 'REFUND' as const,
+                        seriesId: refundSeriesId,
+                        items: normalizedSplitRefundItems,
                         total: returnTotal,
                         userId: currentUser.id,
                         userName: currentUser.name,
@@ -1460,13 +1803,62 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         customerId: selectedCustomer?.id,
                         customerName: selectedCustomer?.name,
                         status: 'COMPLETED',
+                        ncf: refundNcf,
+                        ncfType: refundNcf ? 'B04' : undefined,
                         walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
                         authorizedById: refundAuthorizedBy?.id,
                         authorizedByName: refundAuthorizedBy?.name
                      },
-                     walletDeposit: walletDepositAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletDepositAmount } : undefined,
-                     walletPayment: walletPaymentAmount > 0 ? { customerId: selectedCustomer?.id, amount: walletPaymentAmount } : undefined
-                  })
+                     walletDeposit: selectedCustomer?.id && walletDepositAmount > 0 ? { customerId: selectedCustomer.id, amount: walletDepositAmount } : undefined,
+                     walletPayment: selectedCustomer?.id && walletPaymentAmount > 0 ? { customerId: selectedCustomer.id, amount: walletPaymentAmount } : undefined
+                  };
+
+               if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+                  const result = await withTimeout(
+                     transactionService.createSplitTransaction(splitPayload),
+                     25000,
+                     'TIMEOUT_SPLIT_LOCAL'
+                  );
+
+                  if (result.sale) {
+                     await persistStandaloneSaleHistory({
+                        ...result.sale,
+                        syncStatus: 'PENDING'
+                     });
+                  }
+
+                  if (result.refund) {
+                     await persistStandaloneRefundTransaction(
+                        {
+                           ...result.refund,
+                           items: normalizedSplitRefundItems,
+                           total: returnTotal,
+                           ncf: refundNcf,
+                           ncfType: refundNcf ? 'B04' : undefined,
+                           status: 'REFUNDED',
+                           refundReason: 'Devolución en transacción mixta',
+                           authorizedById: refundAuthorizedBy?.id,
+                           authorizedByName: refundAuthorizedBy?.name,
+                           syncStatus: 'PENDING'
+                        },
+                        {
+                           warehouseId: defaultSalesWarehouseId || 'wh_central',
+                           terminalId
+                        }
+                     );
+                  }
+
+                  onUpdateCart([]);
+                  onSelectCustomer(null);
+                  setIsReturnMode(false);
+                  setRefundAuthorizedBy(null);
+                  return result.sale || result.refund || null;
+               }
+
+               const response = await withTimeout(fetch('/api/transactions/split', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(splitPayload)
                }), 25000, 'TIMEOUT_SPLIT_FETCH');
 
                const data = await withTimeout(response.json(), 4000, 'TIMEOUT_SPLIT_PARSE');
@@ -1490,8 +1882,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
                const creditAmount = payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0);
-               const fiscalProvider = getDefaultFiscalProvider(config);
-               const isElectronicDocument = requestedFiscalType.startsWith('E');
+               const refundDocumentTotal = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+               const documentItems = isRefundOnly ? normalizedRefundItems : processedCart;
 
                const txn = await withTimeout(transactionService.createTransaction({
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
@@ -1499,8 +1891,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      ? (activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND-GENERIC')
                      : assignedSequenceId,
                   date: new Date().toISOString(),
-                  items: processedCart,
-                  total: cartTotal,
+                  items: documentItems,
+                  total: isRefundOnly ? refundDocumentTotal : cartTotal,
                   payments: paymentsForTransaction,
                   userId: currentUser.id,
                   userName: currentUser.name,
@@ -1511,11 +1903,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   pendingBalance: creditAmount > 0 ? creditAmount : undefined,
                   dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined, // Default 30 days
                   ncf: finalNcf,
-                  ncfType: requestedFiscalType,
-                  legacyNcf: isElectronicDocument ? undefined : finalNcf,
-                  electronicNcf: isElectronicDocument ? finalNcf : undefined,
-                  fiscalMode: fiscalCompliance.mode,
-                  fiscalProvider: isElectronicDocument ? fiscalProvider : 'NONE',
+                  ncfType: finalNcfType,
                   taxAmount: taxAmount,
                   netAmount: netAmount,
                   discountAmount: discountAmount,
@@ -1540,10 +1928,32 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                // Ensure seriesId is preserved (Backend might not return it in the root object)
                const finalTxn = {
                   ...txn,
-                  seriesId: txn.seriesId || assignedSequenceId
+                  seriesId: txn.seriesId || (isRefundOnly ? refundSeriesId : assignedSequenceId)
                };
 
-               onTransactionComplete(finalTxn);
+               if (isRefundOnly) {
+                  await persistStandaloneRefundTransaction(
+                     {
+                        ...finalTxn,
+                        items: normalizedRefundItems,
+                        total: refundDocumentTotal,
+                        status: 'REFUNDED',
+                        ncf: finalNcf,
+                        ncfType: finalNcfType,
+                        refundReason: 'Devolución POS',
+                        authorizedById: refundAuthorizedBy?.id,
+                        authorizedByName: refundAuthorizedBy?.name,
+                        syncStatus: 'PENDING'
+                     },
+                     {
+                        warehouseId: defaultSalesWarehouseId || 'wh_central',
+                        terminalId,
+                        conditions: sellableConditions
+                     }
+                  );
+               } else {
+                  onTransactionComplete(finalTxn);
+               }
 
                if (activeRecoveredReservation) {
                   const warehouseId = activeRecoveredReservation.warehouseId || defaultSalesWarehouseId || 'wh_central';
@@ -1624,12 +2034,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const proceedToCheckout = () => {
       const threshold = activeTerminalConfig?.operational?.fiscalThreshold || 0;
       if (threshold > 0 && cartTotal > threshold && !selectedCustomer) {
-         const fiscalCompliance = getFiscalComplianceConfig(config);
-         const requiredFiscalType = resolveSaleFiscalCode(fiscalCompliance.mode, 'B01');
-         const requiredFiscalLabel = requiredFiscalType === 'E31'
-            ? 'un e-CF de Crédito Fiscal (E31)'
-            : 'una Factura de Crédito Fiscal (B01)';
-         alert(`ATENCIÓN: El monto de la venta (${baseCurrency.symbol}${cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) excede el umbral fiscal permitido para facturas de consumo (${baseCurrency.symbol}${threshold.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}).\n\nEs obligatorio identificar al cliente y emitir ${requiredFiscalLabel}.`);
+         alert(`ATENCIÓN: El monto de la venta (${baseCurrency.symbol}${cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) excede el umbral fiscal permitido para facturas de consumo (${baseCurrency.symbol}${threshold.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}).\n\nEs obligatorio identificar al cliente y emitir una Factura de Crédito Fiscal (B01).`);
          onOpenCustomers();
          return;
       }
@@ -1638,13 +2043,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          handlePaymentConfirm([]).catch(console.error);
          return;
       }
-      setPaymentModalSession(prev => prev + 1);
       setShowPaymentModal(true);
-   };
-
-   const handleClosePaymentModal = () => {
-      setShowPaymentModal(false);
-      setPaymentModalSession(prev => prev + 1);
    };
 
    const handleDispatchCommand = async () => {
@@ -1738,21 +2137,28 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const handleParkCurrentTicket = async () => {
+   const handleParkCurrentTicket = async (aliasInput?: string) => {
       if (cart.length === 0) return;
+      const parkedTicketId = activeTable?.currentOrderId || `P-${Date.now()}`;
+      const existingParked = (Array.isArray(parkedTickets) ? parkedTickets : []).find((ticket) => ticket.id === parkedTicketId);
+      const normalizedAlias = aliasInput === undefined
+         ? existingParked?.alias
+         : (aliasInput.trim() || undefined);
       const newParked: ParkedTicket = {
-         id: activeTable?.currentOrderId || `P-${Date.now()}`,
-         name: activeTable ? `Mesa: ${activeTable.name}` : (selectedCustomer ? selectedCustomer.name : `Ticket #${(Array.isArray(parkedTickets) ? parkedTickets : []).length + 1}`),
+         id: parkedTicketId,
+         name: buildParkedTicketName(),
+         alias: normalizedAlias,
          items: [...cart],
          total: cartTotal,
          customerId: selectedCustomer?.id,
          customerName: selectedCustomer?.name,
-         timestamp: new Date().toISOString()
+         timestamp: existingParked?.timestamp || new Date().toISOString()
       };
 
       // Remove existing if updating same ID
       const updatedTickets = [...(Array.isArray(parkedTickets) ? parkedTickets : []).filter(p => p.id !== newParked.id), newParked];
       onUpdateParkedTickets(updatedTickets);
+      closeParkAliasModal();
 
       if (activeTable) {
          try {
@@ -1860,23 +2266,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             returnItems.push({
                ...originalItem,
-               quantity: returnItem.quantity,
+               quantity: Math.abs(returnItem.quantity),
                cartId: `RET-${Date.now()}-${returnItem.itemId}`
             });
          }
       });
 
-      const fiscalCompliance = getFiscalComplianceConfig(config);
-      const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
-      let creditNoteNcf: string | undefined;
+      let refundNcf: string | undefined;
       try {
-         creditNoteNcf = await db.getNextNCF(
-            creditNoteFiscalType,
-            terminalId,
-            activeTerminalConfig?.fiscal?.typeConfigs?.[creditNoteFiscalType]?.batchSize || 100
-         );
-      } catch (error) {
-         console.warn(`No se pudo generar NCF ${creditNoteFiscalType} para devolución inteligente:`, error);
+         refundNcf = await db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50);
+      } catch (refundNcfError) {
+         console.warn('No se pudo generar NCF B04 para devolución QR:', refundNcfError);
       }
 
       // 2. Create Refund Transaction
@@ -1893,47 +2293,47 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          status: 'REFUNDED',
          customerId: originalTransaction.customerId,
          customerName: originalTransaction.customerName,
-         ncf: creditNoteNcf,
-         ncfType: creditNoteFiscalType,
-         legacyNcf: creditNoteFiscalType.startsWith('E') ? undefined : creditNoteNcf,
-         electronicNcf: creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
-         fiscalMode: fiscalCompliance.mode,
-         fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
-         affectedNCF: originalTransaction.ncf,
-         affectedInvoiceNumber: originalTransaction.displayId || originalTransaction.id,
-         affectedInvoiceDate: originalTransaction.date,
          originalTransactionId: originalTransaction.id,
+         affectedInvoiceNumber: originalTransaction.displayId || originalTransaction.id,
+         affectedNCF: originalTransaction.ncf,
+         ncf: refundNcf,
+         ncfType: refundNcf ? 'B04' : undefined,
          refundReason: 'Smart QR Return',
          isTaxIncluded: originalTransaction.isTaxIncluded
       });
 
+      const sellableConditions = new Map<string, 'SELLABLE' | 'DAMAGED'>();
+      returnItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
 
-
-      // 3. Update Original Transaction Status (Global & Local)
-      try {
-         // Global/Server Update
-         await fetch(`/api/transactions/${originalTransaction.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: 'REFUNDED' })
-         });
-
-         // Local Update (if exists in current view)
-         const localExists = transactions.find(t => t.id === originalTransaction.id);
-         if (localExists) {
-            // Use a custom event or callback?
-            // Since transactions prop is passed down, we might not be able to set it directly if onTransactionComplete handles addition only.
-            // Ideally we should reload transactions or optimistically update.
-            // Given the architecture, onTransactionComplete usually refreshes or adds.
-            // For now, let's just log success.
-            console.log('✅ Original transaction marked as REFUNDED remotely.');
+      await persistStandaloneRefundTransaction(
+         {
+            ...refundTxn,
+            items: returnItems,
+            total: refundTotal,
+            status: 'REFUNDED',
+            refundReason: 'Smart QR Return',
+            syncStatus: 'PENDING'
+         },
+         {
+            warehouseId: defaultSalesWarehouseId || 'wh_central',
+            terminalId,
+            originalTransaction,
+            conditions: sellableConditions
          }
-      } catch (e) {
-         console.error("Failed to update original transaction status:", e);
-         // Don't block the UI, the refund itself is valid.
+      );
+
+      if (!(Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android')) {
+         try {
+            await fetch(`/api/transactions/${originalTransaction.id}`, {
+               method: 'PUT',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ status: 'REFUNDED' })
+            });
+         } catch (e) {
+            console.error("Failed to update original transaction status:", e);
+         }
       }
 
-      onTransactionComplete(refundTxn);
       alert(`Devolución registrada: ${config.currencySymbol}${refundTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\nTicket original (${originalTransaction.displayId}) marcado como REEMBOLSADO.`);
    };
 
@@ -1966,7 +2366,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          case 'SETTINGS': if (onOpenSettings) onOpenSettings(); break;
          case 'TRACKING': if (onOpenInventoryTracking) onOpenInventoryTracking(); break;
          case 'DRAWER': handleOpenDrawer(); break;
-         case 'SAVE': handleParkCurrentTicket(); break;
+         case 'SAVE': openParkAliasModal(); break;
          case 'TABLES':
             if ((config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL') && cart.length > 0) {
                handleSendAndExit();
@@ -1980,7 +2380,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    return (
-      <div className="fixed inset-0 w-full h-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900">
+      <div
+         ref={posRootRef}
+         className="fixed inset-0 w-full overflow-hidden bg-gray-50 flex font-sans select-none text-gray-900"
+         style={posShellStyle}
+      >
          {errorToast && (
             <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
                <div className="bg-red-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 font-bold border-2 border-red-400">
@@ -2027,6 +2431,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      newConfig.terminals[terminalIndex].config.documentAssignments = {};
                   }
                   newConfig.terminals[terminalIndex].config.documentAssignments!['TICKET'] = mobileConfig.seriesId;
+                  newConfig.terminals[terminalIndex].config.documentAssignments!['REFUND'] =
+                     newConfig.terminals[terminalIndex].config.documentAssignments!['REFUND'] || 'REFUND';
+                  newConfig.terminals[terminalIndex].config.documentAssignments!['TRANSFER'] =
+                     newConfig.terminals[terminalIndex].config.documentAssignments!['TRANSFER'] || 'TRANSFER';
 
                   onUpdateConfig(newConfig);
                   setActiveTariffId(mobileConfig.tariffId);
@@ -2070,13 +2478,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          {mobileView === 'PRODUCTS' && (
             <MobileCartButton
+               buttonRef={mobileCartButtonRef}
                itemCount={cart.length}
                onClick={() => setMobileView('TICKET')}
+               style={mobileCartButtonStyle}
             />
          )}
 
          {/* LEFT AREA: PRODUCTS */}
-         <div className={`flex-1 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
+         <div className={`flex-1 min-h-0 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
             <header className="bg-white px-4 md:px-8 py-3 md:py-4 border-b border-gray-200 flex items-center gap-3 md:gap-6 shadow-sm z-10 shrink-0">
                <div className="flex items-center gap-3 pr-4 border-r border-gray-100">
                   <div className="w-10 h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
@@ -2095,15 +2505,29 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-gray-50 border border-gray-100 shadow-inner">
                   {syncState.isSyncing ? (
                      <RefreshCw size={18} className="text-amber-500 animate-spin" />
-                  ) : syncState.hasError || !navigator.onLine ? (
+                  ) : !navigator.onLine ? (
                      <CloudOff size={18} className="text-red-500" />
                   ) : (
-                     <Cloud size={18} className="text-emerald-500" />
+                     <Cloud size={18} className={syncState.hasError || syncState.pendingCount > 0 ? 'text-amber-500' : 'text-emerald-500'} />
                   )}
                   <div className="flex flex-col leading-none">
                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest hidden md:block">Sincronización</span>
-                     <span className={`text-[10px] font-bold ${syncState.pendingCount > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                        {syncState.isSyncing ? '...' : syncState.pendingCount > 0 ? `${syncState.pendingCount}` : 'OK'}
+                     <span className={`text-[10px] font-bold ${
+                        syncState.isSyncing
+                           ? 'text-amber-600'
+                           : !navigator.onLine
+                              ? 'text-red-600'
+                              : syncState.hasError || syncState.pendingCount > 0
+                                 ? 'text-amber-600'
+                                 : 'text-emerald-600'
+                     }`}>
+                        {syncState.isSyncing
+                           ? 'Sincronizando'
+                           : !navigator.onLine
+                              ? 'Offline'
+                              : syncState.pendingCount > 0
+                                 ? `Online · ${syncState.pendingCount}`
+                                 : 'Online'}
                      </span>
                   </div>
                </div>
@@ -2124,15 +2548,59 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      />
                      <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
                   </div>
-                  <div className="relative shrink-0">
-                     <button onClick={() => setShowTariffSelector(!showTariffSelector)} className={`flex items-center gap-2 md:gap-3 px-3 md:px-5 py-2.5 md:py-3 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-gray-100 border-transparent'}`}>
+                  <div className="relative shrink-0" ref={tariffSelectorRef}>
+                     <button
+                        type="button"
+                        onClick={() => {
+                           if (!canChangeTariff) return;
+                           setShowTariffSelector(!showTariffSelector);
+                        }}
+                        className={`flex items-center gap-2 md:gap-3 px-3 md:px-5 py-2.5 md:py-3 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-gray-100 border-transparent'} ${canChangeTariff ? 'hover:border-purple-300' : 'opacity-75 cursor-not-allowed'}`}
+                        disabled={!canChangeTariff}
+                        title={canChangeTariff ? 'Cambiar tarifa activa' : 'Tu rol no tiene permiso para cambiar la tarifa'}
+                     >
                         <Tag size={18} className="text-purple-600" />
                         <div className="text-left hidden sm:block">
                            <p className="text-[9px] font-black text-purple-400 uppercase tracking-widest leading-none mb-1">Tarifa Activa</p>
                            <p className="text-xs font-bold text-purple-900 leading-none truncate max-w-[120px]">{activeTariff?.name || 'General'}</p>
                         </div>
-                        <ChevronDown size={14} className={`text-purple-400 transition-transform ${showTariffSelector ? 'rotate-180' : ''}`} />
+                        {canChangeTariff ? (
+                           <ChevronDown size={14} className={`text-purple-400 transition-transform ${showTariffSelector ? 'rotate-180' : ''}`} />
+                        ) : (
+                           <Lock size={14} className="text-purple-300" />
+                        )}
                      </button>
+                     {canChangeTariff && showTariffSelector && (
+                        <div className="absolute right-0 top-[calc(100%+0.5rem)] z-30 min-w-[220px] rounded-2xl border border-purple-100 bg-white p-2 shadow-xl">
+                           <div className="px-3 py-2">
+                              <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest">Seleccionar tarifa</p>
+                           </div>
+                           <div className="space-y-1">
+                              {allowedTariffs.map((tariff) => {
+                                 const isSelected = tariff.id === activeTariffId;
+                                 return (
+                                    <button
+                                       key={tariff.id}
+                                       type="button"
+                                       onClick={() => {
+                                          setActiveTariffId(tariff.id);
+                                          setShowTariffSelector(false);
+                                       }}
+                                       className={`w-full flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition-all ${isSelected ? 'bg-purple-50 text-purple-900 border border-purple-200' : 'bg-white text-gray-700 hover:bg-gray-50 border border-transparent'}`}
+                                    >
+                                       <div className="min-w-0">
+                                          <p className="text-sm font-bold truncate">{tariff.name}</p>
+                                          <p className="text-[10px] font-medium text-gray-400 uppercase tracking-widest">
+                                             {tariff.taxIncluded ? 'Impuestos incluidos' : 'Impuestos separados'}
+                                          </p>
+                                       </div>
+                                       {isSelected && <Check size={16} className="text-purple-600 shrink-0" />}
+                                    </button>
+                                 );
+                              })}
+                           </div>
+                        </div>
+                     )}
                   </div>
 
 
@@ -2171,7 +2639,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                ))}
             </div>
 
-            <div className={`flex-1 overflow-y-auto ${isMobile ? 'p-4' : 'p-8'} custom-scrollbar dark:bg-slate-900`}>
+            <div
+               className={`flex-1 min-h-0 overflow-y-auto bg-[#eef2f6] ${usesExpandedCatalog ? 'p-3 pl-4 pr-2' : isMobile ? 'p-4' : 'p-8'} custom-scrollbar scrollbar-thin dark:bg-slate-900`}
+               style={bottomAwareScrollStyle}
+            >
                <div className={gridClass}>
                   {filteredProducts.map((product, idx) => {
                      const productName = product.name || '';
@@ -2205,11 +2676,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            }}
                            onTouchStart={handleTouchStart}
                            onTouchEnd={handleTouchEnd}
-                           className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-[2rem] p-4 shadow-sm border border-gray-100 cursor-pointer hover:shadow-xl hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group flex flex-col h-full relative overflow-hidden"
+                          className={`bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 cursor-pointer hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group relative overflow-hidden ${(usesExpandedCatalog && uxConfig.showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[228px] grid grid-rows-[52%_48%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[204px] flex flex-col h-full' : 'rounded-[2rem] p-3 min-h-[228px] shadow-sm hover:shadow-xl flex flex-col'}`}
                         >
                            {uxConfig.showProductImages && (
-                              <div className="aspect-square bg-gray-50 dark:bg-slate-800 rounded-[1.5rem] mb-4 overflow-hidden relative">
-                                 {product.image ? <img src={product.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
+                              <div className={`${usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : 'h-28 md:h-32 rounded-[1.5rem] mb-3'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
+                                 {product.image ? <img src={product.image} className={`w-full h-full ${usesExpandedCatalog ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
 
                                  {/* BADGES DE TIPO DE ARTÍCULO */}
                                  {isWeighted && (
@@ -2258,10 +2729,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
                            )}
-                           <div className="flex flex-col flex-1">
-                              <span className="text-[9px] font-bold text-purple-500 uppercase mb-1 opacity-60">{product.category}</span>
-                              <h3 className="font-bold text-gray-800 dark:text-white text-sm leading-tight mb-2 line-clamp-2 flex-1">{product.name}</h3>
-                              <div className="mt-auto pt-2 border-t border-gray-50 dark:border-slate-700"><span className="font-black text-lg text-gray-900 dark:text-white">{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+                           <div className={`flex flex-col ${usesExpandedCatalog ? 'min-h-0 h-full pt-1 justify-between' : 'flex-1 justify-between gap-3'}`}>
+                              <div className={usesExpandedCatalog ? 'space-y-1' : 'space-y-1.5'}>
+                                 <span className={`block font-bold text-purple-500 uppercase opacity-60 line-clamp-1 ${usesExpandedCatalog ? 'text-[10px]' : 'text-[8px]'}`}>{product.category}</span>
+                                 <h3 className={`font-bold text-gray-800 dark:text-white leading-tight line-clamp-2 ${usesExpandedCatalog ? 'text-[1.05rem] min-h-[2.3rem]' : 'text-sm min-h-[2.5rem]'}`}>{product.name}</h3>
+                              </div>
+                              <div className={`${usesExpandedCatalog ? 'mt-1 pt-1 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-2 border-t border-gray-50 dark:border-slate-700'}`}>
+                                 <span className={`font-black text-gray-900 dark:text-white leading-none ${usesExpandedCatalog ? 'text-[1.75rem]' : 'text-lg'}`}>{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              </div>
                            </div>
                         </div>
                      );
@@ -2285,20 +2760,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* --- Novedad: ActionGrid (Rediseño Adaptativo) --- */}
             {activeTerminalConfig?.operational?.expandTicket && !isMobile && (
-               <ActionGrid
-                  orientation="horizontal"
-                  onAction={handleGridAction}
-                  parkedTicketsCount={parkedTickets.length}
-                  isReturnMode={isReturnMode}
-                  config={config}
-                  hasCartItems={cart.length > 0}
-                  globalDiscountValue={globalDiscount.value}
-               />
+               <div ref={desktopActionGridRef}>
+                  <ActionGrid
+                     orientation="horizontal"
+                     onAction={handleGridAction}
+                     parkedTicketsCount={parkedTickets.length}
+                     isReturnMode={isReturnMode}
+                     config={config}
+                     hasCartItems={cart.length > 0}
+                     globalDiscountValue={globalDiscount.value}
+                     showLogout={false}
+                  />
+               </div>
             )}
          </div >
 
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
-         <div className={`w-full ${isRetailMode ? '' : 'md:w-96'} h-full bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
+         <div className={`w-full ${isRetailMode ? '' : 'md:w-96'} h-full min-h-0 bg-white border-l border-gray-200 shadow-2xl flex flex-col z-20 transition-all duration-300 ${mobileView === 'PRODUCTS' && !isRetailMode ? 'hidden md:flex' : 'flex'}`}>
 
             {/* MOBILE HEADER */}
             < div className="md:hidden p-4 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
@@ -2320,7 +2798,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </h2>
                   </div>
                   <div className="flex gap-1">
-                     <button onClick={handleParkCurrentTicket} className="p-2 text-gray-400 hover:text-blue-600" title="Guardar Ticket">
+                     <button onClick={openParkAliasModal} className="p-2 text-gray-400 hover:text-blue-600" title="Guardar Ticket">
                         <Save size={20} />
                      </button>
                      <button onClick={() => setShowParkedList(!showParkedList)} className="p-2 text-gray-400 hover:text-orange-600 relative" title="Recuperar Ticket">
@@ -2475,16 +2953,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <div className="flex gap-1 shrink-0">
                      {!isRetailMode && (
                         <>
-                           <button onClick={handleOpenDrawer} title="Abrir Cajón" className="p-2 hover:bg-emerald-50 rounded-lg text-gray-400 hover:text-emerald-600 transition-colors"><Box size={18} /></button>
-                           <button onClick={handleParkCurrentTicket} title="Guardar Ticket" className="p-2 hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Save size={18} /></button>
-                           <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="p-2 hover:bg-orange-50 rounded-lg text-gray-400 hover:text-orange-600 transition-colors relative">
+                           <button onClick={handleOpenDrawer} title="Abrir Cajón" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-emerald-50 rounded-lg text-gray-400 hover:text-emerald-600 transition-colors"><Box size={18} /></button>
+                           <button onClick={openParkAliasModal} title="Guardar Ticket" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Save size={18} /></button>
+                           <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-orange-50 rounded-lg text-gray-400 hover:text-orange-600 transition-colors relative">
                               <Inbox size={18} />
                               {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-0 right-0 w-3 h-3 bg-orange-500 rounded-full border-2 border-white"></span>}
                            </button>
-                           <button onClick={onOpenHistory} title="Historial" className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><History size={18} /></button>
+                           <button onClick={onOpenHistory} title="Historial" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><History size={18} /></button>
                         </>
                      )}
-                     <button onClick={() => onOpenSettings()} title="Configuración" className="p-2 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Settings size={18} /></button>
+                     <button onClick={() => onOpenSettings()} title="Configuración" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Settings size={18} /></button>
                   </div>
                </div>
 
@@ -2550,15 +3028,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   currencySymbol={baseCurrency.symbol}
                   lastAddedCartId={lastAddedCartId}
                   onRemoveItem={(cartId) => updateCartItem(null, cartId)}
+                  containerStyle={isMobile ? bottomAwareScrollStyle : undefined}
                />
             ) : (
                // STANDARD RESTAURANT/RETAIL LIST
-               <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-gray-50/50" >
+               <div
+                  className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-gray-50/50"
+                  style={isMobile ? bottomAwareScrollStyle : undefined}
+               >
                   {
                      processedCart.map((item, idx) => {
                         const hasDiscount = item.originalPrice && item.price < item.originalPrice;
                         const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
                         const lineNet = item.price * item.quantity;
+                        const lineTaxSummary = getCartItemTaxSummary(item);
 
                         // MOBILE CARD DESIGN
                         if (isMobile) {
@@ -2578,9 +3061,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              <span className="text-xs font-black text-blue-600">{baseCurrency.symbol}{(item.price || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                              {hasDiscount && <span className="text-[10px] text-red-500 font-bold line-through">{baseCurrency.symbol}{item.originalPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
                                           </div>
-                                          <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">
-                                             ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
-                                          </span>
+                                          <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">{lineTaxSummary}</span>
                                        </div>
                                        {item.salespersonId && (
                                           <div className="mt-1 flex items-center gap-1 text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-md w-fit">
@@ -2638,7 +3119,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                                 {item.modifiers && item.modifiers.length > 0 && <span className="text-blue-600 font-bold ml-1">+{item.modifiers.length} mod</span>}
                                              </div>
                                              <div className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">
-                                                ITBIS: {(config.taxRate ? config.taxRate * 100 : 18)}% ({baseCurrency.symbol}{(item.price * item.quantity * (config.taxRate || 0.18)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                                                {lineTaxSummary}
                                              </div>
                                           </div>
                                           {/* Salesperson Badge */}
@@ -2702,7 +3183,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      // --- RETAIL MODE FOOTER (HORIZONTAL) ---
                      <>
                         {/* RIGHT: PAY & TOTAL */}
-                        <div className="flex items-center gap-6">
+                        <div className="flex items-center gap-4">
                            {/* TOTALS BREAKDOWN */}
                            <div className="hidden xl:flex items-center gap-6 mr-2">
                               <div className="text-right">
@@ -2733,6 +3214,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               </p>
                            </div>
                            <button
+                              onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
+                              className="h-14 min-w-[132px] px-5 rounded-2xl font-black text-base border-2 border-red-100 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2.5 shrink-0"
+                           >
+                              <LogOut size={22} />
+                              <span>Salir</span>
+                           </button>
+                           <button
                               onClick={() => {
                                  if (cart.length > 0 && fiscalStatus.hasNCF) {
                                     const validation = validateTerminalDocument(config, terminalId, 'TICKET');
@@ -2747,7 +3235,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  }
                               }}
                               disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                              className={`h-16 px-8 rounded-2xl font-black text-xl shadow-xl hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-3 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
+                              className={`h-14 min-w-[220px] px-6 rounded-2xl font-black text-lg shadow-xl hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 shrink-0 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
                            >
                               <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
                               <ArrowRight size={24} />
@@ -2763,6 +3251,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               isReturnMode={isReturnMode}
                               hasCartItems={cart.length > 0}
                               globalDiscountValue={globalDiscount.value}
+                              showLogout={false}
                            />
                         </div>
 
@@ -2814,6 +3303,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        isReturnMode={isReturnMode}
                                        hasCartItems={cart.length > 0}
                                        globalDiscountValue={globalDiscount.value}
+                                       showLogout={false}
                                     />
                                  </div>
                               )}
@@ -2846,26 +3336,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
 
-                              <button
-                                 onClick={() => {
-                                    if (cart.length > 0 && fiscalStatus.hasNCF) {
-                                       const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-                                       if (!validation.isValid) {
-                                          alert(validation.error);
-                                          return;
+                              <div className="grid grid-cols-[112px_minmax(0,1fr)] items-center gap-6 pt-5 px-2">
+                                 <button
+                                    onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
+                                    className="w-[112px] px-3 py-3.5 rounded-2xl font-black text-base border-2 border-red-100 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
+                                 >
+                                    <LogOut size={20} />
+                                    <span>Salir</span>
+                                 </button>
+                                 <button
+                                    onClick={() => {
+                                       if (cart.length > 0 && fiscalStatus.hasNCF) {
+                                          const validation = validateTerminalDocument(config, terminalId, 'TICKET');
+                                          if (!validation.isValid) {
+                                             alert(validation.error);
+                                             return;
+                                          }
+                                          if (!canProceedWithOperationalSession()) return;
+                                          proceedToCheckout();
+                                       } else if (!fiscalStatus.hasNCF) {
+                                          alert("No hay secuencias fiscales disponibles.");
                                        }
-                                       if (!canProceedWithOperationalSession()) return;
-                                       proceedToCheckout();
-                                    } else if (!fiscalStatus.hasNCF) {
-                                       alert("No hay secuencias fiscales disponibles.");
-                                    }
-                                 }}
-                                 disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                                 className={`w-full py-4 rounded-2xl font-black text-xl shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
-                              >
-                                 <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
-                                 <ArrowRight size={24} />
-                              </button>
+                                    }}
+                                    disabled={cart.length === 0 || !fiscalStatus.hasNCF}
+                                    className={`w-full max-w-[188px] justify-self-end py-3.5 rounded-2xl font-black text-lg shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
+                                 >
+                                    <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
+                                    <ArrowRight size={24} />
+                                 </button>
+                              </div>
                            </>
                         )}
                      </>
@@ -2877,7 +3376,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          {/* MOBILE STICKY FOOTER */}
          {
             isMobile && mobileView === 'TICKET' && (
-               <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5">
+               <div
+                  ref={mobileFooterRef}
+                  className="md:hidden fixed left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-5"
+                  style={mobileFooterStyle}
+               >
                   <div className="flex justify-between items-center mb-4 px-2">
                      <div className="flex gap-4">
                         <button onClick={() => setShowGlobalDiscount(true)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-pink-500">
@@ -2888,7 +3391,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <QrCode size={18} />
                            <span className="text-[9px] font-bold uppercase">Cupón</span>
                         </button>
-                        <button onClick={handleParkCurrentTicket} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
+                        <button onClick={openParkAliasModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
                            <Save size={18} />
                            <span className="text-[9px] font-bold uppercase">Grd.</span>
                         </button>
@@ -2956,7 +3459,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                />
             )
          }
-         {showPaymentModal && <UnifiedPaymentModal key={paymentModalSession} total={amountDueNow} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={handleClosePaymentModal} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={selectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} />}
+         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={selectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr) => { addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
@@ -3219,10 +3722,29 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                      <div className="px-6 pb-6 flex justify-between items-center gap-3">
                         <button
-                           onClick={() => printReservation(showReservationReceipt, config)}
+                           onClick={async () => {
+                              if (isPrintingReservationReceipt) return;
+                              setIsPrintingReservationReceipt(true);
+                              try {
+                                 const printed = await printReservation(showReservationReceipt, config);
+                                 if (printed) {
+                                    setSuccessToast(`Reserva ${showReservationReceipt.code} enviada a impresión`);
+                                 } else {
+                                    setErrorToast('No se pudo imprimir la nota de reserva. Verifica la impresora configurada.');
+                                    setTimeout(() => setErrorToast(null), 3500);
+                                 }
+                              } catch (error) {
+                                 console.error('Reservation print failed:', error);
+                                 setErrorToast('Error al imprimir la nota de reserva.');
+                                 setTimeout(() => setErrorToast(null), 3500);
+                              } finally {
+                                 setIsPrintingReservationReceipt(false);
+                              }
+                           }}
+                           disabled={isPrintingReservationReceipt}
                            className="flex-1 px-5 py-2.5 rounded-xl bg-blue-600 text-white font-black hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-100"
                         >
-                           <Printer size={18} /> Imprimir
+                           <Printer size={18} /> {isPrintingReservationReceipt ? 'Imprimiendo...' : 'Imprimir'}
                         </button>
                         <button
                            onClick={() => setShowReservationReceipt(null)}
@@ -3235,6 +3757,62 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
             )
          }
+
+         {/* Save Parked Ticket Alias */}
+         {showParkAliasModal && (
+            <div className="fixed inset-0 z-[101] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in zoom-in-95">
+               <div className="bg-white rounded-[2.5rem] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95">
+                  <div className="p-6 border-b bg-gray-50 flex justify-between items-center">
+                     <div>
+                        <h3 className="font-black text-xl text-gray-800">Guardar En Espera</h3>
+                        <p className="text-sm text-gray-500 mt-1">Agrega un alias para ubicar esta factura más rápido.</p>
+                     </div>
+                     <button onClick={closeParkAliasModal} className="p-2 hover:bg-gray-200 rounded-full">
+                        <X size={20} />
+                     </button>
+                  </div>
+                  <div className="p-6 space-y-4">
+                     <div>
+                        <label htmlFor="park-ticket-alias" className="block text-sm font-bold text-gray-700 mb-2">
+                           Alias de la factura
+                        </label>
+                        <input
+                           id="park-ticket-alias"
+                           ref={parkAliasInputRef}
+                           value={parkTicketAlias}
+                           onChange={(e) => setParkTicketAlias(e.target.value)}
+                           onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                 void handleParkCurrentTicket(parkTicketAlias);
+                              }
+                           }}
+                           placeholder="Ej. Cliente VIP, Pedido oficina, Recoger luego"
+                           maxLength={80}
+                           className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-base font-medium text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                     </div>
+                     <div className="rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3">
+                        <p className="text-[11px] font-black uppercase tracking-[0.18em] text-blue-500 mb-1">Nombre Base</p>
+                        <p className="text-sm font-semibold text-blue-900">{buildParkedTicketName()}</p>
+                     </div>
+                  </div>
+                  <div className="p-6 pt-0 flex gap-3">
+                     <button
+                        onClick={closeParkAliasModal}
+                        className="flex-1 rounded-2xl border border-gray-200 px-4 py-3 text-sm font-black uppercase tracking-[0.12em] text-gray-500 hover:bg-gray-50 transition-colors"
+                     >
+                        Cancelar
+                     </button>
+                     <button
+                        onClick={() => void handleParkCurrentTicket(parkTicketAlias)}
+                        className="flex-1 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-black uppercase tracking-[0.12em] text-white hover:bg-blue-700 transition-colors"
+                     >
+                        Guardar En Espera
+                     </button>
+                  </div>
+               </div>
+            </div>
+         )}
 
          {/* List of Parked Tickets */}
          {
@@ -3249,12 +3827,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         {(Array.isArray(parkedTickets) ? parkedTickets : []).map((pt, idx) => (
                            <div key={pt.id || `parked-${idx}`} onClick={() => handleRestoreTicket(pt)} className="p-4 bg-white border border-gray-100 rounded-2xl hover:border-orange-400 hover:bg-orange-50 cursor-pointer group transition-all">
                               <div className="flex justify-between items-start mb-2">
-                                 <span className="font-bold text-gray-800">{pt.name}</span>
+                                 <div className="min-w-0 pr-3">
+                                    <span className="block font-bold text-gray-800 truncate">{pt.alias || pt.name}</span>
+                                    {pt.alias && (
+                                       <span className="block text-[11px] font-semibold text-gray-400 truncate mt-1">
+                                          {pt.name}
+                                       </span>
+                                    )}
+                                 </div>
                                  <span className="text-[10px] font-bold text-gray-400 uppercase">{new Date(pt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                               </div>
                               <div className="flex justify-between items-center">
-                                 <span className="text-xs text-gray-500">{pt.items.length} productos</span>
-                                 <ArrowRight size={16} className="text-orange-300 group-hover:text-orange-500 transition-colors" />
+                                 <div className="min-w-0 pr-3">
+                                    <span className="text-xs text-gray-500 block">{pt.items.length} productos</span>
+                                    <span className="text-sm font-black text-gray-900 block mt-1">
+                                       {formatCurrency(Number(pt.total || 0), baseCurrency.symbol)}
+                                    </span>
+                                 </div>
+                                 <ArrowRight size={16} className="text-orange-300 group-hover:text-orange-500 transition-colors shrink-0" />
                               </div>
                            </div>
                         ))}

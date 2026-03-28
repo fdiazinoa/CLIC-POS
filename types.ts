@@ -375,6 +375,53 @@ export interface DocumentSeries {
   businessUnit?: string;  // Optional: "Tienda Norte", "Caja Express"
 }
 
+export interface TerminalConfigResolvedPricingSnapshot {
+  default_tariff_id?: string;
+  allowed_tariff_ids?: string[];
+  tariffs?: any[];
+}
+
+export interface TerminalConfigResolvedInventorySnapshot {
+  default_warehouse_id?: string;
+  transfer_warehouse_id?: string;
+  allowed_warehouse_ids?: string[];
+  default_warehouse?: any;
+  warehouses?: any[];
+}
+
+export interface TerminalConfigResolvedDocumentsSnapshot {
+  assignments?: Record<string, any> | any[];
+  default_fiscal_range_id?: string;
+  document_series?: any[];
+  fiscal_ranges?: any[];
+}
+
+export interface TerminalConfigResolvedCatalogSnapshot {
+  allowed_categories?: string[] | any[];
+  full_pull_on_pairing?: boolean;
+}
+
+export interface TerminalConfigResolvedSnapshot {
+  pricing?: TerminalConfigResolvedPricingSnapshot;
+  inventory?: TerminalConfigResolvedInventorySnapshot;
+  documents?: TerminalConfigResolvedDocumentsSnapshot;
+  catalog?: TerminalConfigResolvedCatalogSnapshot;
+}
+
+export interface TerminalConfigSnapshot {
+  terminal_id?: string;
+  tenant_id?: string;
+  company_id?: string;
+  store_id?: string;
+  device_id?: string;
+  terminal_name?: string;
+  station_number?: string | number;
+  role?: string;
+  resolved?: TerminalConfigResolvedSnapshot;
+  config?: Record<string, any>;
+  resolution_error?: any;
+}
+
 export interface NCFConfig {
   batchSize: number;
   lowBatchThreshold: number;
@@ -386,6 +433,9 @@ export interface TerminalConfig {
   lastPairingDate?: string;
   isBlocked?: boolean;
   deviceBindingToken: string;
+  erpTerminalId?: string;
+  terminalName?: string;
+  stationNumber?: string | null;
   isPrimaryNode?: boolean; // Rol jerárquico de la terminal
   governedByMaster?: boolean; // NEW: If true, this terminal follows the configuration defined by the Master
   startWithAgenda?: boolean; // NEW: Boot directly into Agenda view
@@ -396,6 +446,8 @@ export interface TerminalConfig {
     lowBatchThreshold: number;
     // New: Configuration per NCF Type
     typeConfigs?: Partial<Record<FiscalDocumentCode, NCFConfig>>;
+    defaultFiscalRangeId?: string;
+    fiscalRanges?: FiscalRangeDGII[];
   };
 
   tables?: {
@@ -415,6 +467,7 @@ export interface TerminalConfig {
   pricing: {
     allowedTariffIds: string[];
     defaultTariffId: string;
+    tariffs?: Tariff[];
   };
   workflow: {
     inventory: {
@@ -468,6 +521,7 @@ export interface TerminalConfig {
     bloqueo_meseros: boolean;
     pedir_comensales: boolean;
     usa_modulos_cocina: boolean;
+    defaultTaxIds?: string[];
     reservationPolicy?: {
       validityDays: number;
       requireAdvance: boolean;
@@ -486,11 +540,28 @@ export interface TerminalConfig {
   };
   catalog?: {
     allowedCategories: string[];
+    fullPullOnPairing?: boolean;
   };
   inventoryScope?: {
     defaultSalesWarehouseId: string;
     visibleWarehouseIds: string[];
+    transferWarehouseId?: string;
+    defaultWarehouse?: Warehouse;
+    warehouses?: Warehouse[];
   };
+  erpBinding?: {
+    terminalId?: string;
+    tenantId?: string;
+    companyId?: string;
+    storeId?: string;
+    deviceId?: string;
+    terminalName?: string;
+    stationNumber?: string;
+    role?: string;
+  };
+  erpSnapshot?: TerminalConfigSnapshot;
+  metadata?: Record<string, any>;
+  lan?: Record<string, any>;
   wallet?: WalletConfig;
   syncConfig?: SyncConfig;
 }
@@ -757,6 +828,7 @@ export interface BusinessConfig {
     quickKeysLayout: 'A' | 'B';
     viewMode: 'VISUAL' | 'RETAIL';
   };
+  terminalSnapshots?: Record<string, TerminalConfigSnapshot>;
 }
 
 export interface RoleDefinition {
@@ -939,7 +1011,6 @@ export interface Product {
   purchaseUnit?: string;    // e.g. 'Saco', 'Caja', 'Botella'
   conversionFactor?: number; // e.g. 1 Saco = 50,000 gr. Default: 1
   batchYield?: number;      // e.g. Recipe produces 50 units. Default: 1
-  fiscalUnitCode?: number;  // Optional DGII/Polaris unit code override
 }
 
 export interface ProductStock {
@@ -1155,6 +1226,9 @@ export interface Transaction {
 
 export type ViewState =
   // Standard views
+  | 'ACTIVATION'
+  | 'TERMINAL_MODE_SELECTOR'
+  | 'VERTICAL_SELECTOR'
   | 'SETUP'
   | 'WIZARD'
   | 'LOGIN'
@@ -1412,6 +1486,7 @@ export interface Reception {
 export interface ParkedTicket {
   id: string;
   name: string;
+  alias?: string;
   items: CartItem[];
   total?: number;
   customerId?: string;
@@ -1461,7 +1536,6 @@ export interface PaymentEntry {
   currencyCode?: string;
   amountOriginal?: number;
   exchangeRate?: number;
-  /** ERP / outbound sync (snake_case mirrors camelCase; stable id remains `id` / source_payment_id). */
   payment_method?: PaymentMethod | string;
   currency_code?: string;
   exchange_rate?: number;
@@ -1634,6 +1708,8 @@ export type Permission =
   | 'POS_OPEN_DRAWER'
   | 'POS_RETURNS'
   | 'POS_REPRINT_RECEIPT'
+  | 'POS_NEW_SALE'
+  | 'POS_CHANGE_TARIFF'
   | 'POS_CLOSE_Z'
   | 'POS_VIEW_ACTIVE_CASH'
   | 'POS_MANAGE_PARKED'

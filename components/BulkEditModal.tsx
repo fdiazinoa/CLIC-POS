@@ -34,6 +34,12 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
    const availableCategories = useMemo(() => {
       return Array.from(new Set(products.map(p => p.category))).sort();
    }, [products]);
+   const generalTariff = useMemo(
+      () => (config.tariffs || []).find(tariff =>
+         tariff.id === 'trf-gen' || tariff.name?.trim().toLowerCase().includes('general')
+      ),
+      [config.tariffs]
+   );
 
    // STATE: Warehouse Actions (ENABLE, DISABLE, NO_CHANGE)
    const [warehouseActions, setWarehouseActions] = useState<Record<string, 'ENABLE' | 'DISABLE' | 'NO_CHANGE'>>({});
@@ -81,6 +87,14 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
       });
    };
 
+   const handleAssignGeneralTariff = () => {
+      if (!generalTariff || isSaving) return;
+      setTariffActions(prev => ({
+         ...prev,
+         [generalTariff.id]: 'ASSIGN'
+      }));
+   };
+
    const handleInitialClick = () => {
       setNeedsConfirmation(true);
    };
@@ -106,7 +120,7 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
          <div className="bg-white rounded-[2.5rem] w-full max-w-4xl h-[85vh] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
 
             {/* Header */}
-            <div className="p-8 border-b flex justify-between items-center bg-slate-50/50 shrink-0">
+            <div className="p-8 border-b flex justify-between items-center bg-white shrink-0">
                <div className="flex items-center gap-4">
                   <div className="p-4 bg-blue-600 text-white rounded-2xl shadow-xl shadow-blue-500/20">
                      <Settings2 size={28} />
@@ -118,7 +132,7 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                      </p>
                   </div>
                </div>
-               <button type="button" onClick={onClose} disabled={isSaving} className="p-3 hover:bg-slate-100 rounded-full text-slate-400 transition-colors disabled:opacity-30">
+               <button type="button" onClick={onClose} disabled={isSaving} className="p-3 bg-white border border-slate-200 shadow-sm hover:bg-slate-50 rounded-full text-slate-400 transition-colors disabled:opacity-30">
                   <X size={24} />
                </button>
             </div>
@@ -136,7 +150,7 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                      type="button"
                      onClick={() => setActiveTab(tab.id as BulkTab)}
                      disabled={isSaving}
-                     className={`flex items-center gap-2 py-3 px-6 font-black text-xs uppercase tracking-wider transition-all rounded-xl ${activeTab === tab.id ? 'bg-blue-50 text-blue-600 shadow-sm border border-blue-100' : 'text-slate-400 hover:text-slate-600'} disabled:opacity-50`}
+                     className={`flex items-center gap-2 py-3 px-6 font-black text-xs uppercase tracking-wider transition-all rounded-xl border shadow-sm ${activeTab === tab.id ? 'bg-white text-blue-600 border-blue-200 ring-2 ring-blue-50' : 'bg-white text-slate-500 border-slate-200 hover:text-slate-700 hover:border-slate-300'} disabled:opacity-50`}
                   >
                      <tab.icon size={16} /> {tab.label}
                   </button>
@@ -250,6 +264,25 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                               Asigna o quita tarifas en lote. Cuando asignes una tarifa nueva, cada artículo usará su <span className="font-bold">precio base actual</span> como precio inicial de esa tarifa.
                            </p>
                         </div>
+
+                        {generalTariff && (
+                           <div className="mb-6 flex flex-wrap items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4">
+                              <div className="flex-1">
+                                 <p className="text-xs font-black uppercase tracking-widest text-blue-500">Acción rápida</p>
+                                 <p className="mt-1 text-sm font-semibold text-slate-700">
+                                    Asignar <span className="text-blue-600">{generalTariff.name}</span> a todos los artículos seleccionados.
+                                 </p>
+                              </div>
+                              <button
+                                 type="button"
+                                 onClick={handleAssignGeneralTariff}
+                                 disabled={isSaving}
+                                 className="rounded-2xl bg-blue-600 px-5 py-3 text-xs font-black uppercase tracking-wider text-white shadow-lg shadow-blue-500/20 transition-all hover:bg-blue-700 disabled:opacity-50"
+                              >
+                                 Asignar General
+                              </button>
+                           </div>
+                        )}
 
                         <div className="space-y-3">
                            {(config.tariffs || []).map(tariff => {

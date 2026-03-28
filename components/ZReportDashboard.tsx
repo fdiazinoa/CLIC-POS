@@ -115,9 +115,13 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    );
 
    const handleStartClosing = () => {
-      // Check if at least one currency amount is entered
-      const hasAnyCashCounted = Object.values(cashCountedByCurrency).some(val => val && parseFloat(val) >= 0);
-      if (!hasAnyCashCounted) {
+      const hasCashToCount = currenciesRequiringCashCount.length > 0;
+      const hasAnyCashCounted = currenciesRequiringCashCount.some(currencyCode => {
+         const value = cashCountedByCurrency[currencyCode];
+         return value !== undefined && value !== '' && parseFloat(value) >= 0;
+      });
+
+      if (hasCashToCount && !hasAnyCashCounted) {
          alert("Por favor, ingresa el conteo físico antes de cerrar.");
          return;
       }
@@ -326,6 +330,11 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
       expectedCashByCurrency[currency] = sales + cashIn - cashOut;
    });
 
+   const currenciesRequiringCashCount = Array.from(allCurrenciesInUse).filter(currency => {
+      const expected = expectedCashByCurrency[currency] || 0;
+      return Math.abs(expected) > 0.0001;
+   });
+
    // Calculate discrepancies per currency
    const cashDiscrepancyByCurrency: Record<string, number> = {};
    Object.keys(expectedCashByCurrency).forEach(currency => {
@@ -469,9 +478,9 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                   <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
                      <h3 className="font-bold text-gray-500 uppercase text-xs tracking-wider mb-4">Balance Teórico (Sistema)</h3>
 
-                     {allCurrenciesInUse.size > 0 ? (
+                     {currenciesRequiringCashCount.length > 0 ? (
                         <div className="space-y-6">
-                           {Array.from(allCurrenciesInUse).map((currencyCode) => {
+                           {currenciesRequiringCashCount.map((currencyCode) => {
                               const currencyInfo = activeCurrencies.find(c => c.code === currencyCode) || baseCurrency;
                               const symbol = currencyInfo?.symbol || currencyCode;
                               const sales = cashSalesByCurrency[currencyCode] || 0;
@@ -519,9 +528,9 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                      <Banknote size={18} className="text-gray-400" /> Conteo Físico
                   </h3>
 
-                  {allCurrenciesInUse.size > 0 ? (
+                  {currenciesRequiringCashCount.length > 0 ? (
                      <div className="space-y-5">
-                        {Array.from(allCurrenciesInUse).map((currencyCode, index) => {
+                        {currenciesRequiringCashCount.map((currencyCode, index) => {
                            const currencyInfo = activeCurrencies.find(c => c.code === currencyCode) || baseCurrency;
                            const symbol = currencyInfo?.symbol || currencyCode;
                            const counted = cashCountedByCurrency[currencyCode] || '';
@@ -563,7 +572,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                         <p className="text-xs text-gray-400 mt-2">Ingresa el total de efectivo contado por cada moneda.</p>
                      </div>
                   ) : (
-                     <p className="text-sm text-gray-400 text-center py-4">No hay movimientos de efectivo para contar</p>
+                     <p className="text-sm text-gray-400 text-center py-4">No hay efectivo pendiente por contar. Puedes cerrar la caja directamente.</p>
                   )}
                </div>
             </div>
@@ -613,7 +622,10 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
          <div className="p-6 bg-white border-t border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] flex flex-col items-center">
             <SlideButton
                label="Desliza para Cerrar Caja"
-               disabled={!Object.values(cashCountedByCurrency).some(val => val && parseFloat(val) >= 0)}
+               disabled={currenciesRequiringCashCount.length > 0 && !currenciesRequiringCashCount.some(currencyCode => {
+                  const value = cashCountedByCurrency[currencyCode];
+                  return value !== undefined && value !== '' && parseFloat(value) >= 0;
+               })}
                colorClass={config.themeColor === 'orange' ? 'bg-orange-500' : 'bg-blue-500'}
                onComplete={handleStartClosing}
             />

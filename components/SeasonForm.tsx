@@ -148,7 +148,7 @@ const SeasonForm: React.FC<SeasonFormProps> = ({
                   </div>
                </div>
 
-               <div className="flex gap-8">
+               <div className="mobile-tab-scroller no-scrollbar">
                   {[
                      { id: 'GENERAL', label: 'General', icon: Info },
                      { id: 'ITEMS', label: 'Artículos de Temporada', icon: Box }
@@ -157,7 +157,7 @@ const SeasonForm: React.FC<SeasonFormProps> = ({
                         key={tab.id}
                         type="button"
                         onClick={() => setActiveTab(tab.id as TabType)}
-                        className={`pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === tab.id ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                        className={`mobile-tab-item pb-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeTab === tab.id ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                      >
                         <tab.icon size={16} /> {tab.label}
                      </button>

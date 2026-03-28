@@ -1,4 +1,5 @@
 import { DatabaseAdapter } from '../DatabaseAdapter';
+import { buildMasterUrlFromHost } from '../../../utils/cloudMasterRegistry';
 
 export class NetworkAdapter implements DatabaseAdapter {
     private baseUrl: string | null = null;
@@ -12,12 +13,20 @@ export class NetworkAdapter implements DatabaseAdapter {
     private lastCheckedMasterIp: string | null = null;
 
     private initializeBaseUrl() {
+        const storedMasterUrl = localStorage.getItem('CLIC_POS_MASTER_URL');
         const masterIp = localStorage.getItem('pos_master_ip');
-        const protocol = window.location.protocol.replace(':', '');
 
-        if (masterIp) {
+        if (storedMasterUrl) {
+            this.baseUrl = `${storedMasterUrl.replace(/\/$/, '')}/api`;
+            try {
+                this.lastCheckedMasterIp = new URL(storedMasterUrl).hostname;
+            } catch {
+                this.lastCheckedMasterIp = masterIp;
+            }
+            console.log(`🔒 NetworkAdapter configured from stored master URL. Master: ${this.baseUrl}`);
+        } else if (masterIp) {
             // FORCE PORT 3001 FOR BACKEND
-            this.baseUrl = `${protocol}://${masterIp}:3001/api`;
+            this.baseUrl = `${buildMasterUrlFromHost(masterIp)}/api`;
             this.lastCheckedMasterIp = masterIp;
             console.log(`🔒 NetworkAdapter configured for SLAVE mode. Master: ${this.baseUrl}`);
         } else {

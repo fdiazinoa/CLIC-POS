@@ -1,5 +1,6 @@
 
 import React, { useState, useRef, useMemo, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
 import {
   X, Save, Barcode, DollarSign, Box, Plus, Trash2,
   Info, Layers, RefreshCw, CheckCircle2, Tag,
@@ -68,6 +69,7 @@ const VARIANT_TEMPLATES = [
 
 const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], transfers = [], purchaseOrders = [], hasHistory = false, currentUser, roles = [], onSave, onClose, suppliers = [], seasons = [], initialTab = 'GENERAL', allProducts = [] }) => {
   const MAX_IMAGE_BYTES = 700 * 1024; // ~700 KB to avoid oversized base64 blobs blocking saves
+  const isNativeAndroidRuntime = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
   const [activeTab, setActiveTab] = useState<ProductTab>(initialTab || 'GENERAL');
   const [showConversionHelper, setShowConversionHelper] = useState(false);
   const [kardexWarehouse, setKardexWarehouse] = useState<string>(
@@ -384,6 +386,15 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
   const imageTooHeavy = (bytes: number) => bytes > MAX_IMAGE_BYTES;
   const estimateDataUrlBytes = (dataUrl: string) => dataUrl.length * 0.75;
+  const canReadClipboardProgrammatically =
+    typeof navigator !== 'undefined' &&
+    !!navigator.clipboard &&
+    (typeof navigator.clipboard.read === 'function' || typeof navigator.clipboard.readText === 'function');
+  const canUseNativeClipboardBridge =
+    typeof window !== 'undefined' &&
+    typeof (window as Window & { AndroidPrinter?: { readClipboard?: () => string } }).AndroidPrinter?.readClipboard === 'function';
+  const canUseExplicitPaste = canUseNativeClipboardBridge || canReadClipboardProgrammatically;
+  const imagePlaceholderText = isNativeAndroidRuntime ? 'Toca para subir imagen' : 'Click o Pegar (Ctrl+V)';
 
   const applyImageDataUrl = (dataUrl: string) => {
     if (!dataUrl?.startsWith('data:image/')) {
@@ -411,6 +422,141 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     return match?.[1] || null;
   };
 
+  const processClipboardBlob = async (blob: Blob, sourceLabel = 'La imagen pegada') => {
+    if (!blob) {
+      throw new Error('No se pudo leer la imagen del portapapeles.');
+    }
+
+    if (imageTooHeavy(blob.size)) {
+      alert(`${sourceLabel} es muy pesada (${(blob.size / 1024).toFixed(0)} KB). Máximo ${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB.`);
+      return true;
+    }
+
+    const dataUrl = await blobToDataUrl(blob);
+    applyImageDataUrl(dataUrl);
+    return true;
+  };
+
+  const processClipboardTextPayload = async (html?: string, plainText?: string) => {
+    const imageSource = extractImageFromHtml(html || '') || plainText?.trim();
+
+    if (!imageSource) {
+      alert('No se detectó una imagen para pegar. Use "Copiar imagen" desde el navegador o suba un archivo.');
+      return true;
+    }
+
+    if (imageSource.startsWith('data:image/')) {
+      applyImageDataUrl(imageSource);
+      return true;
+    }
+
+    if (imageSource.startsWith('http://') || imageSource.startsWith('https://')) {
+      try {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 3000);
+
+        const response = await fetch(imageSource, {
+          signal: controller.signal,
+          mode: 'cors',
+          cache: 'no-cache'
+        });
+        window.clearTimeout(timeout);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        if (!blob.type.startsWith('image/')) {
+          throw new Error('La URL no apunta a una imagen válida');
+        }
+
+        await processClipboardBlob(blob, 'La imagen en URL');
+        return true;
+      } catch (fetchError: any) {
+        console.error('❌ Error fetching image from URL:', fetchError);
+        const errorMsg = fetchError.name === 'AbortError'
+          ? 'La descarga de la imagen tardó demasiado (>3s). Descárguela manualmente y súbala.'
+          : 'No se pudo descargar la imagen desde esa URL (CORS/bloqueado). Descárguela y súbala como archivo.';
+        alert(errorMsg);
+        return true;
+      }
+    }
+
+    alert('Formato de portapapeles no soportado. Use "Copiar imagen" o suba un archivo desde su equipo.');
+    return true;
+  };
+
+  const readClipboardFromNativeBridge = async (): Promise<boolean> => {
+    if (!canUseNativeClipboardBridge) return false;
+
+    const runtimeWindow = window as Window & {
+      AndroidPrinter?: { readClipboard?: () => string };
+    };
+
+    const raw = runtimeWindow.AndroidPrinter?.readClipboard?.();
+    if (!raw) return false;
+
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error('Respuesta inválida del portapapeles Android.');
+    }
+
+    if (parsed?.success === false) {
+      throw new Error(parsed?.message || 'No se pudo leer el portapapeles Android.');
+    }
+
+    if (typeof parsed?.imageDataUrl === 'string' && parsed.imageDataUrl.startsWith('data:image/')) {
+      applyImageDataUrl(parsed.imageDataUrl);
+      return true;
+    }
+
+    return processClipboardTextPayload(parsed?.html, parsed?.text);
+  };
+
+  const readClipboardFromNavigator = async (): Promise<boolean> => {
+    if (!canReadClipboardProgrammatically || !navigator.clipboard) return false;
+
+    const clipboardAny = navigator.clipboard as Clipboard & {
+      read?: () => Promise<Array<{ types: readonly string[]; getType: (type: string) => Promise<Blob> }>>;
+    };
+
+    if (typeof clipboardAny.read === 'function') {
+      const clipboardItems = await clipboardAny.read();
+      for (const item of clipboardItems) {
+        const imageType = item.types.find(type => type.startsWith('image/'));
+        if (imageType) {
+          const blob = await item.getType(imageType);
+          return processClipboardBlob(blob);
+        }
+      }
+
+      let html = '';
+      let text = '';
+      for (const item of clipboardItems) {
+        if (!html && item.types.includes('text/html')) {
+          html = await (await item.getType('text/html')).text();
+        }
+        if (!text && item.types.includes('text/plain')) {
+          text = await (await item.getType('text/plain')).text();
+        }
+      }
+
+      if (html || text) {
+        return processClipboardTextPayload(html, text);
+      }
+    }
+
+    if (typeof navigator.clipboard.readText === 'function') {
+      const text = await navigator.clipboard.readText();
+      return processClipboardTextPayload('', text);
+    }
+
+    return false;
+  };
+
   const handleImagePaste = async (e: React.ClipboardEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -427,12 +573,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       // Priority 1: Check for direct image files in clipboard
       const fromFiles = Array.from(e.clipboardData.files || []).find(f => f.type.startsWith('image/'));
       if (fromFiles) {
-        if (imageTooHeavy(fromFiles.size)) {
-          alert(`La imagen pegada es muy pesada (${(fromFiles.size / 1024).toFixed(0)} KB). Máximo ${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB.`);
-          return;
-        }
-        const dataUrl = await blobToDataUrl(fromFiles);
-        applyImageDataUrl(dataUrl);
+        await processClipboardBlob(fromFiles);
         return;
       }
 
@@ -441,83 +582,43 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       const imageItem = items.find(item => item.type.startsWith('image/'));
       if (imageItem) {
         const blob = imageItem.getAsFile();
-        if (!blob) {
-          alert('No se pudo leer la imagen del portapapeles.');
-          return;
-        }
-        if (imageTooHeavy(blob.size)) {
-          alert(`La imagen pegada es muy pesada (${(blob.size / 1024).toFixed(0)} KB). Máximo ${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB.`);
-          return;
-        }
-        const dataUrl = await blobToDataUrl(blob);
-        applyImageDataUrl(dataUrl);
+        await processClipboardBlob(blob as Blob);
         return;
       }
 
       // Priority 3: Check for HTML/URL content
       const html = e.clipboardData.getData('text/html');
       const plainText = e.clipboardData.getData('text/plain')?.trim();
-      const imageSource = extractImageFromHtml(html) || plainText;
-
-      if (!imageSource) {
-        alert('No se detectó una imagen para pegar. Use "Copiar imagen" desde el navegador o suba un archivo.');
-        return;
-      }
-
-      // Handle data URLs directly
-      if (imageSource.startsWith('data:image/')) {
-        applyImageDataUrl(imageSource);
-        return;
-      }
-
-      // Handle remote URLs (with shorter timeout)
-      if (imageSource.startsWith('http://') || imageSource.startsWith('https://')) {
-        try {
-          const controller = new AbortController();
-          const timeout = window.setTimeout(() => controller.abort(), 3000); // Reduced from 6s
-
-          const response = await fetch(imageSource, {
-            signal: controller.signal,
-            mode: 'cors',
-            cache: 'no-cache'
-          });
-          window.clearTimeout(timeout);
-
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-
-          const blob = await response.blob();
-          if (!blob.type.startsWith('image/')) {
-            throw new Error('La URL no apunta a una imagen válida');
-          }
-
-          if (imageTooHeavy(blob.size)) {
-            alert(`La imagen en URL es muy pesada (${(blob.size / 1024).toFixed(0)} KB). Máximo ${(MAX_IMAGE_BYTES / 1024).toFixed(0)} KB.`);
-            return;
-          }
-
-          const dataUrl = await blobToDataUrl(blob);
-          applyImageDataUrl(dataUrl);
-          return;
-        } catch (fetchError: any) {
-          console.error('❌ Error fetching image from URL:', fetchError);
-          const errorMsg = fetchError.name === 'AbortError'
-            ? 'La descarga de la imagen tardó demasiado (>3s). Descárguela manualmente y súbala.'
-            : 'No se pudo descargar la imagen desde esa URL (CORS/bloqueado). Descárguela y súbala como archivo.';
-          alert(errorMsg);
-          return;
-        }
-      }
-
-      // Fallback: unrecognized format
-      alert('Formato de portapapeles no soportado. Use "Copiar imagen" o suba un archivo desde su equipo.');
+      await processClipboardTextPayload(html, plainText);
 
     } catch (error: any) {
       console.error('❌ Error inesperado al pegar imagen:', error);
       alert(`Error al procesar la imagen: ${error?.message || 'Error desconocido'}. Intente subir el archivo directamente.`);
     } finally {
       // Always release the lock
+      setIsPastingImage(false);
+    }
+  };
+
+  const handlePasteFromClipboard = async (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (isPastingImage) return;
+
+    setIsPastingImage(true);
+    try {
+      const handledByNative = await readClipboardFromNativeBridge();
+      if (handledByNative) return;
+
+      const handledByNavigator = await readClipboardFromNavigator();
+      if (handledByNavigator) return;
+
+      alert('Este dispositivo no permite leer imágenes del portapapeles desde la app. Use Galería/Archivo.');
+    } catch (error: any) {
+      console.error('❌ Error leyendo portapapeles:', error);
+      alert(`No se pudo pegar la imagen: ${error?.message || 'Error desconocido'}. Use Galería/Archivo.`);
+    } finally {
       setIsPastingImage(false);
     }
   };
@@ -540,6 +641,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       };
       reader.readAsDataURL(file);
     }
+    e.target.value = '';
   };
 
   const handleCalculateInventory = async (whId: string) => {
@@ -596,9 +698,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       return;
     }
 
+    const activeWarehouses = (formData.activeInWarehouses || []).filter(Boolean);
+    const requiresWarehouseAssignment = formData.is_sellable !== false || formData.operationalFlags?.trackInventory;
+    if (requiresWarehouseAssignment && activeWarehouses.length === 0) {
+      alert("Debe asignar al menos un almacén al artículo antes de guardarlo.");
+      return;
+    }
+
     // Ensure updatedAt is set for Delta Sync
     const updatedProduct = {
       ...formData,
+      activeInWarehouses: activeWarehouses,
       warehouseSettings,
       updatedAt: new Date().toISOString()
     };
@@ -651,7 +761,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         </div>
 
         {/* Tabs Navigation */}
-        <div className="flex flex-wrap px-4 border-b bg-white shrink-0 gap-1 overflow-x-auto no-scrollbar">
+        <div className="mobile-tab-scroller no-scrollbar px-4 border-b bg-white shrink-0">
           {[
             { id: 'GENERAL', label: 'General', icon: Info },
             { id: 'CLASSIFICATION', label: 'Clasificación', icon: ListTree },
@@ -668,7 +778,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as ProductTab)}
-              className={`flex items-center gap-2 py-4 px-4 font-bold text-xs transition-all border-b-4 whitespace-nowrap shrink-0 ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+              className={`mobile-tab-item flex items-center gap-2 py-4 font-bold text-xs transition-all border-b-4 ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
             >
               <tab.icon size={14} /> {tab.label}
             </button>
@@ -941,7 +1051,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     {formData.image ? <img src={formData.image} className="w-full h-full object-cover" /> : (
                       <div className="flex flex-col items-center gap-2 text-gray-300">
                         <ImageIcon size={48} />
-                        <span className="text-[10px] font-bold uppercase">Click o Pegar (Ctrl+V)</span>
+                        <span className="text-[10px] font-bold uppercase">{imagePlaceholderText}</span>
+                        {canUseExplicitPaste && (
+                          <span className="text-[9px] font-semibold uppercase tracking-wide text-gray-400">
+                            O usa el botón Pegar
+                          </span>
+                        )}
                       </div>
                     )}
 
@@ -958,8 +1073,33 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
                     <input ref={fileInputRef} type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
 
+                    <div className="absolute bottom-4 left-4 flex gap-2 z-20">
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          fileInputRef.current?.click();
+                        }}
+                        className="px-3 py-2 bg-white text-blue-600 rounded-xl shadow-lg active:scale-95 transition-all border border-gray-100 inline-flex items-center gap-2"
+                        title="Subir desde galería o archivo"
+                      >
+                        <Upload size={18} />
+                        <span className="text-xs font-bold">{isNativeAndroidRuntime ? 'Galería' : 'Archivo'}</span>
+                      </button>
+                      {canUseExplicitPaste && (
+                        <button
+                          onClick={handlePasteFromClipboard}
+                          className="px-3 py-2 bg-white text-emerald-600 rounded-xl shadow-lg active:scale-95 transition-all border border-gray-100 inline-flex items-center gap-2"
+                          title="Pegar imagen desde portapapeles"
+                        >
+                          <ClipboardList size={18} />
+                          <span className="text-xs font-bold">Pegar</span>
+                        </button>
+                      )}
+                    </div>
+
                     {/* Web Search Button Overlay */}
-                    <div className="absolute bottom-4 right-4 flex gap-2">
+                    <div className="absolute bottom-4 right-4 flex gap-2 z-20">
                       <button
                         onClick={(e) => {
                           e.stopPropagation(); // Prevent file input trigger

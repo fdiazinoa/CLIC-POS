@@ -4,6 +4,8 @@ import fs from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
 import { emitSyncEvent } from '../socket.js';
+import { coerceTransactionItemsForErp } from '../../services/sync/erpOutboundPayloads.js';
+import { forwardTransactionsToErpInbox } from '../services/erpInboxForward.js';
 
 const router = express.Router();
 
@@ -216,61 +218,29 @@ const normalizeTransactionIdentity = (txn: any) => {
     };
 };
 
-const normalizeCashMovementIdentity = (movement: any) => {
-    const sourceChannel = normalizeIdentityString(movement?.source_channel) || 'POS';
-    const sourceCashMovementId =
-        normalizeIdentityString(movement?.source_cash_movement_id) ||
-        normalizeIdentityString(movement?.id);
-
-    if (!sourceCashMovementId) {
-        throw new Error('Cash movement payload missing source_cash_movement_id/id');
-    }
-
-    const sourceTerminalId =
-        normalizeIdentityString(movement?.source_terminal_id) ||
-        normalizeIdentityString(movement?.terminalId);
-    const deviceId = normalizeIdentityString(movement?.device_id);
-    const createdAt =
-        normalizeIdentityString(movement?.created_at) ||
-        normalizeIdentityString(movement?.createdAt) ||
-        normalizeIdentityString(movement?.timestamp);
+const canonicalizeTransactionForLocalPersistence = (txn: any) => {
+    const normalizedTxn = normalizeTransactionIdentity(txn);
+    const technicalId = normalizedTxn.source_transaction_id || normalizedTxn.id;
 
     return {
-        ...movement,
-        source_channel: sourceChannel,
-        source_cash_movement_id: sourceCashMovementId,
-        source_terminal_id: sourceTerminalId || undefined,
-        device_id: deviceId || undefined,
-        created_at: createdAt || undefined,
-        terminalId: normalizeIdentityString(movement?.terminalId) || sourceTerminalId || undefined,
-        createdAt: normalizeIdentityString(movement?.createdAt) || createdAt || undefined
+        ...normalizedTxn,
+        id: technicalId,
     };
 };
 
-const normalizeZReportIdentity = (report: any) => {
-    const sourceChannel = normalizeIdentityString(report?.source_channel) || 'POS';
-    const sourceZReportId =
-        normalizeIdentityString(report?.source_z_report_id) ||
-        normalizeIdentityString(report?.id);
-
-    if (!sourceZReportId) {
-        throw new Error('Z report payload missing source_z_report_id/id');
-    }
-
-    const sourceTerminalId =
-        normalizeIdentityString(report?.source_terminal_id) ||
-        normalizeIdentityString(report?.terminalId);
-    const deviceId = normalizeIdentityString(report?.device_id);
-
-    return {
-        ...report,
-        source_channel: sourceChannel,
-        source_z_report_id: sourceZReportId,
-        source_terminal_id: sourceTerminalId || undefined,
-        device_id: deviceId || undefined,
-        terminalId: normalizeIdentityString(report?.terminalId) || sourceTerminalId || undefined
-    };
+const appendSyncWarning = (existingMessage: any, warning: string): string => {
+    const current = typeof existingMessage === 'string' ? existingMessage.trim() : '';
+    if (!current) return warning;
+    if (current.includes(warning)) return current;
+    return `${current} | ${warning}`;
 };
+
+const buildVisualCollisionWarning = (
+    kind: 'displayId' | 'ncf',
+    value: string,
+    existingId: string,
+    incomingId: string
+): string => `VISUAL_SEQUENCE_COLLISION(${kind}=${value}, existingId=${existingId}, incomingId=${incomingId})`;
 
 const insertChangeStmt = db.prepare(`
     INSERT INTO sync_changes (collection, itemId, version, op, payload, createdAt)
@@ -962,28 +932,24 @@ router.post('/transactions', async (req, res) => {
             return res.status(400).json({ success: false, message: 'items must be an array' });
         }
 
+        const normalizedItems = items.map((txn: any) => canonicalizeTransactionForLocalPersistence(txn));
         let addedCount = 0;
         let conflictResolvedCount = 0;
+        let visualCollisionCount = 0;
+        const persistedPendingItems: any[] = [];
         const now = new Date().toISOString();
         db.transaction(() => {
-            const stmt = db.prepare(`INSERT OR IGNORE INTO transactions (id, globalSequence, displayId, source_channel, source_transaction_id, source_display_id, source_terminal_id, device_id, source_credit_note_id, original_transaction_id, original_display_id, documentType, seriesId, seriesNumber, date, items, total, payments, userId, userName, terminalId, status, customerId, customerName, customerSnapshot, taxAmount, netAmount, discountAmount, isTaxIncluded, ncf, ncfType, relatedTransactions, originalTransactionId, refundReason, affectedInvoiceNumber, affectedNCF, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-            const updateStmt = db.prepare(`UPDATE transactions SET globalSequence = ?, displayId = ?, source_channel = ?, source_transaction_id = ?, source_display_id = ?, source_terminal_id = ?, device_id = ?, source_credit_note_id = ?, original_transaction_id = ?, original_display_id = ?, documentType = ?, seriesId = ?, seriesNumber = ?, date = ?, items = ?, total = ?, payments = ?, userId = ?, userName = ?, terminalId = ?, status = ?, customerId = ?, customerName = ?, customerSnapshot = ?, taxAmount = ?, netAmount = ?, discountAmount = ?, isTaxIncluded = ?, ncf = ?, ncfType = ?, relatedTransactions = ?, originalTransactionId = ?, refundReason = ?, affectedInvoiceNumber = ?, affectedNCF = ?, syncStatus = ?, syncError = ? WHERE id = ?`);
-            const byIdStmt = db.prepare(`SELECT id, displayId, terminalId, source_channel, source_transaction_id FROM transactions WHERE id = ?`);
-            const bySourceIdentityStmt = db.prepare(`SELECT id, displayId, terminalId, source_channel, source_transaction_id FROM transactions WHERE source_channel = ? AND source_transaction_id = ?`);
+            const stmt = db.prepare(`INSERT OR IGNORE INTO transactions (id, globalSequence, displayId, documentType, seriesId, seriesNumber, date, items, total, payments, userId, userName, terminalId, status, customerId, customerName, customerSnapshot, taxAmount, netAmount, discountAmount, isTaxIncluded, ncf, ncfType, relatedTransactions, originalTransactionId, refundReason, affectedInvoiceNumber, affectedNCF, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            const updateStmt = db.prepare(`UPDATE transactions SET globalSequence = ?, displayId = ?, documentType = ?, seriesId = ?, seriesNumber = ?, date = ?, items = ?, total = ?, payments = ?, userId = ?, userName = ?, terminalId = ?, status = ?, customerId = ?, customerName = ?, customerSnapshot = ?, taxAmount = ?, netAmount = ?, discountAmount = ?, isTaxIncluded = ?, ncf = ?, ncfType = ?, relatedTransactions = ?, originalTransactionId = ?, refundReason = ?, affectedInvoiceNumber = ?, affectedNCF = ?, syncStatus = ?, syncError = ? WHERE id = ?`);
+            const byIdStmt = db.prepare(`SELECT id, displayId, terminalId FROM transactions WHERE id = ?`);
+            const byDisplayIdStmt = db.prepare(`SELECT id, displayId, terminalId FROM transactions WHERE displayId = ?`);
+            const byNcfStmt = db.prepare(`SELECT id, displayId, terminalId, ncf FROM transactions WHERE ncf = ?`);
 
             const insertTxn = (txn: any) =>
                 stmt.run(
                     txn.id,
                     txn.globalSequence,
                     txn.displayId,
-                    txn.source_channel,
-                    txn.source_transaction_id,
-                    txn.source_display_id,
-                    txn.source_terminal_id,
-                    txn.device_id,
-                    txn.source_credit_note_id,
-                    txn.original_transaction_id,
-                    txn.original_display_id,
                     txn.documentType,
                     txn.seriesId,
                     txn.seriesNumber,
@@ -1017,14 +983,6 @@ router.post('/transactions', async (req, res) => {
                 updateStmt.run(
                     txn.globalSequence,
                     txn.displayId,
-                    txn.source_channel,
-                    txn.source_transaction_id,
-                    txn.source_display_id,
-                    txn.source_terminal_id,
-                    txn.device_id,
-                    txn.source_credit_note_id,
-                    txn.original_transaction_id,
-                    txn.original_display_id,
                     txn.documentType,
                     txn.seriesId,
                     txn.seriesNumber,
@@ -1055,81 +1013,136 @@ router.post('/transactions', async (req, res) => {
                     targetId
                 );
 
-            for (const rawTxn of items) {
-                const txn = normalizeTransactionIdentity(rawTxn);
-                const result = insertTxn(txn);
+            for (const txn of normalizedItems) {
+                let txnForPersistence = { ...txn };
+                const technicalId = txnForPersistence.id;
+
+                const existingByDisplayId = txnForPersistence.displayId ? (byDisplayIdStmt.get(txnForPersistence.displayId) as any) : null;
+                if (existingByDisplayId?.id && existingByDisplayId.id !== technicalId) {
+                    const warning = buildVisualCollisionWarning('displayId', txnForPersistence.displayId, existingByDisplayId.id, technicalId);
+                    txnForPersistence = {
+                        ...txnForPersistence,
+                        syncError: appendSyncWarning(txnForPersistence.syncError, warning),
+                    };
+                    visualCollisionCount++;
+                    console.warn(`[Sync] ${warning}`);
+                }
+
+                const existingByNcf = txnForPersistence.ncf ? (byNcfStmt.get(txnForPersistence.ncf) as any) : null;
+                if (existingByNcf?.id && existingByNcf.id !== technicalId) {
+                    const warning = buildVisualCollisionWarning('ncf', txnForPersistence.ncf, existingByNcf.id, technicalId);
+                    txnForPersistence = {
+                        ...txnForPersistence,
+                        syncError: appendSyncWarning(txnForPersistence.syncError, warning),
+                    };
+                    visualCollisionCount++;
+                    console.warn(`[Sync] ${warning}`);
+                }
+
+                const result = insertTxn(txnForPersistence);
                 if (result.changes > 0) {
                     addedCount++;
                     const version = bumpVersion('transactions');
-                    insertChangeStmt.run('transactions', txn.id, version, 'UPSERT', JSON.stringify(txn), now);
+                    insertChangeStmt.run('transactions', txnForPersistence.id, version, 'UPSERT', JSON.stringify(txnForPersistence), now);
+                    persistedPendingItems.push(txnForPersistence);
                     continue;
                 }
 
                 // Conflict handling path:
-                // 1) If source identity already exists, update that row.
-                // 2) If id already exists, update existing row with newest payload.
-                // 3) If id collision still exists, synthesize deterministic id and insert.
-                const existingBySource = bySourceIdentityStmt.get(txn.source_channel, txn.source_transaction_id) as any;
-                if (existingBySource?.id) {
-                    const mergedTxn = { ...txn, id: existingBySource.id };
-                    const updateResult = updateTxn(existingBySource.id, mergedTxn);
-                    if (updateResult.changes > 0) {
-                        conflictResolvedCount++;
-                        const version = bumpVersion('transactions');
-                        insertChangeStmt.run('transactions', existingBySource.id, version, 'UPSERT', JSON.stringify(mergedTxn), now);
-                    }
-                    continue;
-                }
-
-                const existingById = byIdStmt.get(txn.id) as any;
+                // 1) If the technical id already exists, update that same transaction.
+                // 2) Visual sequence collisions are flagged, never merged into another UUID row.
+                // 3) Any residual technical-id conflict gets a fallback id so we never overwrite by displayId/ncf.
+                const existingById = byIdStmt.get(txnForPersistence.id) as any;
                 if (existingById?.id) {
-                    const updatedTxn = { ...txn, id: existingById.id };
+                    const updatedTxn = { ...txnForPersistence, id: existingById.id };
                     const updateResult = updateTxn(existingById.id, updatedTxn);
                     if (updateResult.changes > 0) {
                         conflictResolvedCount++;
                         const version = bumpVersion('transactions');
                         insertChangeStmt.run('transactions', updatedTxn.id, version, 'UPSERT', JSON.stringify(updatedTxn), now);
                     }
+                    persistedPendingItems.push(updatedTxn);
                     continue;
                 }
 
-                const baseId = typeof txn.id === 'string' && txn.id.trim().length > 0 ? txn.id : 'TXN-CONFLICT';
-                const sourceChannelPart = normalizeIdentityString(txn.source_channel) || 'POS';
-                const sourceIdPart = normalizeIdentityString(txn.source_transaction_id) || `${Date.now()}`;
-                const fallbackId = `${baseId}__${sourceChannelPart}__${sourceIdPart}`;
-                const fallbackTxn = { ...txn, id: fallbackId };
+                const baseId = typeof txnForPersistence.id === 'string' && txnForPersistence.id.trim().length > 0
+                    ? txnForPersistence.id
+                    : 'TXN-CONFLICT';
+                const fallbackId = `${baseId}__PK_COLLISION__${Date.now()}__${Math.random().toString(36).slice(2, 8)}`;
+                const fallbackWarning = `TECHNICAL_ID_COLLISION(originalId=${txnForPersistence.id}, fallbackId=${fallbackId})`;
+                const fallbackTxn = {
+                    ...txnForPersistence,
+                    id: fallbackId,
+                    syncError: appendSyncWarning(txnForPersistence.syncError, fallbackWarning),
+                };
                 const fallbackResult = insertTxn(fallbackTxn);
 
                 if (fallbackResult.changes > 0) {
                     conflictResolvedCount++;
                     const version = bumpVersion('transactions');
                     insertChangeStmt.run('transactions', fallbackTxn.id, version, 'UPSERT', JSON.stringify(fallbackTxn), now);
-                    console.warn(`[Sync] Transaction ID conflict resolved with fallback id: original=${txn.id}, fallback=${fallbackTxn.id}, source=${txn.source_channel}:${txn.source_transaction_id}`);
+                    console.warn(`[Sync] ${fallbackWarning}`);
+                    persistedPendingItems.push(fallbackTxn);
                 } else {
-                    console.warn(`[Sync] Transaction ignored after conflict handling: id=${txn.id}, source=${txn.source_channel}:${txn.source_transaction_id}, terminalId=${txn.terminalId}`);
+                    console.warn(`[Sync] Transaction ignored after technical-id conflict handling: id=${txnForPersistence.id}, displayId=${txnForPersistence.displayId}, terminalId=${txnForPersistence.terminalId}`);
                 }
             }
 
             const pending = getSetting('pending_transactions') || [];
-            const pendingKey = (txn: any) =>
-                normalizeIdentityString(txn?.source_transaction_id) ||
-                normalizeIdentityString(txn?.id) ||
-                `pending-${Date.now()}`;
-            const pendingMap = new Map(pending.map((p: any) => [pendingKey(p), p]));
-            items
-                .map((txn: any) => normalizeTransactionIdentity(txn))
-                .forEach((txn: any) => pendingMap.set(pendingKey(txn), txn));
+            const pendingMap = new Map(pending.map((p: any) => [p.id, p]));
+            persistedPendingItems.forEach((it: any) => pendingMap.set(it.id, it));
             saveSetting('pending_transactions', Array.from(pendingMap.values()));
 
             updateMetadata('transactions', getCurrentVersion('transactions'));
         })();
 
+        const authenticatedTerminalId = tokens[authToken];
+        const erpBaseFromBody =
+            typeof req.body?.erp_base_url === 'string' && req.body.erp_base_url.trim()
+                ? String(req.body.erp_base_url).trim()
+                : '';
+        console.log(
+            `[SYNC_TX_POST] persisted_local items=${items.length} erp_base_url_from_client=${erpBaseFromBody ? 'yes' : 'no'} auth_terminal=${authenticatedTerminalId || 'none'}`
+        );
+
+        const normalizedForErp = normalizedItems.map((txn: any) =>
+            coerceTransactionItemsForErp(txn)
+        );
+        console.log('[SYNC_TX_POST] calling forwardTransactionsToErpInbox...');
+        const erpInbox = await forwardTransactionsToErpInbox(normalizedForErp, {
+            erpBaseUrlOverride: erpBaseFromBody || null,
+            authTerminalId: authenticatedTerminalId || null
+        });
+
+        if (!erpInbox.skipped && erpInbox.failed) {
+            console.error(
+                '[SYNC_TX_POST] returning 502 — ERP inbox forward failed after local persist',
+                erpInbox.results
+            );
+            return res.status(502).json({
+                success: false,
+                message: 'Local Master saved the sale, but forwarding to ERP failed. Retry sync.',
+                addedCount,
+                conflictResolvedCount,
+                visualCollisionCount,
+                erpInbox
+            });
+        }
+
+        if (erpInbox.skipped) {
+            console.warn('[SYNC_TX_POST] returning 200 with erpInbox.skipped=true (NO_ERP_URL or not configured)');
+        } else {
+            console.log('[SYNC_TX_POST] returning 200 — ERP inbox accepted', erpInbox.erpBaseUrlUsed);
+        }
+
         res.json({
             success: true,
             addedCount,
             conflictResolvedCount,
+            visualCollisionCount,
             totalCount: (getCollection('transactions')).length,
-            inventoryUpdates: 0
+            inventoryUpdates: 0,
+            erpInbox
         });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
@@ -1326,75 +1339,22 @@ router.post('/cash/movements', async (req, res) => {
 
         const collectionKey = 'cashMovements';
         let addedCount = 0;
-        let conflictResolvedCount = 0;
         const now = new Date().toISOString();
         db.transaction(() => {
-            const stmt = db.prepare(`INSERT OR IGNORE INTO cash_movements (id, source_channel, source_cash_movement_id, source_terminal_id, device_id, created_at, createdAt, type, amount, concept, userId, userName, terminalId, zReportId, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-            const updateStmt = db.prepare(`UPDATE cash_movements SET source_channel = ?, source_cash_movement_id = ?, source_terminal_id = ?, device_id = ?, created_at = ?, createdAt = ?, type = ?, amount = ?, concept = ?, userId = ?, userName = ?, terminalId = ?, zReportId = ?, syncStatus = ?, syncError = ? WHERE id = ?`);
-            const byIdStmt = db.prepare(`SELECT id FROM cash_movements WHERE id = ?`);
-            const bySourceIdentityStmt = db.prepare(`SELECT id FROM cash_movements WHERE source_channel = ? AND source_cash_movement_id = ?`);
-            for (const rawMove of items) {
-                const move = normalizeCashMovementIdentity(rawMove);
-                const result = stmt.run(
-                    move.id,
-                    move.source_channel,
-                    move.source_cash_movement_id,
-                    move.source_terminal_id,
-                    move.device_id,
-                    move.created_at,
-                    move.createdAt,
-                    move.type,
-                    move.amount,
-                    move.concept,
-                    move.userId,
-                    move.userName,
-                    move.terminalId,
-                    move.zReportId,
-                    move.syncStatus,
-                    move.syncError
-                );
+            const stmt = db.prepare(`INSERT OR IGNORE INTO cash_movements (id, createdAt, type, amount, concept, userId, userName, terminalId, zReportId, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            for (const move of items) {
+                const result = stmt.run(move.id, move.createdAt, move.type, move.amount, move.concept, move.userId, move.userName, move.terminalId, move.zReportId, move.syncStatus, move.syncError);
                 if (result.changes > 0) {
                     addedCount++;
                     const version = bumpVersion(collectionKey);
                     insertChangeStmt.run(collectionKey, move.id, version, 'UPSERT', JSON.stringify(move), now);
-                    continue;
-                }
-
-                const existingBySource = bySourceIdentityStmt.get(move.source_channel, move.source_cash_movement_id) as any;
-                const targetId = existingBySource?.id || (byIdStmt.get(move.id) as any)?.id;
-
-                if (targetId) {
-                    const updatedMove = { ...move, id: targetId };
-                    const updateResult = updateStmt.run(
-                        updatedMove.source_channel,
-                        updatedMove.source_cash_movement_id,
-                        updatedMove.source_terminal_id,
-                        updatedMove.device_id,
-                        updatedMove.created_at,
-                        updatedMove.createdAt,
-                        updatedMove.type,
-                        updatedMove.amount,
-                        updatedMove.concept,
-                        updatedMove.userId,
-                        updatedMove.userName,
-                        updatedMove.terminalId,
-                        updatedMove.zReportId,
-                        updatedMove.syncStatus,
-                        updatedMove.syncError,
-                        targetId
-                    );
-                    if (updateResult.changes > 0) {
-                        conflictResolvedCount++;
-                        const version = bumpVersion(collectionKey);
-                        insertChangeStmt.run(collectionKey, targetId, version, 'UPSERT', JSON.stringify(updatedMove), now);
-                    }
                 }
             }
 
             updateMetadata(collectionKey, getCurrentVersion(collectionKey));
         })();
 
-        res.json({ success: true, addedCount, conflictResolvedCount });
+        res.json({ success: true, addedCount });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -1419,17 +1379,12 @@ router.post('/z-reports', async (req, res) => {
 
         const collectionKey = 'zReports';
         let addedCount = 0;
-        let conflictResolvedCount = 0;
         let skippedCount = 0;
         const now = new Date().toISOString();
         db.transaction(() => {
-            const stmt = db.prepare(`INSERT OR IGNORE INTO z_reports (id, source_channel, source_z_report_id, source_terminal_id, device_id, openedAt, closedAt, terminalId, userId, userName, openingBalance, closingBalance, totalSales, totalTaxes, totalDiscounts, totalCash, totalCard, totalTransfer, totalOther, status, syncStatus, syncError, sequenceNumber, totalsByMethod, cashExpected, cashCounted, cashDiscrepancy, stats, transactionCount, notes, baseCurrency, cashSales, cashIn, cashOut) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-            const updateStmt = db.prepare(`UPDATE z_reports SET source_channel = ?, source_z_report_id = ?, source_terminal_id = ?, device_id = ?, openedAt = ?, closedAt = ?, terminalId = ?, userId = ?, userName = ?, openingBalance = ?, closingBalance = ?, totalSales = ?, totalTaxes = ?, totalDiscounts = ?, totalCash = ?, totalCard = ?, totalTransfer = ?, totalOther = ?, status = ?, syncStatus = ?, syncError = ?, sequenceNumber = ?, totalsByMethod = ?, cashExpected = ?, cashCounted = ?, cashDiscrepancy = ?, stats = ?, transactionCount = ?, notes = ?, baseCurrency = ?, cashSales = ?, cashIn = ?, cashOut = ? WHERE id = ?`);
-            const byIdStmt = db.prepare(`SELECT id FROM z_reports WHERE id = ?`);
-            const bySourceIdentityStmt = db.prepare(`SELECT id FROM z_reports WHERE source_channel = ? AND source_z_report_id = ?`);
-            for (const rawReport of items) {
+            const stmt = db.prepare(`INSERT OR IGNORE INTO z_reports (id, openedAt, closedAt, terminalId, userId, userName, openingBalance, closingBalance, totalSales, totalTaxes, totalDiscounts, totalCash, totalCard, totalTransfer, totalOther, status, syncStatus, syncError, sequenceNumber, totalsByMethod, cashExpected, cashCounted, cashDiscrepancy, stats, transactionCount, notes, baseCurrency, cashSales, cashIn, cashOut) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            for (const report of items) {
                 try {
-                    const report = normalizeZReportIdentity(rawReport);
                     if (!report?.id) {
                         skippedCount++;
                         continue;
@@ -1445,10 +1400,6 @@ router.post('/z-reports', async (req, res) => {
 
                     const result = stmt.run(
                         report.id,
-                        report.source_channel,
-                        report.source_z_report_id,
-                        report.source_terminal_id,
-                        report.device_id,
                         report.openedAt || null,
                         report.closedAt || null,
                         report.terminalId || null,
@@ -1483,65 +1434,17 @@ router.post('/z-reports', async (req, res) => {
                         addedCount++;
                         const version = bumpVersion(collectionKey);
                         insertChangeStmt.run(collectionKey, report.id, version, 'UPSERT', JSON.stringify(report), now);
-                        continue;
-                    }
-
-                    const existingBySource = bySourceIdentityStmt.get(report.source_channel, report.source_z_report_id) as any;
-                    const targetId = existingBySource?.id || (byIdStmt.get(report.id) as any)?.id;
-                    if (targetId) {
-                        const updatedReport = { ...report, id: targetId };
-                        const updateResult = updateStmt.run(
-                            updatedReport.source_channel,
-                            updatedReport.source_z_report_id,
-                            updatedReport.source_terminal_id,
-                            updatedReport.device_id,
-                            updatedReport.openedAt || null,
-                            updatedReport.closedAt || null,
-                            updatedReport.terminalId || null,
-                            updatedReport.userId || updatedReport.closedByUserId || null,
-                            updatedReport.userName || updatedReport.closedByUserName || null,
-                            toFiniteNumber(updatedReport.openingBalance, 0),
-                            toFiniteNumber(updatedReport.closingBalance, 0),
-                            totalSales,
-                            toFiniteNumber(updatedReport.totalTaxes, 0),
-                            toFiniteNumber(updatedReport.totalDiscounts, 0),
-                            toFiniteNumber(updatedReport.totalCash, 0),
-                            toFiniteNumber(updatedReport.totalCard, 0),
-                            toFiniteNumber(updatedReport.totalTransfer, 0),
-                            toFiniteNumber(updatedReport.totalOther, 0),
-                            updatedReport.status || 'CLOSED',
-                            updatedReport.syncStatus || 'PENDING',
-                            updatedReport.syncError || null,
-                            updatedReport.sequenceNumber || '',
-                            safeJsonStringify(totalsByMethod),
-                            safeJsonStringify(cashExpected),
-                            safeJsonStringify(cashCounted),
-                            safeJsonStringify(cashDiscrepancy),
-                            safeJsonStringify(updatedReport.stats, '{}'),
-                            toFiniteNumber(updatedReport.transactionCount, 0),
-                            updatedReport.notes || '',
-                            updatedReport.baseCurrency || '',
-                            toFiniteNumber(updatedReport.cashSales, 0),
-                            toFiniteNumber(updatedReport.cashIn, 0),
-                            toFiniteNumber(updatedReport.cashOut, 0),
-                            targetId
-                        );
-                        if (updateResult.changes > 0) {
-                            conflictResolvedCount++;
-                            const version = bumpVersion(collectionKey);
-                            insertChangeStmt.run(collectionKey, targetId, version, 'UPSERT', JSON.stringify(updatedReport), now);
-                        }
                     }
                 } catch (itemError: any) {
                     skippedCount++;
-                    console.warn(`[Sync] Skipping malformed z-report ${rawReport?.id || '(no-id)'}: ${itemError?.message || itemError}`);
+                    console.warn(`[Sync] Skipping malformed z-report ${report?.id || '(no-id)'}: ${itemError?.message || itemError}`);
                 }
             }
 
             updateMetadata(collectionKey, getCurrentVersion(collectionKey));
         })();
 
-        res.json({ success: true, addedCount, conflictResolvedCount, skippedCount });
+        res.json({ success: true, addedCount, skippedCount });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
     }

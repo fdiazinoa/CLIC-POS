@@ -1,17 +1,20 @@
-
+import { Capacitor } from '@capacitor/core';
 import { DatabaseAdapter } from './DatabaseAdapter';
-import { LocalStorageAdapter } from './adapters/LocalStorageAdapter';
+import { CapacitorSQLiteAdapter } from './adapters/CapacitorSQLiteAdapter';
 import { IndexedDBAdapter } from './adapters/IndexedDBAdapter';
-import { SQLiteWASMAdapter } from './adapters/SQLiteWASMAdapter';
-import { NetworkAdapter } from './adapters/NetworkAdapter';
 
-// Factory to get the correct adapter based on environment
+const isNativeAndroid = (): boolean => {
+    return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+};
+
 const getAdapter = (): DatabaseAdapter => {
-    // In the future, check for Electron or Capacitor here
-    // return new SQLiteWASMAdapter(); // Uncomment to test SQLite Adapter
+    if (isNativeAndroid()) {
+        console.log('[DB] Using CapacitorSQLiteAdapter for Android native runtime.');
+        return new CapacitorSQLiteAdapter();
+    }
+
+    console.log('[DB] Using IndexedDBAdapter for web runtime.');
     return new IndexedDBAdapter();
-    // return new LocalStorageAdapter();
-    // return new NetworkAdapter();
 };
 
 export const dbAdapter = getAdapter();

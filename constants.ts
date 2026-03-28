@@ -1,12 +1,17 @@
 
 import { RoleDefinition, User, Customer, Product, BusinessConfig, SubVertical, DocumentSeries, Tariff, TaxDefinition, DeviceRole, AuthLevel, LabelTemplate } from './types';
-import { DEFAULT_FISCAL_COMPLIANCE_CONFIG } from './utils/fiscal/fiscalHelpers';
 
 export const DEFAULT_DOCUMENT_SERIES: DocumentSeries[] = [
   { id: 'TICKET', documentType: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar para todas las ventas.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
   { id: 'REFUND', documentType: 'REFUND', name: 'Devolución / Abono', description: 'Notas de crédito por devoluciones.', prefix: 'NC', nextNumber: 1, padding: 6, icon: 'RotateCcw', color: 'orange' },
   { id: 'TRANSFER', documentType: 'TRANSFER', name: 'Nota de Traspaso', description: 'Movimiento de inventario entre almacenes.', prefix: 'TR', nextNumber: 1, padding: 6, icon: 'ArrowRightLeft', color: 'purple' },
 ];
+
+export const DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS = {
+  TICKET: 'TICKET',
+  REFUND: 'REFUND',
+  TRANSFER: 'TRANSFER'
+} as const;
 
 export const INITIAL_TAXES: TaxDefinition[] = [
   { id: 'tax-18', name: 'ITBIS 18%', rate: 0.18, type: 'VAT' },
@@ -101,6 +106,7 @@ export const DEFAULT_TERMINAL_CONFIG = {
     acceptedCurrencies: ['USD', 'EUR']
   },
   documentSeries: DEFAULT_DOCUMENT_SERIES,
+  documentAssignments: { ...DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS },
   hardware: {
     cashDrawerTrigger: 'PRINTER' as const,
     printerAssignments: {},
@@ -126,6 +132,7 @@ export const DEFAULT_TERMINAL_CONFIG = {
     bloqueo_meseros: false,
     pedir_comensales: true,
     usa_modulos_cocina: false,
+    defaultTaxIds: [],
     reservationPolicy: {
       validityDays: 7,
       requireAdvance: false,
@@ -171,7 +178,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
       'ALL',
       'POS_VOID_ITEM', 'POS_VOID_TICKET', 'POS_DISCOUNT',
       'POS_PRICE_OVERRIDE', 'POS_OPEN_DRAWER', 'POS_RETURNS',
-      'POS_REPRINT_RECEIPT', 'SETTINGS_ACCESS', 'POS_ALLOW_ZERO_PRICE'
+      'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHANGE_TARIFF', 'SETTINGS_ACCESS', 'POS_ALLOW_ZERO_PRICE'
     ],
     isSystem: true,
     maxDiscountPercent: 100
@@ -181,7 +188,7 @@ export const DEFAULT_ROLES: RoleDefinition[] = [
     name: 'Supervisor',
     permissions: [
       'POS_VOID_ITEM', 'POS_DISCOUNT', 'POS_OPEN_DRAWER',
-      'POS_RETURNS', 'POS_REPRINT_RECEIPT'
+      'POS_RETURNS', 'POS_REPRINT_RECEIPT', 'POS_NEW_SALE', 'POS_CHANGE_TARIFF'
     ],
     isSystem: true,
     maxDiscountPercent: 20
@@ -386,6 +393,8 @@ export const AVAILABLE_PERMISSIONS = [
   { key: 'POS_VOID_PAID_TICKET', label: 'Anular Factura Pagada', description: 'Revertir una venta finalizada', category: 'SALES' },
   { key: 'POS_RETURNS', label: 'Autorizar Devoluciones y Notas de Crédito', description: 'Permite activar el modo de devolución en el POS y procesar notas de crédito', category: 'SALES' },
   { key: 'POS_MANAGE_PARKED', label: 'Gestionar Cuentas', description: 'Ver y recuperar cuentas de otros', category: 'SALES' },
+  { key: 'POS_NEW_SALE', label: 'Nueva Venta sin Imprimir', description: 'Permite cerrar la pantalla de venta exitosa sin forzar ticket o email', category: 'SALES' },
+  { key: 'POS_CHANGE_TARIFF', label: 'Cambiar Tarifa de Venta', description: 'Permite seleccionar la tarifa activa desde la pantalla de ventas', category: 'SALES' },
 
   // --- CASH & FINANCE ---
   { key: 'POS_OPEN_DRAWER', label: 'Abrir Cajón', description: 'Sin venta', category: 'CASH' },
@@ -545,8 +554,7 @@ export const getInitialConfig = (subVertical: SubVertical): BusinessConfig => {
     themeColor: 'blue',
     features: { stockTracking: true },
     ux: DEFAULT_TERMINAL_CONFIG.ux,
-    fiscalCompliance: DEFAULT_FISCAL_COMPLIANCE_CONFIG,
-    companyInfo: { name: 'CLIC POS DEMO', rnc: '131-12345-1', phone: '809-555-POS1', address: 'Av. Principal #1, Santo Domingo', email: '', website: '' },
+    companyInfo: { name: 'CLIC POS DEMO', rnc: '131-12345-1', phone: '809-555-POS1', address: 'Av. Principal #1, Santo Domingo' },
     currencies: [{ code: 'DOP', name: 'Peso Dominicano', symbol: 'RD$', rate: 1, isEnabled: true, isBase: true }],
     paymentMethods: [
       { id: 'cash', name: 'Efectivo', type: 'CASH', isEnabled: true, icon: 'Banknote', color: 'bg-green-500', opensDrawer: true, requiresSignature: false, integration: 'NONE' },

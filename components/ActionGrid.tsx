@@ -13,6 +13,7 @@ interface ActionGridProps {
     isReturnMode: boolean;
     hasCartItems: boolean;
     orientation?: 'horizontal' | 'vertical';
+    showLogout?: boolean;
 }
 
 const ActionGrid: React.FC<ActionGridProps> = ({
@@ -22,9 +23,11 @@ const ActionGrid: React.FC<ActionGridProps> = ({
     globalDiscountValue,
     isReturnMode,
     hasCartItems,
-    orientation = 'horizontal'
+    orientation = 'horizontal',
+    showLogout = true,
 }) => {
     const isHorizontal = orientation === 'horizontal';
+    const shouldRenderLogout = showLogout && isHorizontal;
 
     const renderButton = (
         id: string,
@@ -108,7 +111,7 @@ const ActionGrid: React.FC<ActionGridProps> = ({
 
                 {/* CLOSING GROUP (Red) */}
                 {renderButton('Z_REPORT', 'Cierre Z', <Lock />, 'closing')}
-                {renderButton('LOGOUT', 'Salir', <LogOut />, 'closing')}
+                {shouldRenderLogout && renderButton('LOGOUT', 'Salir', <LogOut />, 'closing')}
             </div>
         </div>
     );

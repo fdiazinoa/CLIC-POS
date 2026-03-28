@@ -13,6 +13,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { permissionService } from './PermissionService';
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig } from '../../types';
+import {
+    applyTerminalConfigSnapshot,
+    extractTerminalConfigSnapshot,
+    extractTerminalOperationalDocumentState,
+} from '../../utils/terminalConfigSnapshot';
+import { buildMasterUrlFromHost } from '../../utils/cloudMasterRegistry';
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities';
 
@@ -42,6 +48,29 @@ class SyncManager {
     private readonly IMAGE_SYNC_BATCH_SIZE = 40;
 
     public isInitialized: boolean = false;
+
+    private normalizeMasterUrlForStorage(value: string): string {
+        const trimmed = value.trim();
+        if (!trimmed) return '';
+
+        try {
+            const parsed = new URL(trimmed);
+            const numericPort = Number(parsed.port || 3001);
+            return buildMasterUrlFromHost(
+                parsed.hostname,
+                Number.isFinite(numericPort) && numericPort > 0 ? numericPort : 3001,
+                parsed.protocol,
+            );
+        } catch {
+            const withoutProtocol = trimmed.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+            const [host, port] = withoutProtocol.split(':');
+            const numericPort = Number(port);
+            return buildMasterUrlFromHost(
+                host,
+                Number.isFinite(numericPort) && numericPort > 0 ? numericPort : 3001,
+            );
+        }
+    }
 
     /**
      * Helper: Check if debug mode for sync is enabled
@@ -79,7 +108,7 @@ class SyncManager {
         // Get sync configuration from terminal config
         const terminal = (config.terminals || []).find(t => t.id === terminalId);
         let savedMasterUrl = localStorage.getItem('CLIC_POS_MASTER_URL');
-        const runtimeMasterUrl = `${window.location.protocol}//${window.location.hostname}:3001`;
+        const runtimeMasterUrl = buildMasterUrlFromHost(window.location.hostname);
 
         const parseHostname = (url: string): string | null => {
             try {
@@ -97,9 +126,28 @@ class SyncManager {
         const buildMasterUrlFromLegacyInput = (value: string): string => {
             const normalized = normalizeLegacyMasterInput(value);
             if (!normalized) return runtimeMasterUrl;
-            const hostWithPort = normalized.includes(':') ? normalized : `${normalized}:3001`;
-            return `${window.location.protocol}//${hostWithPort}`;
+            const [host, port] = normalized.split(':');
+            const numericPort = Number(port);
+            return buildMasterUrlFromHost(host, Number.isFinite(numericPort) && numericPort > 0 ? numericPort : 3001);
         };
+        const normalizeStoredMasterUrl = (value: string): string => {
+            try {
+                const parsed = new URL(value);
+                const numericPort = Number(parsed.port || 3001);
+                return buildMasterUrlFromHost(parsed.hostname, Number.isFinite(numericPort) && numericPort > 0 ? numericPort : 3001, parsed.protocol);
+            } catch {
+                return buildMasterUrlFromLegacyInput(value);
+            }
+        };
+
+        if (savedMasterUrl) {
+            const normalizedSavedMasterUrl = normalizeStoredMasterUrl(savedMasterUrl);
+            if (normalizedSavedMasterUrl && normalizedSavedMasterUrl !== savedMasterUrl) {
+                console.warn(`⚠️ SyncManager: Normalizing stored master URL (${savedMasterUrl}) -> ${normalizedSavedMasterUrl}`);
+                savedMasterUrl = normalizedSavedMasterUrl;
+                localStorage.setItem('CLIC_POS_MASTER_URL', normalizedSavedMasterUrl);
+            }
+        }
 
         const runtimeHost = window.location.hostname.toLowerCase();
         const savedHost = savedMasterUrl ? parseHostname(savedMasterUrl) : null;
@@ -329,6 +377,202 @@ class SyncManager {
         }
     }
 
+    private sanitizeConfig(config: any): any {
+        if (!config || typeof config !== 'object') return {};
+        const { id, _db_initialized, config_metadata, _id, ...rest } = config;
+        return rest;
+    }
+
+    private getPendingTerminalSnapshot(targetTerminalId: string | null, localTerminalId: string | null): any | null {
+        try {
+            const raw = localStorage.getItem('clic_pos_terminal_config_pending_snapshot');
+            if (!raw) return null;
+
+            const parsed = JSON.parse(raw);
+            const pendingErpTerminalId = typeof parsed?.erpTerminalId === 'string' ? parsed.erpTerminalId.trim() : '';
+            const pendingLocalTerminalId = typeof parsed?.localTerminalId === 'string' ? parsed.localTerminalId.trim() : '';
+            const snapshot = extractTerminalConfigSnapshot(parsed?.snapshot);
+            if (!snapshot) return null;
+
+            const matchesTarget =
+                (targetTerminalId && pendingErpTerminalId && targetTerminalId === pendingErpTerminalId) ||
+                (localTerminalId && pendingLocalTerminalId && localTerminalId === pendingLocalTerminalId) ||
+                (!pendingErpTerminalId && !pendingLocalTerminalId);
+
+            return matchesTarget ? snapshot : null;
+        } catch (error) {
+            console.warn('⚠️ No se pudo leer el snapshot pendiente de terminal:', error);
+            return null;
+        }
+    }
+
+    private clearPendingTerminalSnapshot() {
+        localStorage.removeItem('clic_pos_terminal_config_pending_snapshot');
+    }
+
+    private getActiveTerminalContext(config?: BusinessConfig | null): {
+        terminalId: string | null;
+        localTerminalId: string | null;
+        tenantId: string | null;
+        erpBaseUrl: string | null;
+        posDeviceId: string | null;
+        bindingMode?: 'MASTER' | 'SLAVE';
+    } {
+        const activeTerminalId =
+            localStorage.getItem('active_terminal_id') ||
+            localStorage.getItem('CLIC_POS_TERMINAL_ID') ||
+            null;
+
+        const currentTerminal = activeTerminalId && config?.terminals
+            ? config.terminals.find((terminal) => terminal.id === activeTerminalId)
+            : null;
+
+        const erpTerminalId =
+            currentTerminal?.config?.erpBinding?.terminalId ||
+            localStorage.getItem('clic_erp_sync_terminal_id') ||
+            currentTerminal?.config?.erpTerminalId ||
+            activeTerminalId ||
+            null;
+        const activeTenantId =
+            currentTerminal?.config?.erpBinding?.tenantId ||
+            localStorage.getItem('clic_erp_sync_tenant_id') ||
+            localStorage.getItem('active_tenant_id') ||
+            null;
+        const erpBaseUrl =
+            localStorage.getItem('CLIC_ERP_BASE_URL') ||
+            localStorage.getItem('erp_base_url') ||
+            null;
+
+        const posDeviceId =
+            currentTerminal?.config?.currentDeviceId ||
+            localStorage.getItem('CLIC_POS_DEVICE_ID') ||
+            null;
+
+        const bindingMode = currentTerminal
+            ? (currentTerminal.config?.isPrimaryNode === false ? 'SLAVE' : 'MASTER')
+            : undefined;
+
+        return {
+            terminalId: erpTerminalId,
+            localTerminalId: activeTerminalId,
+            tenantId: activeTenantId,
+            erpBaseUrl,
+            posDeviceId,
+            bindingMode,
+        };
+    }
+
+    async refreshTerminalResolvedConfig(
+        snapshotOverride?: unknown,
+        options?: {
+            baseConfig?: BusinessConfig | null;
+            persist?: boolean;
+            dispatchEvent?: boolean;
+        }
+    ): Promise<BusinessConfig | null> {
+        if (this.isDisabled) return null;
+
+        const loadedConfig = options?.baseConfig ?? (await db.get('config') as unknown);
+        const baseConfig = loadedConfig && !Array.isArray(loadedConfig)
+            ? (loadedConfig as BusinessConfig)
+            : null;
+        if (!baseConfig || Array.isArray(baseConfig) || !Array.isArray(baseConfig.terminals)) {
+            return null;
+        }
+
+        const context = this.getActiveTerminalContext(baseConfig);
+        if (!context.terminalId) {
+            return null;
+        }
+
+        const snapshotTerminalId = context.localTerminalId || context.terminalId;
+        const cachedSnapshot = baseConfig.terminalSnapshots?.[snapshotTerminalId] || null;
+
+        let snapshot = extractTerminalConfigSnapshot(snapshotOverride);
+
+        if (!snapshot) {
+            snapshot = this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
+        }
+
+        if (!snapshot) {
+            const params = new URLSearchParams();
+            if (context.tenantId) params.set('tenant_id', context.tenantId);
+            if (context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
+            if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
+
+            const endpoint = `/api/sync/terminals/${encodeURIComponent(context.terminalId)}/config${params.toString() ? `?${params.toString()}` : ''}`;
+            const response = await fetch(endpoint);
+            if (!response.ok) {
+                const detail = await response.text().catch(() => '');
+                throw new Error(detail || `No se pudo refrescar la configuración de terminal (${response.status}).`);
+            }
+
+            const payload = await response.json();
+            snapshot = extractTerminalConfigSnapshot(payload?.terminal_config ?? payload);
+
+            if (!snapshot && payload?.config && !Array.isArray(payload.config)) {
+                const incomingConfig = payload.config as BusinessConfig;
+                const changed =
+                    JSON.stringify(this.sanitizeConfig(baseConfig)) !==
+                    JSON.stringify(this.sanitizeConfig(incomingConfig));
+
+                if (options?.persist !== false && changed) {
+                    await db.save('config', incomingConfig);
+                }
+
+                if (options?.dispatchEvent !== false && changed) {
+                    window.dispatchEvent(new CustomEvent('configUpdated', { detail: incomingConfig }));
+                }
+
+                return incomingConfig;
+            }
+        }
+
+        if (!snapshot) {
+            return null;
+        }
+
+        const applied = applyTerminalConfigSnapshot(baseConfig, {
+            terminalId: snapshotTerminalId,
+            posDeviceId: context.posDeviceId || undefined,
+            bindingMode: context.bindingMode,
+            incomingSnapshot: snapshot,
+            cachedSnapshot,
+        });
+
+        const nextConfig = applied.config;
+        const operationalDocumentState = extractTerminalOperationalDocumentState(nextConfig, applied.terminalId);
+        const changed =
+            JSON.stringify(this.sanitizeConfig(baseConfig)) !==
+            JSON.stringify(this.sanitizeConfig(nextConfig));
+
+        if (options?.persist !== false && changed) {
+            await db.save('config', nextConfig);
+        }
+
+        await db.rehydrateOperationalDocumentState(
+            operationalDocumentState.documentSeries,
+            operationalDocumentState.fiscalRanges,
+        );
+
+        if (snapshot && this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId)) {
+            this.clearPendingTerminalSnapshot();
+        }
+
+        if (snapshot.tenant_id) {
+            localStorage.setItem('active_tenant_id', snapshot.tenant_id);
+        }
+        localStorage.setItem('active_terminal_id', applied.terminalId);
+        localStorage.setItem('CLIC_POS_TERMINAL_ID', applied.terminalId);
+
+        if (options?.dispatchEvent !== false && changed) {
+            window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfig }));
+        }
+
+        return nextConfig;
+    }
+
     private isRecoveringConnection = false;
 
     /**
@@ -360,11 +604,12 @@ class SyncManager {
     }
 
     private finalizeRecovery(url: string) {
-        localStorage.setItem('CLIC_POS_MASTER_URL', url);
+        const normalizedUrl = this.normalizeMasterUrlForStorage(url) || url;
+        localStorage.setItem('CLIC_POS_MASTER_URL', normalizedUrl);
 
         // Legacy support
         try {
-            const urlObj = new URL(url);
+            const urlObj = new URL(normalizedUrl);
             localStorage.setItem('pos_master_ip', urlObj.hostname);
         } catch (e) {
             // Ignore
@@ -375,7 +620,7 @@ class SyncManager {
         }
 
         // Critical: Reset Adapter & Circuit Breaker
-        apiSyncAdapter.updateMasterUrl(url);
+        apiSyncAdapter.updateMasterUrl(normalizedUrl);
         apiSyncAdapter.resetCircuit();
 
         // Notify UI
@@ -1386,11 +1631,13 @@ class SyncManager {
         console.log('✅ Force pull process finished');
     }
 
-    /**
-     * Public setup/bootstrap pull used after terminal activation.
-     * Kept as a thin wrapper so the activation flow has an explicit orchestration entrypoint.
-     */
     async fullPull(): Promise<void> {
+        try {
+            await this.refreshTerminalResolvedConfig(undefined, { dispatchEvent: false });
+        } catch (error) {
+            console.warn('⚠️ SyncManager: Could not refresh terminal snapshot before full pull:', error);
+        }
+
         await this.forcePullAll();
     }
 
@@ -1415,14 +1662,22 @@ class SyncManager {
             const config = await apiSyncAdapter.pullConfig();
             if (!config) return;
 
-            const sanitize = (c: any) => {
-                if (!c || typeof c !== 'object') return {};
-                const { id, _db_initialized, config_metadata, _id, ...rest } = c;
-                return rest;
-            };
+            let finalConfig = config;
+            try {
+                const refreshedConfig = await this.refreshTerminalResolvedConfig(undefined, {
+                    baseConfig: config,
+                    persist: false,
+                    dispatchEvent: false,
+                });
+                if (refreshedConfig) {
+                    finalConfig = refreshedConfig;
+                }
+            } catch (snapshotError) {
+                console.warn('⚠️ SyncManager: Terminal snapshot refresh failed during pullConfig. Using global config fallback.', snapshotError);
+            }
 
-            const localSanitized = sanitize(localConfig);
-            const incomingSanitized = sanitize(config);
+            const localSanitized = this.sanitizeConfig(localConfig);
+            const incomingSanitized = this.sanitizeConfig(finalConfig);
 
             const localConfigJson = JSON.stringify(localSanitized);
             const incomingConfigJson = JSON.stringify(incomingSanitized);
@@ -1437,7 +1692,7 @@ class SyncManager {
             }
 
             console.log('💾 Saving global configuration...');
-            await db.save('config', config);
+            await db.save('config', finalConfig);
 
             const finalVersion = (typeof remoteVersion === 'number')
                 ? remoteVersion
@@ -1448,7 +1703,7 @@ class SyncManager {
             console.log('✅ Global configuration saved.');
 
             // Notify runtime so the app can apply it immediately without restart.
-            window.dispatchEvent(new CustomEvent('configUpdated', { detail: config }));
+            window.dispatchEvent(new CustomEvent('configUpdated', { detail: finalConfig }));
         } catch (error) {
             console.error('❌ SyncManager: Failed to pull config:', error);
             throw error;
@@ -1658,17 +1913,25 @@ class SyncManager {
     async setMasterUrl(url: string) {
         if (this.isMaster) return;
 
-        console.log(`🔄 Updating Master URL to: ${url}`);
+        const normalizedUrl = this.normalizeMasterUrlForStorage(url) || url;
+
+        console.log(`🔄 Updating Master URL to: ${normalizedUrl}`);
 
         // Save to localStorage for persistence
-        localStorage.setItem('CLIC_POS_MASTER_URL', url);
+        localStorage.setItem('CLIC_POS_MASTER_URL', normalizedUrl);
+        try {
+            const urlObj = new URL(normalizedUrl);
+            localStorage.setItem('pos_master_ip', urlObj.hostname);
+        } catch {
+            // Ignore malformed URLs here; initialize below will surface any real problem.
+        }
 
         if (this.syncConfig) {
-            this.syncConfig.masterUrl = url;
+            this.syncConfig.masterUrl = normalizedUrl;
         }
 
         await apiSyncAdapter.initialize({
-            masterUrl: url,
+            masterUrl: normalizedUrl,
             terminalId: permissionService.getTerminalId() || 'unknown',
             autoRetry: true,
             retryDelayMs: 5000

@@ -29,25 +29,6 @@ export const validateTerminalDocument = (
 };
 
 /**
- * Treat an empty or missing warehouse list as globally available.
- * Older catalogs and web imports often don't persist per-warehouse flags.
- */
-export const isProductEnabledInWarehouse = (
-    product: Product,
-    warehouseId: string
-): boolean => {
-    if (!warehouseId) return true;
-
-    const activeWarehouses = Array.isArray(product.activeInWarehouses)
-        ? product.activeInWarehouses.filter(Boolean)
-        : [];
-
-    if (activeWarehouses.length === 0) return true;
-
-    return activeWarehouses.includes(warehouseId);
-};
-
-/**
  * Validates if a product is explicitly enabled in a specific warehouse.
  * Centralized business rule for Strict Warehouse Mode.
  */
@@ -57,7 +38,7 @@ export const validateWarehouseAccess = (
 ): { isValid: boolean; error?: string } => {
     if (!warehouseId) return { isValid: true }; // Skip if no warehouse context provided
 
-    const isEnabled = isProductEnabledInWarehouse(product, warehouseId);
+    const isEnabled = product.activeInWarehouses?.includes(warehouseId);
 
     if (!isEnabled) {
         return {

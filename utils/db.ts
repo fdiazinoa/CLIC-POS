@@ -2,7 +2,7 @@ import {
   BusinessConfig, Product, User, Customer, Transaction,
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, PurchaseOrderItem, Supplier, Watchlist,
-  FiscalDocumentCode, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
+  NCFType, FiscalDocumentCode, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
   Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment, PaymentMethodDefinition, CartItem
 } from '../types';
 import {
@@ -12,12 +12,11 @@ import {
 } from '../constants';
 import { dbAdapter } from '../services/db';
 import { permissionService } from '../services/sync/PermissionService';
+import { mergeDocumentSeriesCollection } from './documentSeriesIdentity';
 
 const DB_KEY = 'clic_pos_db_v1';
 let initPromise: Promise<any> | null = null;
 const INVENTORY_CLOSE_LOCK_MESSAGE = 'Acción denegada: El inventario a esta fecha ya ha sido cerrado y auditado.';
-const getFiscalSequencePadding = (type: FiscalDocumentCode): number =>
-  type.startsWith('E') ? 10 : 8;
 
 const getSnapshotLockDate = (snapshot: any): number => {
   const lockRef = snapshot?.lockDate || snapshot?.cutoffDate || snapshot?.closedAt || snapshot?.createdAt;
@@ -141,10 +140,7 @@ const SEED_DATA = {
     { id: 'fr2', type: 'B02', prefix: 'B02', startNumber: 1, endNumber: 50000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
     { id: 'fr3', type: 'B04', prefix: 'B04', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
     { id: 'fr4', type: 'B14', prefix: 'B14', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
-    { id: 'fr5', type: 'B15', prefix: 'B15', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true },
-    { id: 'fr6', type: 'E31', prefix: 'E31', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: false },
-    { id: 'fr7', type: 'E32', prefix: 'E32', startNumber: 1, endNumber: 50000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: false },
-    { id: 'fr8', type: 'E34', prefix: 'E34', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: false }
+    { id: 'fr5', type: 'B15', prefix: 'B15', startNumber: 1, endNumber: 10000, currentGlobal: 0, expiryDate: '2026-12-31', isActive: true }
   ] as FiscalRangeDGII[],
   fiscalAllocations: [] as FiscalAllocation[],
   localFiscalBuffer: [] as LocalFiscalBuffer[],
@@ -199,6 +195,93 @@ const SEED_DATA = {
   activities: [] as any[],
   wallet_transactions: [] as any[],
   loyalty_events: [] as any[]
+};
+
+const normalizeSequenceKey = (value?: string | null): string =>
+  typeof value === 'string' ? value.trim().toUpperCase() : '';
+
+const matchesDocumentSeries = (left: DocumentSeries, right: DocumentSeries): boolean => {
+  const leftId = normalizeSequenceKey(left.id);
+  const rightId = normalizeSequenceKey(right.id);
+  if (leftId && rightId && leftId === rightId) return true;
+
+  const leftPrefix = normalizeSequenceKey(left.prefix);
+  const rightPrefix = normalizeSequenceKey(right.prefix);
+  const leftType = normalizeSequenceKey(left.documentType);
+  const rightType = normalizeSequenceKey(right.documentType);
+
+  return Boolean(leftPrefix && rightPrefix && leftPrefix === rightPrefix && leftType && rightType && leftType === rightType);
+};
+
+const matchesFiscalRange = (left: FiscalRangeDGII, right: FiscalRangeDGII): boolean => {
+  const leftId = normalizeSequenceKey(left.id);
+  const rightId = normalizeSequenceKey(right.id);
+  if (leftId && rightId && leftId === rightId) return true;
+
+  const leftType = normalizeSequenceKey(left.type);
+  const rightType = normalizeSequenceKey(right.type);
+  if (leftType && rightType && leftType === rightType) return true;
+
+  const leftPrefix = normalizeSequenceKey(left.prefix);
+  const rightPrefix = normalizeSequenceKey(right.prefix);
+  return Boolean(leftPrefix && rightPrefix && leftPrefix === rightPrefix);
+};
+
+const mergeDocumentSeriesState = (
+  existingSeries: DocumentSeries[],
+  incomingSeries: DocumentSeries[]
+): DocumentSeries[] => {
+  const normalizedIncoming = (incomingSeries || []).map((incoming) => ({
+    ...incoming,
+    nextNumber: Math.max(1, Number(incoming?.nextNumber) || 1),
+    padding: Math.max(1, Number(incoming?.padding) || 6),
+  }));
+
+  return mergeDocumentSeriesCollection([...(existingSeries || []), ...normalizedIncoming]);
+};
+
+const mergeFiscalRangesState = (
+  existingRanges: FiscalRangeDGII[],
+  incomingRanges: FiscalRangeDGII[]
+): { mergedRanges: FiscalRangeDGII[]; bufferTypesToReset: Set<FiscalDocumentCode> } => {
+  const merged = [...(existingRanges || [])];
+  const bufferTypesToReset = new Set<FiscalDocumentCode>();
+
+  incomingRanges.forEach((incoming) => {
+    const matchIndex = merged.findIndex((candidate) => matchesFiscalRange(candidate, incoming));
+    const normalizedIncoming: FiscalRangeDGII = {
+      ...incoming,
+      currentGlobal: Math.max(0, Number(incoming.currentGlobal) || 0),
+      startNumber: Math.max(0, Number(incoming.startNumber) || 0),
+      endNumber: Math.max(0, Number(incoming.endNumber) || 0),
+      isActive: Boolean(incoming.isActive),
+    };
+
+    if (matchIndex === -1) {
+      merged.push(normalizedIncoming);
+      bufferTypesToReset.add(normalizedIncoming.type);
+      return;
+    }
+
+    const current = merged[matchIndex];
+    const authoritativeAdvance = normalizedIncoming.currentGlobal > (Number(current?.currentGlobal) || 0);
+    const rangeShapeChanged =
+      normalizeSequenceKey(current?.prefix) !== normalizeSequenceKey(normalizedIncoming.prefix) ||
+      Number(current?.startNumber) !== normalizedIncoming.startNumber ||
+      Number(current?.endNumber) !== normalizedIncoming.endNumber;
+
+    if (authoritativeAdvance || rangeShapeChanged) {
+      bufferTypesToReset.add(normalizedIncoming.type);
+    }
+
+    merged[matchIndex] = {
+      ...current,
+      ...normalizedIncoming,
+      currentGlobal: Math.max(Number(current?.currentGlobal) || 0, normalizedIncoming.currentGlobal),
+    };
+  });
+
+  return { mergedRanges: merged, bufferTypesToReset };
 };
 
 export const db = {
@@ -854,14 +937,14 @@ export const db = {
     };
   },
 
-  canRequestMoreNCF: async (type: FiscalDocumentCode): Promise<boolean> => {
+  canRequestMoreNCF: async (type: NCFType): Promise<boolean> => {
     const ranges = await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges');
     const range = ranges?.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
     if (!range) return false;
     return range.currentGlobal < range.endNumber;
   },
 
-  requestFiscalBatch: async (terminalId: string, type: FiscalDocumentCode, batchSize: number): Promise<LocalFiscalBuffer | null> => {
+  requestFiscalBatch: async (terminalId: string, type: NCFType, batchSize: number): Promise<LocalFiscalBuffer | null> => {
     const ranges = await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges');
     const range = ranges?.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
     if (!range || range.currentGlobal >= range.endNumber) return null;
@@ -883,7 +966,7 @@ export const db = {
     return localBuffer;
   },
 
-  getNextNCF: async (type: FiscalDocumentCode, terminalId: string, customBatchSize?: number): Promise<string | null> => {
+  getNextNCF: async (type: NCFType, terminalId: string, customBatchSize?: number): Promise<string | null> => {
     let buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
     let buffer = (buffers || []).find((b: LocalFiscalBuffer) => b.type === type);
 
@@ -900,13 +983,42 @@ export const db = {
       return null;
     }
 
-    const ncf = `${buffer.prefix}${buffer.currentNumber.toString().padStart(getFiscalSequencePadding(type), '0')}`;
+    const ncf = `${buffer.prefix}${buffer.currentNumber.toString().padStart(8, '0')}`;
 
     if (buffer.currentNumber > buffer.endNumber) return null;
 
     buffer.currentNumber += 1;
     await dbAdapter.saveCollection('localFiscalBuffer', buffers);
     return ncf;
+  },
+
+  rehydrateOperationalDocumentState: async (
+    documentSeries: DocumentSeries[] = [],
+    fiscalRanges: FiscalRangeDGII[] = []
+  ): Promise<void> => {
+    if ((!documentSeries || documentSeries.length === 0) && (!fiscalRanges || fiscalRanges.length === 0)) {
+      return;
+    }
+
+    if (documentSeries && documentSeries.length > 0) {
+      const existingSeries = await dbAdapter.getCollection<DocumentSeries>('internalSequences') || [];
+      const mergedSeries = mergeDocumentSeriesState(existingSeries, documentSeries);
+      await dbAdapter.saveCollection('internalSequences', mergedSeries);
+    }
+
+    if (fiscalRanges && fiscalRanges.length > 0) {
+      const existingRanges = await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges') || [];
+      const { mergedRanges, bufferTypesToReset } = mergeFiscalRangesState(existingRanges, fiscalRanges);
+      await dbAdapter.saveCollection('fiscalRanges', mergedRanges);
+
+      if (bufferTypesToReset.size > 0) {
+        const existingBuffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
+        const filteredBuffers = existingBuffers.filter((buffer) => !bufferTypesToReset.has(buffer.type));
+        if (filteredBuffers.length !== existingBuffers.length) {
+          await dbAdapter.saveCollection('localFiscalBuffer', filteredBuffers);
+        }
+      }
+    }
   },
 
   getNextSequenceNumber: async (sequenceId: string): Promise<string | null> => {

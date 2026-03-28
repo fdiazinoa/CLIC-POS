@@ -601,9 +601,9 @@ const CurrencySettings: React.FC<CurrencySettingsProps> = ({ config, onUpdateCon
                 <input type="text" placeholder="Buscar moneda..." value={addSearch} onChange={(e) => setAddSearch(e.target.value)} className="w-full pl-10 pr-4 py-2.5 bg-gray-100 rounded-xl outline-none focus:ring-2 focus:ring-emerald-200 text-sm" />
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            <div className="flex-1 overflow-y-auto p-4 space-y-2 bg-white">
               {COMMON_CURRENCIES.filter(c => c.code.toLowerCase().includes(addSearch.toLowerCase()) || c.name.toLowerCase().includes(addSearch.toLowerCase())).map(c => (
-                <button key={c.code} onClick={() => handleAddCurrency(c)} className="w-full p-4 rounded-2xl flex items-center justify-between hover:bg-emerald-50 border border-transparent hover:border-emerald-200 transition-all group">
+                <button key={c.code} onClick={() => handleAddCurrency(c)} className="w-full p-4 rounded-2xl flex items-center justify-between bg-white hover:bg-white border border-gray-200 hover:border-emerald-200 transition-all group">
                   <div className="flex items-center gap-4">
                     <span className="text-3xl">{FLAGS[c.code] || '🏳️'}</span>
                     <div className="text-left">
