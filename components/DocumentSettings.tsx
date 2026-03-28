@@ -13,11 +13,36 @@ import { NCFType } from '../types';
 import { seriesSyncService } from '../services/sync/SeriesSyncService';
 import { syncManager } from '../services/sync/SyncManager';
 import { DEFAULT_DOCUMENT_SERIES } from '../constants';
-import { canonicalizeDocumentSeries, mergeDocumentSeriesCollection } from '../utils/documentSeriesIdentity';
+import {
+   canonicalizeDocumentSeries,
+   mergeDocumentSeriesCollection,
+   resolveEffectiveSeriesIdForDocumentType,
+} from '../utils/documentSeriesIdentity';
 
 interface DocumentSettingsProps {
    onClose: () => void;
+   config?: BusinessConfig | null;
+   terminalId?: string;
+   currentDeviceId?: string;
 }
+
+const findTerminalForDocumentCenter = (
+   cfg: BusinessConfig | null | undefined,
+   explicitTerminalId?: string,
+   deviceId?: string
+) => {
+   const terminals = cfg?.terminals || [];
+   if (!terminals.length) return null;
+   if (explicitTerminalId) {
+      const hit = terminals.find((t) => t.id === explicitTerminalId);
+      if (hit) return hit;
+   }
+   if (deviceId) {
+      const hit = terminals.find((t) => t.config?.currentDeviceId === deviceId);
+      if (hit) return hit;
+   }
+   return terminals[0];
+};
 
 const DOCUMENT_TYPE_ORDER = [
    'TICKET', 'REFUND', 'VOID',
@@ -165,7 +190,12 @@ const buildRecoveredFiscalRanges = (transactions: Transaction[]): FiscalRangeDGI
    });
 };
 
-const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
+const DocumentSettings: React.FC<DocumentSettingsProps> = ({
+   onClose,
+   config: configProp,
+   terminalId,
+   currentDeviceId,
+}) => {
    const [activeSubTab, setActiveSubTab] = useState<'SERIES' | 'FISCAL_POOL'>('SERIES');
 
    // Data for Series
@@ -291,6 +321,33 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
       [extraDocumentTypes]
    );
 
+   const terminalForOperationalFilter = useMemo(
+      () => findTerminalForDocumentCenter(configProp ?? null, terminalId, currentDeviceId),
+      [configProp, terminalId, currentDeviceId]
+   );
+
+   const filterSeriesByTerminalAssignment = (docType: string, typeSeries: DocumentSeries[]): DocumentSeries[] => {
+      const assignments = terminalForOperationalFilter?.config?.documentAssignments || {};
+      const assignedRaw = assignments[docType];
+      if (typeof assignedRaw !== 'string' || !assignedRaw.trim()) {
+         return typeSeries;
+      }
+      const effectiveId =
+         resolveEffectiveSeriesIdForDocumentType(docType, seriesList, assignedRaw) || assignedRaw.trim();
+      const normalizedEff = normalizeDocumentType(effectiveId);
+      const byList = typeSeries.filter((s) => normalizeDocumentType(s.id) === normalizedEff);
+      if (byList.length > 0) return byList;
+
+      const fromTerminal = (terminalForOperationalFilter?.config?.documentSeries || []).find(
+         (s: any) => normalizeDocumentType(s?.id) === normalizedEff
+      );
+      if (fromTerminal) {
+         const row = normalizeSequence(fromTerminal);
+         return row ? [row] : [];
+      }
+      return [];
+   };
+
    const handleAddNewSeries = () => {
       setEditingSeries({
          id: `DOC_${Date.now()}`,
@@ -401,6 +458,16 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
 
                {activeSubTab === 'SERIES' && (
                   <div className="space-y-6 animate-in slide-in-from-bottom-4">
+                     {terminalForOperationalFilter &&
+                        Object.keys(terminalForOperationalFilter.config?.documentAssignments || {}).length > 0 && (
+                           <div className="mx-2 p-4 rounded-2xl bg-slate-100 border border-slate-200 text-sm text-slate-700">
+                              <span className="font-bold text-slate-900">Vista operativa de esta caja: </span>
+                              solo se muestran las series asignadas por tipo cuando la terminal tiene vinculación
+                              explícita. El catálogo completo sigue en la base local (
+                              <span className="font-mono text-xs">internalSequences</span>) para sincronización y otras
+                              cajas.
+                           </div>
+                        )}
                      <div className="flex flex-col gap-3 md:flex-row md:justify-between md:items-center px-2">
                         <h2 className="text-lg font-bold text-gray-800 uppercase tracking-widest text-xs opacity-50">Secuencias por Tipo</h2>
                         <button
@@ -414,10 +481,40 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose }) => {
 
                      {/* Group by Document Type */}
                      {documentTypesToRender.map(docType => {
-                        const typeSeries = seriesList.filter(s => normalizeDocumentType((s as any).documentType) === docType);
+                        const rawForType = seriesList.filter(
+                           (s) => normalizeDocumentType((s as any).documentType) === docType
+                        );
+                        const typeSeries = filterSeriesByTerminalAssignment(docType, rawForType);
+                        const assignedRaw = terminalForOperationalFilter?.config?.documentAssignments?.[docType];
+                        const hasStrAssign = typeof assignedRaw === 'string' && assignedRaw.trim();
 
-                        // Skip if no series for this type
-                        if (typeSeries.length === 0) return null;
+                        if (typeSeries.length === 0) {
+                           if (hasStrAssign && rawForType.length > 0) {
+                              const orphanCfg = DOCUMENT_TYPE_CONFIG[docType] || {
+                                 label: `Tipo ${docType}`,
+                                 icon: FileText,
+                                 color: 'slate',
+                              };
+                              const OrphanIcon = orphanCfg.icon;
+                              return (
+                                 <div key={docType} className="space-y-4">
+                                    <div className="flex items-center gap-3 px-2">
+                                       <div className={`p-2 rounded-lg bg-orange-50 text-orange-600`}>
+                                          <AlertTriangle size={20} />
+                                       </div>
+                                       <h3 className="font-bold text-gray-800">{orphanCfg.label}</h3>
+                                    </div>
+                                    <div className="mx-2 p-4 rounded-2xl bg-orange-50 border border-orange-200 text-sm text-orange-900">
+                                       Esta caja tiene asignada la serie{' '}
+                                       <span className="font-mono font-bold">{assignedRaw.trim()}</span>, pero no aparece
+                                       en el catálogo local. Sincronice o recupere series; no se muestran otras series de
+                                       este tipo para evitar confusiones operativas.
+                                    </div>
+                                 </div>
+                              );
+                           }
+                           return null;
+                        }
 
                         const config = DOCUMENT_TYPE_CONFIG[docType] || {
                            label: `Tipo ${docType}`,
