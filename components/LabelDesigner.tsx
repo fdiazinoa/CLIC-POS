@@ -352,7 +352,7 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
     <div className="flex h-screen bg-gray-100 overflow-hidden animate-in fade-in">
       {/* Left toolbar */}
       <div className="w-20 bg-white border-r border-gray-200 flex flex-col items-center py-6 gap-4 shadow-sm z-10">
-        <button onClick={onClose} className="p-2 mb-4 bg-gray-100 rounded-full hover:bg-gray-200 text-gray-500">
+        <button onClick={onClose} className="p-2 mb-4 bg-white border border-gray-200 rounded-full hover:bg-gray-50 text-gray-500 shadow-sm">
           <X size={20} />
         </button>
 
@@ -363,10 +363,10 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
         </div>
 
         <div className="mt-auto flex flex-col gap-3">
-          <button onClick={() => setZoom(current => Math.min(current + 0.5, 4))} className="p-2 text-gray-400 hover:text-blue-600" title="Zoom +">
+          <button onClick={() => setZoom(current => Math.min(current + 0.5, 4))} className="p-2 bg-white border border-gray-200 rounded-lg text-gray-400 hover:text-blue-600 hover:border-blue-200 hover:bg-blue-50 shadow-sm" title="Zoom +">
             <ZoomIn size={20} />
           </button>
-          <button onClick={() => setZoom(current => Math.max(current - 0.5, 1))} className="p-2 text-gray-400 hover:text-blue-600" title="Zoom -">
+          <button onClick={() => setZoom(current => Math.max(current - 0.5, 1))} className="p-2 bg-white border border-gray-200 rounded-lg text-gray-400 hover:text-blue-600 hover:border-blue-200 hover:bg-blue-50 shadow-sm" title="Zoom -">
             <ZoomOut size={20} />
           </button>
         </div>
@@ -718,10 +718,10 @@ const LabelDesigner: React.FC<LabelDesignerProps> = ({ config, onUpdateConfig, o
 const ToolButton: React.FC<{ icon: any; label: string; onClick: () => void; disabled?: boolean }> = ({ icon: Icon, label, onClick, disabled }) => (
   <button
     onClick={disabled ? undefined : onClick}
-    className={`w-full flex flex-col items-center gap-1 p-3 rounded-xl transition-all border ${
+    className={`w-full flex flex-col items-center gap-1 p-3 rounded-xl transition-all border bg-white ${
       disabled
-        ? 'text-gray-300 border-transparent cursor-not-allowed'
-        : 'hover:bg-blue-50 text-gray-600 hover:text-blue-600 border-transparent hover:border-blue-100 active:scale-95'
+        ? 'text-gray-300 border-gray-100 cursor-not-allowed opacity-70'
+        : 'text-gray-600 border-gray-200 shadow-sm hover:bg-blue-50 hover:text-blue-600 hover:border-blue-100 active:scale-95'
     }`}
   >
     <Icon size={24} />

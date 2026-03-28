@@ -168,6 +168,38 @@ class ClicPOSBluetoothPrinterManager(private val context: Context) {
         return printEscPos(bytes, printerAddress, printerName, printerId)
     }
 
+    fun testConnection(printerAddress: String?, printerName: String?, printerId: String?): PrintResult {
+        synchronized(lock) {
+            return try {
+                val targetAddress = firstNonBlank(printerAddress, printerId)
+                val connected = ensureConnected(targetAddress, printerName)
+                PrintResult(
+                    status = if (connected) "ONLINE" else "OFFLINE",
+                    success = connected,
+                    printed = false,
+                    message = if (connected) "Bluetooth printer connected successfully." else "Bluetooth printer is offline.",
+                    errorCode = if (connected) null else "CONNECT_FAILED"
+                )
+            } catch (e: PrinterBridgeException) {
+                PrintResult(
+                    status = "OFFLINE",
+                    success = false,
+                    printed = false,
+                    message = e.message ?: "Bluetooth printer is offline.",
+                    errorCode = e.code
+                )
+            } catch (e: Exception) {
+                PrintResult(
+                    status = "OFFLINE",
+                    success = false,
+                    printed = false,
+                    message = e.message ?: "Unexpected Bluetooth test error.",
+                    errorCode = "TEST_ERROR"
+                )
+            }
+        }
+    }
+
     fun close() {
         synchronized(lock) {
             closeSocketQuietly(socket)

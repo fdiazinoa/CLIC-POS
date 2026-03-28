@@ -1,96 +1,55 @@
 import { Transaction, BusinessConfig, Reservation } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
+import { buildEscPosReservationPayload, buildEscPosTicketPayload } from '../services/printer/EscPosFormatter';
+import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 import { dbAdapter } from '../services/db';
-import { FISCAL_DOCUMENT_LABELS, isRefundLikeTransaction } from './fiscal/fiscalHelpers';
+import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, formatTaxLineLabel } from './fiscalBreakdown';
 
 export const printTicket = async (transaction: Transaction, config: BusinessConfig) => {
     const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
     const users = ((await dbAdapter.getCollection('users')) || []) as any[];
     const dateStr = new Date(transaction.date).toLocaleDateString();
     const timeStr = new Date(transaction.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const terminalConfig = config.terminals?.find(t => t.id === transaction.terminalId)?.config;
 
     // Calculate totals and savings
-    let subtotal = 0;
     let discountTotal = 0;
-    let taxTotal = 0;
     const isTaxIncluded = transaction.isTaxIncluded || false;
-
-    // 1. Calculate Raw Totals
-    let rawNetTotal = 0;
-    let rawTaxTotal = 0;
-    let rawGrossTotal = 0;
 
     transaction.items.forEach(item => {
         const originalPrice = item.originalPrice || item.price;
-        const lineVal = item.price * item.quantity;
-        const lineDiscount = (originalPrice - item.price) * item.quantity;
-
-        discountTotal += lineDiscount;
-        rawGrossTotal += lineVal;
-
-        // Determine Tax Rate for this item
-        let itemTaxRate = 0;
-        if (item.appliedTaxIds && item.appliedTaxIds.length > 0) {
-            item.appliedTaxIds.forEach(id => {
-                const t = (config.taxes || []).find(tax => tax.id === id);
-                if (t) itemTaxRate += t.rate;
-            });
-        } else {
-            itemTaxRate = config.taxRate || 0;
-        }
-
-        let lineNet = 0;
-        let lineTax = 0;
-
-        if (isTaxIncluded) {
-            lineNet = lineVal / (1 + itemTaxRate);
-            lineTax = lineVal - lineNet;
-        } else {
-            lineNet = lineVal;
-            lineTax = lineNet * itemTaxRate;
-        }
-
-        rawNetTotal += lineNet;
-        rawTaxTotal += lineTax;
+        discountTotal += (originalPrice - item.price) * item.quantity;
     });
 
-    // 2. Apply Global Discount
     if (transaction.discountAmount && transaction.discountAmount > 0) {
         discountTotal += transaction.discountAmount;
-
-        if (isTaxIncluded) {
-            const ratio = (rawGrossTotal - transaction.discountAmount) / (rawGrossTotal || 1);
-            subtotal = rawNetTotal * ratio;
-            taxTotal = rawTaxTotal * ratio;
-        } else {
-            subtotal = rawNetTotal - transaction.discountAmount;
-            const ratio = subtotal / (rawNetTotal || 1);
-            taxTotal = rawTaxTotal * ratio;
-        }
-    } else {
-        subtotal = rawNetTotal;
-        taxTotal = rawTaxTotal;
     }
 
-    const finalTotal = transaction.total || (subtotal + taxTotal);
+    const fiscalSummary = calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
+    const subtotal = fiscalSummary.subtotal;
+    const taxTotal = fiscalSummary.taxTotal;
+    const finalTotal = fiscalSummary.total;
     const savings = discountTotal;
 
     // NCF Type Label Map
     const ncfTypeLabels: Record<string, string> = {
-        B01: 'FACTURA DE CREDITO FISCAL',
-        B02: 'FACTURA DE CONSUMO',
-        B04: 'NOTA DE CREDITO',
-        B14: 'REGIMENES ESPECIALES',
-        B15: 'GUBERNAMENTAL',
-        E31: 'E-CF DE CREDITO FISCAL',
-        E32: 'E-CF DE CONSUMO',
-        E34: 'E-CF NOTA DE CREDITO'
+        'B01': 'FACTURA DE CRÉDITO FISCAL',
+        'B02': 'FACTURA DE CONSUMO',
+        'B04': 'NOTA DE CRÉDITO',
+        'B14': 'REGÍMENES ESPECIALES',
+        'B15': 'GUBERNAMENTAL'
+    };
+    const comprobanteTypeLabels: Record<string, string> = {
+        'B01': 'Crédito Fiscal',
+        'B02': 'Consumidor Final',
+        'B04': 'Nota de Crédito',
+        'B14': 'Regímenes Especiales',
+        'B15': 'Gubernamental'
     };
 
-    const documentTitle = transaction.ncfType
-        ? (ncfTypeLabels[transaction.ncfType] || FISCAL_DOCUMENT_LABELS[transaction.ncfType] || 'FACTURA DE VENTA')
-        : 'TICKET DE VENTA';
-    const isCreditNote = isRefundLikeTransaction(transaction);
+    const documentTitle = transaction.ncfType ? (ncfTypeLabels[transaction.ncfType] || 'FACTURA DE VENTA') : 'TICKET DE VENTA';
+    const isCreditNote = transaction.ncfType === 'B04' || transaction.documentType === 'REFUND';
+    const qrPayload = String(transaction.displayId || transaction.id || '').trim();
 
     // Foreign Currency Calculation
     const foreignCurrenciesHtml = receiptConfig?.showForeignCurrencyTotals && currencies ? currencies
@@ -190,7 +149,6 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
             
             <div class="text-center">
                 <div class="doc-title">${documentTitle}</div>
-                ${transaction.ncf ? `<div class="ncf-row">NCF: ${transaction.ncf}</div>` : ''}
                 <div style="display: flex; justify-content: space-between; margin-top: 5px;">
                     <div class="meta-row" style="font-weight: bold;">Ticket: ${transaction.displayId || transaction.id}</div>
                     <div class="meta-row">${dateStr} ${timeStr}</div>
@@ -223,24 +181,16 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
             <table class="items-table">
                 <tbody>
                     ${transaction.items.map(item => {
-            let itemTaxRate = 0;
-            if (item.appliedTaxIds && item.appliedTaxIds.length > 0) {
-                item.appliedTaxIds.forEach(id => {
-                    const t = (config.taxes || []).find(tax => tax.id === id);
-                    if (t) itemTaxRate += t.rate;
-                });
-            } else {
-                itemTaxRate = config.taxRate || 0;
-            }
-
             const lineVal = item.price * item.quantity;
-            let iTax = 0;
-            if (isTaxIncluded) {
-                iTax = lineVal - (lineVal / (1 + itemTaxRate));
-            } else {
-                iTax = lineVal * itemTaxRate;
-            }
-
+            const itemTaxBreakdown = calculateTaxBreakdownFromItems([item], config, {
+                isTaxIncluded,
+                terminalConfig,
+                absoluteLineValues: true,
+            });
+            const iTax = Math.abs(itemTaxBreakdown.reduce((sum, tax) => sum + Number(tax.amount || 0), 0));
+            const taxLineHtml = itemTaxBreakdown.length > 0
+                ? `<br/>${itemTaxBreakdown.map(tax => `${formatTaxLineLabel(tax)}: ${currencySymbol}${Number(tax.amount || 0).toFixed(2)}`).join('<br/>')}`
+                : '';
             const originalPrice = item.originalPrice || item.price;
             const hasDiscount = originalPrice > item.price;
 
@@ -275,7 +225,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                                     ${item.quantity} x ${currencySymbol}${item.price.toFixed(2)}
                                     ${hasDiscount ? `<span style="text-decoration: line-through; color: #999; margin-left: 5px;">${currencySymbol}${originalPrice.toFixed(2)}</span>` : ''}
                                     ${item.modifiers ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
-                                    <br/>ITBIS: ${currencySymbol}${iTax.toFixed(2)}
+                                    ${taxLineHtml || `<br/>Impuestos: ${currencySymbol}${iTax.toFixed(2)}`}
                                     ${sellerNameHtml}
                                     ${hasTrackingHtml ? `<br/>${trackingHtml.join('<br/>')}` : ''}
                                 </span>
@@ -312,13 +262,12 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 
                 ${foreignCurrenciesHtml ? `
                 <div class="currency-section">
-                    <div style="font-size: 9px; text-transform: uppercase; margin-bottom: 2px;">Equivalente en Divisas</div>
                     ${foreignCurrenciesHtml}
                 </div>
                 ` : ''}
             </div>
 
-            ${savings > 0 ? `
+            ${receiptConfig?.showSavings && savings > 0 ? `
             <div class="savings-box">
                 <div>¡USTED HA AHORRADO!</div>
                 <div style="font-size: 16px;">${currencySymbol}${savings.toFixed(2)}</div>
@@ -376,8 +325,14 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 <div>Vuelva pronto.</div>
                 
                 ${receiptConfig?.showQr ? `
+                <div class="divider"></div>
+                <div style="text-align: left; margin: 6px 0;">
+                    ${transaction.ncfType ? `<div style="font-weight: bold; font-size: 12px;">${comprobanteTypeLabels[transaction.ncfType] || transaction.ncfType}</div>` : ''}
+                    ${transaction.ncf ? `<div class="ncf-row" style="margin-top: 2px; text-align: left;">${transaction.ncf}</div>` : ''}
+                </div>
+                <div class="divider"></div>
                 <div id="qrcode"></div>
-                <div style="font-weight: bold; font-size: 9px; margin-top: 5px;">E-FACTURA VALIDADA</div>
+                <div style="font-weight: bold; font-size: 9px; margin-top: 5px;">ESCANEA ESTE TICKET PARA DEVOLUCIONES Y CUPONES</div>
                 ` : ''}
             </div>
             
@@ -385,13 +340,8 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 window.onload = function() {
                     ${receiptConfig?.showQr ? `
                     try {
-                        const qrData = JSON.stringify({
-                            type: 'INVOICE_RETURN',
-                            id: "${transaction.id}",
-                            sec: "${transaction.id.substring(0, 8)}"
-                        });
                         new QRCode(document.getElementById("qrcode"), {
-                            text: qrData,
+                            text: "${qrPayload}",
                             width: 100,
                             height: 100,
                             colorDark : "#000000",
@@ -418,16 +368,39 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
         ''
     );
 
-    const printedSilently = await PrintRouterService.routeAndPrintHtml({
-        config,
-        html: silentHtml,
-        role: 'TICKET',
-        terminalId: transaction.terminalId,
-        jobType: 'TICKET',
-        referenceId: transaction.id,
-    });
+    const escPosBase64 = buildEscPosTicketPayload(transaction, config, users);
+    let printedSilently = false;
+
+    if (escPosBase64) {
+        printedSilently = await PrintRouterService.routeAndPrintEscPos({
+            config,
+            escPosBase64,
+            role: 'TICKET',
+            terminalId: transaction.terminalId,
+            jobType: 'TICKET',
+            referenceId: transaction.id,
+        });
+    }
 
     if (printedSilently) return;
+
+    if (!shouldSuppressBrowserPrintFallback()) {
+        printedSilently = await PrintRouterService.routeAndPrintHtml({
+            config,
+            html: silentHtml,
+            role: 'TICKET',
+            terminalId: transaction.terminalId,
+            jobType: 'TICKET',
+            referenceId: transaction.id,
+        });
+    }
+
+    if (printedSilently) return;
+
+    if (shouldSuppressBrowserPrintFallback()) {
+        console.warn('Silent native ticket print failed; browser print fallback suppressed.');
+        return;
+    }
 
     const printWindow = window.open('', '_blank', 'width=400,height=600');
     if (printWindow) {
@@ -438,7 +411,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
     }
 };
 
-export const printReservation = async (reservation: Reservation, config: BusinessConfig) => {
+export const printReservation = async (reservation: Reservation, config: BusinessConfig): Promise<boolean> => {
     const { companyInfo, currencySymbol, receiptConfig } = config;
     const dateStr = new Date(reservation.createdAt).toLocaleDateString();
     const timeStr = new Date(reservation.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -567,19 +540,45 @@ export const printReservation = async (reservation: Reservation, config: Busines
     `;
 
     const silentHtml = receiptHtml.replace(/<script>[\s\S]*?window\.onload[\s\S]*?<\/script>/, '');
-    const printedSilently = await PrintRouterService.routeAndPrintHtml({
-        config,
-        html: silentHtml,
-        role: 'TICKET',
-        jobType: 'TICKET',
-        referenceId: reservation.id,
-    });
+    const escPosBase64 = buildEscPosReservationPayload(reservation, config);
+    let printedSilently = false;
 
-    if (printedSilently) return;
+    if (escPosBase64) {
+        printedSilently = await PrintRouterService.routeAndPrintEscPos({
+            config,
+            escPosBase64,
+            role: 'TICKET',
+            terminalId: reservation.terminalId,
+            jobType: 'TICKET',
+            referenceId: reservation.id,
+        });
+    }
+
+    if (printedSilently) return true;
+
+    if (!shouldSuppressBrowserPrintFallback()) {
+        printedSilently = await PrintRouterService.routeAndPrintHtml({
+            config,
+            html: silentHtml,
+            role: 'TICKET',
+            jobType: 'TICKET',
+            referenceId: reservation.id,
+        });
+    }
+
+    if (printedSilently) return true;
+
+    if (shouldSuppressBrowserPrintFallback()) {
+        console.warn('Silent native reservation print failed; browser print fallback suppressed.');
+        return false;
+    }
 
     const printWindow = window.open('', '_blank', 'width=400,height=600');
     if (printWindow) {
         printWindow.document.write(receiptHtml);
         printWindow.document.close();
+        return true;
     }
+
+    return false;
 };

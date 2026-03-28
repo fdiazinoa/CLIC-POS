@@ -1,5 +1,8 @@
 import express from 'express';
 import { getCollection, getSetting, saveSetting } from '../db';
+import { applyTerminalConfigSnapshot, extractTerminalConfigSnapshot } from '../../utils/terminalConfigSnapshot';
+import { TerminalConfigSnapshot } from '../../types';
+import { persistOperationalDocumentState } from '../services/terminalOperationalState';
 
 const router = express.Router();
 
@@ -53,6 +56,26 @@ const resolveStoredErpContext = (): Record<string, any> => {
   return asObject(getSetting('erp_setup_context'));
 };
 
+const getSnapshotCache = (): Record<string, TerminalConfigSnapshot> => {
+  return asObject(getSetting('terminal_snapshot_cache')) as Record<string, TerminalConfigSnapshot>;
+};
+
+const getCachedTerminalSnapshot = (terminalId: string): TerminalConfigSnapshot | null => {
+  const cache = getSnapshotCache();
+  const snapshot = asObject(cache[terminalId]);
+  return Object.keys(snapshot).length > 0 ? (snapshot as TerminalConfigSnapshot) : null;
+};
+
+const saveCachedTerminalSnapshot = (terminalId: string, snapshot: TerminalConfigSnapshot | null | undefined) => {
+  if (!snapshot) return;
+  const resolved = asObject(snapshot.resolved);
+  if (Object.keys(resolved).length === 0) return;
+
+  const cache = getSnapshotCache();
+  cache[terminalId] = snapshot;
+  saveSetting('terminal_snapshot_cache', cache);
+};
+
 const resolveTenantId = (req: express.Request): string | null => {
   const body = asObject(req.body);
   const queryTenantId = asString(req.query.tenant_id);
@@ -64,6 +87,26 @@ const resolveTenantId = (req: express.Request): string | null => {
     asString(getSetting('tenant_id'));
 
   return queryTenantId || bodyTenantId || headerTenantId || storedTenantId || null;
+};
+
+const resolveTenantSlug = (req: express.Request): string | null => {
+  const body = asObject(req.body);
+  const querySlug = asString(req.query.tenant_slug);
+  const bodySlug = asString(body.tenant_slug);
+  const headerSlug = asString(req.headers['x-tenant-slug']);
+  const storedSlug = asString(resolveStoredErpContext().tenantSlug);
+
+  return querySlug || bodySlug || headerSlug || storedSlug || null;
+};
+
+const resolveTenantEmail = (req: express.Request): string | null => {
+  const body = asObject(req.body);
+  const queryEmail = asString(req.query.tenant_email).toLowerCase();
+  const bodyEmail = asString(body.tenant_email).toLowerCase();
+  const headerEmail = asString(req.headers['x-tenant-email']).toLowerCase();
+  const storedEmail = asString(resolveStoredErpContext().tenantEmail).toLowerCase();
+
+  return queryEmail || bodyEmail || headerEmail || storedEmail || null;
 };
 
 const resolveErpBaseUrl = (req: express.Request): string | null => {
@@ -89,10 +132,16 @@ const buildErpHeaders = (req: express.Request, tenantId: string | null, includeJ
 
   const authorization = asString(req.headers.authorization);
   const cookie = asString(req.headers.cookie);
+  const deviceId =
+    asString(req.headers['x-device-id']) ||
+    asString(req.query.pos_device_id) ||
+    asString(asObject(req.body).pos_device_id) ||
+    asString(asObject(req.body).device_id);
 
   if (authorization) headers.Authorization = authorization;
   if (cookie) headers.Cookie = cookie;
   if (tenantId) headers['X-Tenant-Id'] = tenantId;
+  if (deviceId) headers['X-Device-Id'] = deviceId;
 
   return headers;
 };
@@ -143,9 +192,6 @@ const isDeviceAlreadyLocallyBound = (config: any, deviceId: string): boolean => 
     && config.terminals.some((terminal: any) => asString(terminal?.config?.currentDeviceId) === deviceId);
 };
 
-const hasLocalTerminalCatalog = (config: any): boolean =>
-  Array.isArray(config?.terminals) && config.terminals.length > 0;
-
 const buildLocalFallback = (config: any, deviceId: string, tenantId: string | null, erpBaseUrl: string | null) => {
   const terminals = Array.isArray(config?.terminals) ? config.terminals : [];
   return {
@@ -162,51 +208,6 @@ const buildLocalFallback = (config: any, deviceId: string, tenantId: string | nu
         occupied: Boolean(currentDeviceId && currentDeviceId !== deviceId),
         currentDeviceId,
         config: terminalConfig,
-      };
-    }),
-  };
-};
-
-const buildLocalBoundConfig = (input: {
-  currentConfig: any;
-  selectedTerminalId: string;
-  posDeviceId: string;
-  bindingMode: 'MASTER' | 'SLAVE';
-}) => {
-  const { currentConfig, selectedTerminalId, posDeviceId, bindingMode } = input;
-  const now = new Date().toISOString();
-
-  return {
-    ...cloneDeep(currentConfig),
-    terminals: (Array.isArray(currentConfig?.terminals) ? currentConfig.terminals : []).map((terminal: any) => {
-      const terminalId = asString(terminal?.id);
-      const nextConfig = cloneDeep(asObject(terminal?.config));
-      const deviceBindingToken = asString(nextConfig.deviceBindingToken) || `token-${terminalId}`;
-      const currentDeviceId = asString(nextConfig.currentDeviceId);
-
-      nextConfig.deviceBindingToken = deviceBindingToken;
-      nextConfig.security = {
-        ...asObject(nextConfig.security),
-        deviceBindingToken,
-      };
-      nextConfig.currentDeviceId =
-        terminalId === selectedTerminalId
-          ? posDeviceId
-          : currentDeviceId === posDeviceId
-            ? undefined
-            : currentDeviceId || undefined;
-      nextConfig.lastPairingDate = terminalId === selectedTerminalId ? now : nextConfig.lastPairingDate;
-      nextConfig.isPrimaryNode = terminalId === selectedTerminalId ? bindingMode === 'MASTER' : Boolean(nextConfig.isPrimaryNode);
-      nextConfig.governedByMaster = terminalId === selectedTerminalId ? bindingMode === 'SLAVE' : Boolean(nextConfig.governedByMaster);
-      nextConfig.syncConfig = {
-        ...asObject(nextConfig.syncConfig),
-        mode: terminalId === selectedTerminalId ? bindingMode : asString(nextConfig?.syncConfig?.mode) || 'MASTER',
-        isEnabled: true,
-      };
-
-      return {
-        ...cloneDeep(terminal),
-        config: nextConfig,
       };
     }),
   };
@@ -231,6 +232,166 @@ const fetchErpOverview = async (req: express.Request, baseUrl: string, tenantId:
   };
 };
 
+const fetchErpTerminals = async (
+  req: express.Request,
+  baseUrl: string,
+  filters: {
+    tenantId?: string | null;
+    companyId?: string | null;
+    storeId?: string | null;
+  }
+) => {
+  const params = new URLSearchParams();
+  if (filters.tenantId) params.set('tenant_id', filters.tenantId);
+  if (filters.companyId) params.set('company_id', filters.companyId);
+  if (filters.storeId) params.set('store_id', filters.storeId);
+
+  const payload = await fetchErpJson(
+    req,
+    baseUrl,
+    `/api/sync/terminals${params.toString() ? `?${params.toString()}` : ''}`,
+    { tenantId: filters.tenantId || null }
+  );
+
+  return Array.isArray(payload?.terminals) ? payload.terminals : [];
+};
+
+const fetchErpTenants = async (req: express.Request, baseUrl: string) => {
+  const payload = await fetchErpJson(req, baseUrl, '/api/sync/tenants');
+  return Array.isArray(payload?.tenants) ? payload.tenants : [];
+};
+
+const normalizeTenantKey = (value: unknown): string => {
+  return asString(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+};
+
+const findMappedErpTenant = (
+  tenants: any[],
+  identity: {
+    tenantId?: string | null;
+    tenantSlug?: string | null;
+  }
+) => {
+  const cloudTenantId = asString(identity.tenantId);
+  const tenantSlug = normalizeTenantKey(identity.tenantSlug);
+
+  return (
+    tenants.find((tenant) => asString(asObject(tenant?.activation).cloud_admin_tenant_id) === cloudTenantId)
+    || (tenantSlug
+      ? tenants.find((tenant) => normalizeTenantKey(tenant?.company_ref) === tenantSlug)
+        || tenants.find((tenant) => normalizeTenantKey(tenant?.name) === tenantSlug)
+      : null)
+    || null
+  );
+};
+
+const resolveBootstrapContext = (
+  bootstrap: any,
+  fallbackTenantId?: string | null
+) => {
+  return {
+    tenantId:
+      asString(bootstrap?.tenant?.id)
+      || asString(bootstrap?.activation?.tenant_id)
+      || asString(fallbackTenantId)
+      || null,
+    tenantName: asString(bootstrap?.tenant?.name) || null,
+    companyId: asString(bootstrap?.company?.id) || null,
+    storeId: asString(bootstrap?.store?.id) || null,
+  };
+};
+
+const resolveTenantDirectoryContext = async (
+  req: express.Request,
+  baseUrl: string,
+  identity: {
+    tenantId?: string | null;
+    tenantSlug?: string | null;
+  }
+) => {
+  const tenants = await fetchErpTenants(req, baseUrl);
+  const matchedTenant = findMappedErpTenant(tenants, identity);
+
+  if (!matchedTenant) return null;
+
+  return {
+    tenantId: asString(matchedTenant?.id) || null,
+    tenantName: asString(matchedTenant?.name) || null,
+    companyId: asString(asObject(matchedTenant?.primary_company).id) || null,
+    storeId: asString(asObject(matchedTenant?.primary_store).id) || null,
+    source: 'ERP_TENANT_DIRECTORY',
+  };
+};
+
+const resolveErpTerminalContext = async (
+  req: express.Request,
+  baseUrl: string,
+  identity: {
+    tenantId?: string | null;
+    tenantSlug?: string | null;
+    tenantEmail?: string | null;
+    deviceId?: string | null;
+  }
+) => {
+  const candidates: Array<{
+    tenantId: string | null;
+    tenantName: string | null;
+    companyId: string | null;
+    storeId: string | null;
+    source: string;
+  }> = [];
+  let lastBootstrapError: Error | null = null;
+
+  try {
+    const bootstrap = await bootstrapErpTenant(req, baseUrl, identity);
+    const candidate = resolveBootstrapContext(bootstrap, identity.tenantId);
+    if (candidate.tenantId) {
+      candidates.push({
+        ...candidate,
+        source: 'ERP_BOOTSTRAP',
+      });
+    }
+  } catch (error: any) {
+    lastBootstrapError = error instanceof Error ? error : new Error(String(error));
+  }
+
+  try {
+    const mappedTenant = await resolveTenantDirectoryContext(req, baseUrl, identity);
+    if (mappedTenant && !candidates.some((candidate) => candidate.tenantId === mappedTenant.tenantId)) {
+      candidates.push(mappedTenant);
+    }
+  } catch (error) {
+    console.warn('⚠️ ERP tenant directory lookup failed:', error);
+  }
+
+  let fallbackContext: any = null;
+
+  for (const candidate of candidates) {
+    const terminals = await fetchErpTerminals(req, baseUrl, {
+      tenantId: candidate.tenantId,
+      companyId: candidate.companyId,
+      storeId: candidate.storeId,
+    });
+
+    const contextWithTerminals = {
+      ...candidate,
+      terminals,
+    };
+
+    if (terminals.length > 0) {
+      return contextWithTerminals;
+    }
+
+    fallbackContext = fallbackContext || contextWithTerminals;
+  }
+
+  if (fallbackContext) return fallbackContext;
+
+  throw lastBootstrapError || new Error('No se pudo resolver un tenant operativo del ERP.');
+};
+
 const fetchTerminalProfile = async (req: express.Request, baseUrl: string, tenantId: string, terminalId: string) => {
   return fetchErpJson(
     req,
@@ -238,6 +399,93 @@ const fetchTerminalProfile = async (req: express.Request, baseUrl: string, tenan
     `/api/sync/bootstrap/terminal-profile?tenant_id=${encodeURIComponent(tenantId)}&terminal_id=${encodeURIComponent(terminalId)}`,
     { tenantId }
   );
+};
+
+const fetchInitialConfigSnapshot = async (req: express.Request, baseUrl: string, tenantId: string, terminalId: string) => {
+  return fetchErpJson(
+    req,
+    baseUrl,
+    `/api/sync/terminals/${encodeURIComponent(terminalId)}/config`,
+    { tenantId }
+  );
+};
+
+const bootstrapErpTenantOnce = async (
+  req: express.Request,
+  baseUrl: string,
+  identity: {
+    tenantId?: string | null;
+    tenantSlug?: string | null;
+    tenantEmail?: string | null;
+    deviceId?: string | null;
+  }
+) => {
+  return fetchErpJson(req, baseUrl, '/api/sync/bootstrap/check', {
+    method: 'POST',
+    tenantId: identity.tenantId || null,
+    body: {
+      tenant_id: identity.tenantId || null,
+      company_ref: identity.tenantSlug || null,
+      email: identity.tenantEmail || null,
+      device_id: identity.deviceId || null,
+    },
+  });
+};
+
+const bootstrapErpTenant = async (
+  req: express.Request,
+  baseUrl: string,
+  identity: {
+    tenantId?: string | null;
+    tenantSlug?: string | null;
+    tenantEmail?: string | null;
+    deviceId?: string | null;
+  }
+) => {
+  const attempts = [
+    {
+      tenantId: identity.tenantId || null,
+      tenantSlug: identity.tenantSlug || null,
+      tenantEmail: identity.tenantEmail || null,
+      deviceId: identity.deviceId || null,
+    },
+    {
+      tenantId: null,
+      tenantSlug: identity.tenantSlug || null,
+      tenantEmail: identity.tenantEmail || null,
+      deviceId: identity.deviceId || null,
+    },
+  ];
+
+  let lastError: Error | null = null;
+
+  for (const attempt of attempts) {
+    if (!attempt.tenantId && !attempt.tenantSlug && !attempt.tenantEmail && !attempt.deviceId) {
+      continue;
+    }
+
+    try {
+      return await bootstrapErpTenantOnce(req, baseUrl, attempt);
+    } catch (error: any) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  throw lastError || new Error('No se pudo resolver un tenant operativo del ERP.');
+};
+
+const fetchTerminalProfileSafe = async (
+  req: express.Request,
+  baseUrl: string,
+  tenantId: string,
+  terminalId: string
+) => {
+  try {
+    return await fetchTerminalProfile(req, baseUrl, tenantId, terminalId);
+  } catch (error) {
+    console.warn(`⚠️ Terminal profile fallback for ${terminalId}:`, error);
+    return { profile: {} };
+  }
 };
 
 const resolveOccupiedDeviceId = (terminal: any, terminalProfilePayload: any): string | undefined => {
@@ -326,41 +574,66 @@ const buildBoundConfig = (input: {
   };
 };
 
+const materializeTerminalConfigFromSnapshot = (input: {
+  currentConfig: any;
+  terminalId: string;
+  posDeviceId?: string;
+  bindingMode?: 'MASTER' | 'SLAVE';
+  snapshot: TerminalConfigSnapshot | null;
+}) => {
+  const cachedSnapshot = getCachedTerminalSnapshot(input.terminalId);
+  const applied = applyTerminalConfigSnapshot(input.currentConfig, {
+    terminalId: input.terminalId,
+    posDeviceId: input.posDeviceId,
+    bindingMode: input.bindingMode,
+    incomingSnapshot: input.snapshot,
+    cachedSnapshot,
+  });
+
+  if (applied.snapshot && !applied.hasResolutionError && Object.keys(asObject(applied.snapshot.resolved)).length > 0) {
+    saveCachedTerminalSnapshot(applied.terminalId, applied.snapshot);
+  }
+
+  return applied;
+};
+
 router.get('/terminals', async (req, res) => {
   const config = getSetting('config');
   const tenantId = resolveTenantId(req);
+  const tenantSlug = resolveTenantSlug(req);
+  const tenantEmail = resolveTenantEmail(req);
   const erpBaseUrl = resolveErpBaseUrl(req);
   const posDeviceId = asString(req.query.pos_device_id);
 
   try {
-    if (tenantId && erpBaseUrl) {
-      const overview = await fetchErpOverview(req, erpBaseUrl, tenantId);
-      const branchMap = new Map<string, any>(
-        overview.branches.map((branch: any) => [asString(branch.id), branch])
-      );
+    if (erpBaseUrl && (tenantId || tenantSlug || tenantEmail)) {
+      const resolvedContext = await resolveErpTerminalContext(req, erpBaseUrl, {
+        tenantId,
+        tenantSlug,
+        tenantEmail,
+        deviceId: posDeviceId,
+      });
+      const resolvedErpTenantId = resolvedContext.tenantId;
+      const resolvedCompanyId = resolvedContext.companyId;
+      const resolvedStoreId = resolvedContext.storeId;
 
-      const profiles = await Promise.all(
-        overview.terminals.map(async (terminal: any) => {
-          const terminalId = asString(terminal.id);
-          const profile = await fetchTerminalProfile(req, erpBaseUrl, overview.tenantId, terminalId);
-          return [terminalId, profile] as const;
-        })
-      );
+      if (!resolvedErpTenantId) {
+        throw new Error('No se pudo resolver un tenant operativo del ERP para esta activación.');
+      }
 
-      const profilesByTerminalId = new Map<string, any>(profiles);
-      const terminals = overview.terminals.map((terminal: any) => {
+      const erpTerminals = Array.isArray(resolvedContext.terminals) ? resolvedContext.terminals : [];
+
+      const terminals = erpTerminals.map((terminal: any) => {
         const terminalId = asString(terminal.id);
-        const branch = branchMap.get(asString(terminal.store_id));
         const location =
-          asString(branch?.nombre) ||
-          asString(branch?.name) ||
-          asString(branch?.address) ||
+          asString(terminal.store_name) ||
+          asString(terminal.company_name) ||
           'ERP';
-        const currentDeviceId = resolveOccupiedDeviceId(terminal, profilesByTerminalId.get(terminalId));
+        const currentDeviceId = asString(terminal.device_id) || undefined;
 
         return {
           id: terminalId,
-          name: asString(terminal.name) || `Caja ${asString(terminal.station_number) || terminalId}`,
+          name: asString(terminal.name) || `Caja ${terminalId}`,
           location,
           occupied: Boolean(currentDeviceId && currentDeviceId !== posDeviceId),
           currentDeviceId: currentDeviceId || undefined,
@@ -372,21 +645,25 @@ router.get('/terminals', async (req, res) => {
       });
 
       saveSetting('erp_setup_context', {
-        tenantId: overview.tenantId,
-        tenantName: overview.tenantName,
+        tenantId: resolvedErpTenantId,
+        tenantName: resolvedContext.tenantName,
+        tenantSlug,
+        tenantEmail,
         erpBaseUrl,
+        companyId: resolvedCompanyId,
+        storeId: resolvedStoreId,
         lastResolvedAt: new Date().toISOString(),
       });
 
       return res.json({
-        tenant_id: overview.tenantId,
+        tenant_id: resolvedErpTenantId,
         erp_base_url: erpBaseUrl,
         source: 'ERP',
         terminals,
       });
     }
 
-    if (config && (hasLocalTerminalCatalog(config) || isDeviceAlreadyLocallyBound(config, posDeviceId))) {
+    if (config && isDeviceAlreadyLocallyBound(config, posDeviceId)) {
       return res.json(buildLocalFallback(config, posDeviceId, tenantId, erpBaseUrl));
     }
 
@@ -397,7 +674,7 @@ router.get('/terminals', async (req, res) => {
   } catch (error: any) {
     console.error('❌ Setup terminals error:', error?.message || error);
 
-    if (config && (hasLocalTerminalCatalog(config) || isDeviceAlreadyLocallyBound(config, posDeviceId))) {
+    if (config && isDeviceAlreadyLocallyBound(config, posDeviceId)) {
       return res.json(buildLocalFallback(config, posDeviceId, tenantId, erpBaseUrl));
     }
 
@@ -413,55 +690,18 @@ router.post('/bind-terminal', async (req, res) => {
   const users = getCollection('users');
   const body = asObject(req.body);
   const tenantId = resolveTenantId(req);
+  const tenantSlug = resolveTenantSlug(req);
+  const tenantEmail = resolveTenantEmail(req);
   const erpBaseUrl = resolveErpBaseUrl(req);
   const terminalId = asString(body.terminal_id);
   const posDeviceId = asString(body.pos_device_id);
   const bindingMode = asString(body.binding_mode).toUpperCase() === 'SLAVE' ? 'SLAVE' : 'MASTER';
   const forceTransfer = Boolean(body.force_transfer);
 
-  if ((!tenantId || !erpBaseUrl) && hasLocalTerminalCatalog(config)) {
-    const targetTerminal = (config.terminals || []).find((terminal: any) => asString(terminal?.id) === terminalId);
-
-    if (!targetTerminal) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'La terminal no existe en la configuración local de POS.',
-      });
-    }
-
-    const occupiedDeviceId = asString(targetTerminal?.config?.currentDeviceId);
-    if (occupiedDeviceId && occupiedDeviceId !== posDeviceId && !forceTransfer) {
-      return res.status(409).json({
-        status: 'error',
-        code: 'TERMINAL_OCCUPIED',
-        message: 'La terminal ya está ocupada por otro equipo.',
-        current_device_id: occupiedDeviceId,
-      });
-    }
-
-    const nextConfig = buildLocalBoundConfig({
-      currentConfig: config,
-      selectedTerminalId: terminalId,
-      posDeviceId,
-      bindingMode,
-    });
-
-    saveSetting('config', nextConfig);
-
-    return res.json({
-      success: true,
-      tenant_id: tenantId || 'default-tenant',
-      terminal_id: terminalId,
-      source: 'LOCAL',
-      config: nextConfig,
-      users,
-    });
-  }
-
-  if (!tenantId || !erpBaseUrl) {
+  if ((!tenantId && !tenantSlug && !tenantEmail) || !erpBaseUrl) {
     return res.status(400).json({
       status: 'error',
-      message: 'tenant_id y erp_base_url son obligatorios para vincular terminales desde ERP.',
+      message: 'tenant_id o identidad tenant (slug/email) y erp_base_url son obligatorios para vincular terminales desde ERP.',
     });
   }
 
@@ -473,8 +713,25 @@ router.post('/bind-terminal', async (req, res) => {
   }
 
   try {
-    const overview = await fetchErpOverview(req, erpBaseUrl, tenantId);
-    const targetTerminal = overview.terminals.find((terminal: any) => asString(terminal.id) === terminalId);
+    const resolvedContext = await resolveErpTerminalContext(req, erpBaseUrl, {
+      tenantId,
+      tenantSlug,
+      tenantEmail,
+      deviceId: posDeviceId,
+    });
+    const resolvedErpTenantId = resolvedContext.tenantId;
+    const resolvedCompanyId = resolvedContext.companyId;
+    const resolvedStoreId = resolvedContext.storeId;
+
+    if (!resolvedErpTenantId) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'No se encontró un tenant operativo del ERP para esta activación.',
+      });
+    }
+
+    const erpTerminals = Array.isArray(resolvedContext.terminals) ? resolvedContext.terminals : [];
+    const targetTerminal = erpTerminals.find((terminal: any) => asString(terminal.id) === terminalId);
 
     if (!targetTerminal) {
       return res.status(404).json({
@@ -483,11 +740,10 @@ router.post('/bind-terminal', async (req, res) => {
       });
     }
 
-    const branch = overview.branches.find((item: any) => asString(item.id) === asString(targetTerminal.store_id));
-    const currentProfilePayload = await fetchTerminalProfile(req, erpBaseUrl, overview.tenantId, terminalId);
+    const currentProfilePayload = await fetchTerminalProfileSafe(req, erpBaseUrl, resolvedErpTenantId, terminalId);
     const currentProfile = asObject(currentProfilePayload?.profile);
     const currentMetadata = asObject(currentProfile.metadata);
-    const occupiedDeviceId = resolveOccupiedDeviceId(targetTerminal, currentProfilePayload);
+    const occupiedDeviceId = asString(targetTerminal.device_id) || resolveOccupiedDeviceId(targetTerminal, currentProfilePayload);
 
     if (occupiedDeviceId && occupiedDeviceId !== posDeviceId && !forceTransfer) {
       return res.status(409).json({
@@ -510,11 +766,11 @@ router.post('/bind-terminal', async (req, res) => {
 
     const persistedProfilePayload = await fetchErpJson(req, erpBaseUrl, '/api/sync/bootstrap/terminal-profile', {
       method: 'POST',
-      tenantId: overview.tenantId,
+      tenantId: resolvedErpTenantId,
       body: {
-        tenant_id: overview.tenantId,
-        company_id: asString(branch?.company_id) || null,
-        store_id: asString(targetTerminal.store_id) || null,
+        tenant_id: resolvedErpTenantId,
+        company_id: asString(targetTerminal.company_id) || resolvedCompanyId,
+        store_id: asString(targetTerminal.store_id) || resolvedStoreId,
         terminal_id: terminalId,
         device_id: posDeviceId,
         profile_status: currentProfile.profile_status || 'ACTIVE',
@@ -537,12 +793,12 @@ router.post('/bind-terminal', async (req, res) => {
     };
 
     const profiles = await Promise.all(
-      overview.terminals.map(async (terminal: any) => {
+      erpTerminals.map(async (terminal: any) => {
         const id = asString(terminal.id);
         if (id === terminalId) {
           return [id, selectedProfilePayload] as const;
         }
-        const profile = await fetchTerminalProfile(req, erpBaseUrl, overview.tenantId, id);
+        const profile = await fetchTerminalProfileSafe(req, erpBaseUrl, resolvedErpTenantId, id);
         return [id, profile] as const;
       })
     );
@@ -550,7 +806,10 @@ router.post('/bind-terminal', async (req, res) => {
     const profilesByTerminalId = new Map<string, any>(profiles);
     const boundConfig = buildBoundConfig({
       currentConfig: config,
-      overview,
+      overview: {
+        branches: [],
+        terminals: erpTerminals,
+      },
       profilesByTerminalId,
       selectedTerminalId: terminalId,
       posDeviceId,
@@ -558,11 +817,16 @@ router.post('/bind-terminal', async (req, res) => {
     });
 
     saveSetting('config', boundConfig);
-    saveSetting('active_tenant_id', overview.tenantId);
+    persistOperationalDocumentState(boundConfig, terminalId);
+    saveSetting('active_tenant_id', resolvedErpTenantId);
     saveSetting('erp_setup_context', {
-      tenantId: overview.tenantId,
-      tenantName: overview.tenantName,
+      tenantId: resolvedErpTenantId,
+      tenantName: resolvedContext.tenantName,
+      tenantSlug,
+      tenantEmail,
       erpBaseUrl,
+      companyId: resolvedCompanyId,
+      storeId: resolvedStoreId,
       lastResolvedAt: new Date().toISOString(),
     });
 
@@ -570,8 +834,12 @@ router.post('/bind-terminal', async (req, res) => {
       success: true,
       source: 'ERP',
       transferred: Boolean(occupiedDeviceId && occupiedDeviceId !== posDeviceId),
-      tenant_id: overview.tenantId,
+      tenant_id: resolvedErpTenantId,
       terminal_id: terminalId,
+      erp_terminal_id: asString(targetTerminal.id) || terminalId,
+      terminal_name: asString(targetTerminal.name) || terminalId,
+      company_id: asString(targetTerminal.company_id) || resolvedCompanyId || null,
+      store_id: asString(targetTerminal.store_id) || resolvedStoreId || null,
       current_device_id: posDeviceId,
       previous_device_id: occupiedDeviceId && occupiedDeviceId !== posDeviceId ? occupiedDeviceId : null,
       config: boundConfig,
@@ -582,6 +850,112 @@ router.post('/bind-terminal', async (req, res) => {
     return res.status(500).json({
       status: 'error',
       message: error?.message || 'No se pudo vincular la terminal contra ERP.',
+    });
+  }
+});
+
+router.get('/initial-config/:terminalId', async (req, res) => {
+  const config = getSetting('config');
+  const erpTerminalId = asString(req.params.terminalId);
+  const localTerminalId = asString(req.query.local_terminal_id) || erpTerminalId;
+  const tenantId = resolveTenantId(req);
+  const erpBaseUrl = resolveErpBaseUrl(req);
+  const posDeviceId = asString(req.query.pos_device_id);
+  const bindingMode = asString(req.query.binding_mode).toUpperCase() === 'SLAVE' ? 'SLAVE' : 'MASTER';
+
+  if (!erpTerminalId) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'terminalId es obligatorio.',
+    });
+  }
+
+  if (!tenantId || !erpBaseUrl) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'tenant_id y erp_base_url son obligatorios para cargar la configuración inicial.',
+    });
+  }
+
+  try {
+    const snapshotPayload = await fetchInitialConfigSnapshot(req, erpBaseUrl, tenantId, erpTerminalId);
+    const snapshot = extractTerminalConfigSnapshot(snapshotPayload);
+
+    if (!snapshot) {
+      throw new Error('El ERP no devolvió terminal_config en la configuración inicial.');
+    }
+
+    const applied = materializeTerminalConfigFromSnapshot({
+      currentConfig: config,
+      terminalId: localTerminalId,
+      posDeviceId,
+      bindingMode,
+      snapshot,
+    });
+
+    saveSetting('config', applied.config);
+    persistOperationalDocumentState(applied.config, applied.terminalId);
+    saveSetting('active_tenant_id', asString(snapshot.tenant_id) || tenantId);
+    saveSetting('erp_setup_context', {
+      ...resolveStoredErpContext(),
+      tenantId: asString(snapshot.tenant_id) || tenantId,
+      erpBaseUrl,
+      lastResolvedAt: new Date().toISOString(),
+    });
+
+    return res.json({
+      success: true,
+      source: applied.snapshotSource,
+      tenant_id: asString(snapshot.tenant_id) || tenantId,
+      terminal_id: applied.terminalId,
+      erp_terminal_id: erpTerminalId,
+      terminal_config: snapshot,
+      config: applied.config,
+      snapshot_meta: {
+        used_resolved: applied.usedResolved,
+        used_fallback_config: applied.usedFallbackConfig,
+        used_cached_snapshot: applied.usedCachedSnapshot,
+        resolution_error: snapshot.resolution_error ?? null,
+        full_pull_on_pairing: applied.fullPullOnPairing ?? false,
+      },
+    });
+  } catch (error: any) {
+    console.error('❌ Setup initial config error:', error?.message || error);
+
+    const cachedSnapshot = getCachedTerminalSnapshot(localTerminalId);
+    if (cachedSnapshot) {
+      const applied = materializeTerminalConfigFromSnapshot({
+        currentConfig: config,
+        terminalId: localTerminalId,
+        posDeviceId,
+        bindingMode,
+        snapshot: cachedSnapshot,
+      });
+
+      saveSetting('config', applied.config);
+      persistOperationalDocumentState(applied.config, applied.terminalId);
+
+      return res.json({
+        success: true,
+        source: 'CACHED_SNAPSHOT',
+        tenant_id: asString(cachedSnapshot.tenant_id) || tenantId,
+        terminal_id: applied.terminalId,
+        erp_terminal_id: erpTerminalId,
+        terminal_config: cachedSnapshot,
+        config: applied.config,
+        snapshot_meta: {
+          used_resolved: applied.usedResolved,
+          used_fallback_config: applied.usedFallbackConfig,
+          used_cached_snapshot: true,
+          resolution_error: null,
+          full_pull_on_pairing: applied.fullPullOnPairing ?? false,
+        },
+      });
+    }
+
+    return res.status(500).json({
+      status: 'error',
+      message: error?.message || 'No se pudo cargar la configuración inicial de la terminal.',
     });
   }
 });

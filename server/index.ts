@@ -12,13 +12,16 @@ import maintenanceRoutes from './routes/maintenance.js'; // Restore missing impo
 import dgiiRoutes from './routes/dgiiRoutes.js'; // Import new route
 import bulkRoutes from './routes/bulkRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
-import fiscalRoutes from './routes/fiscalRoutes.js';
+import activationRoutes from './routes/activationRoutes.js';
+import cloudRegistryRoutes from './routes/cloudRegistry.js';
 import setupRoutes from './routes/setupRoutes.js';
+import terminalConfigRoutes from './routes/terminalConfigRoutes.js';
 import os from 'os';
 import { createServer } from 'http';
 import { initSocket } from './socket.js';
 
 import { db, getCollection, getSetting, saveSetting } from './db';
+import { persistOperationalDocumentState } from './services/terminalOperationalState.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -135,6 +138,7 @@ server.get('/api/productStocks', (req, res) => {
 
 // Mount custom routes
 server.use('/api/sync', syncRoutes);
+server.use('/api/cloud/master-endpoint', cloudRegistryRoutes);
 server.use('/api/wallet', walletRoutes);
 server.use('/v1', passKitRoutes);
 server.use('/api/email', emailRoutes);
@@ -142,10 +146,11 @@ server.use('/api/suppliers', supplierRoutes);
 server.use('/api/currencies', currencyRoutes);
 server.use('/api/maintenance', maintenanceRoutes);
 server.use('/api/dgii', dgiiRoutes);
-server.use('/api/fiscal', fiscalRoutes);
 server.use('/api/bulk', bulkRoutes);
 server.use('/api/audit', auditRoutes);
+server.use('/api/activation', activationRoutes);
 server.use('/api/setup', setupRoutes);
+server.use('/api/sync/terminals', terminalConfigRoutes);
 
 // --- Mesas & Salas Endpoints ---
 server.get('/api/mesas', (req, res) => {
@@ -613,6 +618,15 @@ server.put('/api/:collection', (req, res) => {
         }
 
         saveSetting(dbName, data);
+        if (collection === 'config') {
+            const storedActiveTerminal = getSetting('active_terminal_id');
+            const activeTerminalId =
+                (typeof req.headers['x-active-terminal-id'] === 'string' ? req.headers['x-active-terminal-id'].trim() : '')
+                || (typeof req.headers['x-terminal-id'] === 'string' ? req.headers['x-terminal-id'].trim() : '')
+                || (typeof storedActiveTerminal === 'string' ? storedActiveTerminal.trim() : '');
+
+            persistOperationalDocumentState(data, activeTerminalId);
+        }
 
         // SYNC LOGGING (Singleton uses 'singleton' as ID)
         logChange(collection, 'singleton', 'UPSERT', data);

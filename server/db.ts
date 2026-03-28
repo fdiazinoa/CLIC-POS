@@ -14,11 +14,6 @@ db.pragma('journal_mode = WAL'); // Better concurrency
 
 // Ensure sync change log exists (for versioned delta sync)
 db.exec(`
-    CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
-    );
-
     CREATE TABLE IF NOT EXISTS sync_changes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         collection TEXT NOT NULL,
@@ -30,20 +25,6 @@ db.exec(`
     );
     CREATE INDEX IF NOT EXISTS idx_sync_changes_collection_version
     ON sync_changes(collection, version);
-
-    CREATE TABLE IF NOT EXISTS sync_tokens (
-        token TEXT PRIMARY KEY,
-        terminalId TEXT NOT NULL,
-        createdAt TEXT DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS connected_terminals (
-        terminalId TEXT PRIMARY KEY,
-        lastSeen TEXT NOT NULL,
-        ip TEXT,
-        deviceToken TEXT,
-        status TEXT DEFAULT 'OFFLINE'
-    );
 
     CREATE TABLE IF NOT EXISTS inventory_discrepancies (
         id TEXT PRIMARY KEY,
@@ -126,86 +107,6 @@ try {
 } catch (e) {
     // Column already exists
 }
-
-const ensureColumn = (table: string, column: string, definition: string) => {
-    try {
-        db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-    } catch (error) {
-        // Column already exists
-    }
-};
-
-const tableExists = (table: string): boolean => {
-    try {
-        const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
-        return Boolean(row);
-    } catch {
-        return false;
-    }
-};
-
-const ensureIndex = (name: string, table: string, statement: string) => {
-    if (!tableExists(table)) return;
-    try {
-        db.exec(statement);
-    } catch (error) {
-        console.warn(`[DB] Failed to ensure index ${name}:`, error);
-    }
-};
-
-ensureColumn('transactions', 'source_channel', 'TEXT');
-ensureColumn('transactions', 'source_transaction_id', 'TEXT');
-ensureColumn('transactions', 'source_display_id', 'TEXT');
-ensureColumn('transactions', 'source_terminal_id', 'TEXT');
-ensureColumn('transactions', 'device_id', 'TEXT');
-ensureColumn('transactions', 'source_credit_note_id', 'TEXT');
-ensureColumn('transactions', 'original_transaction_id', 'TEXT');
-ensureColumn('transactions', 'original_display_id', 'TEXT');
-
-ensureColumn('cash_movements', 'source_channel', 'TEXT');
-ensureColumn('cash_movements', 'source_cash_movement_id', 'TEXT');
-ensureColumn('cash_movements', 'source_terminal_id', 'TEXT');
-ensureColumn('cash_movements', 'device_id', 'TEXT');
-ensureColumn('cash_movements', 'created_at', 'TEXT');
-
-ensureColumn('z_reports', 'source_channel', 'TEXT');
-ensureColumn('z_reports', 'source_z_report_id', 'TEXT');
-ensureColumn('z_reports', 'source_terminal_id', 'TEXT');
-ensureColumn('z_reports', 'device_id', 'TEXT');
-ensureColumn('z_reports', 'cashSales', 'REAL DEFAULT 0');
-ensureColumn('z_reports', 'cashIn', 'REAL DEFAULT 0');
-ensureColumn('z_reports', 'cashOut', 'REAL DEFAULT 0');
-
-ensureIndex(
-    'idx_transactions_source_transaction_id',
-    'transactions',
-    `CREATE INDEX IF NOT EXISTS idx_transactions_source_transaction_id ON transactions(source_transaction_id)`
-);
-ensureIndex(
-    'idx_transactions_source_identity',
-    'transactions',
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_source_identity ON transactions(source_channel, source_transaction_id)`
-);
-ensureIndex(
-    'idx_cash_movements_source_id',
-    'cash_movements',
-    `CREATE INDEX IF NOT EXISTS idx_cash_movements_source_id ON cash_movements(source_cash_movement_id)`
-);
-ensureIndex(
-    'idx_cash_movements_source_identity',
-    'cash_movements',
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_movements_source_identity ON cash_movements(source_channel, source_cash_movement_id)`
-);
-ensureIndex(
-    'idx_z_reports_source_id',
-    'z_reports',
-    `CREATE INDEX IF NOT EXISTS idx_z_reports_source_id ON z_reports(source_z_report_id)`
-);
-ensureIndex(
-    'idx_z_reports_source_identity',
-    'z_reports',
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_z_reports_source_identity ON z_reports(source_channel, source_z_report_id)`
-);
 
 /**
  * Helper to get a collection (mimics lowdb .get().value())

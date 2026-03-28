@@ -147,6 +147,20 @@ const normalizePairedPrinter = (raw: any): PrinterDevice | null => {
   };
 };
 
+const normalizeConnectionHealth = (result: any): 'ONLINE' | 'OFFLINE' | 'UNKNOWN' => {
+  if (!result) return 'UNKNOWN';
+
+  const status = String(result.status || result?.message || result).toUpperCase();
+  if (status.includes('ONLINE') || status.includes('READY') || status.includes('CONNECTED') || status.includes('SUCCESS')) return 'ONLINE';
+  if (status.includes('OFFLINE') || status.includes('ERROR') || status.includes('DISCONNECTED') || status.includes('TIMEOUT') || status.includes('UNREACHABLE')) return 'OFFLINE';
+
+  if (typeof result?.success === 'boolean') {
+    return result.success ? 'ONLINE' : 'OFFLINE';
+  }
+
+  return 'UNKNOWN';
+};
+
 export const nativePrintBridge = {
   getRuntime(): NativePrintRuntime {
     const resolved = resolveBridge();
@@ -242,6 +256,25 @@ export const nativePrintBridge = {
     }
   },
 
+  async testPrinterConnection(printer: Partial<PrinterDevice>): Promise<'ONLINE' | 'OFFLINE' | 'UNKNOWN'> {
+    const resolved = resolveBridge();
+    if (!resolved) return 'UNKNOWN';
+
+    try {
+      const result = await runBridgeMethod(resolved.bridge, ['testPrinter', 'testPrinterConnection', 'getPrinterStatus', 'checkStatus'], {
+        printerId: printer.id,
+        printerName: printer.name,
+        printerAddress: printer.address,
+        connection: printer.connection,
+        type: printer.type
+      });
+      return normalizeConnectionHealth(result);
+    } catch (error) {
+      console.warn('Native printer connection test failed:', error);
+      return 'OFFLINE';
+    }
+  },
+
   async printHtml(payload: NativeHtmlPayload): Promise<boolean> {
     const resolved = resolveBridge();
     if (!resolved) return false;
@@ -295,14 +328,8 @@ export const nativePrintBridge = {
     if (!resolved) return 'UNKNOWN';
 
     try {
-      const result = await runBridgeMethod(resolved.bridge, ['getPrinterStatus', 'checkStatus'], { printerId });
-      if (!result) return 'UNKNOWN';
-
-      const status = String(result.status || result).toUpperCase();
-      if (status.includes('ONLINE') || status.includes('READY') || status.includes('CONNECTED')) return 'ONLINE';
-      if (status.includes('OFFLINE') || status.includes('ERROR') || status.includes('DISCONNECTED')) return 'OFFLINE';
-
-      return 'UNKNOWN';
+      const result = await runBridgeMethod(resolved.bridge, ['getPrinterStatus', 'checkStatus', 'testPrinter', 'testPrinterConnection'], { printerId });
+      return normalizeConnectionHealth(result);
     } catch (error) {
       console.warn('Native printer status check failed:', error);
       return 'UNKNOWN';

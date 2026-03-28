@@ -14,7 +14,6 @@ import {
     ArrowUpRight,
     ArrowDownLeft
 } from 'lucide-react';
-import { isRefundLikeTransaction } from '../utils/fiscal/fiscalHelpers';
 
 interface ProfessionalAccountStatementProps {
     customer: Customer;
@@ -31,7 +30,12 @@ const ProfessionalAccountStatement: React.FC<ProfessionalAccountStatementProps> 
 }) => {
     const [expandedInvoiceId, setExpandedInvoiceId] = useState<string | null>(null);
 
-    const isRefundDocument = (tx: Transaction) => isRefundLikeTransaction(tx);
+    const isRefundDocument = (tx: Transaction) => {
+        const docType = typeof tx.documentType === 'string' ? tx.documentType.trim().toUpperCase() : '';
+        const ncfType = typeof tx.ncfType === 'string' ? tx.ncfType.trim().toUpperCase() : '';
+        const displayId = typeof tx.displayId === 'string' ? tx.displayId.trim().toUpperCase() : '';
+        return docType === 'REFUND' || ncfType === 'B04' || displayId.startsWith('NC');
+    };
 
     // Group allocations by transactionId
     const allocationsByTx = useMemo(() => {

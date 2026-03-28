@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Settings as SettingsIcon, X, CreditCard, Receipt,
   Monitor, Users, Truck, ShieldCheck, FileText,
@@ -38,7 +38,6 @@ import CatalogManager from './CatalogManager';
 import TerminalSettings from './TerminalSettings';
 import HardwareSettings from './HardwareSettings';
 import CurrencySettings from './CurrencySettings';
-import CompanySettings from './CompanySettings';
 import ReceiptDesigner from './ReceiptDesigner';
 import EmailSettings from './EmailSettings';
 import TipsSettings from './TipsSettings';
@@ -47,6 +46,7 @@ import AuditLogViewer from './AuditLogViewer';
 import TeamHub from './TeamHub';
 import PaymentSettings from './PaymentSettings';
 import DocumentSettings from './DocumentSettings';
+import TaxSettings from './TaxSettings';
 import PromotionBuilder from './PromotionBuilder';
 import { ImportWizard } from './ImportWizard/ImportWizard';
 import LoyaltySettings from './LoyaltySettings';
@@ -113,7 +113,7 @@ interface SettingsProps {
   onUpdateRooms?: (rooms: Room[]) => void;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -145,6 +145,41 @@ const Settings: React.FC<SettingsProps> = (props) => {
   const [fiscalPurchaseOrders, setFiscalPurchaseOrders] = useState<PurchaseOrder[]>(props.purchaseOrders || []);
   const [fiscalReceptions, setFiscalReceptions] = useState<Reception[]>(props.receptions || []);
   const [fiscalSuppliers, setFiscalSuppliers] = useState<Supplier[]>(props.suppliers || []);
+  const usesPageScroll = currentView === 'HOME' || currentView === 'TERMINALS' || currentView === 'TAXES';
+
+  useEffect(() => {
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousBodyOverflowY = document.body.style.overflowY;
+    const previousBodyHeight = document.body.style.height;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    const previousHtmlOverflowY = document.documentElement.style.overflowY;
+    const previousHtmlHeight = document.documentElement.style.height;
+    const bodyHadOverflowHiddenClass = document.body.classList.contains('overflow-hidden');
+
+    document.body.style.overflow = 'auto';
+    document.body.style.overflowY = 'auto';
+    document.body.style.height = '100%';
+    document.documentElement.style.overflow = 'auto';
+    document.documentElement.style.overflowY = 'auto';
+    document.documentElement.style.height = '100%';
+
+    if (bodyHadOverflowHiddenClass) {
+      document.body.classList.remove('overflow-hidden');
+    }
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.body.style.overflowY = previousBodyOverflowY;
+      document.body.style.height = previousBodyHeight;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+      document.documentElement.style.overflowY = previousHtmlOverflowY;
+      document.documentElement.style.height = previousHtmlHeight;
+
+      if (bodyHadOverflowHiddenClass) {
+        document.body.classList.add('overflow-hidden');
+      }
+    };
+  }, []);
 
 
   const hasPermission = (permission: string): boolean => {
@@ -307,6 +342,17 @@ const Settings: React.FC<SettingsProps> = (props) => {
           />
         );
 
+      case 'TAXES':
+        return (
+          <TaxSettings
+            config={props.config}
+            products={props.products}
+            onUpdateConfig={props.onUpdateConfig}
+            onUpdateProducts={props.onUpdateProducts}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
       case 'TERMINALS':
         return (
           <TerminalSettings
@@ -365,15 +411,6 @@ const Settings: React.FC<SettingsProps> = (props) => {
       case 'LOYALTY':
         return (
           <LoyaltySettings
-            config={props.config}
-            onUpdateConfig={props.onUpdateConfig}
-            onClose={() => setCurrentView('HOME')}
-          />
-        );
-
-      case 'COMPANY':
-        return (
-          <CompanySettings
             config={props.config}
             onUpdateConfig={props.onUpdateConfig}
             onClose={() => setCurrentView('HOME')}
@@ -688,7 +725,10 @@ const Settings: React.FC<SettingsProps> = (props) => {
 
       default:
         return (
-          <div className="flex-1 overflow-y-auto p-8 max-w-7xl mx-auto w-full animate-in fade-in">
+          <div
+            className="max-w-7xl mx-auto w-full p-4 md:p-8 pb-24 md:pb-16 animate-in fade-in"
+            style={{ flex: '1 1 auto', minHeight: '100%' }}
+          >
             {/* ADMIN MODE BANNER */}
             {props.isAdminMode && (
               <div className="mb-6 p-4 bg-red-100 border border-red-200 rounded-xl flex items-center gap-3 animate-pulse shadow-sm">
@@ -700,12 +740,12 @@ const Settings: React.FC<SettingsProps> = (props) => {
               </div>
             )}
 
-            <div className="flex justify-between items-center mb-8">
+            <div className="flex flex-col gap-4 md:flex-row md:justify-between md:items-center mb-8">
               <div>
                 <h1 className="text-3xl font-black text-gray-800">Configuración</h1>
                 <p className="text-gray-500 mt-1">Administra todos los aspectos de tu negocio.</p>
               </div>
-              <button onClick={props.onClose} className="p-3 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors">
+              <button onClick={props.onClose} className="self-end md:self-auto p-3 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors">
                 <X size={24} className="text-gray-600" />
               </button>
             </div>
@@ -760,9 +800,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
               <section>
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 border-b border-slate-100 pb-2">Finanzas y Legal</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <SettingsCard icon={Building2} label="Empresa" description="RNC, Nombre y Contacto Legal" color="bg-blue-700" onClick={() => setCurrentView('COMPANY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={CreditCard} label="Métodos de Pago" description="Pasarelas, Tarjetas, QR" color="bg-indigo-500" onClick={() => setCurrentView('PAYMENTS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={Percent} label="Impuestos" description="ITBIS, Exentos y Cargos" color="bg-emerald-500" onClick={() => setCurrentView('TAXES')} locked={!hasPermission('SETTINGS_TAXES')} />
                   <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} locked={!hasPermission('POS_CLOSE_Z')} />
                   <SettingsCard icon={FileText} label="Documentos" description="Series, NCF, Prefijos" color="bg-blue-400" onClick={() => setCurrentView('DOCUMENTS')} locked={!hasPermission('SETTINGS_TAXES')} />
                 </div>
@@ -825,8 +865,22 @@ const Settings: React.FC<SettingsProps> = (props) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-gray-50 flex flex-col overflow-hidden">
-      {renderContent()}
+    <div
+      className={`fixed inset-0 z-50 bg-gray-50 flex min-h-0 flex-col ${usesPageScroll ? '' : 'overflow-hidden'}`}
+      style={usesPageScroll
+        ? {
+            overflowY: 'scroll',
+            WebkitOverflowScrolling: 'touch',
+            touchAction: 'pan-y'
+          }
+        : undefined}
+    >
+      <div
+        className={usesPageScroll ? 'min-h-[100dvh] flex flex-1 flex-col' : 'flex min-h-0 flex-1 flex-col'}
+        style={usesPageScroll ? { minHeight: '100dvh' } : undefined}
+      >
+        {renderContent()}
+      </div>
     </div>
   );
 };
@@ -835,6 +889,7 @@ const SettingsCard: React.FC<{ icon: any; label: string; description: string; co
   <button
     onClick={locked ? undefined : onClick}
     className={`flex flex-col items-start p-6 bg-white rounded-3xl shadow-sm border border-slate-100 transition-all text-left group h-full relative overflow-hidden ${locked ? 'opacity-60 cursor-not-allowed grayscale' : 'hover:shadow-xl hover:border-blue-200 hover:-translate-y-1 active:scale-95'}`}
+    style={{ touchAction: 'pan-y' }}
   >
     {locked && (
       <div className="absolute inset-0 bg-gray-50/50 z-10 flex items-center justify-center">

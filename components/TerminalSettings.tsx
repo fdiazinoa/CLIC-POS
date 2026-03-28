@@ -1,5 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
 import {
    Database, Clock, WifiOff, X, Save, Image as ImageIcon,
    Receipt, Monitor, Plus, Trash2, Smartphone, CheckCircle2,
@@ -15,15 +16,14 @@ import {
    // Added Sun to fix "Cannot find name 'Sun'" error
    Sun, ScanBarcode, Layout, Minus, ArrowDownCircle, ArrowUpCircle, Wallet, UserCheck, User, CreditCard, Fingerprint
 } from 'lucide-react';
-import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, FiscalDocumentCode, NCFConfig, Transaction, ScaleDevice, Product, DeviceRole, AuthLevel, Room } from '../types';
+import { BusinessConfig, TerminalConfig, DocumentSeries, Tariff, TaxDefinition, Warehouse, NCFType, NCFConfig, Transaction, ScaleDevice, Product, DeviceRole, AuthLevel, Room } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG } from '../constants';
 import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
 import { getDefaultRoleConfig, getRoleDisplayInfo, getAllModules } from '../utils/deviceRoleHelpers';
 import AccessibilityToggle from './AccessibilityToggle';
 import SettingsOperational from './SettingsOperational';
-import { FISCAL_DOCUMENT_LABELS, SUPPORTED_FISCAL_CODES } from '../utils/fiscal/fiscalHelpers';
-import { isProductEnabledInWarehouse } from '../utils/validation';
+import { mergeDocumentSeriesCollection } from '../utils/documentSeriesIdentity';
 
 interface TerminalSettingsProps {
    config: BusinessConfig;
@@ -74,9 +74,16 @@ const DOCUMENT_ROLES = [
 
 type TerminalTab = 'OPERATIONAL' | 'FISCAL' | 'SECURITY' | 'SESSION' | 'DOCUMENTS' | 'OFFLINE' | 'INVENTORY' | 'LAN_BINDING' | 'CATALOG' | 'DEVICE_ROLE';
 
-const NCF_LABELS: Record<FiscalDocumentCode, string> = FISCAL_DOCUMENT_LABELS;
+const NCF_LABELS: Record<NCFType, string> = {
+   'B01': 'Crédito Fiscal',
+   'B02': 'Consumo',
+   'B04': 'Nota de Crédito',
+   'B14': 'Reg. Especiales',
+   'B15': 'Gubernamentales'
+};
 
 const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateConfig, onClose, warehouses = [], products = [], isAdminMode = false, currentDeviceId }) => {
+   const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
    // ... existing state ...
    const [terminals, setTerminals] = useState(config.terminals || []);
 
@@ -106,19 +113,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
             .flatMap(t => (Array.isArray(t.config?.documentSeries) ? t.config.documentSeries : []))
             .filter((s: any) => !!s?.id && !!s?.documentType) as DocumentSeries[];
 
-         // Keep internalSequences as canonical source, but backfill missing IDs from terminal-level config.
-         const mergedMap = new Map<string, DocumentSeries>();
-         seqs.forEach(s => {
-            if (!s?.id || !s?.documentType) return;
-            mergedMap.set(s.id, s);
-         });
-         configSeries.forEach(s => {
-            if (!mergedMap.has(s.id)) {
-               mergedMap.set(s.id, s);
-            }
-         });
-
-         const merged = Array.from(mergedMap.values());
+         const merged = mergeDocumentSeriesCollection([...seqs, ...configSeries]);
          if (merged.length !== seqs.length) {
             await db.save('internalSequences', merged);
          }
@@ -156,33 +151,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    }, [activeTerminal, currentDeviceId]);
 
    const allCategories = useMemo(() => {
-      const selectedCategories = Array.isArray(activeTerminal?.config.catalog?.allowedCategories)
-         ? activeTerminal.config.catalog.allowedCategories
-         : [];
-      const defaultWarehouseId = activeTerminal?.config.inventoryScope?.defaultSalesWarehouseId;
-
-      const categoryMap = new Map<string, string>();
-      const registerCategory = (value: unknown) => {
-         if (typeof value !== 'string') return;
-         const raw = value.trim();
-         if (!raw) return;
-         const normalized = raw.toLowerCase();
-         if (!categoryMap.has(normalized)) {
-            categoryMap.set(normalized, raw);
-         }
-      };
-
-      products.forEach((product) => {
-         if (!product || product.is_sellable === false) return;
-         if (defaultWarehouseId && !isProductEnabledInWarehouse(product, defaultWarehouseId)) return;
-         registerCategory(product.category);
-      });
-
-      selectedCategories.forEach(registerCategory);
-
-      return Array.from(categoryMap.values())
-         .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
-   }, [products, activeTerminal]);
+      return Array.from(new Set(products.map(p => p.category))).sort();
+   }, [products]);
 
    const handleSyncSeries = async () => {
       setIsSyncing(true);
@@ -360,7 +330,10 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    );
 
    return (
-      <div className="flex h-full bg-gray-50 animate-in fade-in overflow-hidden relative">
+      <div
+         className={`responsive-shell flex h-full bg-gray-50 animate-in fade-in overflow-hidden relative ${isNativeAndroid ? 'flex-col' : 'flex-col lg:flex-row'}`}
+         style={isNativeAndroid ? { height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' } : undefined}
+      >
          {/* ADMIN MODE BANNER */}
          {isAdminMode && (
             <div className="absolute top-0 left-0 right-0 bg-red-600 text-white text-center py-2 text-sm font-bold z-50 shadow-md flex items-center justify-center gap-2 animate-pulse">
@@ -370,8 +343,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
          )}
 
          {/* SIDEBAR */}
-         <aside className="w-80 bg-white border-r border-gray-200 flex flex-col shrink-0 z-20 shadow-sm">
-            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+         <aside className={`bg-white border-gray-200 flex flex-col shrink-0 z-20 shadow-sm ${isNativeAndroid ? 'w-full border-b max-h-none' : 'w-full lg:w-80 lg:max-w-[320px] border-b lg:border-b-0 lg:border-r max-h-[42vh] lg:max-h-none'}`}>
+            <div className="p-4 md:p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                <div>
                   <h2 className="text-xl font-black text-slate-800">Terminales</h2>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Configuración técnica</p>
@@ -383,13 +356,17 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                   <Plus size={20} />
                </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            <div
+               className={`flex-1 p-4 no-scrollbar ${isNativeAndroid ? 'overflow-x-auto overflow-y-hidden' : 'overflow-x-auto lg:overflow-y-auto'}`}
+               style={isNativeAndroid ? { WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' } : undefined}
+            >
+               <div className={`flex gap-3 ${isNativeAndroid ? 'min-w-max flex-row' : 'lg:flex-col lg:gap-2 min-w-max lg:min-w-0'}`}>
                {terminals.map((t) => (
-                  <div key={t.id} onClick={() => setSelectedTerminalId(t.id)} className={`group p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between ${selectedTerminalId === t.id ? 'bg-blue-50 border-blue-500 shadow-md ring-4 ring-blue-50' : 'bg-white border-transparent hover:border-gray-200'}`}>
-                     <div className="flex items-center gap-3">
-                        <div className={`p-2.5 rounded-xl ${selectedTerminalId === t.id ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100 text-gray-400'}`}><Monitor size={20} /></div>
-                        <div>
-                           <h3 className={`font-bold text-sm ${selectedTerminalId === t.id ? 'text-blue-900' : 'text-gray-700'}`}>{t.id}</h3>
+                  <div key={t.id} onClick={() => setSelectedTerminalId(t.id)} className={`group p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between ${isNativeAndroid ? 'min-w-[220px]' : 'min-w-[220px] lg:min-w-0 lg:w-full'} ${selectedTerminalId === t.id ? 'bg-blue-50 border-blue-500 shadow-md ring-4 ring-blue-50' : 'bg-white border-transparent hover:border-gray-200'}`}>
+                     <div className="flex items-center gap-3 min-w-0">
+                        <div className={`p-2.5 rounded-xl shrink-0 ${selectedTerminalId === t.id ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-100 text-gray-400'}`}><Monitor size={20} /></div>
+                        <div className="min-w-0">
+                           <h3 className={`font-bold text-sm truncate ${selectedTerminalId === t.id ? 'text-blue-900' : 'text-gray-700'}`}>{t.id}</h3>
                            {t.config.isPrimaryNode && (
                               <span className="flex items-center gap-1 text-[9px] font-black text-blue-600 uppercase tracking-widest mt-0.5">
                                  <Crown size={10} /> Master
@@ -400,21 +377,23 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                      {selectedTerminalId === t.id && <ChevronRight size={16} className="text-blue-500" />}
                   </div>
                ))}
+               </div>
             </div>
          </aside>
 
          {/* MAIN AREA */}
-         <div className="flex-1 flex flex-col min-w-0 h-full">
-            <header className="bg-white px-8 py-5 border-b border-gray-200 flex justify-between items-center shrink-0 z-10">
-               <h2 className="text-2xl font-black text-gray-800 flex items-center gap-3"><SettingsIcon className="text-blue-600" /> Terminal: <span className="text-blue-600">{selectedTerminalId}</span></h2>
-               <div className="flex gap-3">
-                  <button onClick={handleSave} className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold flex items-center gap-2 shadow-xl hover:bg-blue-700 transition-all"><Save size={20} /> Guardar Cambios</button>
-                  <button onClick={onClose} className="p-3 bg-gray-100 text-gray-500 hover:bg-gray-200 rounded-xl transition-colors"><X size={20} /></button>
+         <div className="responsive-content flex-1 flex flex-col min-w-0 h-full">
+            <header className={`bg-white px-4 md:px-8 py-4 md:py-5 border-b border-gray-200 flex flex-col gap-4 shrink-0 z-10 ${isNativeAndroid ? '' : 'lg:flex-row lg:justify-between lg:items-center'}`}>
+               <h2 className="text-xl md:text-2xl font-black text-gray-800 flex items-center gap-3 min-w-0"><SettingsIcon className="text-blue-600 shrink-0" /> <span className="truncate">Terminal: <span className="text-blue-600">{selectedTerminalId}</span></span></h2>
+               <div className={`flex w-full gap-3 ${isNativeAndroid ? '' : 'lg:w-auto'}`}>
+                  <button onClick={handleSave} className="flex-1 justify-center px-5 md:px-8 py-3 bg-blue-600 text-white rounded-xl font-bold flex items-center gap-2 shadow-xl hover:bg-blue-700 transition-all"><Save size={20} /> Guardar Cambios</button>
+                  <button onClick={onClose} className="p-3 bg-gray-100 text-gray-500 hover:bg-gray-200 rounded-xl transition-colors shrink-0"><X size={20} /></button>
                </div>
             </header>
 
             {/* TABS NAVIGATION */}
-            <div className="relative bg-white border-b border-gray-100 shrink-0 overflow-x-auto no-scrollbar flex px-4">
+            <div className="relative bg-white border-b border-gray-100 shrink-0 overflow-hidden px-4 md:px-6">
+               <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 md:mx-0 md:px-0" style={{ overflowX: 'scroll', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}>
                {[
                   { id: 'OPERATIONAL', label: 'Operativa', icon: Database },
                   { id: 'FISCAL', label: 'Lotes Fiscales', icon: Landmark },
@@ -430,17 +409,18 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                   <button
                      key={tab.id}
                      onClick={() => setActiveTab(tab.id as TerminalTab)}
-                     className={`pb-4 pt-4 px-4 text-sm font-bold flex items-center gap-2 border-b-4 transition-all whitespace-nowrap ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                     className={`mobile-tab-item pb-4 pt-4 text-sm font-bold flex items-center gap-2 border-b-4 transition-all ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                   >
                      <tab.icon size={18} /> {tab.label}
                   </button>
                ))}
+               </div>
             </div>
 
             {/* TAB CONTENT */}
-            <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50 custom-scrollbar">
+            <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-slate-50/50 custom-scrollbar" style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}>
                {activeTerminal ? (
-                  <div className="max-w-4xl mx-auto space-y-8 animate-in slide-in-from-right-4">
+                  <div className="w-full max-w-4xl mx-auto space-y-6 md:space-y-8 animate-in slide-in-from-right-4">
 
                      {/* CATALOG SECTION */}
                      {activeTab === 'CATALOG' && (
@@ -451,37 +431,30 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               </h3>
                               <p className="text-sm text-gray-500 mb-8">Selecciona qué categorías de productos estarán disponibles para la venta en esta terminal. Si no seleccionas ninguna, se mostrarán todas.</p>
 
-                              {allCategories.length > 0 ? (
-                                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                                    {allCategories.map(cat => {
-                                       const isSelected = activeTerminal.config.catalog?.allowedCategories?.includes(cat);
-                                       return (
-                                          <button
-                                             key={cat}
-                                             onClick={() => {
-                                                const current = activeTerminal.config.catalog?.allowedCategories || [];
-                                                const updated = isSelected
-                                                   ? current.filter(c => c !== cat)
-                                                   : [...current, cat];
-                                                handleUpdateActiveConfig('catalog', 'allowedCategories', updated);
-                                             }}
-                                             className={`p-4 rounded-2xl border-2 text-left transition-all ${isSelected ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                             disabled={isReadOnly}
-                                          >
-                                             <div className={`w-6 h-6 rounded-full flex items-center justify-center mb-3 ${isSelected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-300'}`}>
-                                                {isSelected ? <Check size={14} strokeWidth={3} /> : <div className="w-2 h-2 bg-gray-300 rounded-full" />}
-                                             </div>
-                                             <span className={`font-bold text-sm block truncate ${isSelected ? 'text-blue-900' : 'text-gray-600'}`}>{cat}</span>
-                                          </button>
-                                       );
-                                    })}
-                                 </div>
-                              ) : (
-                                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-medium text-amber-900">
-                                    No encontramos categorías válidas en el catálogo visible de esta terminal.
-                                    Asigna categorías a los artículos o sincroniza nuevamente el catálogo para poder limitarlo por categoría.
-                                 </div>
-                              )}
+                              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                                 {allCategories.map(cat => {
+                                    const isSelected = activeTerminal.config.catalog?.allowedCategories?.includes(cat);
+                                    return (
+                                       <button
+                                          key={cat}
+                                          onClick={() => {
+                                             const current = activeTerminal.config.catalog?.allowedCategories || [];
+                                             const updated = isSelected
+                                                ? current.filter(c => c !== cat)
+                                                : [...current, cat];
+                                             handleUpdateActiveConfig('catalog', 'allowedCategories', updated);
+                                          }}
+                                          className={`p-4 rounded-2xl border-2 text-left transition-all ${isSelected ? 'bg-blue-50 border-blue-500 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                          disabled={isReadOnly}
+                                       >
+                                          <div className={`w-6 h-6 rounded-full flex items-center justify-center mb-3 ${isSelected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-300'}`}>
+                                             {isSelected ? <Check size={14} strokeWidth={3} /> : <div className="w-2 h-2 bg-gray-300 rounded-full" />}
+                                          </div>
+                                          <span className={`font-bold text-sm block truncate ${isSelected ? 'text-blue-900' : 'text-gray-600'}`}>{cat}</span>
+                                       </button>
+                                    );
+                                 })}
+                              </div>
 
                               <div className="mt-8 p-4 bg-blue-50 rounded-xl border border-blue-100 flex items-start gap-3">
                                  <Info size={20} className="text-blue-600 shrink-0 mt-0.5" />
@@ -777,6 +750,63 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  onUpdate={handleUpdateActiveConfig}
                                  isReadOnly={isReadOnly}
                               />
+
+                              <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6">
+                                 <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                                    <div>
+                                       <h3 className="text-xl font-black flex items-center gap-2 text-slate-800"><Percent size={24} className="text-emerald-600" /> Impuestos por Defecto</h3>
+                                       <p className="text-sm text-gray-500 font-medium leading-relaxed mt-2">
+                                          Si el artículo no tiene impuestos en su ficha, esta terminal aplicará esta combinación. Si el artículo sí tiene impuestos configurados, prevalece la ficha del artículo.
+                                       </p>
+                                    </div>
+                                    <button
+                                       type="button"
+                                       onClick={() => handleUpdateActiveConfig('operational', 'defaultTaxIds', [])}
+                                       disabled={isReadOnly || (activeTerminal.config.operational?.defaultTaxIds || []).length === 0}
+                                       className={`px-4 py-2 rounded-2xl text-xs font-black uppercase tracking-widest border transition-all ${isReadOnly || (activeTerminal.config.operational?.defaultTaxIds || []).length === 0 ? 'bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed' : 'bg-white border-slate-200 text-slate-600 hover:border-emerald-300 hover:text-emerald-700'}`}
+                                    >
+                                       Limpiar selección
+                                    </button>
+                                 </div>
+
+                                 {config.taxes.length > 0 ? (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                       {config.taxes.map((tax) => {
+                                          const selectedTaxIds = activeTerminal.config.operational?.defaultTaxIds || [];
+                                          const isSelected = selectedTaxIds.includes(tax.id);
+                                          const ratePercent = tax.rate <= 1 ? tax.rate * 100 : tax.rate;
+                                          const formattedRate = Number.isInteger(ratePercent) ? `${ratePercent}%` : `${ratePercent.toFixed(2)}%`;
+
+                                          return (
+                                             <button
+                                                key={tax.id}
+                                                type="button"
+                                                onClick={() => {
+                                                   const updated = isSelected
+                                                      ? selectedTaxIds.filter((taxId) => taxId !== tax.id)
+                                                      : [...selectedTaxIds, tax.id];
+                                                   handleUpdateActiveConfig('operational', 'defaultTaxIds', updated);
+                                                }}
+                                                disabled={isReadOnly}
+                                                className={`p-4 rounded-2xl border-2 text-left transition-all flex items-center justify-between gap-4 ${isSelected ? 'bg-emerald-50 border-emerald-500 shadow-sm' : 'bg-white border-slate-100 hover:border-emerald-200'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                             >
+                                                <div>
+                                                   <p className="text-sm font-black text-slate-800">{tax.name}</p>
+                                                   <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400 mt-1">{formattedRate}</p>
+                                                </div>
+                                                <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center ${isSelected ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-200 bg-white text-transparent'}`}>
+                                                   <Check size={14} strokeWidth={3} />
+                                                </div>
+                                             </button>
+                                          );
+                                       })}
+                                    </div>
+                                 ) : (
+                                    <div className="p-4 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                                       <p className="text-xs font-bold text-slate-400">No hay impuestos globales configurados en el sistema.</p>
+                                    </div>
+                                 )}
+                              </div>
 
                               {activeTerminal.config.operational?.usa_mesas && (
                                  <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-8 animate-in slide-in-from-top-4 duration-300">
@@ -1436,7 +1466,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                                  </div>
                               )}
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                 {SUPPORTED_FISCAL_CODES.map((type) => {
+                                 {(['B01', 'B02', 'B04', 'B14', 'B15'] as NCFType[]).map((type) => {
                                     const typeConfig = activeTerminal.config.fiscal?.typeConfigs?.[type] || { batchSize: 100, lowBatchThreshold: 20, lowBatchThresholdPct: 20 };
                                     return (
                                        <div key={type} className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-4">

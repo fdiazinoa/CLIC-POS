@@ -1,6 +1,8 @@
 import { ZReport, BusinessConfig } from '../../types';
+import { buildEscPosZReportPayload } from './EscPosFormatter';
 import { generateZReportReceipt } from './templates/ZReportReceipt';
 import { PrintRouterService } from './PrintRouterService';
+import { shouldSuppressBrowserPrintFallback } from './PrintRuntime';
 
 export const ThermalPrinterService = {
     /**
@@ -13,18 +15,40 @@ export const ThermalPrinterService = {
             console.log("🖨️ Starting Thermal Print Job for Z-Report:", report.sequenceNumber);
 
             // 1. Generate HTML Content for Thermal Paper (80mm width approx)
+            const runtimeConfig = config || ({ terminals: [], availablePrinters: [] } as BusinessConfig);
             const receiptHtml = generateZReportReceipt(report, hiddenModules);
+            const escPosBase64 = buildEscPosZReportPayload(report, hiddenModules, config);
 
-            const printedSilently = await PrintRouterService.routeAndPrintHtml({
-                config: config || ({ terminals: [], availablePrinters: [] } as BusinessConfig),
-                html: receiptHtml,
-                role: 'TICKET',
-                terminalId: report.terminalId,
-                jobType: 'Z_REPORT',
-                referenceId: report.id,
-            });
+            let printedSilently = false;
+
+            if (escPosBase64) {
+                printedSilently = await PrintRouterService.routeAndPrintEscPos({
+                    config: runtimeConfig,
+                    escPosBase64,
+                    role: 'TICKET',
+                    terminalId: report.terminalId,
+                    jobType: 'Z_REPORT',
+                    referenceId: report.id,
+                });
+            }
+
+            if (!printedSilently && !shouldSuppressBrowserPrintFallback()) {
+                printedSilently = await PrintRouterService.routeAndPrintHtml({
+                    config: runtimeConfig,
+                    html: receiptHtml,
+                    role: 'TICKET',
+                    terminalId: report.terminalId,
+                    jobType: 'Z_REPORT',
+                    referenceId: report.id,
+                });
+            }
 
             if (printedSilently) return true;
+
+            if (shouldSuppressBrowserPrintFallback()) {
+                console.warn('Silent native Z report print failed; browser print fallback suppressed.');
+                return false;
+            }
 
             // 2. Create a hidden iframe to print without disrupting the UI
             const iframe = document.createElement('iframe');

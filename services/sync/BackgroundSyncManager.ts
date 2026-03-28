@@ -61,6 +61,19 @@ class BackgroundSyncManager {
         console.log('⚙️ BackgroundSyncManager: Worker started (30s interval)');
     }
 
+    private isErpOperationalPushConfigured(): boolean {
+        try {
+            const erpBaseUrl =
+                localStorage.getItem('CLIC_ERP_SYNC_URL') ||
+                localStorage.getItem('CLIC_ERP_BASE_URL') ||
+                localStorage.getItem('erp_base_url');
+            const erpTerminalId = localStorage.getItem('clic_erp_sync_terminal_id');
+            return Boolean(erpBaseUrl && erpTerminalId);
+        } catch {
+            return false;
+        }
+    }
+
     /**
      * On slave terminals, only sync operational docs owned by this terminal.
      * This prevents replaying historical/master documents accidentally present locally.
@@ -155,14 +168,14 @@ class BackgroundSyncManager {
 
             // 5) Wallet operational events (ERP-normalized queue)
             await this.processCollection<any>('wallet_transactions', async (item) => {
-                await apiSyncAdapter.pushOperationalEvents([item]);
+                await (apiSyncAdapter as any).pushOperationalEvents?.([item]);
             }).catch((error: any) => {
                 collectionErrors.push(`wallet_transactions: ${error?.message || 'unknown error'}`);
             });
 
             // 6) Loyalty points events (optional collection; often empty until wired to earn/burn)
             await this.processCollection<any>('loyalty_events', async (item) => {
-                await apiSyncAdapter.pushOperationalEvents([item]);
+                await (apiSyncAdapter as any).pushOperationalEvents?.([item]);
             }).catch((error: any) => {
                 collectionErrors.push(`loyalty_events: ${error?.message || 'unknown error'}`);
             });
@@ -216,7 +229,6 @@ class BackgroundSyncManager {
             if (collectionName === 'transactions' && (status === undefined || status === null || (item as any).syncStatus === '')) {
                 return true;
             }
-            // Wallet / loyalty: only sync rows explicitly queued (avoid replaying legacy rows without status).
             if (
                 (collectionName === 'wallet_transactions' || collectionName === 'loyalty_events') &&
                 (status === undefined || status === null || (item as any).syncStatus === '')
@@ -259,6 +271,12 @@ class BackgroundSyncManager {
                     item._forceSyncReplay = false;
                 }
                 await db.saveDocument(collectionName as any, item as any);
+                if (collectionName === 'transactions') {
+                    const transaction = item as any;
+                    console.log(
+                        `[SYNC_BSM] marked COMPLETED collection=transactions id=${transaction.id} source_transaction_id=${transaction.source_transaction_id || 'n/a'}`
+                    );
+                }
             } catch (error: any) {
                 console.error(`❌ BackgroundSyncManager: Failed to sync ${collectionName} item ${item.id}:`, error);
                 item.syncStatus = 'ERROR';
@@ -354,12 +372,15 @@ class BackgroundSyncManager {
      * Re-queue recent COMPLETED transactions on slave nodes; duplicates are ignored on Master.
      */
     private async recoverCompletedTransactionsForReplay() {
-        if (permissionService.isMasterTerminal()) return;
-
         const terminalId = permissionService.getTerminalId();
         if (!terminalId) return;
 
-        const flagKey = `sync_replay_completed_transactions_v2_${terminalId}`;
+        const shouldReplayForSlave = !permissionService.isMasterTerminal();
+        const shouldReplayForErp = this.isErpOperationalPushConfigured();
+        if (!shouldReplayForSlave && !shouldReplayForErp) return;
+
+        const flagSuffix = shouldReplayForErp ? 'erp_v3' : 'v2';
+        const flagKey = `sync_replay_completed_transactions_${flagSuffix}_${terminalId}`;
         if (localStorage.getItem(flagKey) === '1') return;
 
         try {
@@ -379,8 +400,9 @@ class BackgroundSyncManager {
                 const hasLegacyMissingStatus = txn?.syncStatus === undefined || txn?.syncStatus === null || txn?.syncStatus === '';
                 const shouldReplayCompleted = txn?.syncStatus === 'COMPLETED';
 
-                // v2 broadened recovery:
-                // - COMPLETED items can be replayed once (for silent push bugs).
+                // Requeue recent transactions once:
+                // - on slave nodes for legacy silent push bugs
+                // - on ERP-bound terminals after introducing the direct ERP operational channel
                 // - Missing status gets normalized to PENDING.
                 if (hasLegacyMissingStatus || shouldReplayCompleted) {
                     txn.syncStatus = 'PENDING';

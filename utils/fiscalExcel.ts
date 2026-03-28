@@ -6,12 +6,6 @@ import {
     Transaction
 } from '../types';
 import * as XLSX from 'xlsx';
-import {
-    getExpectedFiscalNcfLength,
-    isCreditNoteFiscalCode,
-    isCreditNoteNcf,
-    isReportableFiscalNcf
-} from './fiscal/fiscalHelpers';
 
 type ExcelCellType = 'String' | 'Number';
 
@@ -126,6 +120,8 @@ const DEFAULT_TIPO_INGRESO = '01';
 const DEFAULT_TIPO_BIEN_SERVICIO_606 = '11';
 const DEFAULT_FORMA_PAGO_606 = '04';
 const DEFAULT_TIPO_ANULACION_608 = '09';
+const SALES_NCF_PREFIXES = ['B01', 'B02', 'B04', 'B14', 'B15'];
+
 const INCOME_TYPE_MAP: Record<string, string> = {
     '1': '01',
     '01': '01',
@@ -490,7 +486,7 @@ const normalizeForm607Row = (tx: Transaction): Form607Row | null => {
 
     const totals = extract607Totals(tx);
     const payments = aggregatePayments(tx.payments || [], totals.totalFacturado);
-    const ncfModificado = isCreditNoteFiscalCode(tx.ncfType) || isCreditNoteNcf(ncf)
+    const ncfModificado = tx.ncfType === 'B04'
         ? normalizeNcf(tx.affectedNCF ?? anyTx.ncfModificado)
         : normalizeNcf(anyTx.ncfModificado);
 
@@ -731,7 +727,7 @@ const build606Rows = (
 const build608Rows = (transactions: Transaction[]): Form608Row[] => {
     const creditNotesByOriginal = new Map<string, Transaction>();
     transactions
-        .filter(tx => isCreditNoteFiscalCode(tx.ncfType) && tx.originalTransactionId)
+        .filter(tx => tx.ncfType === 'B04' && tx.originalTransactionId)
         .forEach((creditNote) => {
             creditNotesByOriginal.set(String(creditNote.originalTransactionId), creditNote);
         });
@@ -755,23 +751,19 @@ const validate607Rows = (rows: Form607Row[]): FiscalPreflightError[] => {
     const errors: FiscalPreflightError[] = [];
     rows.forEach((row, index) => {
         const rowLabel = `607 fila ${index + 1} (${row.sourceId})`;
-        const expectedNcfLength = getExpectedFiscalNcfLength(row.ncf);
 
-        if (expectedNcfLength && row.ncf.length !== expectedNcfLength) {
+        if (row.ncf.length !== 11) {
             errors.push({
                 code: 'NCF_INVALID_LENGTH',
-                message: `${rowLabel}: NCF invalido. Debe tener ${expectedNcfLength} caracteres.`
+                message: `${rowLabel}: NCF invalido. Debe tener 11 caracteres.`
             });
         }
 
-        if (isCreditNoteNcf(row.ncf)) {
-            const expectedModifiedLength = getExpectedFiscalNcfLength(row.ncfModificado) || getExpectedFiscalNcfLength(row.ncf) || 11;
-            if (row.ncfModificado.length !== expectedModifiedLength) {
+        if (row.ncf.startsWith('B04') && row.ncfModificado.length !== 11) {
             errors.push({
                 code: 'NCF_MODIFIED_REQUIRED',
-                    message: `${rowLabel}: NCF Modificado es obligatorio para notas de credito (${expectedModifiedLength} caracteres).`
+                message: `${rowLabel}: NCF Modificado es obligatorio para B04 (11 caracteres).`
             });
-            }
         }
 
         if (row.tipoIdentificacion === 1 && onlyDigits(row.rncCedulaPasaporte).length !== 9) {
@@ -834,11 +826,10 @@ const validate608Rows = (rows: Form608Row[]): FiscalPreflightError[] => {
     const errors: FiscalPreflightError[] = [];
     rows.forEach((row, index) => {
         const rowLabel = `608 fila ${index + 1} (${row.sourceId})`;
-        const expectedNcfLength = getExpectedFiscalNcfLength(row.ncf);
-        if (expectedNcfLength && row.ncf.length !== expectedNcfLength) {
+        if (row.ncf.length !== 11) {
             errors.push({
                 code: '608_NCF_INVALID',
-                message: `${rowLabel}: NCF invalido. Debe tener ${expectedNcfLength} caracteres.`
+                message: `${rowLabel}: NCF invalido. Debe tener 11 caracteres.`
             });
         }
         if (!/^\d{8}$/.test(row.fechaAnulacion)) {
@@ -1117,7 +1108,7 @@ export const formatFiscalExcel = (options: FiscalExcelOptions): FiscalExcelResul
     const raw607Rows = allTransactions
         .filter(tx => {
             const ncf = normalizeNcf(tx.ncf);
-            return isReportableFiscalNcf(ncf);
+            return SALES_NCF_PREFIXES.some(prefix => ncf.startsWith(prefix));
         })
         .map(normalizeForm607Row)
         .filter(Boolean) as Form607Row[];

@@ -51,11 +51,12 @@ export const useBarcodeScanner = ({
             const target = e.target as HTMLElement;
 
             // CRITICAL: Identify if the event originated from an input field
-            const isManualInput = (
-                target.tagName === 'INPUT' ||
-                target.tagName === 'TEXTAREA' ||
-                target.isContentEditable
+            const isEditableInput = (
+                (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') &&
+                !(target as HTMLInputElement | HTMLTextAreaElement).readOnly &&
+                !(target as HTMLInputElement | HTMLTextAreaElement).disabled
             );
+            const isManualInput = isEditableInput || target.isContentEditable;
 
             // If user is typing in a text field, we MUST ignore global capture
             if (isManualInput) {
