@@ -19,6 +19,7 @@ import {
    resolveDocumentSeriesDisplayPrefix,
    resolveEffectiveSeriesIdForDocumentType,
 } from '../utils/documentSeriesIdentity';
+import { isPartialXReportAllowed } from '../utils/seriesValidation';
 
 interface DocumentSettingsProps {
    onClose: () => void;
@@ -308,6 +309,13 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({
       return stats;
    }, [transactions]);
 
+   const terminalForOperationalFilter = useMemo(
+      () => findTerminalForDocumentCenter(configProp ?? null, terminalId, currentDeviceId),
+      [configProp, terminalId, currentDeviceId]
+   );
+
+   const allowPartialXForOperationalTerminal = isPartialXReportAllowed(terminalForOperationalFilter?.config);
+
    const extraDocumentTypes = useMemo(() => {
       const extras = new Set<string>();
       for (const series of seriesList) {
@@ -319,15 +327,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({
       return Array.from(extras);
    }, [seriesList]);
 
-   const documentTypesToRender = useMemo(
-      () => [...DOCUMENT_TYPE_ORDER, ...extraDocumentTypes],
-      [extraDocumentTypes]
-   );
-
-   const terminalForOperationalFilter = useMemo(
-      () => findTerminalForDocumentCenter(configProp ?? null, terminalId, currentDeviceId),
-      [configProp, terminalId, currentDeviceId]
-   );
+   const documentTypesToRender = useMemo(() => {
+      const combined = [...DOCUMENT_TYPE_ORDER, ...extraDocumentTypes];
+      if (allowPartialXForOperationalTerminal) return combined;
+      return combined.filter((dt) => normalizeDocumentType(dt) !== 'X_REPORT');
+   }, [extraDocumentTypes, allowPartialXForOperationalTerminal]);
 
    const filterSeriesByTerminalAssignment = (docType: string, typeSeries: DocumentSeries[]): DocumentSeries[] => {
       const assignments = terminalForOperationalFilter?.config?.documentAssignments || {};
@@ -367,6 +371,15 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({
 
    const handleSaveInternalSeries = async () => {
       if (!editingSeries) return;
+      if (
+         normalizeDocumentType(editingSeries.documentType) === 'X_REPORT' &&
+         !allowPartialXForOperationalTerminal
+      ) {
+         alert(
+            'No se pueden guardar series de Corte Parcial (X) mientras esta caja tiene deshabilitado el reporte X (política ERP / sesión).'
+         );
+         return;
+      }
 
       let updated;
       const exists = seriesList.some(s => s.id === editingSeries.id);
@@ -745,7 +758,9 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({
                            </optgroup>
                            <optgroup label="Cierres">
                               <option value="Z_REPORT">Cierre de Caja (Z)</option>
-                              <option value="X_REPORT">Corte Parcial (X)</option>
+                              {allowPartialXForOperationalTerminal && (
+                                 <option value="X_REPORT">Corte Parcial (X)</option>
+                              )}
                            </optgroup>
                            <optgroup label="Cuentas">
                               <option value="RECEIVABLE">Cuenta por Cobrar</option>

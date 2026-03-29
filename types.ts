@@ -492,6 +492,11 @@ export interface TerminalConfig {
       // New fields for Force Z on Day Change
       forceZChange: boolean;
       businessStartHour: number;
+      /**
+       * Si es false: sin monitor X en Finanzas, sin asignación de serie X (`documentAssignments.X_REPORT` se quita al aplicar snapshot ERP),
+       * y las operaciones que validen `X_REPORT` fallan (ver `validateTerminalSeries`).
+       */
+      allowPartialXReport?: boolean;
     };
     offline: {
       mode: 'OPTIMISTIC' | 'STRICT' | 'READ_ONLY';

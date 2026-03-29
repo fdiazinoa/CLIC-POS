@@ -91,7 +91,8 @@ export const DEFAULT_TERMINAL_CONFIG = {
       cashVarianceThreshold: 0,
       emailZReport: false,
       forceZChange: false,
-      businessStartHour: 0
+      businessStartHour: 0,
+      allowPartialXReport: true,
     },
     offline: {
       mode: 'OPTIMISTIC' as const,

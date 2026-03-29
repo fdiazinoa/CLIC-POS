@@ -1,5 +1,14 @@
 import { TerminalConfig, DocumentType } from '../types';
 
+/** Mensaje cuando el ERP / política deshabilitó cortes parciales (X). */
+export const PARTIAL_X_REPORT_DISABLED_MESSAGE =
+    'Los cortes parciales (Reporte X) están deshabilitados para esta terminal desde el ERP.\n\n' +
+    'Activa “Permitir reporte X parcial” en Configuración de terminal (ERP) o pide a un administrador que lo habilite.';
+
+export function isPartialXReportAllowed(terminalConfig: TerminalConfig | undefined): boolean {
+    return terminalConfig?.workflow?.session?.allowPartialXReport !== false;
+}
+
 /**
  * Validate if a terminal has a series assigned for a specific document type
  */
@@ -12,6 +21,10 @@ export function validateTerminalSeries(
             isValid: false,
             message: 'No se ha configurado esta terminal.'
         };
+    }
+
+    if (documentType === 'X_REPORT' && !isPartialXReportAllowed(terminalConfig)) {
+        return { isValid: false, message: PARTIAL_X_REPORT_DISABLED_MESSAGE };
     }
 
     const assignedSeriesId = terminalConfig.documentAssignments?.[documentType];

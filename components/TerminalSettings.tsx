@@ -24,6 +24,7 @@ import { getDefaultRoleConfig, getRoleDisplayInfo, getAllModules } from '../util
 import AccessibilityToggle from './AccessibilityToggle';
 import SettingsOperational from './SettingsOperational';
 import { mergeDocumentSeriesCollection } from '../utils/documentSeriesIdentity';
+import { isPartialXReportAllowed } from '../utils/seriesValidation';
 
 interface TerminalSettingsProps {
    config: BusinessConfig;
@@ -142,6 +143,12 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
       terminals.find(t => t.id === selectedTerminalId),
       [terminals, selectedTerminalId]);
 
+   const documentRolesForUi = useMemo(() => {
+      if (!activeTerminal) return DOCUMENT_ROLES;
+      const allowX = isPartialXReportAllowed(activeTerminal.config);
+      return DOCUMENT_ROLES.filter((r) => r.id !== 'X_REPORT' || allowX);
+   }, [activeTerminal]);
+
    const isReadOnly = useMemo(() => {
       if (!activeTerminal) return false;
       // Si la terminal está gobernada por la maestra Y estamos físicamente en esa terminal Y no es la maestra
@@ -204,6 +211,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    // ... existing handlers ...
    const handleAssignSequence = (roleId: string, sequenceId: string) => {
       if (!activeTerminal) return;
+      if (roleId === 'X_REPORT' && !isPartialXReportAllowed(activeTerminal.config)) return;
 
       const currentAssignments = activeTerminal.config.documentAssignments || {};
       const newAssignments = { ...currentAssignments, [roleId]: sequenceId };
@@ -306,7 +314,13 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
    };
 
    const handleSave = () => {
-      onUpdateConfig({ ...config, terminals: terminals });
+      const cleanedTerminals = terminals.map((t) => {
+         if (isPartialXReportAllowed(t.config)) return t;
+         const da = { ...(t.config.documentAssignments || {}) };
+         delete da.X_REPORT;
+         return { ...t, config: { ...t.config, documentAssignments: da } };
+      });
+      onUpdateConfig({ ...config, terminals: cleanedTerminals });
       alert("Configuraciones de terminales guardadas correctamente.");
       onClose();
    };
@@ -1030,7 +1044,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                               )}
 
                               <div className="space-y-4">
-                                 {DOCUMENT_ROLES.map((role) => {
+                                 {documentRolesForUi.map((role) => {
                                     const assignedId = activeTerminal.config.documentAssignments?.[role.id] || '';
                                     const allForRole = masterSequences.filter((s) => s.documentType === role.id);
                                     const sequenceOptions =

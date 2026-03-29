@@ -12,6 +12,8 @@ interface FinanceDashboardProps {
    config: BusinessConfig;
    currentUser: User | null;
    roles: RoleDefinition[];
+   /** false desactiva el bloque Reporte X (gobernado desde ERP `session.allowPartialXReport`). */
+   allowPartialXReport?: boolean;
    onClose: () => void;
    onRegisterMovement: (type: 'IN' | 'OUT', amount: number, reason: string) => void;
    onOpenZReport: () => void;
@@ -104,6 +106,7 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
    config,
    currentUser,
    roles,
+   allowPartialXReport = true,
    onClose,
    onRegisterMovement,
    onOpenZReport
@@ -227,8 +230,8 @@ const FinanceDashboard: React.FC<FinanceDashboardProps> = ({
             {/* RIGHT: X-REPORT (MONITOR) & Z-REPORT LINK */}
             <div className="w-full md:w-1/2 flex flex-col gap-6">
 
-               {/* Control X Card - Only visible with POS_VIEW_X_REPORT permission*/}
-               {hasPermission('POS_VIEW_X_REPORT') && (
+               {/* Control X: permiso + política ERP/POS (allowPartialXReport) */}
+               {hasPermission('POS_VIEW_X_REPORT') && allowPartialXReport && (
                   <div className="bg-gray-900 text-white p-6 rounded-3xl shadow-xl relative overflow-hidden">
                      {/* Background Pattern */}
                      <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>

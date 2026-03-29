@@ -4294,9 +4294,11 @@ const AppContent: React.FC = () => {
 
       case 'FINANCE':
         {
-          const currentTerminalId = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId)?.id || 'T1';
+          const financeTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+          const currentTerminalId = financeTerminal?.id || 'T1';
           const terminalTransactions = getPendingTransactionsForTerminal(currentTerminalId);
           const terminalMovements = getPendingCashMovementsForTerminal(currentTerminalId);
+          const allowPartialXReport = financeTerminal?.config?.workflow?.session?.allowPartialXReport !== false;
 
           return (
             <FinanceDashboard
@@ -4305,6 +4307,7 @@ const AppContent: React.FC = () => {
               config={config}
               currentUser={currentUser}
               roles={roles}
+              allowPartialXReport={allowPartialXReport}
               onRegisterMovement={handleRegisterMovement}
               onOpenZReport={() => setCurrentView('Z_REPORT')}
               onClose={() => setCurrentView('POS')}

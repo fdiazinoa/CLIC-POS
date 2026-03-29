@@ -42,10 +42,21 @@ const cloneDeep = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
 /**
  * ERP (Settings → Terminal) guarda jornada/Z en `terminal.config.session`:
- * `requireZClose`, `requireOpenSession`, `allowPartialXReport`, `autoLockMinutes`.
+ * `requireZClose`, `requireOpenSession`, `allowPartialXReport`, `autoLockMinutes`,
+ * `businessStartHour`, `autoPrintZReport`, `emailZReport`, `zReportEmails`.
  * El POS usa `workflow.session` con otros nombres (`forceZChange`, `allowSalesWithOpenZ`, …).
  * Sin este mapeo, el snapshot trae los booleans del ERP pero el POS no los aplica.
  */
+const readErpSessionNumber = (erpSession: Record<string, unknown>, camel: string, snake: string): number | undefined => {
+  const raw = erpSession[camel] ?? erpSession[snake];
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+};
+
 const mergeWorkflowSessionFromErpConfig = (
   templateSession: TerminalConfig['workflow']['session'],
   erpSession: Record<string, unknown>,
@@ -61,6 +72,32 @@ const mergeWorkflowSessionFromErpConfig = (
   }
   if (typeof erpSession.requireOpenSession === 'boolean') {
     merged.allowSalesWithOpenZ = !erpSession.requireOpenSession;
+  }
+
+  const partialX =
+    erpSession.allowPartialXReport ?? erpSession.allow_partial_x_report;
+  if (typeof partialX === 'boolean') {
+    merged.allowPartialXReport = partialX;
+  }
+
+  const bsh = readErpSessionNumber(erpSession, 'businessStartHour', 'business_start_hour');
+  if (bsh !== undefined) {
+    merged.businessStartHour = Math.max(0, Math.min(23, Math.floor(bsh)));
+  }
+
+  const autoPrint = erpSession.autoPrintZReport ?? erpSession.auto_print_z_report;
+  if (typeof autoPrint === 'boolean') {
+    merged.autoPrintZReport = autoPrint;
+  }
+
+  const emailZ = erpSession.emailZReport ?? erpSession.email_z_report;
+  if (typeof emailZ === 'boolean') {
+    merged.emailZReport = emailZ;
+  }
+
+  const zEmails = erpSession.zReportEmails ?? erpSession.z_report_emails;
+  if (typeof zEmails === 'string') {
+    merged.zReportEmails = zEmails;
   }
 
   return merged;
@@ -537,6 +574,12 @@ export const applyTerminalConfigSnapshot = (
       ...fallbackLan,
     },
   };
+
+  if (nextTerminalConfig.workflow?.session?.allowPartialXReport === false && nextTerminalConfig.documentAssignments) {
+    const prunedAssignments = { ...nextTerminalConfig.documentAssignments };
+    delete prunedAssignments.X_REPORT;
+    nextTerminalConfig.documentAssignments = prunedAssignments;
+  }
 
   nextConfig.terminals = (nextConfig.terminals || []).map((terminal) => {
     if (terminal.id !== terminalId) return terminal;
