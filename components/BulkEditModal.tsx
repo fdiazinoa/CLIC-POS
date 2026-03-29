@@ -116,29 +116,29 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
    };
 
    return (
-      <div className="fixed inset-0 z-[110] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-300">
-         <div className="bg-white rounded-[2.5rem] w-full max-w-4xl h-[85vh] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+      <div className="fixed inset-0 z-[110] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-300">
+         <div className="bg-white rounded-t-[2rem] sm:rounded-[2.5rem] w-full max-w-4xl h-[92dvh] sm:h-[85vh] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
 
             {/* Header */}
-            <div className="p-8 border-b flex justify-between items-center bg-white shrink-0">
-               <div className="flex items-center gap-4">
-                  <div className="p-4 bg-blue-600 text-white rounded-2xl shadow-xl shadow-blue-500/20">
-                     <Settings2 size={28} />
+            <div className="p-5 sm:p-8 border-b flex justify-between items-start sm:items-center gap-4 bg-white shrink-0">
+               <div className="flex items-start sm:items-center gap-3 sm:gap-4 min-w-0">
+                  <div className="p-3 sm:p-4 bg-blue-600 text-white rounded-2xl shadow-xl shadow-blue-500/20 shrink-0">
+                     <Settings2 size={24} />
                   </div>
-                  <div>
-                     <h2 className="text-2xl font-black text-slate-800">Edición Masiva</h2>
-                     <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">
+                  <div className="min-w-0">
+                     <h2 className="text-3xl sm:text-2xl leading-none font-black text-slate-800">Edición Masiva</h2>
+                     <p className="text-[11px] sm:text-xs text-slate-400 font-bold uppercase tracking-[0.22em] mt-2 leading-snug">
                         Actualizando <span className="text-blue-600 font-black">{selectedCount}</span> artículos simultáneamente
                      </p>
                   </div>
                </div>
-               <button type="button" onClick={onClose} disabled={isSaving} className="p-3 bg-white border border-slate-200 shadow-sm hover:bg-slate-50 rounded-full text-slate-400 transition-colors disabled:opacity-30">
-                  <X size={24} />
+               <button type="button" onClick={onClose} disabled={isSaving} className="p-3 bg-white border border-slate-200 shadow-sm hover:bg-slate-50 rounded-full text-slate-400 transition-colors disabled:opacity-30 shrink-0">
+                  <X size={22} />
                </button>
             </div>
 
             {/* Tab Navigation */}
-            <div className="flex px-8 border-b bg-white shrink-0 overflow-x-auto no-scrollbar gap-2 py-2">
+            <div className="grid grid-cols-2 sm:flex px-4 sm:px-8 border-b bg-white shrink-0 overflow-x-auto no-scrollbar gap-2 py-3">
                {[
                   { id: 'LOGISTICS', label: 'Logística & Almacenes', icon: Building2 },
                   { id: 'FLAGS', label: 'Propiedades & Flags', icon: ShieldCheck },
@@ -150,7 +150,7 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                      type="button"
                      onClick={() => setActiveTab(tab.id as BulkTab)}
                      disabled={isSaving}
-                     className={`flex items-center gap-2 py-3 px-6 font-black text-xs uppercase tracking-wider transition-all rounded-xl border shadow-sm ${activeTab === tab.id ? 'bg-white text-blue-600 border-blue-200 ring-2 ring-blue-50' : 'bg-white text-slate-500 border-slate-200 hover:text-slate-700 hover:border-slate-300'} disabled:opacity-50`}
+                     className={`flex items-center justify-center gap-2 py-3 px-3 sm:px-6 font-black text-[10px] sm:text-xs uppercase tracking-wide text-center transition-all rounded-xl border shadow-sm ${activeTab === tab.id ? 'bg-white text-blue-600 border-blue-200 ring-2 ring-blue-50' : 'bg-white text-slate-500 border-slate-200 hover:text-slate-700 hover:border-slate-300'} disabled:opacity-50`}
                   >
                      <tab.icon size={16} /> {tab.label}
                   </button>
@@ -158,7 +158,7 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
             </div>
 
             {/* Content Area */}
-            <div className="flex-1 overflow-y-auto p-10 bg-slate-50/30 custom-scrollbar">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-10 bg-slate-50/30 custom-scrollbar">
 
                {activeTab === 'LOGISTICS' && (
                   <div className="max-w-2xl mx-auto space-y-6 animate-in slide-in-from-right-4 duration-300">
@@ -321,7 +321,7 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
 
                {activeTab === 'CLASSIFICATION' && (
                   <div className="max-w-2xl mx-auto space-y-6 animate-in slide-in-from-right-4 duration-300">
-                     <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm space-y-8">
+                     <div className="bg-white p-5 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] border border-slate-200 shadow-sm space-y-8">
                         <div>
                            <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-3 ml-1">Cambiar Categoría</label>
                            <select
@@ -390,7 +390,7 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                         </div>
                      </div>
 
-                     <div className="p-6 bg-blue-50 rounded-[2rem] border border-blue-100 flex items-start gap-4">
+                     <div className="p-5 sm:p-6 bg-blue-50 rounded-[1.5rem] sm:rounded-[2rem] border border-blue-100 flex items-start gap-4">
                         <AlertTriangle className="text-blue-600 mt-1 shrink-0" size={24} />
                         <p className="text-xs text-blue-800 leading-relaxed font-medium">
                            <strong>Importante:</strong> Solo los campos que selecciones explícitamente serán actualizados en los artículos. Los valores actuales de los productos seleccionados se mantendrán intactos en los campos que dejes en blanco.
@@ -402,12 +402,12 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
             </div>
 
             {/* Footer Actions */}
-            <div className="p-8 border-t bg-white flex justify-end gap-4 shrink-0 shadow-[0_-10px_40px_rgba(0,0,0,0.03)]">
+            <div className="p-4 sm:p-8 border-t bg-white flex flex-col-reverse sm:flex-row justify-end gap-3 sm:gap-4 shrink-0 shadow-[0_-10px_40px_rgba(0,0,0,0.03)]">
                <button
                   type="button"
                   onClick={onClose}
                   disabled={isSaving}
-                  className="px-8 py-4 rounded-2xl font-black text-sm uppercase tracking-wider text-slate-400 hover:bg-slate-50 transition-colors disabled:opacity-30"
+                  className="w-full sm:w-auto px-8 py-4 rounded-2xl font-black text-sm uppercase tracking-wider text-slate-400 hover:bg-slate-50 transition-colors disabled:opacity-30"
                >
                   Cancelar
                </button>
@@ -417,7 +417,7 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                      type="button"
                      onClick={handleFinalConfirm}
                      disabled={isSaving}
-                     className="px-12 py-4 bg-orange-500 hover:bg-orange-600 text-white rounded-2xl font-black text-sm uppercase tracking-wider shadow-2xl shadow-orange-500/30 active:scale-95 transition-all flex items-center gap-3 animate-in zoom-in-95"
+                     className="w-full sm:w-auto justify-center px-8 sm:px-12 py-4 bg-orange-500 hover:bg-orange-600 text-white rounded-2xl font-black text-sm uppercase tracking-wider shadow-2xl shadow-orange-500/30 active:scale-95 transition-all flex items-center gap-3 animate-in zoom-in-95"
                   >
                      {isSaving ? <RefreshCw size={20} className="animate-spin" /> : <AlertTriangle size={20} />}
                      {isSaving ? 'Procesando...' : 'Confirmar Aplicación Masiva'}
@@ -427,7 +427,7 @@ const BulkEditModal: React.FC<BulkEditModalProps> = ({
                      type="button"
                      onClick={handleInitialClick}
                      disabled={isSaving}
-                     className="px-12 py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-sm uppercase tracking-wider shadow-2xl shadow-blue-500/30 active:scale-95 transition-all flex items-center gap-3"
+                     className="w-full sm:w-auto justify-center px-8 sm:px-12 py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-sm uppercase tracking-wider shadow-2xl shadow-blue-500/30 active:scale-95 transition-all flex items-center gap-3"
                   >
                      <Save size={20} /> Guardar Cambios Masivos
                   </button>

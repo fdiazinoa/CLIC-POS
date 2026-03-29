@@ -123,6 +123,32 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 if (updates.classification.measurementUnit) next.measurementUnit = updates.classification.measurementUnit;
                 if (updates.classification.purchaseUnit) next.purchaseUnit = updates.classification.purchaseUnit;
             }
+            if (updates?.pricing?.tariffActions) {
+                const tariffCatalog = new Map(
+                    (updates.pricing.tariffs || []).map((tariff: any) => [tariff.id, tariff])
+                );
+                next.tariffs = [...(next.tariffs || [])];
+
+                Object.entries(updates.pricing.tariffActions).forEach(([tariffId, action]) => {
+                    const existingIndex = next.tariffs.findIndex((tariff: any) => tariff.tariffId === tariffId);
+                    if (action === 'ASSIGN') {
+                        if (existingIndex === -1) {
+                            const tariffMeta = tariffCatalog.get(tariffId) as { id: string; name?: string } | undefined;
+                            next.tariffs.push({
+                                tariffId,
+                                name: tariffMeta?.name,
+                                price: Number(next.price || 0),
+                                costBase: Number(next.cost || 0),
+                                margin: next.cost > 0
+                                    ? ((Number(next.price || 0) - Number(next.cost || 0)) / Number(next.cost || 0)) * 100
+                                    : 30
+                            });
+                        }
+                    } else if (action === 'REMOVE' && existingIndex !== -1) {
+                        next.tariffs.splice(existingIndex, 1);
+                    }
+                });
+            }
             if (updates?.warehouseActions) {
                 const activeInWarehouses = new Set(next.activeInWarehouses || []);
                 Object.entries(updates.warehouseActions).forEach(([whId, action]) => {

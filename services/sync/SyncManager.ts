@@ -12,13 +12,17 @@ import { NetworkScanner } from './NetworkScanner';
 import { v4 as uuidv4 } from 'uuid';
 import { permissionService } from './PermissionService';
 import { realtimeNotificationService } from './RealtimeNotificationService';
-import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig } from '../../types';
+import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig } from '../../types';
 import {
     applyTerminalConfigSnapshot,
     extractTerminalConfigSnapshot,
     extractTerminalOperationalDocumentState,
 } from '../../utils/terminalConfigSnapshot';
 import { buildMasterUrlFromHost } from '../../utils/cloudMasterRegistry';
+import {
+    looksLikeUuidString,
+    resolveDocumentSeriesDisplayPrefix,
+} from '../../utils/documentSeriesIdentity';
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities';
 
@@ -1135,7 +1139,7 @@ class SyncManager {
                     const fullItems = await apiSyncAdapter.pull(collection);
 
                     if (Array.isArray(fullItems) && fullItems.length > 0) {
-                        const cleanItems = fullItems.map((item: any) => {
+                        let cleanItems = fullItems.map((item: any) => {
                             const { _op, ...rest } = item;
                             if (collection === 'internalSequences') {
                                 return this.repairSequenceData(rest);
@@ -1148,6 +1152,10 @@ class SyncManager {
 
                             return rest;
                         });
+
+                        if (collection === 'products') {
+                            cleanItems = await this.enrichPulledProducts(cleanItems);
+                        }
 
                         const safeItems = collection === 'transactions'
                             ? await this.mergeTransactionsFullSnapshot(cleanItems)
@@ -1198,7 +1206,7 @@ class SyncManager {
             if (isFullDownload) {
                 // Legacy behavior for first load or force pull
                 console.log(`💾 SyncManager: Performing FULL save for ${collection}...`);
-                const cleanItems = items.map((item: any) => {
+                let cleanItems = items.map((item: any) => {
                     const { _op, ...rest } = item;
                     // Add repair logic for internalSequences
                     if (collection === 'internalSequences') {
@@ -1212,6 +1220,11 @@ class SyncManager {
 
                     return rest;
                 });
+
+                if (collection === 'products') {
+                    cleanItems = await this.enrichPulledProducts(cleanItems);
+                }
+
                 const safeItems = collection === 'transactions'
                     ? await this.mergeTransactionsFullSnapshot(cleanItems)
                     : cleanItems;
@@ -1228,6 +1241,11 @@ class SyncManager {
                     } else {
                         // Add repair logic for internalSequences
                         let finalItem = collection === 'internalSequences' ? this.repairSequenceData(cleanItem) : cleanItem;
+
+                        if (collection === 'products') {
+                            const enriched = await this.enrichPulledProducts([finalItem]);
+                            finalItem = enriched[0];
+                        }
 
                         // Master as Proxy logic: Default cloudSyncStatus to PENDING for audited documents if missing
                         if (['transactions', 'reservations', 'inventoryLedger', 'zReports'].includes(collection)) {
@@ -2000,32 +2018,63 @@ class SyncManager {
             throw error;
         }
     }
+    private async resolveCurrentTerminalConfig(): Promise<TerminalConfig | null> {
+        try {
+            const raw = await db.get('config');
+            let businessConfig: any = raw;
+            if (Array.isArray(raw)) {
+                businessConfig =
+                    raw.find((c: any) => c && c.id === 'current') ||
+                    raw.find((c: any) => Array.isArray(c?.terminals)) ||
+                    raw[0];
+            }
+            const tid = permissionService.getTerminalId();
+            if (!tid || !businessConfig?.terminals) return null;
+            const terminal = (businessConfig.terminals as any[]).find((t: any) => t.id === tid);
+            return terminal?.config || null;
+        } catch {
+            return null;
+        }
+    }
+
+    /** Catálogo tal cual viene del ERP/master; el POS no inventa tarifas ni almacenes. */
+    private async enrichPulledProducts(items: any[]): Promise<any[]> {
+        return Array.isArray(items) ? items : [];
+    }
+
     /**
      * Repair missing documentType in sequence data (Legacy/Imported Fix)
      */
     private repairSequenceData(item: any): any {
-        if (item.documentType) return item;
+        const rawPrefix = String(item.prefix || '').trim();
+        const idStr = String(item.id || '').trim();
+        let base = { ...item };
+        if (!rawPrefix || looksLikeUuidString(rawPrefix) || rawPrefix.toLowerCase() === idStr.toLowerCase()) {
+            base.prefix = resolveDocumentSeriesDisplayPrefix(item);
+        }
 
-        console.log(`🛠️ SyncManager: Repairing missing documentType for sequence ${item.id} (${item.prefix})`);
+        if (base.documentType) return base;
+
+        console.log(`🛠️ SyncManager: Repairing missing documentType for sequence ${base.id} (${base.prefix})`);
 
         // Match by ID first (Defaults)
-        if (item.id === 'TICKET') return { ...item, documentType: 'TICKET' };
-        if (item.id === 'REFUND') return { ...item, documentType: 'REFUND' };
-        if (item.id === 'TRANSFER') return { ...item, documentType: 'TRANSFER' };
-        if (item.id === 'VOID') return { ...item, documentType: 'VOID' };
+        if (base.id === 'TICKET') return { ...base, documentType: 'TICKET' };
+        if (base.id === 'REFUND') return { ...base, documentType: 'REFUND' };
+        if (base.id === 'TRANSFER') return { ...base, documentType: 'TRANSFER' };
+        if (base.id === 'VOID') return { ...base, documentType: 'VOID' };
 
         // Match by Prefix
-        const prefix = item.prefix || '';
-        if (prefix.startsWith('TCK')) return { ...item, documentType: 'TICKET' };
-        if (prefix.startsWith('NC') || prefix.startsWith('REF')) return { ...item, documentType: 'REFUND' };
-        if (prefix.startsWith('TR')) return { ...item, documentType: 'TRANSFER' };
-        if (prefix.startsWith('VOID')) return { ...item, documentType: 'VOID' };
-        if (prefix.startsWith('AJ')) return { ...item, documentType: 'ADJUSTMENT_IN' };
-        if (prefix.startsWith('CR') || prefix.startsWith('CK')) return { ...item, documentType: 'Z_REPORT' };
-        if (prefix.startsWith('XP')) return { ...item, documentType: 'X_REPORT' };
+        const prefix = base.prefix || '';
+        if (prefix.startsWith('TCK')) return { ...base, documentType: 'TICKET' };
+        if (prefix.startsWith('NC') || prefix.startsWith('REF')) return { ...base, documentType: 'REFUND' };
+        if (prefix.startsWith('TR')) return { ...base, documentType: 'TRANSFER' };
+        if (prefix.startsWith('VOID')) return { ...base, documentType: 'VOID' };
+        if (prefix.startsWith('AJ')) return { ...base, documentType: 'ADJUSTMENT_IN' };
+        if (prefix.startsWith('CR') || prefix.startsWith('CK')) return { ...base, documentType: 'Z_REPORT' };
+        if (prefix.startsWith('XP')) return { ...base, documentType: 'X_REPORT' };
 
         // Fallback for everything else
-        return { ...item, documentType: 'TICKET' };
+        return { ...base, documentType: 'TICKET' };
     }
 }
 

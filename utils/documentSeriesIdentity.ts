@@ -1,5 +1,48 @@
 import { DocumentSeries, DocumentType } from '../types';
 
+const UUID_LIKE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** True for standard UUID strings (often used as erp_document_series.id — not a ticket prefix). */
+export const looksLikeUuidString = (value?: string | null): boolean => {
+  const s = typeof value === 'string' ? value.trim() : '';
+  return s.length > 0 && UUID_LIKE.test(s);
+};
+
+export type DocumentSeriesPrefixSource = {
+  prefix?: unknown;
+  codigo?: unknown;
+  code?: unknown;
+  series_code?: unknown;
+  name?: unknown;
+  label?: unknown;
+};
+
+/**
+ * Resolves the human-facing document prefix for tickets (code / serie), never preferring a row UUID.
+ * ERP rows use `code`; legacy payloads may use `series_code` or `codigo`.
+ */
+export const resolveDocumentSeriesDisplayPrefix = (data: DocumentSeriesPrefixSource): string => {
+  const prefix = typeof data.prefix === 'string' ? data.prefix.trim() : '';
+  const codigo = typeof data.codigo === 'string' ? data.codigo.trim() : '';
+  const code = typeof data.code === 'string' ? data.code.trim() : '';
+  const seriesCode = typeof data.series_code === 'string' ? data.series_code.trim() : '';
+  const name = typeof data.name === 'string' ? data.name : typeof data.label === 'string' ? data.label : '';
+
+  for (const candidate of [prefix, codigo, code, seriesCode]) {
+    if (!candidate) continue;
+    if (!looksLikeUuidString(candidate)) {
+      return candidate.toUpperCase();
+    }
+  }
+
+  const fromName = String(name).replace(/[^a-zA-Z0-9]+/g, '').slice(0, 14);
+  if (fromName) return fromName.toUpperCase();
+
+  const fallback = prefix || code || seriesCode || codigo;
+  return (fallback || 'DOC').toUpperCase();
+};
+
 const normalizeString = (value?: string | null): string =>
   typeof value === 'string' ? value.trim().toUpperCase() : '';
 

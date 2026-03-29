@@ -15,6 +15,7 @@ import {
   canonicalizeDocumentSeries,
   mergeDocumentSeriesCollection,
   resolveDocumentAssignmentId,
+  resolveDocumentSeriesDisplayPrefix,
 } from './documentSeriesIdentity';
 
 const asObject = (value: unknown): Record<string, any> => {
@@ -132,12 +133,14 @@ const normalizeDocumentSeries = (raw: unknown, index: number): DocumentSeries | 
   const id = asString(data.id || data.series_id || data.code || data.prefix || `SERIES-${index + 1}`);
   if (!id) return null;
 
+  const displayPrefix = resolveDocumentSeriesDisplayPrefix(data);
+
   return canonicalizeDocumentSeries({
     id,
     documentType: normalizeDocumentType(data.documentType || data.document_type || data.type, 'TICKET'),
     name: asString(data.name || data.label || id) || id,
     description: asString(data.description || data.notes || ''),
-    prefix: asString(data.prefix || data.codigo || id) || id,
+    prefix: displayPrefix,
     nextNumber: asNumber(data.nextNumber ?? data.next_number ?? data.current_number, 1),
     padding: asNumber(data.padding ?? data.number_padding, 6),
     icon: asString(data.icon || 'Receipt') || 'Receipt',

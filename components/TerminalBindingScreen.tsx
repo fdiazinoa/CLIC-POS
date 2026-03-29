@@ -182,19 +182,19 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   };
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-slate-900 p-6">
+    <div className="relative min-h-screen overflow-x-hidden overflow-y-auto bg-slate-900 p-3 pb-6 sm:p-6">
       <div className="pointer-events-none absolute inset-0 opacity-10">
         <div className="absolute left-1/2 top-1/2 h-[860px] w-[860px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500 blur-[170px]" />
       </div>
 
-      <div className="relative z-10 mx-auto max-w-5xl">
-        <div className="rounded-[2.75rem] border border-white/10 bg-white/95 p-10 shadow-[0_36px_110px_rgba(15,23,42,0.32)] backdrop-blur-xl">
-          <div className="mb-10 text-center">
-            <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-[1.85rem] bg-blue-50 shadow-inner">
-              <Smartphone className="text-blue-600" size={40} />
+      <div className="relative z-10 mx-auto max-w-5xl pb-4 sm:pb-0">
+        <div className="rounded-[2rem] border border-white/10 bg-white/95 p-5 shadow-[0_36px_110px_rgba(15,23,42,0.32)] backdrop-blur-xl sm:rounded-[2.75rem] sm:p-10">
+          <div className="mb-7 text-center sm:mb-10">
+            <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-[1.4rem] bg-blue-50 shadow-inner sm:mb-6 sm:h-20 sm:w-20 sm:rounded-[1.85rem]">
+              <Smartphone className="text-blue-600" size={32} />
             </div>
-            <h1 className="text-3xl font-black tracking-tight text-slate-900">Activar Terminal</h1>
-            <p className="mt-3 text-sm font-medium text-slate-500">
+            <h1 className="text-[2rem] font-black leading-none tracking-tight text-slate-900 sm:text-3xl">Activar Terminal</h1>
+            <p className="mx-auto mt-3 max-w-xl text-sm font-medium leading-relaxed text-slate-500 sm:text-sm">
               Este equipo aún no tiene identidad operativa. Vamos a vincularlo a una caja del tenant.
             </p>
           </div>
@@ -207,30 +207,30 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
 
               <button
                 onClick={() => handleModeSelect('MASTER')}
-                className="w-full rounded-[2rem] border-2 border-slate-100 bg-slate-50 p-6 text-left transition hover:border-blue-500 hover:bg-white"
+                className="w-full rounded-[1.6rem] border-2 border-slate-100 bg-slate-50 p-5 text-left transition hover:border-blue-500 hover:bg-white sm:rounded-[2rem] sm:p-6"
               >
-                <div className="flex items-center gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white text-slate-400 shadow-sm">
+                <div className="flex items-start gap-4 sm:items-center">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-slate-400 shadow-sm sm:h-12 sm:w-12">
                     <Server size={24} />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <h3 className="font-black text-slate-900">Caja Maestra / Independiente</h3>
-                    <p className="mt-1 text-xs font-medium text-slate-400">Servidor local o única caja operando en este equipo.</p>
+                    <p className="mt-1 text-xs font-medium leading-relaxed text-slate-400">Servidor local o única caja operando en este equipo.</p>
                   </div>
                 </div>
               </button>
 
               <button
                 onClick={() => handleModeSelect('SLAVE')}
-                className="w-full rounded-[2rem] border-2 border-slate-100 bg-slate-50 p-6 text-left transition hover:border-purple-500 hover:bg-white"
+                className="w-full rounded-[1.6rem] border-2 border-slate-100 bg-slate-50 p-5 text-left transition hover:border-purple-500 hover:bg-white sm:rounded-[2rem] sm:p-6"
               >
-                <div className="flex items-center gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white text-slate-400 shadow-sm">
+                <div className="flex items-start gap-4 sm:items-center">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-slate-400 shadow-sm sm:h-12 sm:w-12">
                     <Wifi size={24} />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <h3 className="font-black text-slate-900">Caja Esclava / Adicional</h3>
-                    <p className="mt-1 text-xs font-medium text-slate-400">Se conecta a una caja maestra existente dentro de la red local.</p>
+                    <p className="mt-1 text-xs font-medium leading-relaxed text-slate-400">Se conecta a una caja maestra existente dentro de la red local.</p>
                   </div>
                 </div>
               </button>
@@ -239,7 +239,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
 
           {step === 'SLAVE_CONNECT' && (
             <div className="mx-auto max-w-xl space-y-6">
-              <div className="rounded-[2rem] border border-purple-100 bg-purple-50 p-6">
+              <div className="rounded-[1.75rem] border border-purple-100 bg-purple-50 p-5 sm:rounded-[2rem] sm:p-6">
                 <div className="mb-4 flex items-center gap-2 text-purple-600">
                   <Wifi size={16} />
                   <span className="text-[10px] font-black uppercase tracking-[0.3em]">Conexión a Maestra</span>
@@ -252,7 +252,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   placeholder="Ej: 192.168.1.50"
                   value={masterIp}
                   onChange={(e) => setMasterIp(e.target.value)}
-                  className="w-full rounded-xl border-2 border-purple-200 bg-white p-4 font-mono text-lg text-purple-900 outline-none transition-all focus:border-purple-500"
+                  className="w-full rounded-xl border-2 border-purple-200 bg-white p-4 font-mono text-base text-purple-900 outline-none transition-all focus:border-purple-500 sm:text-lg"
                 />
 
                 {localIps.length > 0 && (
@@ -280,7 +280,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
               <button
                 onClick={handleConnectToMaster}
                 disabled={isConnecting}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-purple-600 py-4 text-lg font-black text-white shadow-xl shadow-purple-200 transition-all hover:bg-purple-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-purple-600 py-4 text-base font-black text-white shadow-xl shadow-purple-200 transition-all hover:bg-purple-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 sm:text-lg"
               >
                 {isConnecting ? 'Conectando...' : 'Conectar y Sincronizar'} <ChevronRight size={20} />
               </button>
@@ -296,7 +296,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
 
           {step === 'AUTH' && (
             <div className="mx-auto max-w-xl space-y-6">
-              <div className="rounded-[2rem] border border-slate-100 bg-slate-50 p-6">
+              <div className="rounded-[1.75rem] border border-slate-100 bg-slate-50 p-5 sm:rounded-[2rem] sm:p-6">
                 <div className="mb-4 flex items-center gap-2 text-slate-500">
                   <Lock size={16} />
                   <span className="text-[10px] font-black uppercase tracking-[0.3em]">Autorización Requerida</span>
@@ -307,14 +307,14 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   value={adminPin}
                   maxLength={4}
                   onChange={(e) => setAdminPin(e.target.value)}
-                  className="w-full rounded-xl border-2 border-slate-200 bg-white p-4 text-center font-mono text-2xl tracking-[1rem] outline-none transition-all focus:border-blue-500"
+                  className="w-full rounded-xl border-2 border-slate-200 bg-white p-4 text-center font-mono text-xl tracking-[0.75rem] outline-none transition-all focus:border-blue-500 sm:text-2xl sm:tracking-[1rem]"
                 />
                 {error && <p className="mt-3 text-center text-xs font-black text-red-500">{error}</p>}
               </div>
 
               <button
                 onClick={handleAuth}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 py-4 text-lg font-black text-white shadow-xl shadow-blue-200 transition-all hover:bg-blue-700 active:scale-95"
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 py-4 text-base font-black text-white shadow-xl shadow-blue-200 transition-all hover:bg-blue-700 active:scale-95 sm:text-lg"
               >
                 Continuar <ChevronRight size={20} />
               </button>
@@ -371,8 +371,8 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
             />
           )}
 
-          <div className="mt-10 border-t border-slate-100 pt-6 text-center">
-            <p className="font-mono text-[10px] text-slate-300">Fingerprint: {deviceId.substring(0, 18)}...</p>
+          <div className="mt-8 border-t border-slate-100 pt-5 text-center sm:mt-10 sm:pt-6">
+            <p className="font-mono text-[10px] text-slate-300 break-all sm:break-normal">Fingerprint: {deviceId.substring(0, 18)}...</p>
           </div>
         </div>
       </div>

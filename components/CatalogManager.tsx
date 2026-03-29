@@ -291,9 +291,10 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       setShowBulkModal(false);
 
       try {
+         const touchedIds = Array.from(selectedIds);
          // Call persistent bulk API instead of local state mutation
          await db.bulkUpdateProducts(
-            Array.from(selectedIds),
+            touchedIds,
             changes,
             currentUser?.id,
             currentUser?.name
@@ -302,6 +303,15 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          // Force refresh from database to ensure UI is in sync with server/IndexedDB
          const refreshedProducts = await db.get('products') as Product[];
          onUpdateProducts(refreshedProducts);
+
+         for (const id of touchedIds) {
+            const doc = refreshedProducts.find((p) => p.id === id);
+            if (doc) {
+               syncManager.broadcastChange('products', doc, 'UPDATE').catch((err) =>
+                  console.warn('[CatalogManager] broadcastChange products', err)
+               );
+            }
+         }
 
          setSelectedIds(new Set());
 
@@ -454,24 +464,24 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          {/* BULK ACTION BAR */}
          {selectedIds.size > 0 && viewMode === 'PRODUCTS' && (
-            <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
-               <div className="bg-slate-900 text-white px-8 py-4 rounded-[2rem] shadow-2xl flex items-center gap-8 border border-slate-700 backdrop-blur-md bg-opacity-90">
-                  <div className="flex items-center gap-3 border-r border-slate-700 pr-8">
-                     <div className="bg-blue-600 px-3 py-1 rounded-full text-xs font-black">{selectedIds.size}</div>
-                     <span className="text-sm font-bold uppercase tracking-widest text-slate-300">Seleccionados</span>
+            <div className="fixed inset-x-3 bottom-4 md:inset-x-auto md:bottom-10 md:left-1/2 md:-translate-x-1/2 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
+               <div className="mx-auto w-full max-w-[calc(100vw-1.5rem)] md:max-w-none bg-slate-900 text-white px-4 md:px-8 py-4 rounded-[1.75rem] md:rounded-[2rem] shadow-2xl flex flex-col md:flex-row md:items-center gap-4 md:gap-8 border border-slate-700 backdrop-blur-md bg-opacity-90">
+                  <div className="flex items-center gap-3 md:border-r border-slate-700 md:pr-8">
+                     <div className="bg-blue-600 px-3 py-1 rounded-full text-xs font-black shrink-0">{selectedIds.size}</div>
+                     <span className="text-xs md:text-sm font-bold uppercase tracking-widest text-slate-300">Seleccionados</span>
                   </div>
-                  <div className="flex gap-4">
+                  <div className="flex flex-col md:flex-row gap-3 md:gap-4 md:items-center w-full md:w-auto">
                      {canManage && (
                         <button
                            onClick={() => setShowBulkModal(true)}
-                           className="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-2"
+                           className="w-full md:w-auto justify-center px-5 md:px-6 py-3 md:py-2 bg-blue-600 hover:bg-blue-500 rounded-xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-2"
                         >
                            <Settings2 size={16} /> Editar Propiedades
                         </button>
                      )}
                      <button
                         onClick={() => setSelectedIds(new Set())}
-                        className="px-4 py-2 hover:bg-white/10 rounded-xl font-bold text-xs uppercase tracking-wider text-slate-400 transition-all"
+                        className="w-full md:w-auto px-4 py-3 md:py-2 hover:bg-white/10 rounded-xl font-bold text-xs uppercase tracking-wider text-slate-400 transition-all"
                      >
                         Cancelar
                      </button>
@@ -535,7 +545,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                   </div>
 
                   <div className="flex-1 min-h-0 overflow-y-auto">
-                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-32">
+                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-44 md:pb-32">
                         {filteredProducts.map(product => {
                            const isSelected = selectedIds.has(product.id);
                            return (
