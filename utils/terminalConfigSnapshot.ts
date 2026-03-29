@@ -40,6 +40,32 @@ const asBoolean = (value: unknown, fallback = false): boolean => {
 
 const cloneDeep = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
+/**
+ * ERP (Settings → Terminal) guarda jornada/Z en `terminal.config.session`:
+ * `requireZClose`, `requireOpenSession`, `allowPartialXReport`, `autoLockMinutes`.
+ * El POS usa `workflow.session` con otros nombres (`forceZChange`, `allowSalesWithOpenZ`, …).
+ * Sin este mapeo, el snapshot trae los booleans del ERP pero el POS no los aplica.
+ */
+const mergeWorkflowSessionFromErpConfig = (
+  templateSession: TerminalConfig['workflow']['session'],
+  erpSession: Record<string, unknown>,
+  posShapeSessionPatch: Record<string, unknown>
+): TerminalConfig['workflow']['session'] => {
+  const merged: TerminalConfig['workflow']['session'] = {
+    ...templateSession,
+    ...asObject(posShapeSessionPatch),
+  };
+
+  if (typeof erpSession.requireZClose === 'boolean') {
+    merged.forceZChange = erpSession.requireZClose;
+  }
+  if (typeof erpSession.requireOpenSession === 'boolean') {
+    merged.allowSalesWithOpenZ = !erpSession.requireOpenSession;
+  }
+
+  return merged;
+};
+
 const KNOWN_DOCUMENT_TYPES = new Set<DocumentType>([
   'TICKET',
   'REFUND',
@@ -294,6 +320,7 @@ export const applyTerminalConfigSnapshot = (
   const fallbackDeviceRole = asObject(effectiveFallbackConfig.deviceRole);
   const fallbackSecurity = asObject(effectiveFallbackConfig.security);
   const fallbackSession = asObject(effectiveFallbackConfig.session);
+  const fallbackWorkflowSessionPatch = asObject(asObject(effectiveFallbackConfig.workflow).session);
   const fallbackOffline = asObject(effectiveFallbackConfig.offline);
   const fallbackLan = asObject(effectiveFallbackConfig.lan);
   const fallbackMetadata = asObject(effectiveFallbackConfig.metadata);
@@ -460,16 +487,23 @@ export const applyTerminalConfigSnapshot = (
       ...terminalTemplate.operational,
       ...fallbackOperational,
     },
-    security: {
-      ...terminalTemplate.security,
-      ...fallbackSecurity,
-    },
+    security: (() => {
+      const erpAutoLock = Number(fallbackSession.autoLockMinutes);
+      const fromErpLock =
+        Number.isFinite(erpAutoLock) && erpAutoLock > 0 ? { autoLogoutMinutes: erpAutoLock } : {};
+      return {
+        ...terminalTemplate.security,
+        ...fallbackSecurity,
+        ...fromErpLock,
+      };
+    })(),
     workflow: {
       ...terminalTemplate.workflow,
-      session: {
-        ...terminalTemplate.workflow.session,
-        ...fallbackSession,
-      },
+      session: mergeWorkflowSessionFromErpConfig(
+        terminalTemplate.workflow?.session || DEFAULT_TERMINAL_CONFIG.workflow.session,
+        fallbackSession,
+        fallbackWorkflowSessionPatch
+      ),
       offline: {
         ...terminalTemplate.workflow.offline,
         ...fallbackOffline,
