@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Delete, Lock, Fingerprint } from 'lucide-react';
 import { User as UserType, TerminalConfig } from '../types';
 import { biometricService } from '../services/BiometricAuthService';
-import AccessibilityToggle from './AccessibilityToggle';
 import './ModernLoginScreen.css';
 
 interface ModernLoginScreenProps {
@@ -159,90 +158,104 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
 
   return (
     <div className="modern-login-container">
-      <div className="absolute top-6 right-6 z-50">
-        <AccessibilityToggle />
+      <div className="modern-login-brand">
+        <span className="modern-login-brand-mark">CLIC</span>
+        <span className="modern-login-brand-pos">POS</span>
       </div>
 
       <div className={`modern-login-card animate-fade-in ${error ? 'animate-shake' : ''}`}>
-        <div className="modern-login-header">
-          <div className="modern-lock-icon-container">
-            <Lock className="text-blue-400" size={30} />
+        {/* Left Side: Company & User Selection */}
+        <div className="modern-login-left">
+          <div className="modern-login-header">
+            <div className="modern-lock-icon-container">
+              <Lock className="text-blue-400" size={30} />
+            </div>
+            <p className="modern-login-subtitle">{subVertical}</p>
+            <h1 className="modern-login-title">Acceso de Sistema</h1>
           </div>
-          <p className="modern-login-subtitle">{subVertical}</p>
-          <h1 className="modern-login-title">Acceso de Sistema</h1>
-        </div>
 
-        <div className="modern-user-grid">
-          {availableUsers.slice(0, 6).map((user) => (
-            <button
-              key={user.id}
-              onClick={() => {
-                setSelectedUser(user);
-                setPin('');
-                setError(false);
-              }}
-              className={`modern-user-card ${selectedUser?.id === user.id ? 'active' : ''}`}
-            >
-              <div className="modern-user-avatar-wrapper">
-                <div className="modern-user-avatar">
-                  {user.photo ? (
-                    <img src={user.photo} alt={user.name} className="w-full h-full object-cover" />
-                  ) : (
-                    user.name.charAt(0)
-                  )}
+          <div className="modern-user-grid">
+            {availableUsers.slice(0, 12).map((user) => (
+              <button
+                key={user.id}
+                onClick={() => {
+                  setSelectedUser(user);
+                  setPin('');
+                  setError(false);
+                }}
+                className={`modern-user-card ${selectedUser?.id === user.id ? 'active' : ''}`}
+              >
+                <div className="modern-user-avatar-wrapper">
+                  <div className="modern-user-avatar">
+                    {user.photo ? (
+                      <img src={user.photo} alt={user.name} className="w-full h-full object-cover" />
+                    ) : (
+                      user.name.charAt(0)
+                    )}
+                  </div>
                 </div>
+                <span className="modern-user-name">{user.name.split(' ')[0]}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Right Side: PIN Entry & Keypad */}
+        <div className="modern-login-right">
+          <div className="modern-pin-section">
+            <div className="modern-pin-display">
+              {[0, 1, 2, 3].map((index) => (
+                <div
+                  key={index}
+                  className={`modern-pin-dot ${pin.length > index ? (error ? 'error' : 'filled') : ''}`}
+                />
+              ))}
+            </div>
+            {error && (
+              <div className="text-center text-red-500 text-xs mt-2 font-semibold">
+                PIN Incorrecto. Intente nuevamente.
               </div>
-              <span className="modern-user-name">{user.name.split(' ')[0]}</span>
+            )}
+          </div>
+
+          <div className="modern-keypad">
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
+              <button key={num} onClick={() => handleKeyPress(num.toString())} className="modern-key">
+                {num}
+              </button>
+            ))}
+            <button onClick={() => handleKeyPress('C')} className="modern-key special clear">
+              C
             </button>
-          ))}
-        </div>
-
-        <div className="modern-pin-display">
-          {[0, 1, 2, 3].map((index) => (
-            <div
-              key={index}
-              className={`modern-pin-dot ${pin.length > index ? (error ? 'error' : 'filled') : ''}`}
-            />
-          ))}
-        </div>
-
-        <div className="modern-keypad">
-          {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
-            <button key={num} onClick={() => handleKeyPress(num.toString())} className="modern-key">
-              {num}
+            <button onClick={() => handleKeyPress('0')} className="modern-key">
+              0
             </button>
-          ))}
-          <button onClick={() => handleKeyPress('C')} className="modern-key special clear">
-            C
-          </button>
-          <button onClick={() => handleKeyPress('0')} className="modern-key">
-            0
-          </button>
-          <button onClick={() => handleKeyPress('BACK')} className="modern-key special">
-            <Delete size={24} />
-          </button>
-        </div>
-
-        <div className="modern-biometrics-footer">
-          {config.security?.allowBiometrics && isHardwareAvailable ? (
-            <button
-              onClick={handleBiometricLogin}
-              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 transition-all ${
-                biometricError
-                  ? 'bg-red-400/10 text-red-400'
-                  : 'text-slate-500 hover:bg-blue-400/10 hover:text-blue-400'
-              }`}
-            >
-              <Fingerprint size={16} />
-              <span className="modern-biometrics-text">{loginFooterText}</span>
+            <button onClick={() => handleKeyPress('BACK')} className="modern-key special">
+              <Delete size={24} />
             </button>
-          ) : (
-            <p className="modern-biometrics-text italic">{loginFooterText}</p>
-          )}
+          </div>
 
-          <div className="mt-4 text-center text-xs text-gray-500">
-            <p>Terminal ID: POS-001</p>
-            {buildVersion && <p className="mt-1">Versión: {buildVersion}</p>}
+          <div className="modern-biometrics-footer">
+            {config.security?.allowBiometrics && isHardwareAvailable ? (
+              <button
+                onClick={handleBiometricLogin}
+                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 transition-all ${
+                  biometricError
+                    ? 'bg-red-400/10 text-red-400'
+                    : 'text-slate-500 hover:bg-blue-400/10 hover:text-blue-400'
+                }`}
+              >
+                <Fingerprint size={16} />
+                <span className="modern-biometrics-text">{loginFooterText}</span>
+              </button>
+            ) : (
+              <p className="modern-biometrics-text italic">{loginFooterText}</p>
+            )}
+
+            <div className="mt-6 text-center text-xs text-gray-500 opacity-60">
+              <p>Terminal ID: POS-001</p>
+              {buildVersion && <p className="mt-1">Versión: {buildVersion}</p>}
+            </div>
           </div>
         </div>
       </div>

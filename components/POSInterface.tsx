@@ -10,7 +10,7 @@ import {
    ChevronDown, Check, AlertCircle, Layers,
    ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle,
    MessageSquare, PlayCircle, Download, Lock, ArrowUpRight, Landmark,
-   UserCheck, StickyNote, Inbox, Printer, QrCode, Box, Package,
+   UserCheck, StickyNote, Inbox, Printer, QrCode, Box, Package, MapPin,
    Cloud, RefreshCw, CloudOff, Layout, ChefHat, Building2, ClipboardCheck
 
 
@@ -300,6 +300,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (effectiveWarehouseKeys.size === 0) return true;
       return activeWarehouses.some((warehouseId) => effectiveWarehouseKeys.has(warehouseId));
    }, [effectiveWarehouseKeys, normalizeScopeKey]);
+   /** Tarifa OK en ERP pero almacenes activos no intersectan la caja: se muestra atenuado y no deja vender. */
+   const isProductWarehouseBlockedForSale = useCallback(
+      (product: Product) => !productMatchesTerminalWarehouse(product),
+      [productMatchesTerminalWarehouse]
+   );
    const getScopedProductStock = useCallback((product: Product) => {
       const stockEntries = Object.entries(product.stockBalances || {});
       const matchedEntry = stockEntries.find(([warehouseId]) => effectiveWarehouseKeys.has(normalizeScopeKey(warehouseId)));
@@ -1271,9 +1276,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const filtered = products.filter(p => {
          if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
-         const activeWarehouses = (p.activeInWarehouses || []).filter(Boolean);
-         const hasAssignedWarehouse = activeWarehouses.length > 0;
-         const isAvailableInWarehouse = productMatchesTerminalWarehouse(p);
+         const erpWarehouses = (p.activeInWarehouses || []).filter(Boolean);
+         const hasErpWarehouse = erpWarehouses.length > 0;
          const productName = p.name || '';
          const matchSearch = productName.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
 
@@ -1285,7 +1289,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const isSellable = p.is_sellable !== false;
          const hasActiveTariff = productHasActiveTariff(p);
 
-         return matchSearch && matchCat && hasAssignedWarehouse && isAvailableInWarehouse && matchAllowedCat && isSellable && hasActiveTariff;
+         // Tarifa activa de la caja debe existir en datos ERP; almacén en grid no tiene que coincidir con la terminal (la venta se bloquea en canAddItemToCart).
+         return matchSearch && matchCat && matchAllowedCat && isSellable && hasActiveTariff && hasErpWarehouse;
       });
 
       // Defensive: Ensure unique IDs to prevent React key warnings
@@ -1295,7 +1300,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          seenIds.add(p.id);
          return true;
       });
-   }, [products, searchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff, productMatchesTerminalWarehouse]);
+   }, [products, searchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff]);
 
    const categories = useMemo(() => {
       const allowedDisplayCategories = Array.from(
@@ -1304,6 +1309,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const availableProducts = products.filter(p => {
          if (!p || p.is_sellable === false) return false;
          if (!productHasActiveTariff(p)) return false;
+         const erpWh = (p.activeInWarehouses || []).filter(Boolean);
+         if (erpWh.length === 0) return false;
          if (effectiveAllowedCategorySet.size > 0) {
             const normalizedCategory = canonicalizeCategory(p.category);
             if (!effectiveAllowedCategorySet.has(normalizedCategory)) return false;
@@ -2487,10 +2494,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          {/* LEFT AREA: PRODUCTS */}
          <div className={`flex-1 min-h-0 flex flex-col min-w-0 bg-gray-50 transition-all duration-300 ${mobileView === 'TICKET' ? 'hidden md:flex' : 'flex'} ${isRetailMode ? '!hidden' : ''}`}>
-            <header className="bg-white px-4 md:px-8 py-3 md:py-4 border-b border-gray-200 flex items-center gap-3 md:gap-6 shadow-sm z-10 shrink-0">
-               <div className="flex items-center gap-3 pr-4 border-r border-gray-100">
+            <header className="bg-white px-3 md:px-8 py-3 md:py-4 border-b border-gray-200 flex flex-wrap items-center gap-2 md:gap-6 shadow-sm z-10 shrink-0">
+               <div className="flex items-center gap-3 pr-0 md:pr-4 border-r-0 md:border-r border-gray-100 shrink-0">
                   <div className="w-10 h-10 rounded-full bg-gray-50 overflow-hidden border border-gray-200 shadow-inner shrink-0">
                      {currentUser.photo ? <img src={currentUser.photo} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center bg-blue-50 text-blue-600 font-bold">{currentUser.name.charAt(0)}</div>}
+                  </div>
+                  <div className="flex flex-col leading-tight md:hidden min-w-0">
+                     <p className="text-[11px] font-black text-slate-800 truncate max-w-[96px]">{currentUser.name.split(' ')[0]}</p>
+                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.24em] mt-1">Cajero</p>
+                     <div className="mt-1 inline-flex items-center gap-1 rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-blue-700 shadow-sm w-fit">
+                        <span className="text-[9px] font-black uppercase tracking-[0.2em]">Caja</span>
+                        <span className="text-[10px] font-black">{terminalId}</span>
+                     </div>
                   </div>
                   <div className="hidden lg:block leading-tight">
                      <p className="text-sm font-black text-gray-800 truncate max-w-[120px]">{currentUser.name}</p>
@@ -2502,7 +2517,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   </div>
                </div>
 
-               <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-gray-50 border border-gray-100 shadow-inner">
+               <div className="flex items-center gap-2 px-3 md:px-4 py-2 rounded-2xl bg-gray-50 border border-gray-100 shadow-inner shrink-0">
                   {syncState.isSyncing ? (
                      <RefreshCw size={18} className="text-amber-500 animate-spin" />
                   ) : !navigator.onLine ? (
@@ -2533,45 +2548,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
 
 
-               <div className="flex-1 flex items-center gap-2 md:gap-4">
-
-                  <div className="relative flex-1 group min-w-[150px] md:min-w-[300px]">
-                     <Search className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                     <input
-                        ref={searchInputRef}
-                        type="text"
-                        placeholder="Buscar..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        onKeyDown={handleSearchKeyDown}
-                        className="w-full pl-10 md:pl-12 pr-10 md:pr-4 py-2.5 md:py-3 bg-gray-100 rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
-                     />
-                     <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
-                  </div>
-                  <div className="relative shrink-0" ref={tariffSelectorRef}>
+               <div className="w-full md:flex-1 flex flex-wrap items-center gap-2 md:gap-4 md:min-w-0">
+                  <div className="relative shrink-0 ml-auto md:ml-0 order-1" ref={tariffSelectorRef}>
                      <button
                         type="button"
                         onClick={() => {
                            if (!canChangeTariff) return;
                            setShowTariffSelector(!showTariffSelector);
                         }}
-                        className={`flex items-center gap-2 md:gap-3 px-3 md:px-5 py-2.5 md:py-3 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-gray-100 border-transparent'} ${canChangeTariff ? 'hover:border-purple-300' : 'opacity-75 cursor-not-allowed'}`}
+                        className={`flex items-center justify-between gap-2 md:gap-3 min-w-[134px] sm:min-w-[156px] px-3 md:px-5 py-2.5 md:py-3 rounded-2xl border-2 transition-all ${showTariffSelector ? 'border-purple-500 bg-purple-50' : 'bg-purple-50/80 border-purple-100 md:bg-gray-100 md:border-transparent'} ${canChangeTariff ? 'hover:border-purple-300' : 'opacity-75 cursor-not-allowed'}`}
                         disabled={!canChangeTariff}
                         title={canChangeTariff ? 'Cambiar tarifa activa' : 'Tu rol no tiene permiso para cambiar la tarifa'}
                      >
-                        <Tag size={18} className="text-purple-600" />
-                        <div className="text-left hidden sm:block">
-                           <p className="text-[9px] font-black text-purple-400 uppercase tracking-widest leading-none mb-1">Tarifa Activa</p>
-                           <p className="text-xs font-bold text-purple-900 leading-none truncate max-w-[120px]">{activeTariff?.name || 'General'}</p>
+                        <Tag size={18} className="text-purple-600 shrink-0" />
+                        <div className="text-left min-w-0">
+                           <p className="text-[8px] md:text-[9px] font-black text-purple-400 uppercase tracking-[0.22em] leading-none mb-1">Tarifa</p>
+                           <p className="text-[11px] md:text-xs font-bold text-purple-900 leading-none truncate max-w-[86px] sm:max-w-[110px] md:max-w-[120px]">{activeTariff?.name || 'General'}</p>
                         </div>
                         {canChangeTariff ? (
-                           <ChevronDown size={14} className={`text-purple-400 transition-transform ${showTariffSelector ? 'rotate-180' : ''}`} />
+                           <ChevronDown size={14} className={`text-purple-400 transition-transform shrink-0 ${showTariffSelector ? 'rotate-180' : ''}`} />
                         ) : (
-                           <Lock size={14} className="text-purple-300" />
+                           <Lock size={14} className="text-purple-300 shrink-0" />
                         )}
                      </button>
                      {canChangeTariff && showTariffSelector && (
-                        <div className="absolute right-0 top-[calc(100%+0.5rem)] z-30 min-w-[220px] rounded-2xl border border-purple-100 bg-white p-2 shadow-xl">
+                        <div className="absolute right-0 top-[calc(100%+0.5rem)] z-30 min-w-[220px] max-w-[min(88vw,280px)] rounded-2xl border border-purple-100 bg-white p-2 shadow-xl">
                            <div className="px-3 py-2">
                               <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest">Seleccionar tarifa</p>
                            </div>
@@ -2603,6 +2604,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      )}
                   </div>
 
+                  <div className="relative order-3 md:order-none w-full md:flex-1 group min-w-0 md:min-w-[300px]">
+                     <Search className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                     <input
+                        ref={searchInputRef}
+                        type="text"
+                        placeholder="Buscar..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        onKeyDown={handleSearchKeyDown}
+                        className="w-full pl-10 md:pl-12 pr-10 md:pr-4 py-2.5 md:py-3 bg-gray-100 rounded-2xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 text-sm font-medium"
+                     />
+                     <button onClick={() => setIsScannerOpen(true)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-gray-500 bg-white shadow-sm rounded-xl hover:text-blue-600 hover:bg-blue-50 border border-gray-100"><ScanBarcode size={18} /></button>
+                  </div>
+
 
                   <SupervisorAuthModal
                      isOpen={showSupervisorAuth}
@@ -2617,7 +2632,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   />
 
                   {/* MOBILE SETTINGS BUTTON */}
-                  <button onClick={() => onOpenSettings()} className="md:hidden p-3 bg-gray-100 rounded-xl text-gray-600 hover:bg-gray-200">
+                  <button onClick={() => onOpenSettings()} className="md:hidden order-2 p-3 bg-gray-100 rounded-xl text-gray-600 hover:bg-gray-200 shrink-0">
                      <Settings size={20} />
                   </button>
                </div>
@@ -2648,6 +2663,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      const productName = product.name || '';
                      const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
                      const hasVariants = product.attributes && product.attributes.length > 0;
+                     const isCompactMobileCard = isMobile && !usesExpandedCatalog;
+                     const warehouseSaleBlocked = isProductWarehouseBlockedForSale(product);
 
                      // Long Press Detection Logic
                      let touchTimer: any;
@@ -2666,6 +2683,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                         <div
                            key={product.id || `prod-${idx}`}
+                           title={
+                              warehouseSaleBlocked
+                                 ? `No vendible en ${getTerminalWarehouseName()}: habilite este artículo en el almacén de ventas de esta caja (ERP).`
+                                 : undefined
+                           }
                            onClick={(e) => {
                               if (quickActionData) return;
                               handleProductClick(product);
@@ -2676,11 +2698,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            }}
                            onTouchStart={handleTouchStart}
                            onTouchEnd={handleTouchEnd}
-                          className={`bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 cursor-pointer hover:border-purple-300 hover:-translate-y-1 transition-all active:scale-95 group relative overflow-hidden ${(usesExpandedCatalog && uxConfig.showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[228px] grid grid-rows-[52%_48%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[204px] flex flex-col h-full' : 'rounded-[2rem] p-3 min-h-[228px] shadow-sm hover:shadow-xl flex flex-col'}`}
+                          className={`bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 transition-all group relative overflow-hidden ${
+                             warehouseSaleBlocked
+                                ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
+                                : 'cursor-pointer hover:border-purple-300 hover:-translate-y-1 active:scale-95'
+                          } ${(usesExpandedCatalog && uxConfig.showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[228px] grid grid-rows-[52%_48%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[204px] flex flex-col h-full' : isCompactMobileCard ? `rounded-[2rem] p-3.5 min-h-[246px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}` : `rounded-[2rem] p-3 min-h-[228px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
                         >
                            {uxConfig.showProductImages && (
-                              <div className={`${usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : 'h-28 md:h-32 rounded-[1.5rem] mb-3'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
-                                 {product.image ? <img src={product.image} className={`w-full h-full ${usesExpandedCatalog ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
+                              <div className={`${usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-36 rounded-[1.5rem] mb-3 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-3'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
+                                 {product.image ? <img src={product.image} className={`w-full h-full ${usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
 
                                  {/* BADGES DE TIPO DE ARTÍCULO */}
                                  {isWeighted && (
@@ -2731,13 +2757,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            )}
                            <div className={`flex flex-col ${usesExpandedCatalog ? 'min-h-0 h-full pt-1 justify-between' : 'flex-1 justify-between gap-3'}`}>
                               <div className={usesExpandedCatalog ? 'space-y-1' : 'space-y-1.5'}>
-                                 <span className={`block font-bold text-purple-500 uppercase opacity-60 line-clamp-1 ${usesExpandedCatalog ? 'text-[10px]' : 'text-[8px]'}`}>{product.category}</span>
-                                 <h3 className={`font-bold text-gray-800 dark:text-white leading-tight line-clamp-2 ${usesExpandedCatalog ? 'text-[1.05rem] min-h-[2.3rem]' : 'text-sm min-h-[2.5rem]'}`}>{product.name}</h3>
+                                 <span className={`block font-bold text-purple-500 uppercase opacity-60 line-clamp-1 ${usesExpandedCatalog ? 'text-[10px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[8px]'}`}>{product.category}</span>
+                                 <h3 className={`font-bold text-gray-800 dark:text-white leading-tight line-clamp-2 ${usesExpandedCatalog ? 'text-[1.05rem] min-h-[2.3rem]' : isCompactMobileCard ? 'text-[1.05rem] min-h-[2.8rem]' : 'text-sm min-h-[2.5rem]'}`}>{product.name}</h3>
                               </div>
                               <div className={`${usesExpandedCatalog ? 'mt-1 pt-1 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-2 border-t border-gray-50 dark:border-slate-700'}`}>
-                                 <span className={`font-black text-gray-900 dark:text-white leading-none ${usesExpandedCatalog ? 'text-[1.75rem]' : 'text-lg'}`}>{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                 <span className={`font-black text-gray-900 dark:text-white leading-none ${usesExpandedCatalog ? 'text-[1.75rem]' : isCompactMobileCard ? 'text-[1.95rem]' : 'text-lg'}`}>{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               </div>
                            </div>
+                           {warehouseSaleBlocked && (
+                              <div
+                                 className="pointer-events-none absolute inset-x-0 bottom-0 z-[25] flex justify-center px-2 pb-2 pt-10 bg-gradient-to-t from-slate-900/10 to-transparent dark:from-black/25 rounded-b-[1.5rem]"
+                                 aria-hidden
+                              >
+                                 <span className="inline-flex max-w-[calc(100%-0.5rem)] items-center gap-1 truncate rounded-lg bg-amber-600 px-2 py-1 text-center text-[9px] font-black uppercase tracking-wide text-white shadow-md">
+                                    <MapPin size={10} strokeWidth={3} className="shrink-0 opacity-95" />
+                                    Sin almacén en esta caja
+                                 </span>
+                              </div>
+                           )}
                         </div>
                      );
                   })}
@@ -2929,22 +2966,56 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         {/* SEARCH RESULTS DROPDOWN */}
                         {searchTerm && filteredProducts.length > 0 && (
                            <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-2xl border border-gray-100 max-h-[60vh] overflow-y-auto z-50">
-                              {filteredProducts.map((product, idx) => (
-                                 <div
-                                    key={product.id || `search-prod-${idx}`}
-                                    onClick={() => {
-                                       handleProductClick(product);
-                                       setSearchTerm('');
-                                    }}
-                                    className="p-3 hover:bg-purple-50 cursor-pointer border-b border-gray-50 last:border-0 flex justify-between items-center group"
-                                 >
-                                    <div>
-                                       <p className="font-bold text-gray-800 text-sm group-hover:text-purple-700">{product.name}</p>
-                                       <p className="text-[10px] text-gray-400 font-mono">{product.barcode || 'Sin Código'}</p>
+                              {filteredProducts.map((product, idx) => {
+                                 const whBlocked = isProductWarehouseBlockedForSale(product);
+                                 return (
+                                    <div
+                                       key={product.id || `search-prod-${idx}`}
+                                       title={
+                                          whBlocked
+                                             ? `No vendible en ${getTerminalWarehouseName()}: ajuste almacenes en el ERP.`
+                                             : undefined
+                                       }
+                                       onClick={() => {
+                                          handleProductClick(product);
+                                          setSearchTerm('');
+                                       }}
+                                       className={`p-3 border-b border-gray-50 last:border-0 flex justify-between items-center gap-2 group ${
+                                          whBlocked
+                                             ? 'cursor-not-allowed bg-amber-50/80 opacity-90'
+                                             : 'cursor-pointer hover:bg-purple-50'
+                                       }`}
+                                    >
+                                       <div className="min-w-0 flex-1">
+                                          <p
+                                             className={`font-bold text-sm truncate ${
+                                                whBlocked ? 'text-gray-700' : 'text-gray-800 group-hover:text-purple-700'
+                                             }`}
+                                          >
+                                             {product.name}
+                                          </p>
+                                          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                                             <p className="text-[10px] text-gray-400 font-mono">{product.barcode || 'Sin Código'}</p>
+                                             {whBlocked && (
+                                                <span className="inline-flex items-center gap-0.5 rounded bg-amber-600 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-white">
+                                                   <MapPin size={8} strokeWidth={3} />
+                                                   Sin almacén
+                                                </span>
+                                             )}
+                                          </div>
+                                       </div>
+                                       <span
+                                          className={`shrink-0 font-black ${whBlocked ? 'text-gray-600' : 'text-gray-900'}`}
+                                       >
+                                          {baseCurrency.symbol}
+                                          {getProductPrice(product).toLocaleString('en-US', {
+                                             minimumFractionDigits: 2,
+                                             maximumFractionDigits: 2
+                                          })}
+                                       </span>
                                     </div>
-                                    <span className="font-black text-gray-900">{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                                 </div>
-                              ))}
+                                 );
+                              })}
                            </div>
                         )}
                      </div>

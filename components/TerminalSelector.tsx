@@ -523,18 +523,18 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
-      <div className="rounded-[2rem] border border-white/60 bg-white/70 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl">
-        <div className="flex items-start justify-between gap-4">
-          <div>
+      <div className="rounded-[1.75rem] border border-white/60 bg-white/70 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:rounded-[2rem] sm:p-6">
+        <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
             <p className="mb-2 text-[11px] font-black uppercase tracking-[0.35em] text-slate-400">Activar Terminal</p>
-            <h3 className="text-2xl font-black tracking-tight text-slate-900">Selecciona la caja para este equipo</h3>
+            <h3 className="text-xl font-black tracking-tight text-slate-900 sm:text-2xl">Selecciona la caja para este equipo</h3>
             <p className="mt-2 text-sm font-medium leading-relaxed text-slate-500">
               El equipo quedará vinculado a una terminal operativa del tenant. Si eliges una ocupada, podrás transferirla.
             </p>
           </div>
-          <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-2 text-right shadow-inner">
+          <div className="w-full rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-left shadow-inner sm:w-auto sm:max-w-[18rem] sm:text-right">
             <p className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-400">Tenant</p>
-            <p className="text-sm font-bold text-blue-700">{tenantId}</p>
+            <p className="text-sm font-bold text-blue-700 break-all sm:break-words">{tenantId}</p>
           </div>
         </div>
       </div>
@@ -615,30 +615,30 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                   key={terminal.id}
                   onClick={() => void handleCardClick(terminal)}
                   disabled={isBinding}
-                  className={`group relative overflow-hidden rounded-[2rem] border p-6 text-left shadow-[0_22px_54px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60 ${
+                  className={`group relative overflow-hidden rounded-[1.75rem] border p-5 text-left shadow-[0_22px_54px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60 sm:rounded-[2rem] sm:p-6 ${
                     occupiedByOtherDevice
                       ? 'border-amber-200 bg-white/70'
                       : 'border-white/70 bg-white/85 hover:border-blue-200'
                   }`}
                 >
                   <div className="absolute inset-0 bg-gradient-to-br from-white/50 via-transparent to-slate-100/40 opacity-80" />
-                  <div className="relative flex items-start justify-between gap-4">
-                    <div className="flex items-center gap-4">
-                      <div className={`flex h-14 w-14 items-center justify-center rounded-[1.35rem] shadow-inner ${
+                  <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex min-w-0 items-center gap-4">
+                      <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.1rem] shadow-inner sm:h-14 sm:w-14 sm:rounded-[1.35rem] ${
                         occupiedByOtherDevice ? 'bg-amber-50 text-amber-500' : 'bg-blue-50 text-blue-600'
                       }`}>
-                        <Monitor size={24} />
+                        <Monitor size={22} />
                       </div>
-                      <div>
-                        <p className="text-[11px] font-black uppercase tracking-[0.25em] text-slate-400">{terminal.id.toUpperCase()}</p>
-                        <h4 className="mt-1 text-2xl font-black tracking-tight text-slate-900">{terminal.name}</h4>
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400 break-all sm:tracking-[0.25em]">{terminal.id.toUpperCase()}</p>
+                        <h4 className="mt-1 text-xl font-black tracking-tight text-slate-900 sm:text-2xl">{terminal.name}</h4>
                         <div className="mt-3 flex items-center gap-2 text-sm font-medium text-slate-500">
                           <MapPin size={14} />
-                          <span>{terminal.location}</span>
+                          <span className="truncate">{terminal.location}</span>
                         </div>
                       </div>
                     </div>
-                    <div className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.28em] ${
+                    <div className={`self-start rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.24em] sm:self-auto sm:tracking-[0.28em] ${
                       occupiedByOtherDevice
                         ? 'bg-amber-100 text-amber-700'
                         : 'bg-emerald-100 text-emerald-700'
@@ -647,20 +647,20 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
                     </div>
                   </div>
 
-                  <div className="relative mt-6 flex items-center justify-between rounded-2xl border border-slate-100 bg-white/80 px-4 py-3 shadow-inner">
-                    <div>
+                  <div className="relative mt-6 flex flex-col gap-3 rounded-2xl border border-slate-100 bg-white/80 px-4 py-3 shadow-inner sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
                       <p className="text-[11px] font-black uppercase tracking-[0.28em] text-slate-400">Operación</p>
                       <p className="mt-1 text-sm font-semibold text-slate-700">
                         {terminal.config.isPrimaryNode ? 'Servidor principal' : 'Punto de venta'}
                       </p>
                     </div>
                     {occupiedByOtherDevice ? (
-                      <div className="flex items-center gap-2 rounded-full bg-amber-50 px-3 py-2 text-amber-700">
+                      <div className="flex w-fit items-center gap-2 rounded-full bg-amber-50 px-3 py-2 text-amber-700">
                         <Lock size={14} />
                         <span className="text-xs font-black uppercase tracking-[0.18em]">Transferible</span>
                       </div>
                     ) : (
-                      <div className="rounded-full bg-blue-50 px-3 py-2 text-xs font-black uppercase tracking-[0.18em] text-blue-700">
+                      <div className="w-fit rounded-full bg-blue-50 px-3 py-2 text-xs font-black uppercase tracking-[0.18em] text-blue-700">
                         Vincular
                       </div>
                     )}

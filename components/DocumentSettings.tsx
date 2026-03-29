@@ -16,6 +16,7 @@ import { DEFAULT_DOCUMENT_SERIES } from '../constants';
 import {
    canonicalizeDocumentSeries,
    mergeDocumentSeriesCollection,
+   resolveDocumentSeriesDisplayPrefix,
    resolveEffectiveSeriesIdForDocumentType,
 } from '../utils/documentSeriesIdentity';
 
@@ -117,7 +118,9 @@ const normalizeSequence = (raw: any): DocumentSeries | null => {
       normalizeDocumentType(s.id) === documentType
    );
 
-   const prefix = String(raw.prefix || fallback?.prefix || 'DOC').trim().toUpperCase();
+   const prefix =
+      resolveDocumentSeriesDisplayPrefix(raw) ||
+      String(fallback?.prefix || 'DOC').trim().toUpperCase();
    const safeId = String(raw.id || `${documentType}_${prefix}`).trim();
    if (!safeId) return null;
 

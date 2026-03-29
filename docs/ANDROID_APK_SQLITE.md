@@ -38,6 +38,8 @@ APK generado en:
 
 ## Generar APK release firmado
 
+Para el flujo operativo con **worktree firmado**, versión monotónica, copia selectiva de archivos y verificación con `apksigner`, ver **[APK_RELEASE_CHECKLIST.md](./APK_RELEASE_CHECKLIST.md)**.
+
 Este flujo usa un keystore local en `android/keys/` y un `android/key.properties` ignorado por Git.
 
 ```bash
