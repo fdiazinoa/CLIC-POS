@@ -5,6 +5,9 @@ import {
   DocumentType,
   FiscalRangeDGII,
   NCFType,
+  Promotion,
+  PromotionTargetType,
+  PromotionType,
   Tariff,
   TerminalConfig,
   TerminalConfigSnapshot,
@@ -226,6 +229,81 @@ const normalizeFiscalRange = (raw: unknown, index: number): FiscalRangeDGII | nu
     currentGlobal: asNumber(data.currentGlobal ?? data.current_global ?? data.current_number, 0),
     expiryDate: asString(data.expiryDate || data.expiry_date || '') || '',
     isActive: asBoolean(data.isActive ?? data.is_active, true),
+  };
+};
+
+const POS_PROMO_TYPES: PromotionType[] = [
+  'DISCOUNT',
+  'BOGO',
+  'HAPPY_HOUR',
+  'CONDITIONAL_TARGET',
+  'BUNDLE',
+];
+
+const normalizePromotionTargetType = (raw: unknown): PromotionTargetType => {
+  const t = asString(raw).toUpperCase();
+  const allowed: PromotionTargetType[] = ['ALL', 'PRODUCT', 'CATEGORY', 'GROUP', 'SEASON'];
+  return (allowed.includes(t as PromotionTargetType) ? t : 'PRODUCT') as PromotionTargetType;
+};
+
+/** Payload ya en forma POS (camelCase) desde ERP `resolved.promotions`. */
+const normalizePromotionFromErpPayload = (raw: unknown): Promotion | null => {
+  const data = asObject(raw);
+  const id = asString(data.id);
+  if (!id) return null;
+
+  const typeRaw = asString(data.type).toUpperCase();
+  const type = (POS_PROMO_TYPES.includes(typeRaw as PromotionType) ? typeRaw : 'DISCOUNT') as PromotionType;
+
+  const sched = asObject(data.schedule);
+  const days = asArray<string>(sched.days).map((d) => asString(d)).filter(Boolean);
+  const defaultDays = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
+
+  const triggerRaw = asObject(data.trigger);
+  const triggerType = asString(triggerRaw.type);
+  const allowedTrigger = new Set(['TOTAL_SPEND', 'ITEM_QTY', 'MIN_TICKET_AMOUNT']);
+  const trigger: Promotion['trigger'] | undefined =
+    triggerType && allowedTrigger.has(triggerType)
+      ? {
+          type: triggerType as NonNullable<Promotion['trigger']>['type'],
+          value: asNumber(triggerRaw.value, 0),
+          excludeCategories: asArray<string>(triggerRaw.excludeCategories).map((c) => asString(c)).filter(Boolean),
+          isRecursive: asBoolean(triggerRaw.isRecursive, false),
+        }
+      : undefined;
+
+  const stratRaw = asObject(data.targetStrategy);
+  const targetStrategy =
+    stratRaw && (stratRaw.mode != null || stratRaw.filterValue != null)
+      ? {
+          mode: (asString(stratRaw.mode) || 'CHEAPEST_ITEM') as NonNullable<Promotion['targetStrategy']>['mode'],
+          filterValue: stratRaw.filterValue as string | number | undefined,
+          tieBreaker: stratRaw.tieBreaker as NonNullable<Promotion['targetStrategy']>['tieBreaker'],
+          allowSelfTrigger: stratRaw.allowSelfTrigger as boolean | undefined,
+        }
+      : undefined;
+
+  return {
+    id,
+    name: asString(data.name) || id,
+    type,
+    priority: asNumber(data.priority, 1),
+    trigger,
+    targetType: normalizePromotionTargetType(data.targetType),
+    targetValue: data.targetValue != null ? asString(data.targetValue) : undefined,
+    targetStrategy,
+    benefitValue: asNumber(data.benefitValue ?? data.benefit_value, 0),
+    schedule: {
+      days: days.length > 0 ? days : defaultDays,
+      startTime: asString(sched.startTime || sched.start_time) || '00:00',
+      endTime: asString(sched.endTime || sched.end_time) || '23:59',
+      startDate: sched.startDate || sched.start_date ? asString(sched.startDate || sched.start_date) : undefined,
+      endDate: sched.endDate || sched.end_date ? asString(sched.endDate || sched.end_date) : undefined,
+      isActive: asBoolean(sched.isActive ?? sched.is_active, true),
+    },
+    terminalIds: asArray<string>(data.terminalIds ?? data.terminal_ids)
+      .map((x) => asString(x))
+      .filter(Boolean),
   };
 };
 
@@ -606,6 +684,13 @@ export const applyTerminalConfigSnapshot = (
     defaultSalesWarehouseId: effectiveDefaultWarehouseId,
     visibleWarehouseIds: effectiveAllowedWarehouseIds,
   };
+
+  if (!hasResolutionError && Object.prototype.hasOwnProperty.call(effectiveResolved, 'promotions')) {
+    nextConfig.promotions = asArray(effectiveResolved.promotions)
+      .map((item) => normalizePromotionFromErpPayload(item))
+      .filter((p): p is Promotion => Boolean(p));
+  }
+
   nextConfig.terminalSnapshots = {
     ...(nextConfig.terminalSnapshots || {}),
     ...(effectiveSnapshot ? { [terminalId]: effectiveSnapshot } : {}),

@@ -406,6 +406,8 @@ export interface TerminalConfigResolvedSnapshot {
   inventory?: TerminalConfigResolvedInventorySnapshot;
   documents?: TerminalConfigResolvedDocumentsSnapshot;
   catalog?: TerminalConfigResolvedCatalogSnapshot;
+  /** Promociones ERP → POS (forma camelCase, ver `posPromotionsSnapshot.js`). */
+  promotions?: any[];
 }
 
 export interface TerminalConfigSnapshot {
