@@ -9,6 +9,7 @@ Guía para mejoras del APK móvil: dónde editar, dónde firmar, versión y vali
 | **Repo principal (solo código)** | `/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/CLIC-POS` |
 | **Worktree firmado (único sitio de release)** | `/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite` |
 | **Salida APK release** | `<worktree>/android/app/build/outputs/apk/release` |
+| **Salida APK debug** | `<worktree>/android/app/build/outputs/apk/debug` (misma convención de nombres que `build.gradle`) |
 | **Metadata del último build** | `<worktree>/android/app/build/outputs/apk/release/output-metadata.json` |
 
 En otros equipos, sustituye la parte base por tu clon; el worktree firmado debe ser el checkout que contiene `key.properties` y el keystore (ver abajo).
