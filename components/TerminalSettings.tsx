@@ -295,7 +295,8 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                </div>
             </div>
 
-            <div className="bg-white border-b border-gray-100 px-6 shrink-0 z-10 flex gap-8 overflow-x-auto no-scrollbar">
+            <div className="bg-white border-b border-gray-100 px-6 py-4 shrink-0 z-10 overflow-x-auto no-scrollbar">
+               <div className="flex min-w-max gap-3">
                {[
                   { id: 'IDENTITY', label: 'Identidad', icon: UserCircle },
                   { id: 'OPERATIONAL', label: 'Operación', icon: Zap },
@@ -305,10 +306,19 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                   { id: 'SECURITY', label: 'Seguridad', icon: ShieldCheck },
                   { id: 'OFFLINE', label: 'Red/Nube', icon: Cloud },
                ].map(tab => (
-                  <button key={tab.id} onClick={() => setActiveTab(tab.id as TerminalTab)} className={`pb-4 pt-6 text-xs font-black flex items-center gap-2 border-b-4 uppercase transition-all ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400'}`}>
+                  <button
+                     key={tab.id}
+                     onClick={() => setActiveTab(tab.id as TerminalTab)}
+                     className={`px-5 py-3 text-xs font-black flex items-center gap-2 rounded-2xl border-2 uppercase whitespace-nowrap transition-all shadow-sm ${
+                        activeTab === tab.id
+                           ? 'bg-white border-blue-200 text-blue-600 shadow-blue-100'
+                           : 'bg-white border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600'
+                     }`}
+                  >
                      <tab.icon size={16} /> {tab.label}
                   </button>
                ))}
+               </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
