@@ -34,8 +34,25 @@ export const evaluateCreditSupervisorGate = (
 };
 
 /** Nombre reservado: venta queda como crédito / CxC, no como efectivo en caja. */
-export const isPendingPaymentMethodName = (name: string): boolean =>
-  name.trim().toLowerCase() === 'pendiente';
+export const isPendingPaymentMethodName = (name: string): boolean => {
+  const t = name
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '');
+  if (t === 'pendiente') return true;
+  // "PENDIENTE DE COBRO", "pendiente pago", variantes en catálogo
+  if (t.startsWith('pendiente')) return true;
+  return false;
+};
+
+/** Línea que aumenta CxC: tipo CREDIT o etiqueta tipo Pendiente (corrige configs con type CASH). */
+export const paymentEntryIsCxCCredit = (
+  p: Pick<PaymentEntry, 'method' | 'methodLabel'>
+): boolean => {
+  if (p.method === 'CREDIT') return true;
+  return isPendingPaymentMethodName(p.methodLabel || '');
+};
 
 export const toValidCreditDays = (days?: number): number => {
   const parsed = Number(days);
@@ -69,5 +86,9 @@ export const resolvePaymentMethodTypeForRuntime = (
 ): PaymentMethod =>
   isPendingPaymentMethodName(method.name) ? 'CREDIT' : method.type;
 
-export const sumCreditPaymentsBase = (entries: Pick<PaymentEntry, 'method' | 'amount'>[]): number =>
-  entries.filter((p) => p.method === 'CREDIT').reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+export const sumCreditPaymentsBase = (
+  entries: Pick<PaymentEntry, 'method' | 'methodLabel' | 'amount'>[]
+): number =>
+  entries
+    .filter((p) => paymentEntryIsCxCCredit(p))
+    .reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
