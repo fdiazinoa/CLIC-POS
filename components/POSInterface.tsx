@@ -22,7 +22,7 @@ import {
    PaymentEntry, Table, Reservation, ZReport, Room, Permission
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
-import UnifiedPaymentModal from './PaymentModal';
+import UnifiedPaymentModal, { type PaymentConfirmOptions } from './PaymentModal';
 import TicketOptionsModal from './TicketOptionsModal';
 import CartItemOptionsModal from './CartItemOptionsModal';
 import ProductVariantSelector from './ProductVariantSelector';
@@ -584,6 +584,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
 
    const [showPaymentModal, setShowPaymentModal] = useState(false);
+   /** Supervisor ya autorizó cobrar con cliente en mora (flujo Cobrar antes del modal). */
+   const [delinquentCheckoutSupervisorOk, setDelinquentCheckoutSupervisorOk] = useState(false);
    const [showTicketOptions, setShowTicketOptions] = useState(false);
    const [showParkedList, setShowParkedList] = useState(false);
    const [showParkAliasModal, setShowParkAliasModal] = useState(false);
@@ -1629,7 +1631,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
 
-   const handlePaymentConfirm = async (payments: PaymentEntry[]): Promise<Transaction | null> => {
+   const handlePaymentConfirm = async (
+      payments: PaymentEntry[],
+      options?: PaymentConfirmOptions
+   ): Promise<Transaction | null> => {
       const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
          let timeoutHandle: number | undefined;
          try {
@@ -1650,6 +1655,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const hasSales = processedCart.some(i => i.quantity > 0);
          const productsById = new Map(products.map(product => [product.id, product] as const));
          const isRefundOnly = hasReturns && !hasSales;
+
+         const delinquentSaleAuthorized =
+            Boolean(options?.delinquentSaleOk) || hasPermission('POS_CREDIT_OVERRIDE');
+         if (!isRefundOnly && isDelinquent && !delinquentSaleAuthorized) {
+            alert(
+               'No se puede cerrar el ticket: el cliente está en mora o sin cupo de crédito. Use Cobrar y solicite autorización de supervisor.'
+            );
+            return null;
+         }
+
          const refundSeriesId = activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND';
          const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
          const normalizedRefundItems = processedCart
@@ -2038,7 +2053,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
-   const proceedToCheckout = () => {
+   const proceedToCheckout = async () => {
       const threshold = activeTerminalConfig?.operational?.fiscalThreshold || 0;
       if (threshold > 0 && cartTotal > threshold && !selectedCustomer) {
          alert(`ATENCIÓN: El monto de la venta (${baseCurrency.symbol}${cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) excede el umbral fiscal permitido para facturas de consumo (${baseCurrency.symbol}${threshold.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}).\n\nEs obligatorio identificar al cliente y emitir una Factura de Crédito Fiscal (B01).`);
@@ -2046,10 +2061,25 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return;
       }
 
+      let supervisorOkDelinquent = false;
+      if (isDelinquent && !hasPermission('POS_CREDIT_OVERRIDE')) {
+         const ok = await requestApproval({
+            permission: 'POS_CREDIT_OVERRIDE',
+            actionDescription: 'Cobrar ticket con cliente en mora o cupo de crédito agotado',
+         });
+         if (!ok) return;
+         supervisorOkDelinquent = true;
+      }
+
       if (activeRecoveredReservation && amountDueNow <= 0.0001) {
-         handlePaymentConfirm([]).catch(console.error);
+         handlePaymentConfirm([], {
+            delinquentSaleOk:
+               !isDelinquent || hasPermission('POS_CREDIT_OVERRIDE') || supervisorOkDelinquent,
+         }).catch(console.error);
          return;
       }
+
+      setDelinquentCheckoutSupervisorOk(supervisorOkDelinquent);
       setShowPaymentModal(true);
    };
 
@@ -3530,7 +3560,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                />
             )
          }
-         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={selectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} />}
+         {showPaymentModal && (
+            <UnifiedPaymentModal
+               total={amountDueNow}
+               items={cart}
+               currencySymbol={baseCurrency.symbol}
+               config={config}
+               onClose={() => {
+                  setShowPaymentModal(false);
+                  setDelinquentCheckoutSupervisorOk(false);
+               }}
+               onConfirm={handlePaymentConfirm}
+               themeColor={config.themeColor}
+               customer={selectedCustomer}
+               isDelinquent={isDelinquent}
+               delinquentSalePreApproved={delinquentCheckoutSupervisorOk}
+               users={users}
+               roles={roles}
+               isMaster={isMaster}
+               currentUser={currentUser}
+            />
+         )}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr) => { addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
