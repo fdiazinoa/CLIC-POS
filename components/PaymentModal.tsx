@@ -6,8 +6,22 @@ import {
    Repeat, ArrowRightLeft, DollarSign, Zap, Smartphone
 } from 'lucide-react';
 import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem, Transaction, Customer, User, Permission, RoleDefinition } from '../types';
+import {
+   isPendingPaymentMethodName,
+   resolvePaymentMethodTypeForRuntime,
+   sumCreditPaymentsBase,
+   evaluateCreditSupervisorGate,
+   paymentEntryIsCxCCredit,
+} from '../utils/paymentMethodGuards';
 import { printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
+
+export type PaymentConfirmOptions = {
+   /** True si el supervisor ya autorizó cobrar con cliente en mora / sin cupo (modal o puerta Cobrar). */
+   delinquentSaleOk?: boolean;
+   /** Autorización explícita en modal de crédito/Pendiente (o rol con override); validado también en handlePaymentConfirm. */
+   creditSupervisorOk?: boolean;
+};
 
 interface PaymentModalProps {
    total: number;
@@ -15,10 +29,12 @@ interface PaymentModalProps {
    currencySymbol: string;
    config?: BusinessConfig;
    onClose: () => void;
-   onConfirm: (payments: PaymentEntry[]) => Promise<Transaction | null>;
+   onConfirm: (payments: PaymentEntry[], options?: PaymentConfirmOptions) => Promise<Transaction | null>;
    themeColor: string;
    customer?: Customer | null;
    isDelinquent?: boolean;
+   /** Autorización ya obtenida en POS (Cobrar) antes de abrir el modal. */
+   delinquentSalePreApproved?: boolean;
    users: User[];
    isMaster?: boolean;
    currentUser?: User | null;
@@ -89,9 +105,24 @@ const createPaymentId = (): string => {
    return `PAY-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 };
 
-import SupervisorAuthModal from './SupervisorAuthModal';
+import SupervisorAuthModal, { type CreditSupervisorSummary } from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({
+   total,
+   items,
+   currencySymbol,
+   config,
+   onClose,
+   onConfirm,
+   themeColor,
+   customer,
+   isDelinquent,
+   delinquentSalePreApproved = false,
+   users,
+   isMaster,
+   currentUser,
+   roles
+}) => {
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');
@@ -105,6 +136,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    const [verifiedBalance, setVerifiedBalance] = useState<number | null>(null);
    const [showSupervisorModal, setShowSupervisorModal] = useState(false);
    const [isOverrideActive, setIsOverrideActive] = useState(false);
+   const [creditSupervisorSummary, setCreditSupervisorSummary] = useState<CreditSupervisorSummary | null>(null);
 
    const userPermissions = useMemo(() => {
       if (!currentUser) return [];
@@ -149,13 +181,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
       const fromConfig = enabledConfigMethods.map((method, index) => {
          const IconFromName = method.icon ? PAYMENT_ICON_BY_NAME[method.icon] : undefined;
+         const resolvedType = resolvePaymentMethodTypeForRuntime(method);
          return {
             key: `${method.id}-${index}`,
             id: method.id,
-            type: method.type,
-            label: method.name || getDefaultLabelByType(method.type),
+            type: resolvedType,
+            label: method.name || getDefaultLabelByType(resolvedType),
             iconName: method.icon,
-            Icon: IconFromName || getDefaultIconByType(method.type)
+            Icon: IconFromName || getDefaultIconByType(resolvedType)
          };
       });
 
@@ -220,66 +253,65 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       }
    };
 
-   const getCreditPaymentsTotal = (entries: PaymentEntry[]): number =>
-      entries
-         .filter((payment) => payment.method === 'CREDIT')
-         .reduce((acc, payment) => acc + payment.amount, 0);
-
-   const canBypassCreditLimit = isOverrideActive || hasPermission('POS_CREDIT_OVERRIDE');
-
-   const enforceCreditRules = (projectedCreditTotal: number): boolean => {
-      if (projectedCreditTotal <= 0) return true;
-
-      if (!customer?.id) {
-         setFinalizeError('Las ventas a crédito pendientes requieren un cliente asociado antes de guardar el ticket.');
-         return false;
-      }
-
-      if (!canBypassCreditLimit) {
-         const limit = customer.creditLimit || 0;
-         const currentDebt = customer.currentDebt || 0;
-         if (limit > 0 && (currentDebt + projectedCreditTotal) > limit) {
-            setFinalizeError(`Límite de crédito excedido (${currencySymbol}${limit.toFixed(2)}). Requiere autorización.`);
-            setShowSupervisorModal(true);
-            return false;
-         }
-      }
-
-      return true;
-   };
-
    const handleAddPayment = (amountOverride?: number) => {
       const valInSelectedCurrency = amountOverride !== undefined ? amountOverride : parseFloat(inputAmount);
       if (!valInSelectedCurrency || valInSelectedCurrency <= 0) return;
+      if (!activePaymentMethod) return;
+
+      const resolvedEntryMethod: PaymentMethod =
+         activePaymentMethod.type === 'CREDIT' || isPendingPaymentMethodName(activePaymentMethod.label)
+            ? 'CREDIT'
+            : activePaymentMethod.type;
+      const activeIsCxC = resolvedEntryMethod === 'CREDIT';
 
       // Permission Check: Credit requires POS_PAY_CREDIT
-      if (activePaymentMethod.type === 'CREDIT' && !hasPermission('POS_PAY_CREDIT')) {
+      if (activeIsCxC && !hasPermission('POS_PAY_CREDIT')) {
          setFinalizeError(`No tiene permisos para realizar ventas a crédito.`);
          return;
       }
 
       // Strict Online Check: Credit and Wallet require connection (unless Master)
-      if (!isOnline && !isMaster && (activePaymentMethod.type === 'CREDIT' || activePaymentMethod.type === 'WALLET')) {
+      if (!isOnline && !isMaster && (activeIsCxC || activePaymentMethod.type === 'WALLET')) {
          setFinalizeError(`El pago con ${activePaymentMethod.label} requiere conexión con la Terminal Master.`);
+         return;
+      }
+
+      if (isPendingPaymentMethodName(activePaymentMethod.label) && !customer?.id) {
+         setFinalizeError('Debe asignar un cliente al ticket antes de usar Pendiente.');
          return;
       }
 
       const amountInBase = valInSelectedCurrency * selectedCurrency.rate;
 
-      if (activePaymentMethod.type === 'CREDIT') {
-         const projectedCreditTotal = getCreditPaymentsTotal(payments) + amountInBase;
-         if (!enforceCreditRules(projectedCreditTotal)) {
+      const creditAlreadyOnTicket = sumCreditPaymentsBase(payments);
+      if (activeIsCxC && !isOverrideActive && !hasPermission('POS_CREDIT_OVERRIDE') && customer) {
+         const gate = evaluateCreditSupervisorGate(customer, creditAlreadyOnTicket, amountInBase);
+         if (gate) {
+            setFinalizeError(
+               gate.reason === 'NO_LIMIT'
+                  ? 'Cliente sin cupo de crédito definido: Pendiente requiere autorización de supervisor.'
+                  : `Límite de crédito excedido. Cupo ${currencySymbol}${(customer.creditLimit || 0).toFixed(2)}. Requiere supervisor.`
+            );
+            setCreditSupervisorSummary({
+               currencySymbol,
+               customerName: customer.name,
+               limit: customer.creditLimit || 0,
+               currentDebt: customer.currentDebt || 0,
+               creditOnTicket: gate.creditOnTicket,
+               projected: gate.projected,
+               reason: gate.reason,
+            });
+            setShowSupervisorModal(true);
             return;
          }
       }
 
       const newPayment: PaymentEntry = {
          id: createPaymentId(),
-         method: activePaymentMethod.type,
+         method: resolvedEntryMethod,
          methodId: activePaymentMethod.id,
          methodLabel: activePaymentMethod.label,
          methodIcon: activePaymentMethod.iconName,
-         creditOverrideApproved: activePaymentMethod.type === 'CREDIT' && canBypassCreditLimit ? true : undefined,
          amount: parseFloat(amountInBase.toFixed(2)),
          timestamp: new Date(),
          currencyCode: selectedCurrency.code,
@@ -305,6 +337,24 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       try {
          let paymentsToConfirm = payments;
 
+         // Cliente al límite o en mora (deuda >= cupo): no permitir cerrar la venta sin supervisor,
+         // aunque el cobro sea en efectivo u otros métodos (el cartel "crédito bloqueado" debe cumplirse).
+         if (
+            !isRefund &&
+            isDelinquent &&
+            !isOverrideActive &&
+            !hasPermission('POS_CREDIT_OVERRIDE') &&
+            !delinquentSalePreApproved
+         ) {
+            setFinalizeError(
+               'Cliente con cupo de crédito agotado o en mora. Requiere autorización de supervisor para cobrar.'
+            );
+            setCreditSupervisorSummary(null);
+            setShowSupervisorModal(true);
+            setIsFinalizing(false);
+            return;
+         }
+
          // UX: If cashier typed an amount but didn't press "Agregar",
          // auto-create the payment entry so "Finalizar Venta" still works.
          if (canFinalizeWithTypedAmount) {
@@ -313,23 +363,51 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                return;
             }
 
+            const autoResolvedMethod: PaymentMethod =
+               activePaymentMethod.type === 'CREDIT' || isPendingPaymentMethodName(activePaymentMethod.label)
+                  ? 'CREDIT'
+                  : activePaymentMethod.type;
+            const autoIsCxC = autoResolvedMethod === 'CREDIT';
+
             // Permission Check: Credit requires POS_PAY_CREDIT during auto-finalize too
-            if (activePaymentMethod.type === 'CREDIT' && !hasPermission('POS_PAY_CREDIT')) {
+            if (autoIsCxC && !hasPermission('POS_PAY_CREDIT')) {
                setFinalizeError(`No tiene permisos para realizar ventas a crédito.`);
                setIsFinalizing(false);
                return;
             }
 
             // Strict Online Check: Credit and Wallet require connection during finalization too (unless Master)
-            if (!isOnline && !isMaster && (activePaymentMethod.type === 'CREDIT' || activePaymentMethod.type === 'WALLET')) {
+            if (!isOnline && !isMaster && (autoIsCxC || activePaymentMethod.type === 'WALLET')) {
                setFinalizeError(`El pago con ${activePaymentMethod.label} requiere conexión con la Terminal Master.`);
                setIsFinalizing(false);
                return;
             }
 
-            if (activePaymentMethod.type === 'CREDIT') {
-               const projectedCreditTotal = getCreditPaymentsTotal(payments) + typedAmountInBase;
-               if (!enforceCreditRules(projectedCreditTotal)) {
+            if (isPendingPaymentMethodName(activePaymentMethod.label) && !customer?.id) {
+               setFinalizeError('Debe asignar un cliente al ticket antes de usar Pendiente.');
+               setIsFinalizing(false);
+               return;
+            }
+
+            const creditBeforeAuto = sumCreditPaymentsBase(payments);
+            if (autoIsCxC && !isOverrideActive && !hasPermission('POS_CREDIT_OVERRIDE') && customer) {
+               const gate = evaluateCreditSupervisorGate(customer, creditBeforeAuto, typedAmountInBase);
+               if (gate) {
+                  setFinalizeError(
+                     gate.reason === 'NO_LIMIT'
+                        ? 'Cliente sin cupo definido: Pendiente requiere supervisor.'
+                        : `Límite de crédito excedido. Requiere supervisor.`
+                  );
+                  setCreditSupervisorSummary({
+                     currencySymbol,
+                     customerName: customer.name,
+                     limit: customer.creditLimit || 0,
+                     currentDebt: customer.currentDebt || 0,
+                     creditOnTicket: gate.creditOnTicket,
+                     projected: gate.projected,
+                     reason: gate.reason,
+                  });
+                  setShowSupervisorModal(true);
                   setIsFinalizing(false);
                   return;
                }
@@ -337,11 +415,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
             const autoPayment: PaymentEntry = {
                id: createPaymentId(),
-               method: activePaymentMethod.type,
+               method: autoResolvedMethod,
                methodId: activePaymentMethod.id,
                methodLabel: activePaymentMethod.label,
                methodIcon: activePaymentMethod.iconName,
-               creditOverrideApproved: activePaymentMethod.type === 'CREDIT' && canBypassCreditLimit ? true : undefined,
                amount: typedAmountInBase,
                timestamp: new Date(),
                currencyCode: selectedCurrency.code,
@@ -352,25 +429,46 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             setPayments(paymentsToConfirm);
          }
 
-         const totalCreditCommitted = getCreditPaymentsTotal(paymentsToConfirm);
-         if (totalCreditCommitted > 0) {
-            if (!enforceCreditRules(totalCreditCommitted)) {
-               setIsFinalizing(false);
-               return;
-            }
+         if (
+            paymentsToConfirm.some((p) => isPendingPaymentMethodName(p.methodLabel || '')) &&
+            !customer?.id
+         ) {
+            setFinalizeError('Debe asignar un cliente al ticket antes de cerrar con Pendiente.');
+            setIsFinalizing(false);
+            return;
+         }
 
-            paymentsToConfirm = paymentsToConfirm.map((payment) =>
-               payment.method === 'CREDIT'
-                  ? { ...payment, creditOverrideApproved: payment.creditOverrideApproved || canBypassCreditLimit }
-                  : payment
-            );
-            setPayments(paymentsToConfirm);
+         if (!isOverrideActive && !hasPermission('POS_CREDIT_OVERRIDE') && customer) {
+            const creditTotal = sumCreditPaymentsBase(paymentsToConfirm);
+            if (creditTotal > 0) {
+               const gate = evaluateCreditSupervisorGate(customer, 0, creditTotal);
+               if (gate) {
+                  setFinalizeError(
+                     gate.reason === 'NO_LIMIT'
+                        ? 'Pendiente / crédito sin cupo en ficha del cliente. Requiere supervisor.'
+                        : `Total a crédito supera el cupo (${currencySymbol}${(customer.creditLimit || 0).toFixed(2)}). Requiere supervisor.`
+                  );
+                  setCreditSupervisorSummary({
+                     currencySymbol,
+                     customerName: customer.name,
+                     limit: customer.creditLimit || 0,
+                     currentDebt: customer.currentDebt || 0,
+                     creditOnTicket: gate.creditOnTicket,
+                     projected: gate.projected,
+                     reason: gate.reason,
+                  });
+                  setShowSupervisorModal(true);
+                  setIsFinalizing(false);
+                  return;
+               }
+            }
          }
 
          // Zero Price Check
          const hasZeroPriceItem = items.some(item => item.price === 0);
          if (hasZeroPriceItem && !hasPermission('POS_ALLOW_ZERO_PRICE') && !isOverrideActive) {
             setFinalizeError(`Venta contiene artículos con precio en $0.00. Requiere autorización.`);
+            setCreditSupervisorSummary(null);
             setShowSupervisorModal(true);
             setIsFinalizing(false);
             return;
@@ -378,7 +476,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
          // Final safety check: ensure no CREDIT or WALLET payments are sent while offline (unless Master)
          if (!isOnline && !isMaster) {
-            const blockedPayment = paymentsToConfirm.find(p => p.method === 'CREDIT' || p.method === 'WALLET');
+            const blockedPayment = paymentsToConfirm.find(
+               (p) => paymentEntryIsCxCCredit(p) || p.method === 'WALLET'
+            );
             if (blockedPayment) {
                setFinalizeError(`El pago con ${blockedPayment.methodLabel} requiere conexión con la Terminal Master.`);
                setIsFinalizing(false);
@@ -391,7 +491,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             slowProcessTimer = window.setTimeout(() => {
                setFinalizeError('El cobro está tardando más de lo esperado, espere unos segundos...');
             }, 15000);
-            const txn = await onConfirm(paymentsToConfirm);
+            const txn = await onConfirm(paymentsToConfirm, {
+               delinquentSaleOk:
+                  isOverrideActive ||
+                  hasPermission('POS_CREDIT_OVERRIDE') ||
+                  delinquentSalePreApproved,
+               creditSupervisorOk:
+                  isOverrideActive || hasPermission('POS_CREDIT_OVERRIDE'),
+            });
 
             if (txn) {
                setCompletedTransaction(txn);
@@ -679,7 +786,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                {/* Payment Methods */}
                <div className="flex flex-wrap p-3 md:p-4 gap-3 md:gap-4 shrink-0">
                   {configuredMethods.map(method => {
-                     const isExceeded = method.type === 'CREDIT' && isDelinquent && !isOverrideActive;
+                     const methodIsCxC =
+                        method.type === 'CREDIT' || isPendingPaymentMethodName(method.label);
+                     const isExceeded = methodIsCxC && isDelinquent && !isOverrideActive;
                      return (
                         <button
                            key={method.key}
@@ -695,6 +804,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                      );
                   })}
                </div>
+
+               {isPendingPaymentMethodName(activePaymentMethod?.label || '') &&
+                  !customer?.id && (
+                     <div className="mx-4 mb-2 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] font-bold text-amber-900 md:text-xs">
+                        <ShieldAlert size={16} className="shrink-0 text-amber-600" />
+                        <span>Asigne un cliente al ticket para usar Pendiente y cerrar la venta.</span>
+                     </div>
+                  )}
 
                {isDelinquent && !isOverrideActive && (
                   <div className="mx-4 mb-4 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between">
@@ -779,13 +896,21 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
          {showSupervisorModal && (
             <SupervisorAuthModal
                isOpen={showSupervisorModal}
-               onClose={() => setShowSupervisorModal(false)}
+               onClose={() => {
+                  setShowSupervisorModal(false);
+                  setCreditSupervisorSummary(null);
+               }}
                onSuccess={() => {
                   setIsOverrideActive(true);
+                  setCreditSupervisorSummary(null);
                   setShowSupervisorModal(false);
                }}
                users={users}
+               roles={roles || config?.roles}
                requiredPermission="POS_CREDIT_OVERRIDE"
+               creditSummary={creditSupervisorSummary}
+               title={creditSupervisorSummary ? 'Autorizar Pendiente / crédito' : undefined}
+               description={creditSupervisorSummary ? 'PIN de supervisor o administrador' : undefined}
             />
          )}
       </div>

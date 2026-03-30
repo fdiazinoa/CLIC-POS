@@ -1,7 +1,7 @@
 import { DatabaseAdapter } from '../DatabaseAdapter';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 14; // Incremented to add activities for CRM & Booking
+const DB_VERSION = 15; // Keep aligned with deployed local schemas and avoid web downgrades
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
@@ -18,7 +18,7 @@ const STORES = [
     'watchlists', 'syncMetadata', 'inventorySnapshots', 'inventoryAuditLogs', 'inventoryCounts',
     'offline_receptions', 'offline_reception_queue', 'offline_reception_conflicts',
     'offline_inventory_counts', 'offline_inventory_count_queue', 'offline_inventory_count_conflicts',
-    'offline_print_queue', 'reservations', 'inventoryCommitments', 'activities'
+    'offline_print_queue', 'reservations', 'inventoryCommitments', 'activities', 'collections'
 ];
 
 export class IndexedDBAdapter implements DatabaseAdapter {
@@ -30,9 +30,24 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         if (this.db) return;
 
         try {
-            this.db = await this.openDatabase(DB_VERSION, OPEN_TIMEOUT_MS);
+            const versionToOpen = await this.resolveCompatibleVersion();
+            this.db = await this.openDatabase(versionToOpen, OPEN_TIMEOUT_MS);
         } catch (error: any) {
             const message = String(error?.message || error || '');
+            const isVersionDowngrade =
+                error?.name === 'VersionError' ||
+                message.toLowerCase().includes('less than the existing version');
+
+            if (isVersionDowngrade) {
+                console.warn('[IndexedDBAdapter] Requested version is older than existing DB. Reopening current version.', error);
+                this.db = await this.openDatabase(undefined, OPEN_TIMEOUT_MS);
+                this.storageOnlyMode = false;
+                console.log('[IndexedDBAdapter] Connected using existing DB version');
+                this.attachVersionChangeHandler();
+                await this.migrateFromLocalStorage();
+                return;
+            }
+
             const canFallback = message.toLowerCase().includes('timeout') || message.toLowerCase().includes('blocked');
 
             if (!canFallback) {
@@ -49,6 +64,33 @@ export class IndexedDBAdapter implements DatabaseAdapter {
         console.log('[IndexedDBAdapter] Connected');
         this.attachVersionChangeHandler();
         await this.migrateFromLocalStorage();
+    }
+
+    private async resolveCompatibleVersion(): Promise<number | undefined> {
+        try {
+            const databasesApi = (indexedDB as IDBFactory & {
+                databases?: () => Promise<Array<{ name?: string; version?: number }>>;
+            }).databases;
+
+            if (typeof databasesApi !== 'function') {
+                return DB_VERSION;
+            }
+
+            const databases = await databasesApi.call(indexedDB);
+            const existingDb = databases.find(db => db?.name === DB_NAME);
+            const existingVersion = Number(existingDb?.version || 0);
+
+            if (existingVersion > DB_VERSION) {
+                console.warn(
+                    `[IndexedDBAdapter] Existing DB version ${existingVersion} is newer than requested ${DB_VERSION}. Using existing version.`
+                );
+                return existingVersion;
+            }
+        } catch (error) {
+            console.warn('[IndexedDBAdapter] Could not inspect existing IndexedDB versions. Falling back to requested version.', error);
+        }
+
+        return DB_VERSION;
     }
 
     private openDatabase(version?: number, timeoutMs = OPEN_TIMEOUT_MS): Promise<IDBDatabase> {

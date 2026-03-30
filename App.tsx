@@ -124,13 +124,6 @@ import {
 } from './utils/cloudMasterRegistry';
 import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, persistStoredErpSyncBinding } from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
-import {
-  canRetryFiscalTransaction,
-  getFiscalComplianceConfig,
-  getFiscalProviderConfig,
-  getProviderEnvironment
-} from './utils/fiscal/fiscalHelpers';
-import { getFiscalDocumentStatus, issueFiscalDocument } from './services/fiscal/fiscalService';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -271,8 +264,7 @@ const normalizeMasterHost = (value: string | null | undefined) =>
     .replace(/^https?:\/\//i, '')
     .replace(/\/.*$/, '');
 
-type TerminalSetupMode = 'SERVER_LOCAL' | 'SERVER_ERP' | 'CLIENT';
-type TerminalIntegrationMode = 'LOCAL_ONLY' | 'ERP_DIRECT';
+type TerminalSetupMode = 'SERVER' | 'CLIENT';
 
 type TerminalConfigRestartNotice = {
   receivedAt: string;
@@ -299,21 +291,7 @@ const readTerminalConfigRestartNotice = (): TerminalConfigRestartNotice | null =
 
 const getStoredTerminalSetupMode = (): TerminalSetupMode | null => {
   const storedMode = localStorage.getItem(TERMINAL_SETUP_MODE_KEY);
-  if (storedMode === 'SERVER_LOCAL' || storedMode === 'SERVER_ERP' || storedMode === 'CLIENT') {
-    return storedMode;
-  }
-
-  if (storedMode === 'SERVER') return 'SERVER_LOCAL';
-  if (storedMode === 'CLIENT') return 'CLIENT';
-  return null;
-};
-
-const getTerminalSetupIntegrationMode = (setupMode: TerminalSetupMode | null): TerminalIntegrationMode => {
-  return setupMode === 'SERVER_ERP' ? 'ERP_DIRECT' : 'LOCAL_ONLY';
-};
-
-const getTerminalBindingMode = (setupMode: TerminalSetupMode | null): 'MASTER' | 'SLAVE' => {
-  return setupMode === 'CLIENT' ? 'SLAVE' : 'MASTER';
+  return storedMode === 'SERVER' || storedMode === 'CLIENT' ? storedMode : null;
 };
 
 const hasPendingTerminalSetup = (): boolean => localStorage.getItem(TERMINAL_SETUP_PENDING_KEY) === '1';
@@ -758,7 +736,6 @@ const AppContent: React.FC = () => {
     const canForceStandaloneRebind =
       !hasPendingTerminalSetup() &&
       setupMode !== 'CLIENT' &&
-      setupMode !== 'SERVER_ERP' &&
       !localStorage.getItem('pos_master_ip') &&
       primaryTerminal?.config?.governedByMaster !== true;
 
@@ -833,7 +810,7 @@ const AppContent: React.FC = () => {
     localStorage.removeItem('active_terminal_id');
     localStorage.removeItem('initial_terminal_config');
     localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
-    localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_LOCAL');
+    localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER');
     localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'VERTICAL_SELECTED');
     localStorage.setItem(SETUP_FLOW_VERSION_KEY, SETUP_FLOW_VERSION);
     setConfig(selectedConfig);
@@ -848,19 +825,10 @@ const AppContent: React.FC = () => {
     localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
     localStorage.setItem(TERMINAL_SETUP_MODE_KEY, mode);
 
-    if (mode === 'SERVER_LOCAL') {
+    if (mode === 'SERVER') {
       localStorage.removeItem('pos_master_ip');
       localStorage.setItem('CLIC_POS_MASTER_URL', buildRuntimeMasterUrl());
       setCurrentView('VERTICAL_SELECTOR');
-      return;
-    }
-
-    if (mode === 'SERVER_ERP') {
-      localStorage.removeItem('pos_master_ip');
-      localStorage.setItem('CLIC_POS_MASTER_URL', buildRuntimeMasterUrl());
-      localStorage.removeItem(SETUP_FLOW_STAGE_KEY);
-      localStorage.removeItem(SETUP_FLOW_VERSION_KEY);
-      setCurrentView('TERMINAL_PAIRING');
       return;
     }
 
@@ -1555,14 +1523,14 @@ const AppContent: React.FC = () => {
         const hasStartupTransactions = Array.isArray(data.transactions) && data.transactions.length > 0;
         const shouldResumeSetupWizard =
           terminalSetupPending &&
-          setupMode === 'SERVER_LOCAL' &&
+          setupMode === 'SERVER' &&
           setupFlowStage === 'VERTICAL_SELECTED' &&
           !masterIp &&
           !localPairedTerminal &&
           !isVisorMode;
         const shouldResumeVerticalSelection =
           terminalSetupPending &&
-          setupMode === 'SERVER_LOCAL' &&
+          setupMode === 'SERVER' &&
           !setupWizardCompleted &&
           !setupFlowStage &&
           !masterIp &&
@@ -1582,11 +1550,6 @@ const AppContent: React.FC = () => {
           !setupMode &&
           !localPairedTerminal &&
           !setupWizardCompleted;
-        const shouldPairAsServerErp =
-          terminalSetupPending &&
-          !isVisorMode &&
-          setupMode === 'SERVER_ERP' &&
-          !localPairedTerminal;
         const shouldPairAsClient =
           terminalSetupPending &&
           !isVisorMode &&
@@ -1594,7 +1557,7 @@ const AppContent: React.FC = () => {
           !localPairedTerminal;
 
         const shouldResolveMasterFromCloud = !masterIp && (
-          shouldPairAsClient || localPairedTerminal?.config?.isPrimaryNode === false
+          !localPairedTerminal || localPairedTerminal?.config?.isPrimaryNode === false || shouldPairAsClient
         );
 
         if (shouldResolveMasterFromCloud) {
@@ -1627,14 +1590,6 @@ const AppContent: React.FC = () => {
 
         if (shouldPairAsClient) {
           console.log('[BOOT] Client mode selected. Redirecting to terminal pairing...');
-          setCurrentView('TERMINAL_PAIRING');
-          setIsDataLoaded(true);
-          setIsSecurityLoaded(true);
-          return;
-        }
-
-        if (shouldPairAsServerErp) {
-          console.log('[BOOT] ERP direct mode selected. Redirecting to ERP terminal pairing...');
           setCurrentView('TERMINAL_PAIRING');
           setIsDataLoaded(true);
           setIsSecurityLoaded(true);
@@ -2312,11 +2267,6 @@ const AppContent: React.FC = () => {
     options?: { forceTakeover?: boolean }
   ) => {
     setRestoringHistory(true);
-    const previousConfig = config;
-    const previousUsers = users;
-    const previousActiveTerminalId = localStorage.getItem('active_terminal_id');
-    const previousTerminalStorageId = localStorage.getItem('CLIC_POS_TERMINAL_ID');
-    const previousInitialTerminalConfig = localStorage.getItem('initial_terminal_config');
     try {
       const setupResult = typeof pairingContext === 'object' && pairingContext !== null ? pairingContext : undefined;
       const resolvedMasterIp = typeof pairingContext === 'string' ? pairingContext : setupResult?.masterIp;
@@ -2358,17 +2308,23 @@ const AppContent: React.FC = () => {
         operationalDocumentState.documentSeries,
         operationalDocumentState.fiscalRanges
       );
-      const storedSetupMode = getStoredTerminalSetupMode();
-      const nextSetupMode: TerminalSetupMode = isSlave
-        ? 'CLIENT'
-        : storedSetupMode === 'SERVER_ERP'
-          ? 'SERVER_ERP'
-          : 'SERVER_LOCAL';
-      localStorage.setItem(TERMINAL_SETUP_MODE_KEY, nextSetupMode);
+      localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
+      localStorage.setItem(TERMINAL_SETUP_MODE_KEY, isSlave ? 'CLIENT' : 'SERVER');
+      localStorage.setItem('active_terminal_id', terminalId);
+      localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
       localStorage.setItem(
         'active_tenant_id',
         setupResult?.tenantId || localStorage.getItem('active_tenant_id') || 'default-tenant'
       );
+      localStorage.setItem('initial_terminal_config', JSON.stringify(updatedConfig));
+      persistStoredErpSyncBinding({
+        tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
+        terminalId: resolvedErpTerminalId,
+        localTerminalId: terminalId,
+        terminalName: resolvedTerminalName,
+        companyId: setupResult?.companyId || null,
+        storeId: setupResult?.storeId || null,
+      });
 
       if (Array.isArray(setupResult?.boundUsers)) {
         setUsers(setupResult.boundUsers);
@@ -2511,43 +2467,9 @@ const AppContent: React.FC = () => {
       if (Array.isArray(freshData.collections)) setCollections(freshData.collections);
       if (Array.isArray(freshData.supplierProductPrices)) setSupplierProductPrices(freshData.supplierProductPrices);
 
-      localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
-      localStorage.setItem('active_terminal_id', terminalId);
-      localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
-      localStorage.setItem('initial_terminal_config', JSON.stringify(updatedConfig));
-      persistStoredErpSyncBinding({
-        tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
-        terminalId: resolvedErpTerminalId,
-        localTerminalId: terminalId,
-        terminalName: resolvedTerminalName,
-        companyId: setupResult?.companyId || null,
-        storeId: setupResult?.storeId || null,
-      });
-
       setCurrentView('LOGIN');
     } catch (error) {
       console.error('❌ Failed to take terminal control:', error);
-      clearStoredErpSyncBinding();
-      localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
-      if (previousActiveTerminalId) {
-        localStorage.setItem('active_terminal_id', previousActiveTerminalId);
-      } else {
-        localStorage.removeItem('active_terminal_id');
-      }
-      if (previousTerminalStorageId) {
-        localStorage.setItem('CLIC_POS_TERMINAL_ID', previousTerminalStorageId);
-      } else {
-        localStorage.removeItem('CLIC_POS_TERMINAL_ID');
-      }
-      if (previousInitialTerminalConfig) {
-        localStorage.setItem('initial_terminal_config', previousInitialTerminalConfig);
-      } else {
-        localStorage.removeItem('initial_terminal_config');
-      }
-      setConfig(previousConfig);
-      await db.save('config', previousConfig);
-      setUsers(previousUsers);
-      await db.save('users', previousUsers);
       alert('No se pudo tomar control de la terminal. Revisa conexión y vuelve a intentar.');
     } finally {
       setRestoringHistory(false);
@@ -2563,7 +2485,7 @@ const AppContent: React.FC = () => {
       const effectiveDeviceId = deviceId || localStorage.getItem('pos_device_id') || '';
 
       localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
-      localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_LOCAL');
+      localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER');
       localStorage.setItem(SETUP_WIZARD_COMPLETED_KEY, '1');
       localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'COMPLETE');
       localStorage.setItem(SETUP_FLOW_VERSION_KEY, SETUP_FLOW_VERSION);
@@ -3051,194 +2973,6 @@ const AppContent: React.FC = () => {
     };
   }, [customers, transactions]);
 
-  const upsertFiscalTransaction = useCallback(async (nextTransaction: Transaction) => {
-    setTransactions(prev => {
-      const exists = prev.some(tx => tx.id === nextTransaction.id);
-      if (exists) return prev.map(tx => tx.id === nextTransaction.id ? nextTransaction : tx);
-      return [nextTransaction, ...prev];
-    });
-    await db.saveDocument('transactions', nextTransaction);
-    try {
-      await db.saveDocument('transactionHistory', nextTransaction);
-    } catch (historyMirrorError) {
-      console.warn('⚠️ Fiscal history mirror update skipped:', historyMirrorError);
-    }
-  }, []);
-
-  const pollFiscalDocumentStatus = useCallback(async (
-    transaction: Transaction,
-    providerId: Exclude<Transaction['fiscalProvider'], undefined | 'NONE'>,
-    environment: number,
-    providerTransactionId: string,
-    credentialKey?: string,
-    attempt = 1
-  ) => {
-    try {
-      const result = await getFiscalDocumentStatus(
-        providerId,
-        environment,
-        providerTransactionId,
-        config.companyInfo,
-        credentialKey
-      );
-
-      const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';
-      const refreshedTransaction: Transaction = {
-        ...transaction,
-        fiscalSyncStatus: finalStatus,
-        fiscalSyncError: result.success ? undefined : result.message,
-        fiscalReferenceId: providerTransactionId,
-        fiscalResponseMessage: result.message,
-        fiscalSyncedAt: result.success && !result.pending ? new Date().toISOString() : transaction.fiscalSyncedAt
-      };
-
-      await upsertFiscalTransaction(refreshedTransaction);
-
-      if (result.pending && attempt < 8) {
-        window.setTimeout(() => {
-          pollFiscalDocumentStatus(
-            refreshedTransaction,
-            providerId,
-            environment,
-            providerTransactionId,
-            credentialKey,
-            attempt + 1
-          ).catch(console.error);
-        }, attempt < 3 ? 3000 : 5000);
-      }
-    } catch (error: any) {
-      if (attempt >= 8) {
-        const failedTransaction: Transaction = {
-          ...transaction,
-          fiscalSyncStatus: 'ERROR',
-          fiscalSyncError: error?.message || 'No se pudo consultar el estado del e-CF.',
-          fiscalReferenceId: providerTransactionId,
-          fiscalResponseMessage: error?.message || 'No se pudo consultar el estado del e-CF.'
-        };
-        await upsertFiscalTransaction(failedTransaction);
-        return;
-      }
-
-      window.setTimeout(() => {
-        pollFiscalDocumentStatus(
-          transaction,
-          providerId,
-          environment,
-          providerTransactionId,
-          credentialKey,
-          attempt + 1
-        ).catch(console.error);
-      }, 5000);
-    }
-  }, [config.companyInfo, upsertFiscalTransaction]);
-
-  const syncFiscalDocument = useCallback(async (transaction: Transaction) => {
-    const providerId = transaction.fiscalProvider;
-    const documentCode = transaction.ncfType;
-    const electronicNcf = transaction.electronicNcf || transaction.ncf;
-
-    if (!providerId || providerId === 'NONE') return;
-    if (!documentCode || !documentCode.startsWith('E')) return;
-    if (!electronicNcf) return;
-
-    const fiscalCompliance = getFiscalComplianceConfig(config);
-    const environment = getProviderEnvironment(fiscalCompliance, providerId);
-    const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
-    const baseTransaction: Transaction = {
-      ...transaction,
-      fiscalSyncStatus: 'PENDING',
-      fiscalSyncError: undefined
-    };
-
-    await upsertFiscalTransaction(baseTransaction);
-
-    try {
-      const result = await issueFiscalDocument({
-        providerId,
-        environment,
-        companyInfo: config.companyInfo,
-        transaction: baseTransaction,
-        taxRate: config.taxRate,
-        sequenceExpiryDate: new Date(new Date(baseTransaction.date).getFullYear(), 11, 31).toISOString(),
-        credentialKey: providerConfig.credentialKey,
-        tipoIngreso: providerConfig.tipoIngreso,
-        modificationCode: providerConfig.modificationCode,
-        unitCodeGoods: providerConfig.unitCodeGoods,
-        unitCodeServices: providerConfig.unitCodeServices
-      });
-
-      const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';
-      const finalizedTransaction: Transaction = {
-        ...baseTransaction,
-        fiscalSyncStatus: finalStatus,
-        fiscalSyncError: result.success ? undefined : result.message,
-        fiscalReferenceId: result.providerTransactionId || baseTransaction.fiscalReferenceId,
-        fiscalResponseMessage: result.message,
-        fiscalSyncedAt: result.success && !result.pending ? new Date().toISOString() : baseTransaction.fiscalSyncedAt
-      };
-
-      await upsertFiscalTransaction(finalizedTransaction);
-
-      if (result.pending && result.providerTransactionId) {
-        window.setTimeout(() => {
-          pollFiscalDocumentStatus(
-            finalizedTransaction,
-            providerId,
-            environment,
-            result.providerTransactionId!,
-            providerConfig.credentialKey
-          ).catch(console.error);
-        }, 3000);
-      }
-    } catch (error: any) {
-      const failedTransaction: Transaction = {
-        ...baseTransaction,
-        fiscalSyncStatus: 'ERROR',
-        fiscalSyncError: error?.message || 'No se pudo emitir el comprobante electrónico.',
-        fiscalResponseMessage: error?.message || 'No se pudo emitir el comprobante electrónico.'
-      };
-      await upsertFiscalTransaction(failedTransaction);
-    }
-  }, [config, pollFiscalDocumentStatus, upsertFiscalTransaction]);
-
-  const retryFiscalDocument = useCallback(async (transaction: Transaction): Promise<string> => {
-    const providerId = transaction.fiscalProvider;
-    if (!canRetryFiscalTransaction(transaction) || !providerId || providerId === 'NONE') {
-      throw new Error('Solo se pueden reintentar documentos electrónicos pendientes o con error.');
-    }
-
-    const fiscalCompliance = getFiscalComplianceConfig(config);
-    const environment = getProviderEnvironment(fiscalCompliance, providerId);
-    const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
-    const shouldPollExistingAttempt = transaction.fiscalSyncStatus === 'PENDING' && Boolean(transaction.fiscalReferenceId);
-    const retryingTransaction: Transaction = {
-      ...transaction,
-      fiscalSyncStatus: 'PENDING',
-      fiscalSyncError: undefined,
-      fiscalReferenceId: shouldPollExistingAttempt ? transaction.fiscalReferenceId : undefined,
-      fiscalResponseMessage: shouldPollExistingAttempt
-        ? 'Consultando estado actualizado del e-CF en Polaris...'
-        : 'Reintentando envío del e-CF a Polaris...'
-    };
-
-    await upsertFiscalTransaction(retryingTransaction);
-
-    if (shouldPollExistingAttempt && transaction.fiscalReferenceId) {
-      await pollFiscalDocumentStatus(
-        retryingTransaction,
-        providerId,
-        environment,
-        transaction.fiscalReferenceId,
-        providerConfig.credentialKey,
-        1
-      );
-      return 'Consulta de estado fiscal iniciada.';
-    }
-
-    await syncFiscalDocument(retryingTransaction);
-    return 'Reintento de envío fiscal iniciado.';
-  }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);
-
   const handleTransactionComplete = async (txn: Transaction) => {
     // Get current terminal ID before persisting.
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
@@ -3254,7 +2988,6 @@ const AppContent: React.FC = () => {
     setTransactions(newTransactions);
     // setFilteredTransactions(newTransactions); // Assuming this is meant to be here if filtered transactions are used
     await db.saveDocument('transactions', txn);
-    syncFiscalDocument(txn).catch(console.error);
 
     // Trigger background sync
     backgroundSyncManager.triggerSync().catch(console.error);
@@ -4004,9 +3737,6 @@ const AppContent: React.FC = () => {
       console.warn('⚠️ Refund state refresh fallback:', refreshError);
     }
 
-    const finalizedCreditNote = refundPersistenceResult.refund || creditNote;
-    syncFiscalDocument(finalizedCreditNote).catch(console.error);
-
     // Sync
     backgroundSyncManager.triggerSync().catch(console.error);
 
@@ -4110,8 +3840,6 @@ const AppContent: React.FC = () => {
             adminUsers={users}
             tenantId={resolveSetupTenantId()}
             erpBaseUrl={resolveSetupErpBaseUrl() || undefined}
-            initialBindingMode={getTerminalBindingMode(getStoredTerminalSetupMode())}
-            integrationMode={getTerminalSetupIntegrationMode(getStoredTerminalSetupMode())}
             onPair={handlePairTerminal}
             onConfigUpdate={handleConfigUpdate}
             onUsersUpdate={async (newUsers) => {
@@ -4527,7 +4255,6 @@ const AppContent: React.FC = () => {
             }}
             onSelect={(c) => { setSelectedCustomer(c); setCurrentView('POS'); }}
             onClose={() => setCurrentView('POS')}
-            onRetryFiscalDocument={retryFiscalDocument}
           />
         );
 
@@ -4562,7 +4289,6 @@ const AppContent: React.FC = () => {
                 alert(`Error procesando devolución: ${refundError?.message || 'Error desconocido'}`);
               }
             }}
-            onRetryFiscalDocument={retryFiscalDocument}
           />
         );
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../utils/supabase';
+import { getSupabaseConfigError, supabase } from '../utils/supabase';
 import { resolveTenantRecord } from '../utils/licenseGuard';
 import {
     Rocket,
@@ -83,7 +83,7 @@ const getActivationApiBase = (): string => {
     const cloudAdminUrl = String(env.VITE_CLOUD_ADMIN_URL || '').trim().replace(/\/$/, '');
     if (cloudAdminUrl) return `${cloudAdminUrl}/api/activation`;
 
-    return '/api/activation';
+    return 'https://cloud-admin-gamma.vercel.app/api/activation';
 };
 
 const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplete }) => {
@@ -209,6 +209,11 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         setError(null);
 
         try {
+            const configError = getSupabaseConfigError();
+            if (configError) {
+                throw new Error(configError);
+            }
+
             const { data, error: authError } = await supabase.auth.signInWithPassword({
                 email,
                 password,
