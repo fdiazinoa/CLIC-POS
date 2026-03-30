@@ -220,6 +220,34 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       }
    };
 
+   const getCreditPaymentsTotal = (entries: PaymentEntry[]): number =>
+      entries
+         .filter((payment) => payment.method === 'CREDIT')
+         .reduce((acc, payment) => acc + payment.amount, 0);
+
+   const canBypassCreditLimit = isOverrideActive || hasPermission('POS_CREDIT_OVERRIDE');
+
+   const enforceCreditRules = (projectedCreditTotal: number): boolean => {
+      if (projectedCreditTotal <= 0) return true;
+
+      if (!customer?.id) {
+         setFinalizeError('Las ventas a crédito pendientes requieren un cliente asociado antes de guardar el ticket.');
+         return false;
+      }
+
+      if (!canBypassCreditLimit) {
+         const limit = customer.creditLimit || 0;
+         const currentDebt = customer.currentDebt || 0;
+         if (limit > 0 && (currentDebt + projectedCreditTotal) > limit) {
+            setFinalizeError(`Límite de crédito excedido (${currencySymbol}${limit.toFixed(2)}). Requiere autorización.`);
+            setShowSupervisorModal(true);
+            return false;
+         }
+      }
+
+      return true;
+   };
+
    const handleAddPayment = (amountOverride?: number) => {
       const valInSelectedCurrency = amountOverride !== undefined ? amountOverride : parseFloat(inputAmount);
       if (!valInSelectedCurrency || valInSelectedCurrency <= 0) return;
@@ -238,17 +266,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
       const amountInBase = valInSelectedCurrency * selectedCurrency.rate;
 
-      // Credit Limit Check (NEW)
-      if (activePaymentMethod.type === 'CREDIT' && !isOverrideActive) {
-         // Check if user has permission to override
-         if (!hasPermission('POS_CREDIT_OVERRIDE')) {
-            const limit = customer?.creditLimit || 0;
-            const currentDebt = customer?.currentDebt || 0;
-            if (limit > 0 && (currentDebt + amountInBase) > limit) {
-               setFinalizeError(`Límite de crédito excedido (${currencySymbol}${limit.toFixed(2)}). Requiere autorización.`);
-               setShowSupervisorModal(true);
-               return;
-            }
+      if (activePaymentMethod.type === 'CREDIT') {
+         const projectedCreditTotal = getCreditPaymentsTotal(payments) + amountInBase;
+         if (!enforceCreditRules(projectedCreditTotal)) {
+            return;
          }
       }
 
@@ -258,6 +279,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
          methodId: activePaymentMethod.id,
          methodLabel: activePaymentMethod.label,
          methodIcon: activePaymentMethod.iconName,
+         creditOverrideApproved: activePaymentMethod.type === 'CREDIT' && canBypassCreditLimit ? true : undefined,
          amount: parseFloat(amountInBase.toFixed(2)),
          timestamp: new Date(),
          currencyCode: selectedCurrency.code,
@@ -305,18 +327,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                return;
             }
 
-            // Credit Limit Check for Auto-Finalize (NEW)
-            if (activePaymentMethod.type === 'CREDIT' && !isOverrideActive) {
-               // Check if user has permission to override
-               if (!hasPermission('POS_CREDIT_OVERRIDE')) {
-                  const limit = customer?.creditLimit || 0;
-                  const currentDebt = customer?.currentDebt || 0;
-                  if (limit > 0 && (currentDebt + typedAmountInBase) > limit) {
-                     setFinalizeError(`Límite de crédito excedido (${currencySymbol}${limit.toFixed(2)}). Requiere autorización.`);
-                     setShowSupervisorModal(true);
-                     setIsFinalizing(false);
-                     return;
-                  }
+            if (activePaymentMethod.type === 'CREDIT') {
+               const projectedCreditTotal = getCreditPaymentsTotal(payments) + typedAmountInBase;
+               if (!enforceCreditRules(projectedCreditTotal)) {
+                  setIsFinalizing(false);
+                  return;
                }
             }
 
@@ -326,6 +341,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                methodId: activePaymentMethod.id,
                methodLabel: activePaymentMethod.label,
                methodIcon: activePaymentMethod.iconName,
+               creditOverrideApproved: activePaymentMethod.type === 'CREDIT' && canBypassCreditLimit ? true : undefined,
                amount: typedAmountInBase,
                timestamp: new Date(),
                currencyCode: selectedCurrency.code,
@@ -333,6 +349,21 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                exchangeRate: selectedCurrency.rate
             };
             paymentsToConfirm = [...payments, autoPayment];
+            setPayments(paymentsToConfirm);
+         }
+
+         const totalCreditCommitted = getCreditPaymentsTotal(paymentsToConfirm);
+         if (totalCreditCommitted > 0) {
+            if (!enforceCreditRules(totalCreditCommitted)) {
+               setIsFinalizing(false);
+               return;
+            }
+
+            paymentsToConfirm = paymentsToConfirm.map((payment) =>
+               payment.method === 'CREDIT'
+                  ? { ...payment, creditOverrideApproved: payment.creditOverrideApproved || canBypassCreditLimit }
+                  : payment
+            );
             setPayments(paymentsToConfirm);
          }
 

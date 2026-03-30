@@ -1538,6 +1538,7 @@ export interface PaymentEntry {
   methodId?: string;
   methodLabel?: string;
   methodIcon?: string;
+  creditOverrideApproved?: boolean;
   amount: number;
   timestamp: Date;
   currencyCode?: string;
