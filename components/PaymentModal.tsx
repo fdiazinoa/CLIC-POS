@@ -6,7 +6,11 @@ import {
    Repeat, ArrowRightLeft, DollarSign, Zap, Smartphone
 } from 'lucide-react';
 import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem, Transaction, Customer, User, Permission, RoleDefinition } from '../types';
-import { resolvePaymentMethodTypeForRuntime } from '../utils/paymentMethodGuards';
+import {
+   isPendingPaymentMethodName,
+   resolvePaymentMethodTypeForRuntime,
+   sumCreditPaymentsBase,
+} from '../utils/paymentMethodGuards';
 import { printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
 
@@ -238,16 +242,27 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
          return;
       }
 
+      if (
+         activePaymentMethod.type === 'CREDIT' &&
+         isPendingPaymentMethodName(activePaymentMethod.label) &&
+         !customer?.id
+      ) {
+         setFinalizeError('Debe asignar un cliente al ticket antes de usar Pendiente.');
+         return;
+      }
+
       const amountInBase = valInSelectedCurrency * selectedCurrency.rate;
 
-      // Credit Limit Check (NEW)
-      if (activePaymentMethod.type === 'CREDIT' && !isOverrideActive) {
-         // Check if user has permission to override
-         if (!hasPermission('POS_CREDIT_OVERRIDE')) {
-            const limit = customer?.creditLimit || 0;
-            const currentDebt = customer?.currentDebt || 0;
-            if (limit > 0 && (currentDebt + amountInBase) > limit) {
-               setFinalizeError(`Límite de crédito excedido (${currencySymbol}${limit.toFixed(2)}). Requiere autorización.`);
+      const creditAlreadyOnTicket = sumCreditPaymentsBase(payments);
+      if (activePaymentMethod.type === 'CREDIT' && !isOverrideActive && !hasPermission('POS_CREDIT_OVERRIDE')) {
+         const limit = customer?.creditLimit || 0;
+         if (limit > 0 && customer) {
+            const currentDebt = customer.currentDebt || 0;
+            const projected = currentDebt + creditAlreadyOnTicket + amountInBase;
+            if (projected > limit) {
+               setFinalizeError(
+                  `Límite de crédito excedido (límite ${currencySymbol}${limit.toFixed(2)}, deuda ${currencySymbol}${currentDebt.toFixed(2)}, ya en ticket ${currencySymbol}${creditAlreadyOnTicket.toFixed(2)}). Requiere autorización de supervisor.`
+               );
                setShowSupervisorModal(true);
                return;
             }
@@ -307,14 +322,26 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                return;
             }
 
-            // Credit Limit Check for Auto-Finalize (NEW)
-            if (activePaymentMethod.type === 'CREDIT' && !isOverrideActive) {
-               // Check if user has permission to override
-               if (!hasPermission('POS_CREDIT_OVERRIDE')) {
-                  const limit = customer?.creditLimit || 0;
-                  const currentDebt = customer?.currentDebt || 0;
-                  if (limit > 0 && (currentDebt + typedAmountInBase) > limit) {
-                     setFinalizeError(`Límite de crédito excedido (${currencySymbol}${limit.toFixed(2)}). Requiere autorización.`);
+            if (
+               activePaymentMethod.type === 'CREDIT' &&
+               isPendingPaymentMethodName(activePaymentMethod.label) &&
+               !customer?.id
+            ) {
+               setFinalizeError('Debe asignar un cliente al ticket antes de usar Pendiente.');
+               setIsFinalizing(false);
+               return;
+            }
+
+            const creditBeforeAuto = sumCreditPaymentsBase(payments);
+            if (activePaymentMethod.type === 'CREDIT' && !isOverrideActive && !hasPermission('POS_CREDIT_OVERRIDE')) {
+               const limit = customer?.creditLimit || 0;
+               if (limit > 0 && customer) {
+                  const currentDebt = customer.currentDebt || 0;
+                  const projected = currentDebt + creditBeforeAuto + typedAmountInBase;
+                  if (projected > limit) {
+                     setFinalizeError(
+                        `Límite de crédito excedido (límite ${currencySymbol}${limit.toFixed(2)}). Requiere autorización de supervisor.`
+                     );
                      setShowSupervisorModal(true);
                      setIsFinalizing(false);
                      return;
@@ -336,6 +363,35 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             };
             paymentsToConfirm = [...payments, autoPayment];
             setPayments(paymentsToConfirm);
+         }
+
+         if (
+            paymentsToConfirm.some(
+               (p) => p.method === 'CREDIT' && isPendingPaymentMethodName(p.methodLabel || '')
+            ) &&
+            !customer?.id
+         ) {
+            setFinalizeError('Debe asignar un cliente al ticket antes de cerrar con Pendiente.');
+            setIsFinalizing(false);
+            return;
+         }
+
+         if (!isOverrideActive && !hasPermission('POS_CREDIT_OVERRIDE') && customer) {
+            const creditTotal = sumCreditPaymentsBase(paymentsToConfirm);
+            if (creditTotal > 0) {
+               const limit = customer.creditLimit || 0;
+               if (limit > 0) {
+                  const projected = (customer.currentDebt || 0) + creditTotal;
+                  if (projected > limit) {
+                     setFinalizeError(
+                        `El total a crédito supera el límite del cliente (${currencySymbol}${limit.toFixed(2)}). Requiere autorización de supervisor.`
+                     );
+                     setShowSupervisorModal(true);
+                     setIsFinalizing(false);
+                     return;
+                  }
+               }
+            }
          }
 
          // Zero Price Check
@@ -666,6 +722,15 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                      );
                   })}
                </div>
+
+               {activePaymentMethod?.type === 'CREDIT' &&
+                  isPendingPaymentMethodName(activePaymentMethod.label) &&
+                  !customer?.id && (
+                     <div className="mx-4 mb-2 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] font-bold text-amber-900 md:text-xs">
+                        <ShieldAlert size={16} className="shrink-0 text-amber-600" />
+                        <span>Asigne un cliente al ticket para usar Pendiente y cerrar la venta.</span>
+                     </div>
+                  )}
 
                {isDelinquent && !isOverrideActive && (
                   <div className="mx-4 mb-4 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between">

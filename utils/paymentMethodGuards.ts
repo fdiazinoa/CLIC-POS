@@ -1,4 +1,4 @@
-import type { PaymentMethod, PaymentMethodDefinition } from '../types';
+import type { PaymentMethod, PaymentMethodDefinition, PaymentEntry } from '../types';
 
 /** Nombre reservado: venta queda como crédito / CxC, no como efectivo en caja. */
 export const isPendingPaymentMethodName = (name: string): boolean =>
@@ -35,3 +35,6 @@ export const resolvePaymentMethodTypeForRuntime = (
   method: Pick<PaymentMethodDefinition, 'name' | 'type'>
 ): PaymentMethod =>
   isPendingPaymentMethodName(method.name) ? 'CREDIT' : method.type;
+
+export const sumCreditPaymentsBase = (entries: Pick<PaymentEntry, 'method' | 'amount'>[]): number =>
+  entries.filter((p) => p.method === 'CREDIT').reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
