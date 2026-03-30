@@ -23,6 +23,11 @@ import {
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import UnifiedPaymentModal from './PaymentModal';
+import {
+   evaluateCreditSupervisorGate,
+   paymentEntryIsCxCCredit,
+   sumCreditPaymentsBase
+} from '../utils/creditRules';
 import TicketOptionsModal from './TicketOptionsModal';
 import CartItemOptionsModal from './CartItemOptionsModal';
 import ProductVariantSelector from './ProductVariantSelector';
@@ -159,6 +164,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const terminal = config.terminals?.find(t => t.id === activeTerminalId);
       return terminal?.config?.isPrimaryNode === true;
    }, [config.terminals, activeTerminalId]);
+   const effectiveSelectedCustomer = useMemo(() => {
+      if (!selectedCustomer?.id) return selectedCustomer;
+      return customers.find(customer => customer.id === selectedCustomer.id) || selectedCustomer;
+   }, [customers, selectedCustomer]);
    const [quickActionData, setQuickActionData] = useState<{ product: Product; x: number; y: number } | null>(null);
    const [successToast, setSuccessToast] = useState<string | null>(null);
 
@@ -777,14 +786,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    // Credit Control (CxC) - Simple Check
    const isDelinquent = useMemo(() => {
-      if (!selectedCustomer) return false;
-      const debt = selectedCustomer.currentDebt || 0;
-      const limit = selectedCustomer.creditLimit || 0;
+      if (!effectiveSelectedCustomer) return false;
+      const debt = effectiveSelectedCustomer.currentDebt || 0;
+      const limit = effectiveSelectedCustomer.creditLimit || 0;
       // If limit is 0, meaningful credit check might be disabled or unlimited depending on business logic. 
       // Assuming strict: debt > limit and limit > 0
       if (limit > 0 && debt >= limit) return true;
       return false;
-   }, [selectedCustomer]);
+   }, [effectiveSelectedCustomer]);
 
    const reloadCommitments = useCallback(async () => {
       const commitments = await db.get('inventoryCommitments') as any[] || [];
@@ -1646,6 +1655,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       try {
          const terminalId = activeTerminalId || 't1';
+         const customerForCheckout = effectiveSelectedCustomer;
          const hasReturns = processedCart.some(i => i.quantity < 0);
          const hasSales = processedCart.some(i => i.quantity > 0);
          const productsById = new Map(products.map(product => [product.id, product] as const));
@@ -1659,11 +1669,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          normalizedRefundItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
 
          // --- FISCAL COMPLIANCE CHECK (DGII RNC VALIDATION) ---
-         if (!isRefundOnly && fiscalStatus && fiscalStatus.type === 'B01' && selectedCustomer) {
-            if (selectedCustomer.fiscalStatus && selectedCustomer.fiscalStatus !== 'ACTIVO') {
+         if (!isRefundOnly && fiscalStatus && fiscalStatus.type === 'B01' && customerForCheckout) {
+            if (customerForCheckout.fiscalStatus && customerForCheckout.fiscalStatus !== 'ACTIVO') {
                alert(
                   `⛔ COMPROBANTE BLOQUEADO\n\n` +
-                  `El contribuyente ${selectedCustomer.name} tiene estatus: ${selectedCustomer.fiscalStatus || 'DESCONOCIDO'}.\n` +
+                  `El contribuyente ${customerForCheckout.name} tiene estatus: ${customerForCheckout.fiscalStatus || 'DESCONOCIDO'}.\n` +
                   `No se puede emitir Crédito Fiscal (B01) según normas de la DGII.\n\n` +
                   `Acción requerida: Cambie el tipo de comprobante a Consumo (B02) o seleccione otro cliente.`
                );
@@ -1736,11 +1746,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const paymentsForTransaction = reservationAdvance > 0
             ? [...payments, reservationAdvancePayment]
             : payments;
-         const creditAmount = paymentsForTransaction
-            .filter((payment) => payment.method === 'CREDIT')
-            .reduce((acc, payment) => acc + payment.amount, 0);
+         const creditAmount = sumCreditPaymentsBase(paymentsForTransaction);
          const hasCreditOverrideApproval = paymentsForTransaction.some(
-            (payment) => payment.method === 'CREDIT' && payment.creditOverrideApproved
+            (payment) => paymentEntryIsCxCCredit(payment) && payment.creditOverrideApproved
          );
 
          if (activeRecoveredReservation && hasReturns) {
@@ -1749,16 +1757,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          if (creditAmount > 0) {
-            if (!selectedCustomer?.id) {
+            const creditGate = evaluateCreditSupervisorGate(customerForCheckout, 0, creditAmount);
+            if (creditGate?.reason === 'NO_CUSTOMER') {
                alert('No se puede guardar un ticket con pago pendiente a crédito sin un cliente asociado.');
                onOpenCustomers();
                return null;
             }
 
-            const creditLimit = selectedCustomer.creditLimit || 0;
-            const currentDebt = selectedCustomer.currentDebt || 0;
-            if (creditLimit > 0 && (currentDebt + creditAmount) > creditLimit && !hasCreditOverrideApproval) {
-               alert(`El cliente excede su límite de crédito (${baseCurrency.symbol}${creditLimit.toFixed(2)}). No se guardó el ticket.`);
+            if (creditGate && !hasCreditOverrideApproval) {
+               if (creditGate.reason === 'NO_LIMIT') {
+                  alert('El cliente no tiene un límite de crédito configurado. Solicite autorización para guardar este ticket.');
+               } else {
+                  alert(`El cliente excede su límite de crédito (${baseCurrency.symbol}${creditGate.limit.toFixed(2)}). No se guardó el ticket.`);
+               }
                return null;
             }
          }
@@ -1812,17 +1823,19 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         userId: currentUser.id,
                         userName: currentUser.name,
                         terminalId: terminalId,
-                        customerId: selectedCustomer?.id,
-                        customerName: selectedCustomer?.name,
+                        status: creditAmount > 0 ? 'PENDING' : 'COMPLETED',
+                        customerId: customerForCheckout?.id,
+                        customerName: customerForCheckout?.name,
                         ncf: finalNcf,
                         ncfType: fiscalStatus.type,
                         taxAmount: saleTaxAmount,
                         netAmount: saleNetAmount,
                         pendingBalance: creditAmount || undefined,
                         dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined,
-                        customerSnapshot: selectedCustomer ? {
-                           name: selectedCustomer.name,
-                           taxId: selectedCustomer.taxId
+                        balanceDueAtSale: creditAmount > 0 ? creditAmount : undefined,
+                        customerSnapshot: customerForCheckout ? {
+                           name: customerForCheckout.name,
+                           taxId: customerForCheckout.taxId
                         } : undefined,
                         walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined
                      },
@@ -1834,8 +1847,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         userId: currentUser.id,
                         userName: currentUser.name,
                         terminalId: terminalId,
-                        customerId: selectedCustomer?.id,
-                        customerName: selectedCustomer?.name,
+                        customerId: customerForCheckout?.id,
+                        customerName: customerForCheckout?.name,
                         status: 'COMPLETED',
                         ncf: refundNcf,
                         ncfType: refundNcf ? 'B04' : undefined,
@@ -1843,8 +1856,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         authorizedById: refundAuthorizedBy?.id,
                         authorizedByName: refundAuthorizedBy?.name
                      },
-                     walletDeposit: selectedCustomer?.id && walletDepositAmount > 0 ? { customerId: selectedCustomer.id, amount: walletDepositAmount } : undefined,
-                     walletPayment: selectedCustomer?.id && walletPaymentAmount > 0 ? { customerId: selectedCustomer.id, amount: walletPaymentAmount } : undefined
+                     walletDeposit: customerForCheckout?.id && walletDepositAmount > 0 ? { customerId: customerForCheckout.id, amount: walletDepositAmount } : undefined,
+                     walletPayment: customerForCheckout?.id && walletPaymentAmount > 0 ? { customerId: customerForCheckout.id, amount: walletPaymentAmount } : undefined
                   };
 
                if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
@@ -1930,9 +1943,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   userId: currentUser.id,
                   userName: currentUser.name,
                   terminalId: terminalId,
-                  status: 'COMPLETED',
-                  customerId: selectedCustomer?.id,
-                  customerName: selectedCustomer?.name,
+                  status: !isRefundOnly && creditAmount > 0 ? 'PENDING' : 'COMPLETED',
+                  customerId: customerForCheckout?.id,
+                  customerName: customerForCheckout?.name,
                   pendingBalance: creditAmount > 0 ? creditAmount : undefined,
                   dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined, // Default 30 days
                   ncf: finalNcf,
@@ -1940,12 +1953,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   taxAmount: taxAmount,
                   netAmount: netAmount,
                   discountAmount: discountAmount,
-                  customerSnapshot: selectedCustomer ? {
-                     name: selectedCustomer.name,
-                     taxId: selectedCustomer.taxId,
-                     address: selectedCustomer.address,
-                     phone: selectedCustomer.phone,
-                     email: selectedCustomer.email
+                  customerSnapshot: customerForCheckout ? {
+                     name: customerForCheckout.name,
+                     taxId: customerForCheckout.taxId,
+                     address: customerForCheckout.address,
+                     phone: customerForCheckout.phone,
+                     email: customerForCheckout.email
                   } : undefined,
                   isTaxIncluded: isTaxIncluded,
                   authorizedById: hasReturns ? refundAuthorizedBy?.id : undefined,
@@ -1953,7 +1966,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   reservationId: activeRecoveredReservation?.id,
                   reservationCode: activeRecoveredReservation?.code,
                   priorAdvancePaid: reservationAdvance > 0 ? reservationAdvance : undefined,
-                  balanceDueAtSale: activeRecoveredReservation ? reservationBalanceDue : undefined,
+                  balanceDueAtSale: creditAmount > 0
+                     ? creditAmount
+                     : activeRecoveredReservation ? reservationBalanceDue : undefined,
                   walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
                   walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined
                }), 25000, 'TIMEOUT_CREATE_TRANSACTION');
@@ -3556,7 +3571,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                />
             )
          }
-         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={selectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} />}
+         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr) => { addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}

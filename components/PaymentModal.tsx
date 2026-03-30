@@ -6,6 +6,12 @@ import {
    Repeat, ArrowRightLeft, DollarSign, Zap, Smartphone
 } from 'lucide-react';
 import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem, Transaction, Customer, User, Permission, RoleDefinition } from '../types';
+import {
+   evaluateCreditSupervisorGate,
+   paymentEntryIsCxCCredit,
+   resolvePaymentMethodTypeForRuntime,
+   sumCreditPaymentsBase
+} from '../utils/creditRules';
 import { printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
 
@@ -186,6 +192,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    );
 
    const activeMethod = activePaymentMethod?.type || 'CASH';
+   const activeRuntimeMethod = activePaymentMethod
+      ? resolvePaymentMethodTypeForRuntime(activePaymentMethod.type, activePaymentMethod.label, activePaymentMethod.id)
+      : 'CASH';
+   const activeIsCxCCredit = activeRuntimeMethod === 'CREDIT';
 
    const denominations = selectedCurrency.code === 'USD' ? [1, 5, 10, 20, 50, 100] : [50, 100, 200, 500, 1000, 2000];
 
@@ -220,32 +230,28 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       }
    };
 
-   const getCreditPaymentsTotal = (entries: PaymentEntry[]): number =>
-      entries
-         .filter((payment) => payment.method === 'CREDIT')
-         .reduce((acc, payment) => acc + payment.amount, 0);
-
    const canBypassCreditLimit = isOverrideActive || hasPermission('POS_CREDIT_OVERRIDE');
 
    const enforceCreditRules = (projectedCreditTotal: number): boolean => {
-      if (projectedCreditTotal <= 0) return true;
+      const gate = evaluateCreditSupervisorGate(customer, 0, projectedCreditTotal);
+      if (!gate) return true;
 
-      if (!customer?.id) {
+      if (gate.reason === 'NO_CUSTOMER') {
          setFinalizeError('Las ventas a crédito pendientes requieren un cliente asociado antes de guardar el ticket.');
          return false;
       }
 
-      if (!canBypassCreditLimit) {
-         const limit = customer.creditLimit || 0;
-         const currentDebt = customer.currentDebt || 0;
-         if (limit > 0 && (currentDebt + projectedCreditTotal) > limit) {
-            setFinalizeError(`Límite de crédito excedido (${currencySymbol}${limit.toFixed(2)}). Requiere autorización.`);
-            setShowSupervisorModal(true);
-            return false;
-         }
+      if (canBypassCreditLimit) {
+         return true;
       }
 
-      return true;
+      if (gate.reason === 'NO_LIMIT') {
+         setFinalizeError('El cliente no tiene un límite de crédito configurado. Requiere autorización.');
+      } else {
+         setFinalizeError(`Límite de crédito excedido (${currencySymbol}${gate.limit.toFixed(2)}). Requiere autorización.`);
+      }
+      setShowSupervisorModal(true);
+      return false;
    };
 
    const handleAddPayment = (amountOverride?: number) => {
@@ -253,21 +259,21 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       if (!valInSelectedCurrency || valInSelectedCurrency <= 0) return;
 
       // Permission Check: Credit requires POS_PAY_CREDIT
-      if (activePaymentMethod.type === 'CREDIT' && !hasPermission('POS_PAY_CREDIT')) {
+      if (activeIsCxCCredit && !hasPermission('POS_PAY_CREDIT')) {
          setFinalizeError(`No tiene permisos para realizar ventas a crédito.`);
          return;
       }
 
       // Strict Online Check: Credit and Wallet require connection (unless Master)
-      if (!isOnline && !isMaster && (activePaymentMethod.type === 'CREDIT' || activePaymentMethod.type === 'WALLET')) {
+      if (!isOnline && !isMaster && (activeIsCxCCredit || activePaymentMethod.type === 'WALLET')) {
          setFinalizeError(`El pago con ${activePaymentMethod.label} requiere conexión con la Terminal Master.`);
          return;
       }
 
       const amountInBase = valInSelectedCurrency * selectedCurrency.rate;
 
-      if (activePaymentMethod.type === 'CREDIT') {
-         const projectedCreditTotal = getCreditPaymentsTotal(payments) + amountInBase;
+      if (activeIsCxCCredit) {
+         const projectedCreditTotal = sumCreditPaymentsBase(payments) + amountInBase;
          if (!enforceCreditRules(projectedCreditTotal)) {
             return;
          }
@@ -275,11 +281,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
       const newPayment: PaymentEntry = {
          id: createPaymentId(),
-         method: activePaymentMethod.type,
+         method: activeRuntimeMethod,
          methodId: activePaymentMethod.id,
          methodLabel: activePaymentMethod.label,
          methodIcon: activePaymentMethod.iconName,
-         creditOverrideApproved: activePaymentMethod.type === 'CREDIT' && canBypassCreditLimit ? true : undefined,
+         creditOverrideApproved: activeIsCxCCredit && canBypassCreditLimit ? true : undefined,
          amount: parseFloat(amountInBase.toFixed(2)),
          timestamp: new Date(),
          currencyCode: selectedCurrency.code,
@@ -314,21 +320,21 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             }
 
             // Permission Check: Credit requires POS_PAY_CREDIT during auto-finalize too
-            if (activePaymentMethod.type === 'CREDIT' && !hasPermission('POS_PAY_CREDIT')) {
+            if (activeIsCxCCredit && !hasPermission('POS_PAY_CREDIT')) {
                setFinalizeError(`No tiene permisos para realizar ventas a crédito.`);
                setIsFinalizing(false);
                return;
             }
 
             // Strict Online Check: Credit and Wallet require connection during finalization too (unless Master)
-            if (!isOnline && !isMaster && (activePaymentMethod.type === 'CREDIT' || activePaymentMethod.type === 'WALLET')) {
+            if (!isOnline && !isMaster && (activeIsCxCCredit || activePaymentMethod.type === 'WALLET')) {
                setFinalizeError(`El pago con ${activePaymentMethod.label} requiere conexión con la Terminal Master.`);
                setIsFinalizing(false);
                return;
             }
 
-            if (activePaymentMethod.type === 'CREDIT') {
-               const projectedCreditTotal = getCreditPaymentsTotal(payments) + typedAmountInBase;
+            if (activeIsCxCCredit) {
+               const projectedCreditTotal = sumCreditPaymentsBase(payments) + typedAmountInBase;
                if (!enforceCreditRules(projectedCreditTotal)) {
                   setIsFinalizing(false);
                   return;
@@ -337,11 +343,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
             const autoPayment: PaymentEntry = {
                id: createPaymentId(),
-               method: activePaymentMethod.type,
+               method: activeRuntimeMethod,
                methodId: activePaymentMethod.id,
                methodLabel: activePaymentMethod.label,
                methodIcon: activePaymentMethod.iconName,
-               creditOverrideApproved: activePaymentMethod.type === 'CREDIT' && canBypassCreditLimit ? true : undefined,
+               creditOverrideApproved: activeIsCxCCredit && canBypassCreditLimit ? true : undefined,
                amount: typedAmountInBase,
                timestamp: new Date(),
                currencyCode: selectedCurrency.code,
@@ -352,7 +358,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             setPayments(paymentsToConfirm);
          }
 
-         const totalCreditCommitted = getCreditPaymentsTotal(paymentsToConfirm);
+         const totalCreditCommitted = sumCreditPaymentsBase(paymentsToConfirm);
          if (totalCreditCommitted > 0) {
             if (!enforceCreditRules(totalCreditCommitted)) {
                setIsFinalizing(false);
@@ -360,7 +366,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             }
 
             paymentsToConfirm = paymentsToConfirm.map((payment) =>
-               payment.method === 'CREDIT'
+               paymentEntryIsCxCCredit(payment)
                   ? { ...payment, creditOverrideApproved: payment.creditOverrideApproved || canBypassCreditLimit }
                   : payment
             );

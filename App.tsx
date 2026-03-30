@@ -1079,6 +1079,23 @@ const AppContent: React.FC = () => {
   const [viewData, setViewData] = useState<any>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  useEffect(() => {
+    if (!selectedCustomer?.id) return;
+    const refreshedCustomer = customers.find(customer => customer.id === selectedCustomer.id);
+    if (!refreshedCustomer || refreshedCustomer === selectedCustomer) return;
+
+    const selectedWalletBalance = Number(selectedCustomer.wallet?.balance || 0);
+    const refreshedWalletBalance = Number(refreshedCustomer.wallet?.balance || 0);
+    const shouldRefreshSelection =
+      refreshedCustomer.currentDebt !== selectedCustomer.currentDebt ||
+      refreshedCustomer.creditLimit !== selectedCustomer.creditLimit ||
+      refreshedCustomer.updatedAt !== selectedCustomer.updatedAt ||
+      refreshedWalletBalance !== selectedWalletBalance;
+
+    if (shouldRefreshSelection) {
+      setSelectedCustomer(refreshedCustomer);
+    }
+  }, [customers, selectedCustomer]);
 
   const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
 
