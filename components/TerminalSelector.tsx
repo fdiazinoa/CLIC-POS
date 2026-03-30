@@ -33,11 +33,13 @@ interface TerminalCard {
 interface TerminalSelectorResponse {
   tenant_id: string;
   erp_base_url?: string | null;
+  source?: string | null;
   terminals: TerminalCard[];
 }
 
 interface BindTerminalResponse {
   success: boolean;
+  source?: string | null;
   tenant_id: string;
   terminal_id: string;
   erp_terminal_id?: string | null;
@@ -195,6 +197,46 @@ const resolveReachableMasterBinding = async (masterIp?: string) => {
   };
 };
 
+/** Host del WebView Capacitor → servidor embebido con `/api/setup` (proxy hacia ERP). */
+const buildAndroidEmbeddedSetupBase = (): string =>
+  `${buildMasterUrlFromHost(window.location.hostname)}/api/setup`;
+
+const describeTerminalListFailure = (
+  err: unknown,
+  ctx: { bindingMode: 'MASTER' | 'SLAVE'; erpDirectAndroid: boolean }
+): string => {
+  const raw = err instanceof Error ? err.message : String(err);
+  const lower = raw.toLowerCase();
+  const isNetwork =
+    lower.includes('failed to fetch') ||
+    lower.includes('networkerror') ||
+    lower.includes('load failed') ||
+    (err instanceof Error && err.name === 'TypeError');
+
+  if (ctx.erpDirectAndroid && ctx.bindingMode === 'MASTER') {
+    if (raw.includes('ERP') || lower.includes('/api/sync')) {
+      return `Error al cargar terminales desde el ERP. ${raw}`;
+    }
+    if (isNetwork) {
+      return 'No hubo respuesta del proxy local (/api/setup) ni del ERP. Revisa la URL del ERP y la conectividad.';
+    }
+    return `No se pudieron cargar las terminales. ${raw}`;
+  }
+
+  if (ctx.bindingMode === 'SLAVE') {
+    if (isNetwork) {
+      return 'No se pudo alcanzar la caja maestra en la IP indicada (red, firewall o puerto).';
+    }
+    return `No se pudieron listar terminales en la maestra local. ${raw}`;
+  }
+
+  if (isNetwork) {
+    return 'Error de red al consultar terminales. Revisa la conexión.';
+  }
+
+  return raw || 'No pudimos cargar las terminales.';
+};
+
 export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   currentConfig,
   deviceId,
@@ -216,6 +258,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   const [pendingTerminal, setPendingTerminal] = useState<TerminalCard | null>(null);
   const [masterIpInput, setMasterIpInput] = useState(masterIp);
   const [erpBaseUrl, setErpBaseUrl] = useState<string | null>(() => normalizeBaseUrl(initialErpBaseUrl) || resolveErpBaseUrl());
+  const [terminalsSource, setTerminalsSource] = useState<string | null>(null);
   const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
 
   useEffect(() => {
@@ -237,11 +280,14 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   }, [masterIp]);
 
   const apiBase = useMemo(() => {
+    if (isNativeAndroid && bindingMode === 'SLAVE') {
+      return getSetupApiBase(masterIpInput);
+    }
     if (isNativeAndroid) {
-      return `${buildMasterUrlFromHost(window.location.hostname)}/api/setup`;
+      return buildAndroidEmbeddedSetupBase();
     }
     return getSetupApiBase(masterIpInput);
-  }, [isNativeAndroid, masterIpInput]);
+  }, [bindingMode, isNativeAndroid, masterIpInput]);
 
   const fetchTerminals = useCallback(async () => {
     if (isAlreadyBound) {
@@ -252,73 +298,107 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
     setIsLoading(true);
     setError(null);
+    setTerminalsSource(null);
+
+    const persistListMeta = (data: TerminalSelectorResponse, sourceLabel: string | null) => {
+      setTerminals(Array.isArray(data.terminals) ? data.terminals : []);
+      setTenantId(data.tenant_id || 'default-tenant');
+      setTerminalsSource(sourceLabel);
+      const resolvedBase = normalizeBaseUrl(data.erp_base_url || erpBaseUrl) || erpBaseUrl;
+      setErpBaseUrl(resolvedBase);
+
+      if (data.tenant_id) {
+        localStorage.setItem('active_tenant_id', data.tenant_id);
+      }
+
+      if (resolvedBase) {
+        localStorage.setItem('CLIC_ERP_BASE_URL', resolvedBase);
+        localStorage.setItem('erp_base_url', resolvedBase);
+      }
+    };
 
     try {
       const resolvedTenantId = (initialTenantId || '').trim() || resolveTenantId();
       const resolvedTenantSlug = resolveTenantSlug();
       const resolvedTenantEmail = resolveTenantEmail();
 
-      if (isNativeAndroid && erpBaseUrl) {
-        const data = await listTerminalsFromErp({
+      const params = new URLSearchParams({
+        pos_device_id: deviceId,
+      });
+
+      if (resolvedTenantId) params.set('tenant_id', resolvedTenantId);
+      if (resolvedTenantSlug) params.set('tenant_slug', resolvedTenantSlug);
+      if (resolvedTenantEmail) params.set('tenant_email', resolvedTenantEmail);
+      if (erpBaseUrl) params.set('erp_base_url', erpBaseUrl);
+
+      const erpDirectAndroid = Boolean(isNativeAndroid && erpBaseUrl);
+
+      if (erpDirectAndroid && bindingMode === 'MASTER') {
+        const proxyBase = buildAndroidEmbeddedSetupBase();
+        try {
+          const response = await fetch(`${proxyBase}/terminals?${params.toString()}`);
+          if (response.ok) {
+            const proxyData = (await response.json()) as TerminalSelectorResponse;
+            const list = Array.isArray(proxyData.terminals) ? proxyData.terminals : [];
+            if (list.length > 0) {
+              persistListMeta(proxyData, (proxyData.source || '').trim() || 'SETUP_PROXY');
+              return;
+            }
+          }
+        } catch (proxyErr) {
+          console.warn('setup proxy /terminals failed, falling back to ERP direct', proxyErr);
+        }
+
+        const erpData = await listTerminalsFromErp({
           currentConfig,
           posDeviceId: deviceId,
           tenantId: resolvedTenantId,
           tenantSlug: resolvedTenantSlug,
           tenantEmail: resolvedTenantEmail,
-          erpBaseUrl,
+          erpBaseUrl: erpBaseUrl!,
         });
 
-        setTerminals(Array.isArray(data.terminals) ? data.terminals : []);
-        setTenantId(data.tenant_id || 'default-tenant');
-        const resolvedBase = normalizeBaseUrl(data.erp_base_url || erpBaseUrl) || erpBaseUrl;
-        setErpBaseUrl(resolvedBase);
-
-        if (data.tenant_id) {
-          localStorage.setItem('active_tenant_id', data.tenant_id);
-        }
-
-        if (resolvedBase) {
-          localStorage.setItem('CLIC_ERP_BASE_URL', resolvedBase);
-          localStorage.setItem('erp_base_url', resolvedBase);
-        }
-      } else {
-        const params = new URLSearchParams({
-          pos_device_id: deviceId,
-        });
-
-        if (resolvedTenantId) params.set('tenant_id', resolvedTenantId);
-        if (resolvedTenantSlug) params.set('tenant_slug', resolvedTenantSlug);
-        if (resolvedTenantEmail) params.set('tenant_email', resolvedTenantEmail);
-        if (erpBaseUrl) params.set('erp_base_url', erpBaseUrl);
-
-        const response = await fetch(`${apiBase}/terminals?${params.toString()}`);
-        if (!response.ok) {
-          throw new Error(`No se pudieron cargar las terminales (${response.status}).`);
-        }
-
-        const data = (await response.json()) as TerminalSelectorResponse;
-        setTerminals(Array.isArray(data.terminals) ? data.terminals : []);
-        setTenantId(data.tenant_id || 'default-tenant');
-        const resolvedBase = normalizeBaseUrl(data.erp_base_url || erpBaseUrl) || erpBaseUrl;
-        setErpBaseUrl(resolvedBase);
-
-        if (data.tenant_id) {
-          localStorage.setItem('active_tenant_id', data.tenant_id);
-        }
-
-        if (resolvedBase) {
-          localStorage.setItem('CLIC_ERP_BASE_URL', resolvedBase);
-          localStorage.setItem('erp_base_url', resolvedBase);
-        }
+        persistListMeta(
+          {
+            tenant_id: erpData.tenant_id,
+            erp_base_url: erpData.erp_base_url || erpBaseUrl!,
+            terminals: erpData.terminals as TerminalCard[],
+            source: 'ERP',
+          },
+          'ERP'
+        );
+        return;
       }
+
+      const response = await fetch(`${apiBase}/terminals?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`No se pudieron cargar las terminales (${response.status}).`);
+      }
+
+      const data = (await response.json()) as TerminalSelectorResponse;
+      persistListMeta(data, (data.source || '').trim() || 'LOCAL');
     } catch (err) {
       console.error('Failed to fetch terminals for setup:', err);
-      setError('No pudimos cargar las terminales. Verifica la conexión o valida la IP del Master local.');
+      setError(
+        describeTerminalListFailure(err, {
+          bindingMode,
+          erpDirectAndroid: Boolean(isNativeAndroid && erpBaseUrl),
+        })
+      );
       setTerminals([]);
     } finally {
       setIsLoading(false);
     }
-  }, [apiBase, currentConfig, deviceId, erpBaseUrl, initialTenantId, isAlreadyBound, isNativeAndroid]);
+  }, [
+    apiBase,
+    bindingMode,
+    currentConfig,
+    deviceId,
+    erpBaseUrl,
+    initialTenantId,
+    isAlreadyBound,
+    isNativeAndroid,
+  ]);
 
   useEffect(() => {
     void fetchTerminals();
@@ -330,21 +410,54 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
       setError(null);
 
     try {
-      let data: BindTerminalResponse;
+      let data: BindTerminalResponse | null = null;
+      const useErpDirectMasterAndroid = Boolean(isNativeAndroid && erpBaseUrl && bindingMode === 'MASTER');
 
-      if (isNativeAndroid && erpBaseUrl) {
-        data = await bindTerminalFromErp({
-          currentConfig,
-          posDeviceId: deviceId,
-          terminalId: terminal.id,
-          erpTerminalId: terminal.erpTerminalId,
-          bindingMode,
-          forceTransfer,
-          tenantId,
-          tenantSlug: resolveTenantSlug(),
-          tenantEmail: resolveTenantEmail(),
-          erpBaseUrl,
-        });
+      if (useErpDirectMasterAndroid) {
+        try {
+          const response = await fetch(`${buildAndroidEmbeddedSetupBase()}/bind-terminal`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tenant_id: tenantId,
+              tenant_slug: resolveTenantSlug(),
+              tenant_email: resolveTenantEmail(),
+              erp_base_url: erpBaseUrl,
+              terminal_id: terminal.id,
+              erp_terminal_id: terminal.erpTerminalId,
+              pos_device_id: deviceId,
+              binding_mode: bindingMode,
+              force_transfer: forceTransfer,
+            }),
+          });
+
+          if (response.status === 409) {
+            setPendingTerminal(terminal);
+            setShowTransferModal(true);
+            return;
+          }
+
+          if (response.ok) {
+            data = (await response.json()) as BindTerminalResponse;
+          }
+        } catch (proxyBindErr) {
+          console.warn('proxy bind-terminal failed, falling back to ERP direct', proxyBindErr);
+        }
+
+        if (!data) {
+          data = (await bindTerminalFromErp({
+            currentConfig,
+            posDeviceId: deviceId,
+            terminalId: terminal.id,
+            erpTerminalId: terminal.erpTerminalId,
+            bindingMode,
+            forceTransfer,
+            tenantId,
+            tenantSlug: resolveTenantSlug(),
+            tenantEmail: resolveTenantEmail(),
+            erpBaseUrl: erpBaseUrl!,
+          })) as BindTerminalResponse;
+        }
       } else {
         const response = await fetch(`${apiBase}/bind-terminal`, {
           method: 'POST',
@@ -376,6 +489,10 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         data = (await response.json()) as BindTerminalResponse;
       }
 
+        if (!data) {
+          throw new Error('No se pudo vincular la terminal.');
+        }
+
         const initialConfigParams = new URLSearchParams({
           tenant_id: data.tenant_id || tenantId,
           pos_device_id: deviceId,
@@ -395,13 +512,42 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           config: data.config,
         };
 
-        if (isNativeAndroid && erpBaseUrl) {
-          const erpInitialConfigData = await fetchInitialConfigFromErp({
-            erpBaseUrl,
-            tenantId: data.tenant_id || tenantId,
-            erpTerminalId: data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id,
-            posDeviceId: deviceId,
-          });
+        const shouldFetchInitialConfigFromErp = Boolean(isNativeAndroid && erpBaseUrl && bindingMode === 'MASTER');
+        const shouldFetchInitialConfigFromSetupApi = !shouldFetchInitialConfigFromErp && data.source !== 'LOCAL';
+
+        if (shouldFetchInitialConfigFromErp) {
+          const erpTerminalIdForConfig =
+            data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id;
+          let erpInitialConfigData: InitialConfigResponse | null = null;
+
+          try {
+            const proxyBase = buildAndroidEmbeddedSetupBase();
+            const icRes = await fetch(
+              `${proxyBase}/initial-config/${encodeURIComponent(String(erpTerminalIdForConfig))}?${initialConfigParams.toString()}`,
+              {
+                headers: {
+                  'X-Device-Id': deviceId,
+                },
+              }
+            );
+            if (icRes.ok) {
+              const parsed = (await icRes.json()) as InitialConfigResponse;
+              if (extractTerminalConfigSnapshot(parsed)) {
+                erpInitialConfigData = parsed;
+              }
+            }
+          } catch (icProxyErr) {
+            console.warn('proxy initial-config failed, falling back to ERP direct', icProxyErr);
+          }
+
+          if (!erpInitialConfigData) {
+            erpInitialConfigData = (await fetchInitialConfigFromErp({
+              erpBaseUrl: erpBaseUrl!,
+              tenantId: data.tenant_id || tenantId,
+              erpTerminalId: erpTerminalIdForConfig,
+              posDeviceId: deviceId,
+            })) as InitialConfigResponse;
+          }
 
           const snapshot = extractTerminalConfigSnapshot(erpInitialConfigData);
           if (!snapshot) {
@@ -433,7 +579,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
               full_pull_on_pairing: applied.fullPullOnPairing ?? false,
             },
           };
-        } else {
+        } else if (shouldFetchInitialConfigFromSetupApi) {
           const initialConfigResponse = await fetch(
             `${apiBase}/initial-config/${encodeURIComponent(data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id)}?${initialConfigParams.toString()}`,
             {
@@ -548,23 +694,25 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
             <div className="min-w-0 flex-1">
               <p className="text-xs font-black uppercase tracking-[0.3em] text-amber-500">Conexión</p>
               <p className="mt-2 text-sm font-semibold leading-relaxed text-amber-900">{error}</p>
-              <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-                <div className="flex-1">
-                  <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.25em] text-amber-600">
-                    IP del Master local
-                  </label>
-                  <input
-                    type="text"
-                    value={masterIpInput}
-                    onChange={(e) => setMasterIpInput(e.target.value)}
-                    placeholder="192.168.1.50"
-                    className="w-full rounded-2xl border border-amber-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
-                  />
-                </div>
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+                {bindingMode === 'SLAVE' ? (
+                  <div className="flex-1">
+                    <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.25em] text-amber-600">
+                      IP del Master local
+                    </label>
+                    <input
+                      type="text"
+                      value={masterIpInput}
+                      onChange={(e) => setMasterIpInput(e.target.value)}
+                      placeholder="192.168.1.50"
+                      className="w-full rounded-2xl border border-amber-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
+                    />
+                  </div>
+                ) : null}
                 <button
                   onClick={handleRetry}
                   disabled={isLoading}
-                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white shadow-lg shadow-slate-900/15 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  className={`inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white shadow-lg shadow-slate-900/15 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 ${bindingMode === 'SLAVE' ? '' : 'w-full sm:w-auto'}`}
                 >
                   {isLoading ? <RefreshCw size={16} className="animate-spin" /> : <Server size={16} />}
                   Reintentar Conexión
@@ -592,6 +740,38 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           </button>
         </div>
       ) : (
+        <div className="space-y-4">
+          {bindingMode === 'SLAVE' && isNativeAndroid && erpBaseUrl ? (
+            <div className="rounded-[1.75rem] border border-violet-200 bg-violet-50/90 p-5 shadow-[0_12px_32px_rgba(139,92,246,0.12)]">
+              <div className="flex items-start gap-3">
+                <div className="rounded-2xl bg-white p-2 text-violet-600 shadow-sm">
+                  <Server size={18} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-black uppercase tracking-[0.3em] text-violet-500">Modo esclavo</p>
+                  <p className="mt-2 text-sm font-semibold leading-relaxed text-violet-950">
+                    Las terminales se listan solo desde la caja maestra en la IP indicada (sin vínculo directo al ERP).
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {terminalsSource === 'LOCAL_BOUND_FALLBACK' && (
+            <div className="rounded-[1.75rem] border border-sky-200 bg-sky-50/90 p-5 shadow-[0_12px_32px_rgba(14,165,233,0.12)]">
+              <div className="flex items-start gap-3">
+                <div className="rounded-2xl bg-white p-2 text-sky-600 shadow-sm">
+                  <Server size={18} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-black uppercase tracking-[0.3em] text-sky-500">Modo local de prueba</p>
+                  <p className="mt-2 text-sm font-semibold leading-relaxed text-sky-950">
+                    Conectado al master local. Esta web está usando las terminales locales de la caja maestra para pruebas rápidas, sin depender del ERP.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
         <div className="grid gap-4 md:grid-cols-2">
           {isLoading && terminals.length === 0 ? (
             Array.from({ length: 4 }).map((_, index) => (
@@ -675,10 +855,15 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
               </div>
               <h4 className="text-xl font-black text-slate-900">No hay terminales disponibles</h4>
               <p className="mt-2 text-sm font-medium text-slate-500">
-                Reintenta la conexión o valida la configuración del tenant antes de continuar.
+                {terminalsSource === 'ERP' || terminalsSource === 'SETUP_PROXY'
+                  ? 'No hay cajas registradas en el ERP para este tenant, o el filtro actual no devolvió resultados.'
+                  : bindingMode === 'SLAVE'
+                    ? 'La maestra local no devolvió terminales. Revisa la IP y que el servidor maestro esté activo.'
+                    : 'Reintenta la conexión o valida la configuración del tenant antes de continuar.'}
               </p>
             </div>
           )}
+        </div>
         </div>
       )}
 

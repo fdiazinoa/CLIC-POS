@@ -26,4 +26,5 @@ La worktree canónica **no** es lugar de desarrollo: solo recibe diffs ya valida
 ## Lecturas
 
 - [docs/APK_RELEASE_CHECKLIST.md](./docs/APK_RELEASE_CHECKLIST.md) — flujo canónico completo.
+- [docs/TERMINAL_SETUP_CHECKLIST.md](./docs/TERMINAL_SETUP_CHECKLIST.md) — matriz MASTER/SLAVE × local/ERP y reglas de activación.
 - [docs/ANDROID_APK_SQLITE.md](./docs/ANDROID_APK_SQLITE.md) — notas SQLite / APK.
