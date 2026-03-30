@@ -4,26 +4,26 @@
 
 Frontend POS (Vite/React) con shell Android vía Capacitor; SQLite nativo en APK.
 
-## Dónde trabajar (no confundir rutas)
+## Dónde trabajar (obligatorio para APK firmado)
 
 | Objetivo | Ubicación |
 |----------|-----------|
-| Código, commits y PRs | **Repo principal** (este directorio). |
-| APK **release firmado** (keystore) | **Worktree** `_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite` en la misma máquina de build. |
+| Código, features, PRs | **Repo principal** `.../CLIC-POS` o worktree **limpia** desde `develop`. |
+| **Solo** build release **firmado** | **Worktree canónica** `.../_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite`. |
+| Respaldo histórico / sucio | `.../_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite-legacy-dirty` — **no compilar**; solo rescate con diff/cherry-pick. |
 
-Detalle operativo: [docs/APK_RELEASE_CHECKLIST.md](./docs/APK_RELEASE_CHECKLIST.md).
+La worktree canónica **no** es lugar de desarrollo: solo recibe diffs ya validados para compilar un release. Detalle paso a paso: [docs/APK_RELEASE_CHECKLIST.md](./docs/APK_RELEASE_CHECKLIST.md).
 
 ## Ramas
 
-- Base habitual: **`develop`**. Las ramas **`fix/*`** y **`feat/*`** (o `codex/*`) son para PRs; el nombre describe el cambio.
-- **Git no permite** tener la **misma** rama checked out en dos sitios a la vez. Si el worktree firmado usa otra rama que el principal, es normal: alinea código con merge, cherry-pick o **rsync de archivos** según el checklist antes de `assembleRelease`.
-- Antes de un release: confirma que el worktree tiene el mismo código que la rama que vas a integrar (revisa diff frente a `origin`).
+- Base habitual: **`develop`**; ramas `fix/*`, `feat/*`, `codex/*` según PR.
+- Una misma rama no puede estar en dos checkouts a la vez; alinear código antes de release (merge, cherry-pick o copia acotada de archivos).
 
 ## Versión Android
 
-En `android/app/build.gradle`, **`versionCode`** debe subir en cada subida a Play (monotónico). Después de un release firmado, mantén **alineados** `versionCode` / `versionName` en el repo principal y en el worktree firmado.
+`android/app/build.gradle`: `versionCode` monotónico. Tras cada release, `build.gradle` + `output-metadata.json` + repo principal deben quedar coherentes; **nunca** bajar la versión.
 
-## Lecturas útiles
+## Lecturas
 
-- [docs/APK_RELEASE_CHECKLIST.md](./docs/APK_RELEASE_CHECKLIST.md) — flujo build + firma + verificación.
-- [docs/ANDROID_APK_SQLITE.md](./docs/ANDROID_APK_SQLITE.md) — notas SQLite / APK (si aplica a tu tarea).
+- [docs/APK_RELEASE_CHECKLIST.md](./docs/APK_RELEASE_CHECKLIST.md) — flujo canónico completo.
+- [docs/ANDROID_APK_SQLITE.md](./docs/ANDROID_APK_SQLITE.md) — notas SQLite / APK.
