@@ -2267,6 +2267,11 @@ const AppContent: React.FC = () => {
     options?: { forceTakeover?: boolean }
   ) => {
     setRestoringHistory(true);
+    const previousConfig = config;
+    const previousUsers = users;
+    const previousActiveTerminalId = localStorage.getItem('active_terminal_id');
+    const previousTerminalStorageId = localStorage.getItem('CLIC_POS_TERMINAL_ID');
+    const previousInitialTerminalConfig = localStorage.getItem('initial_terminal_config');
     try {
       const setupResult = typeof pairingContext === 'object' && pairingContext !== null ? pairingContext : undefined;
       const resolvedMasterIp = typeof pairingContext === 'string' ? pairingContext : setupResult?.masterIp;
@@ -2308,23 +2313,11 @@ const AppContent: React.FC = () => {
         operationalDocumentState.documentSeries,
         operationalDocumentState.fiscalRanges
       );
-      localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
       localStorage.setItem(TERMINAL_SETUP_MODE_KEY, isSlave ? 'CLIENT' : 'SERVER');
-      localStorage.setItem('active_terminal_id', terminalId);
-      localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
       localStorage.setItem(
         'active_tenant_id',
         setupResult?.tenantId || localStorage.getItem('active_tenant_id') || 'default-tenant'
       );
-      localStorage.setItem('initial_terminal_config', JSON.stringify(updatedConfig));
-      persistStoredErpSyncBinding({
-        tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
-        terminalId: resolvedErpTerminalId,
-        localTerminalId: terminalId,
-        terminalName: resolvedTerminalName,
-        companyId: setupResult?.companyId || null,
-        storeId: setupResult?.storeId || null,
-      });
 
       if (Array.isArray(setupResult?.boundUsers)) {
         setUsers(setupResult.boundUsers);
@@ -2467,9 +2460,43 @@ const AppContent: React.FC = () => {
       if (Array.isArray(freshData.collections)) setCollections(freshData.collections);
       if (Array.isArray(freshData.supplierProductPrices)) setSupplierProductPrices(freshData.supplierProductPrices);
 
+      localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
+      localStorage.setItem('active_terminal_id', terminalId);
+      localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
+      localStorage.setItem('initial_terminal_config', JSON.stringify(updatedConfig));
+      persistStoredErpSyncBinding({
+        tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
+        terminalId: resolvedErpTerminalId,
+        localTerminalId: terminalId,
+        terminalName: resolvedTerminalName,
+        companyId: setupResult?.companyId || null,
+        storeId: setupResult?.storeId || null,
+      });
+
       setCurrentView('LOGIN');
     } catch (error) {
       console.error('❌ Failed to take terminal control:', error);
+      clearStoredErpSyncBinding();
+      localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
+      if (previousActiveTerminalId) {
+        localStorage.setItem('active_terminal_id', previousActiveTerminalId);
+      } else {
+        localStorage.removeItem('active_terminal_id');
+      }
+      if (previousTerminalStorageId) {
+        localStorage.setItem('CLIC_POS_TERMINAL_ID', previousTerminalStorageId);
+      } else {
+        localStorage.removeItem('CLIC_POS_TERMINAL_ID');
+      }
+      if (previousInitialTerminalConfig) {
+        localStorage.setItem('initial_terminal_config', previousInitialTerminalConfig);
+      } else {
+        localStorage.removeItem('initial_terminal_config');
+      }
+      setConfig(previousConfig);
+      await db.save('config', previousConfig);
+      setUsers(previousUsers);
+      await db.save('users', previousUsers);
       alert('No se pudo tomar control de la terminal. Revisa conexión y vuelve a intentar.');
     } finally {
       setRestoringHistory(false);

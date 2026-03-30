@@ -217,6 +217,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   const [masterIpInput, setMasterIpInput] = useState(masterIp);
   const [erpBaseUrl, setErpBaseUrl] = useState<string | null>(() => normalizeBaseUrl(initialErpBaseUrl) || resolveErpBaseUrl());
   const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+  const isSetupPending = localStorage.getItem('clic_pos_terminal_setup_pending') === '1';
+  const shouldBlockAlreadyBound = isAlreadyBound && !isSetupPending;
 
   useEffect(() => {
     const resolvedTenantId = (initialTenantId || '').trim();
@@ -244,7 +246,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   }, [isNativeAndroid, masterIpInput]);
 
   const fetchTerminals = useCallback(async () => {
-    if (isAlreadyBound) {
+    if (shouldBlockAlreadyBound) {
       setError('Este equipo ya está vinculado a una terminal. No es necesario volver a configurarlo.');
       setIsLoading(false);
       return;
@@ -318,7 +320,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [apiBase, currentConfig, deviceId, erpBaseUrl, initialTenantId, isAlreadyBound, isNativeAndroid]);
+  }, [apiBase, currentConfig, deviceId, erpBaseUrl, initialTenantId, isNativeAndroid, shouldBlockAlreadyBound]);
 
   useEffect(() => {
     void fetchTerminals();
@@ -503,7 +505,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
   const handleCardClick = useCallback(
     async (terminal: TerminalCard) => {
-      if (isBinding || isAlreadyBound) return;
+      if (isBinding || shouldBlockAlreadyBound) return;
 
       if (terminal.occupied && terminal.currentDeviceId && terminal.currentDeviceId !== deviceId) {
         setPendingTerminal(terminal);
@@ -513,7 +515,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
       await bindTerminal(terminal, false);
     },
-    [bindTerminal, deviceId, isAlreadyBound, isBinding]
+    [bindTerminal, deviceId, isBinding, shouldBlockAlreadyBound]
   );
 
   const handleRetry = async () => {
@@ -575,7 +577,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         </div>
       )}
 
-      {isAlreadyBound ? (
+      {shouldBlockAlreadyBound ? (
         <div className="rounded-[2rem] border border-emerald-200 bg-emerald-50/80 p-8 text-center shadow-[0_16px_48px_rgba(16,185,129,0.12)]">
           <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-[1.5rem] bg-white text-emerald-600 shadow-md">
             <CheckCircle2 size={30} />
