@@ -14,16 +14,23 @@ import {
 import { printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
 
+export type PaymentConfirmOptions = {
+   /** True si el supervisor ya autorizó cobrar con cliente en mora / sin cupo (modal o puerta Cobrar). */
+   delinquentSaleOk?: boolean;
+};
+
 interface PaymentModalProps {
    total: number;
    items: CartItem[]; // Added items prop
    currencySymbol: string;
    config?: BusinessConfig;
    onClose: () => void;
-   onConfirm: (payments: PaymentEntry[]) => Promise<Transaction | null>;
+   onConfirm: (payments: PaymentEntry[], options?: PaymentConfirmOptions) => Promise<Transaction | null>;
    themeColor: string;
    customer?: Customer | null;
    isDelinquent?: boolean;
+   /** Autorización ya obtenida en POS (Cobrar) antes de abrir el modal. */
+   delinquentSalePreApproved?: boolean;
    users: User[];
    isMaster?: boolean;
    currentUser?: User | null;
@@ -96,7 +103,22 @@ const createPaymentId = (): string => {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({
+   total,
+   items,
+   currencySymbol,
+   config,
+   onClose,
+   onConfirm,
+   themeColor,
+   customer,
+   isDelinquent,
+   delinquentSalePreApproved = false,
+   users,
+   isMaster,
+   currentUser,
+   roles
+}) => {
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');
@@ -300,6 +322,23 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       try {
          let paymentsToConfirm = payments;
 
+         // Cliente al límite o en mora (deuda >= cupo): no permitir cerrar la venta sin supervisor,
+         // aunque el cobro sea en efectivo u otros métodos (el cartel "crédito bloqueado" debe cumplirse).
+         if (
+            !isRefund &&
+            isDelinquent &&
+            !isOverrideActive &&
+            !hasPermission('POS_CREDIT_OVERRIDE') &&
+            !delinquentSalePreApproved
+         ) {
+            setFinalizeError(
+               'Cliente con cupo de crédito agotado o en mora. Requiere autorización de supervisor para cobrar.'
+            );
+            setShowSupervisorModal(true);
+            setIsFinalizing(false);
+            return;
+         }
+
          // UX: If cashier typed an amount but didn't press "Agregar",
          // auto-create the payment entry so "Finalizar Venta" still works.
          if (canFinalizeWithTypedAmount) {
@@ -418,7 +457,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             slowProcessTimer = window.setTimeout(() => {
                setFinalizeError('El cobro está tardando más de lo esperado, espere unos segundos...');
             }, 15000);
-            const txn = await onConfirm(paymentsToConfirm);
+            const txn = await onConfirm(paymentsToConfirm, {
+               delinquentSaleOk:
+                  isOverrideActive ||
+                  hasPermission('POS_CREDIT_OVERRIDE') ||
+                  delinquentSalePreApproved
+            });
 
             if (txn) {
                setCompletedTransaction(txn);
