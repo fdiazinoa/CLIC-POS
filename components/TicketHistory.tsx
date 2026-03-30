@@ -13,7 +13,13 @@ import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
 import { User, DeviceRole } from '../types';
 import { RefundModal } from './RefundModal';
+import FiscalSyncBadge from './FiscalSyncBadge';
 import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/fiscalBreakdown';
+import {
+   canRetryFiscalTransaction,
+   getFiscalRetryActionLabel,
+   isRefundLikeTransaction
+} from '../utils/fiscal/fiscalHelpers';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -24,6 +30,7 @@ interface TicketHistoryProps {
    roles: RoleDefinition[];
    onClose: () => void;
    initialSelectedId?: string | null; // NEW: For Smart Scan
+   onRetryFiscalDocument?: (transaction: Transaction) => Promise<string>;
    onRefundTransaction: (originalTx: Transaction, refundedItems: CartItem[], conditions: Map<string, 'SELLABLE' | 'DAMAGED'>, reason: string) => void;
 }
 
@@ -226,7 +233,15 @@ const SalesHistoryTable: React.FC<{
                            style={{ touchAction: 'manipulation' }}
                         >
                            <td className="px-4 py-3" onClick={openDetail}>{getStatusBadge(tx)}</td>
-                           <td className="px-4 py-3 text-xs font-medium text-gray-500" onClick={openDetail}>{tx.displayId || tx.id.slice(-8).toUpperCase()}</td>
+                           <td className="px-4 py-3" onClick={openDetail}>
+                              <p className="text-xs font-medium text-gray-500">{tx.displayId || tx.id.slice(-8).toUpperCase()}</p>
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                 <span className="text-[10px] font-bold text-gray-400">
+                                    {(tx.ncf || tx.electronicNcf || tx.legacyNcf || '').toString().trim() || 'Sin NCF'}
+                                 </span>
+                                 <FiscalSyncBadge transaction={tx} compact />
+                              </div>
+                           </td>
                            <td className="px-4 py-3" onClick={openDetail}>
                               <p className="font-bold text-gray-800">{new Date(tx.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                               <p className="text-[10px] text-gray-400 font-medium">{new Date(tx.date).toLocaleDateString()}</p>
@@ -292,25 +307,42 @@ const TicketDetailDrawer: React.FC<{
    onClose: () => void;
    onPrint: (tx: Transaction) => void;
    onRequestRefund: (tx: Transaction) => void;
+   onRetryFiscalDocument?: (tx: Transaction) => Promise<string>;
    themeText: string;
    themeBg: string;
    users: User[];
-}> = ({ tx, config, onClose, onPrint, onRequestRefund, themeText, themeBg, users }) => {
-   // Removed internal return state
-
-
-
+}> = ({ tx, config, onClose, onPrint, onRequestRefund, onRetryFiscalDocument, themeText, themeBg, users }) => {
+   const [isRetryingFiscal, setIsRetryingFiscal] = useState(false);
+   const [retryFeedback, setRetryFeedback] = useState<string | null>(null);
 
    if (!tx) return null;
    const cashierName = tx.userName || users.find(u => u.id === tx.userId)?.name || 'Sistema';
    const supervisorName = tx.authorizedByName || users.find(u => u.id === tx.authorizedById)?.name || null;
    const payments = Array.isArray(tx.payments) ? tx.payments : [];
    const paymentTotal = payments.reduce((acc, p: any) => acc + Number(p?.amount || 0), 0);
-   const isRefundDoc = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+   const isRefundDoc = isRefundLikeTransaction(tx);
    const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
    const affectedNCF = (tx.affectedNCF || '').toString().trim();
    const terminalConfig = config.terminals?.find(t => t.id === tx.terminalId)?.config;
    const fiscalSummary = calculateTransactionFiscalSummary(tx, config, { terminalConfig });
+   const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
+   const retryActionLabel = getFiscalRetryActionLabel(tx) || 'Reintentar envío';
+
+   const handleRetryFiscal = async () => {
+      if (!tx || !onRetryFiscalDocument || !canRetryFiscal) return;
+
+      setIsRetryingFiscal(true);
+      setRetryFeedback(null);
+      try {
+         const message = await onRetryFiscalDocument(tx);
+         setRetryFeedback(message);
+      } catch (error: any) {
+         console.error('❌ Error retrying fiscal document:', error);
+         setRetryFeedback(error?.message || 'No se pudo iniciar el reintento fiscal.');
+      } finally {
+         setIsRetryingFiscal(false);
+      }
+   };
 
    const getPaymentMethodLabel = (payment: any): string => {
       const method = (payment?.method || '').toString().toUpperCase();
@@ -460,6 +492,57 @@ const TicketDetailDrawer: React.FC<{
                         <p className="text-[10px] font-bold text-gray-400 uppercase">NCF</p>
                         <p className="text-xs font-bold text-gray-800 truncate">{tx.ncf || 'Sin NCF'}</p>
                      </div>
+                     <div className="col-span-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                           <div>
+                              <p className="text-[10px] font-bold text-slate-400 uppercase">Estado Fiscal</p>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                 <FiscalSyncBadge transaction={tx} />
+                                 {tx.ncfType && (
+                                    <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600">
+                                       {tx.ncfType}
+                                    </span>
+                                 )}
+                                 {tx.fiscalProvider && tx.fiscalProvider !== 'NONE' && (
+                                    <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600">
+                                       {tx.fiscalProvider}
+                                    </span>
+                                 )}
+                              </div>
+                           </div>
+                           {tx.fiscalSyncedAt && (
+                              <div className="text-right">
+                                 <p className="text-[10px] font-bold text-slate-400 uppercase">Última actualización</p>
+                                 <p className="text-xs font-bold text-slate-700">{new Date(tx.fiscalSyncedAt).toLocaleString()}</p>
+                              </div>
+                           )}
+                        </div>
+                        {tx.fiscalReferenceId && (
+                           <p className="mt-3 text-[11px] font-bold text-slate-500">
+                              Referencia proveedor: {tx.fiscalReferenceId}
+                           </p>
+                        )}
+                        {tx.fiscalResponseMessage && (
+                           <p className={`mt-2 text-[11px] ${tx.fiscalSyncStatus === 'ERROR' ? 'text-red-600' : 'text-slate-500'}`}>
+                              {tx.fiscalResponseMessage}
+                           </p>
+                        )}
+                        {canRetryFiscal && (
+                           <div className="mt-3 flex flex-wrap items-center gap-3">
+                              <button
+                                 onClick={handleRetryFiscal}
+                                 disabled={isRetryingFiscal}
+                                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                              >
+                                 <RotateCcw size={12} />
+                                 {isRetryingFiscal ? 'Procesando...' : retryActionLabel}
+                              </button>
+                              {retryFeedback && (
+                                 <p className="text-[11px] font-bold text-slate-500">{retryFeedback}</p>
+                              )}
+                           </div>
+                        )}
+                     </div>
                      {isRefundDoc && (
                         <div className="p-3 bg-red-50/60 rounded-xl border border-red-100">
                            <p className="text-[10px] font-bold text-red-400 uppercase">Factura afectada</p>
@@ -534,7 +617,7 @@ const TicketDetailDrawer: React.FC<{
    );
 };
 
-const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, onRefundTransaction, initialSelectedId }) => {
+const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, currentUser, onUpdateConfig, users, roles, onClose, onRefundTransaction, initialSelectedId, onRetryFiscalDocument }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [expandedId, setExpandedId] = useState<string | null>(null);
    const [showFilters, setShowFilters] = useState(false);
@@ -1243,6 +1326,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
                setRefundTx(tx);
                setIsRefundModalOpen(true);
             }}
+            onRetryFiscalDocument={onRetryFiscalDocument}
             themeText={themeText}
             themeBg={themeBg}
             users={users}

@@ -124,6 +124,13 @@ import {
 } from './utils/cloudMasterRegistry';
 import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, persistStoredErpSyncBinding } from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
+import {
+  canRetryFiscalTransaction,
+  getFiscalComplianceConfig,
+  getFiscalProviderConfig,
+  getProviderEnvironment
+} from './utils/fiscal/fiscalHelpers';
+import { getFiscalDocumentStatus, issueFiscalDocument } from './services/fiscal/fiscalService';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -3044,6 +3051,194 @@ const AppContent: React.FC = () => {
     };
   }, [customers, transactions]);
 
+  const upsertFiscalTransaction = useCallback(async (nextTransaction: Transaction) => {
+    setTransactions(prev => {
+      const exists = prev.some(tx => tx.id === nextTransaction.id);
+      if (exists) return prev.map(tx => tx.id === nextTransaction.id ? nextTransaction : tx);
+      return [nextTransaction, ...prev];
+    });
+    await db.saveDocument('transactions', nextTransaction);
+    try {
+      await db.saveDocument('transactionHistory', nextTransaction);
+    } catch (historyMirrorError) {
+      console.warn('⚠️ Fiscal history mirror update skipped:', historyMirrorError);
+    }
+  }, []);
+
+  const pollFiscalDocumentStatus = useCallback(async (
+    transaction: Transaction,
+    providerId: Exclude<Transaction['fiscalProvider'], undefined | 'NONE'>,
+    environment: number,
+    providerTransactionId: string,
+    credentialKey?: string,
+    attempt = 1
+  ) => {
+    try {
+      const result = await getFiscalDocumentStatus(
+        providerId,
+        environment,
+        providerTransactionId,
+        config.companyInfo,
+        credentialKey
+      );
+
+      const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';
+      const refreshedTransaction: Transaction = {
+        ...transaction,
+        fiscalSyncStatus: finalStatus,
+        fiscalSyncError: result.success ? undefined : result.message,
+        fiscalReferenceId: providerTransactionId,
+        fiscalResponseMessage: result.message,
+        fiscalSyncedAt: result.success && !result.pending ? new Date().toISOString() : transaction.fiscalSyncedAt
+      };
+
+      await upsertFiscalTransaction(refreshedTransaction);
+
+      if (result.pending && attempt < 8) {
+        window.setTimeout(() => {
+          pollFiscalDocumentStatus(
+            refreshedTransaction,
+            providerId,
+            environment,
+            providerTransactionId,
+            credentialKey,
+            attempt + 1
+          ).catch(console.error);
+        }, attempt < 3 ? 3000 : 5000);
+      }
+    } catch (error: any) {
+      if (attempt >= 8) {
+        const failedTransaction: Transaction = {
+          ...transaction,
+          fiscalSyncStatus: 'ERROR',
+          fiscalSyncError: error?.message || 'No se pudo consultar el estado del e-CF.',
+          fiscalReferenceId: providerTransactionId,
+          fiscalResponseMessage: error?.message || 'No se pudo consultar el estado del e-CF.'
+        };
+        await upsertFiscalTransaction(failedTransaction);
+        return;
+      }
+
+      window.setTimeout(() => {
+        pollFiscalDocumentStatus(
+          transaction,
+          providerId,
+          environment,
+          providerTransactionId,
+          credentialKey,
+          attempt + 1
+        ).catch(console.error);
+      }, 5000);
+    }
+  }, [config.companyInfo, upsertFiscalTransaction]);
+
+  const syncFiscalDocument = useCallback(async (transaction: Transaction) => {
+    const providerId = transaction.fiscalProvider;
+    const documentCode = transaction.ncfType;
+    const electronicNcf = transaction.electronicNcf || transaction.ncf;
+
+    if (!providerId || providerId === 'NONE') return;
+    if (!documentCode || !documentCode.startsWith('E')) return;
+    if (!electronicNcf) return;
+
+    const fiscalCompliance = getFiscalComplianceConfig(config);
+    const environment = getProviderEnvironment(fiscalCompliance, providerId);
+    const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
+    const baseTransaction: Transaction = {
+      ...transaction,
+      fiscalSyncStatus: 'PENDING',
+      fiscalSyncError: undefined
+    };
+
+    await upsertFiscalTransaction(baseTransaction);
+
+    try {
+      const result = await issueFiscalDocument({
+        providerId,
+        environment,
+        companyInfo: config.companyInfo,
+        transaction: baseTransaction,
+        taxRate: config.taxRate,
+        sequenceExpiryDate: new Date(new Date(baseTransaction.date).getFullYear(), 11, 31).toISOString(),
+        credentialKey: providerConfig.credentialKey,
+        tipoIngreso: providerConfig.tipoIngreso,
+        modificationCode: providerConfig.modificationCode,
+        unitCodeGoods: providerConfig.unitCodeGoods,
+        unitCodeServices: providerConfig.unitCodeServices
+      });
+
+      const finalStatus = result.pending ? 'PENDING' : result.success ? 'SYNCED' : 'ERROR';
+      const finalizedTransaction: Transaction = {
+        ...baseTransaction,
+        fiscalSyncStatus: finalStatus,
+        fiscalSyncError: result.success ? undefined : result.message,
+        fiscalReferenceId: result.providerTransactionId || baseTransaction.fiscalReferenceId,
+        fiscalResponseMessage: result.message,
+        fiscalSyncedAt: result.success && !result.pending ? new Date().toISOString() : baseTransaction.fiscalSyncedAt
+      };
+
+      await upsertFiscalTransaction(finalizedTransaction);
+
+      if (result.pending && result.providerTransactionId) {
+        window.setTimeout(() => {
+          pollFiscalDocumentStatus(
+            finalizedTransaction,
+            providerId,
+            environment,
+            result.providerTransactionId!,
+            providerConfig.credentialKey
+          ).catch(console.error);
+        }, 3000);
+      }
+    } catch (error: any) {
+      const failedTransaction: Transaction = {
+        ...baseTransaction,
+        fiscalSyncStatus: 'ERROR',
+        fiscalSyncError: error?.message || 'No se pudo emitir el comprobante electrónico.',
+        fiscalResponseMessage: error?.message || 'No se pudo emitir el comprobante electrónico.'
+      };
+      await upsertFiscalTransaction(failedTransaction);
+    }
+  }, [config, pollFiscalDocumentStatus, upsertFiscalTransaction]);
+
+  const retryFiscalDocument = useCallback(async (transaction: Transaction): Promise<string> => {
+    const providerId = transaction.fiscalProvider;
+    if (!canRetryFiscalTransaction(transaction) || !providerId || providerId === 'NONE') {
+      throw new Error('Solo se pueden reintentar documentos electrónicos pendientes o con error.');
+    }
+
+    const fiscalCompliance = getFiscalComplianceConfig(config);
+    const environment = getProviderEnvironment(fiscalCompliance, providerId);
+    const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
+    const shouldPollExistingAttempt = transaction.fiscalSyncStatus === 'PENDING' && Boolean(transaction.fiscalReferenceId);
+    const retryingTransaction: Transaction = {
+      ...transaction,
+      fiscalSyncStatus: 'PENDING',
+      fiscalSyncError: undefined,
+      fiscalReferenceId: shouldPollExistingAttempt ? transaction.fiscalReferenceId : undefined,
+      fiscalResponseMessage: shouldPollExistingAttempt
+        ? 'Consultando estado actualizado del e-CF en Polaris...'
+        : 'Reintentando envío del e-CF a Polaris...'
+    };
+
+    await upsertFiscalTransaction(retryingTransaction);
+
+    if (shouldPollExistingAttempt && transaction.fiscalReferenceId) {
+      await pollFiscalDocumentStatus(
+        retryingTransaction,
+        providerId,
+        environment,
+        transaction.fiscalReferenceId,
+        providerConfig.credentialKey,
+        1
+      );
+      return 'Consulta de estado fiscal iniciada.';
+    }
+
+    await syncFiscalDocument(retryingTransaction);
+    return 'Reintento de envío fiscal iniciado.';
+  }, [config, pollFiscalDocumentStatus, syncFiscalDocument, upsertFiscalTransaction]);
+
   const handleTransactionComplete = async (txn: Transaction) => {
     // Get current terminal ID before persisting.
     const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
@@ -3059,6 +3254,7 @@ const AppContent: React.FC = () => {
     setTransactions(newTransactions);
     // setFilteredTransactions(newTransactions); // Assuming this is meant to be here if filtered transactions are used
     await db.saveDocument('transactions', txn);
+    syncFiscalDocument(txn).catch(console.error);
 
     // Trigger background sync
     backgroundSyncManager.triggerSync().catch(console.error);
@@ -3808,6 +4004,9 @@ const AppContent: React.FC = () => {
       console.warn('⚠️ Refund state refresh fallback:', refreshError);
     }
 
+    const finalizedCreditNote = refundPersistenceResult.refund || creditNote;
+    syncFiscalDocument(finalizedCreditNote).catch(console.error);
+
     // Sync
     backgroundSyncManager.triggerSync().catch(console.error);
 
@@ -4328,6 +4527,7 @@ const AppContent: React.FC = () => {
             }}
             onSelect={(c) => { setSelectedCustomer(c); setCurrentView('POS'); }}
             onClose={() => setCurrentView('POS')}
+            onRetryFiscalDocument={retryFiscalDocument}
           />
         );
 
@@ -4362,6 +4562,7 @@ const AppContent: React.FC = () => {
                 alert(`Error procesando devolución: ${refundError?.message || 'Error desconocido'}`);
               }
             }}
+            onRetryFiscalDocument={retryFiscalDocument}
           />
         );
 
