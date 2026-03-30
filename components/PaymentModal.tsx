@@ -6,6 +6,7 @@ import {
    Repeat, ArrowRightLeft, DollarSign, Zap, Smartphone
 } from 'lucide-react';
 import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem, Transaction, Customer, User, Permission, RoleDefinition } from '../types';
+import { resolvePaymentMethodTypeForRuntime } from '../utils/paymentMethodGuards';
 import { printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
 
@@ -149,13 +150,14 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
       const fromConfig = enabledConfigMethods.map((method, index) => {
          const IconFromName = method.icon ? PAYMENT_ICON_BY_NAME[method.icon] : undefined;
+         const resolvedType = resolvePaymentMethodTypeForRuntime(method);
          return {
             key: `${method.id}-${index}`,
             id: method.id,
-            type: method.type,
-            label: method.name || getDefaultLabelByType(method.type),
+            type: resolvedType,
+            label: method.name || getDefaultLabelByType(resolvedType),
             iconName: method.icon,
-            Icon: IconFromName || getDefaultIconByType(method.type)
+            Icon: IconFromName || getDefaultIconByType(resolvedType)
          };
       });
 
