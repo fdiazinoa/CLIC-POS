@@ -1727,13 +1727,40 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          const reservationAdvance = activeRecoveredReservation ? Math.min(activeRecoveredReservation.balancePaid || 0, cartTotal) : 0;
+         const reservationAdvancePayment: PaymentEntry = {
+            id: `ADV-${Date.now()}`,
+            method: 'ADVANCE',
+            amount: reservationAdvance,
+            timestamp: new Date()
+         };
          const paymentsForTransaction = reservationAdvance > 0
-            ? [...payments, { id: `ADV-${Date.now()}`, method: 'ADVANCE', amount: reservationAdvance, timestamp: new Date() }]
+            ? [...payments, reservationAdvancePayment]
             : payments;
+         const creditAmount = paymentsForTransaction
+            .filter((payment) => payment.method === 'CREDIT')
+            .reduce((acc, payment) => acc + payment.amount, 0);
+         const hasCreditOverrideApproval = paymentsForTransaction.some(
+            (payment) => payment.method === 'CREDIT' && payment.creditOverrideApproved
+         );
 
          if (activeRecoveredReservation && hasReturns) {
             alert('La recuperación de reserva no admite líneas de devolución. Finalice la reserva y procese devoluciones por separado.');
             return null;
+         }
+
+         if (creditAmount > 0) {
+            if (!selectedCustomer?.id) {
+               alert('No se puede guardar un ticket con pago pendiente a crédito sin un cliente asociado.');
+               onOpenCustomers();
+               return null;
+            }
+
+            const creditLimit = selectedCustomer.creditLimit || 0;
+            const currentDebt = selectedCustomer.currentDebt || 0;
+            if (creditLimit > 0 && (currentDebt + creditAmount) > creditLimit && !hasCreditOverrideApproval) {
+               alert(`El cliente excede su límite de crédito (${baseCurrency.symbol}${creditLimit.toFixed(2)}). No se guardó el ticket.`);
+               return null;
+            }
          }
 
          try {
@@ -1791,8 +1818,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         ncfType: fiscalStatus.type,
                         taxAmount: saleTaxAmount,
                         netAmount: saleNetAmount,
-                        pendingBalance: payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0) || undefined,
-                        dueDate: payments.some(p => p.method === 'CREDIT') ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined,
+                        pendingBalance: creditAmount || undefined,
+                        dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined,
                         customerSnapshot: selectedCustomer ? {
                            name: selectedCustomer.name,
                            taxId: selectedCustomer.taxId
@@ -1888,7 +1915,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
-               const creditAmount = payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0);
                const refundDocumentTotal = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
                const documentItems = isRefundOnly ? normalizedRefundItems : processedCart;
 
