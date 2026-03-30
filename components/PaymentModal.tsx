@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
    X, CreditCard, Banknote, QrCode, CheckCircle2,
    Trash2, Plus, Wallet, Printer, Mail, ShieldAlert,
@@ -220,6 +220,95 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({
 
    const activeMethod = activePaymentMethod?.type || 'CASH';
 
+   /** Pagos tal como quedarán al pulsar Finalizar (incluye línea auto si aplica). */
+   const previewPaymentsForSupervisorGate = useMemo((): PaymentEntry[] => {
+      if (canFinalizeWithTypedAmount && activePaymentMethod) {
+         const resolvedEntryMethod: PaymentMethod =
+            activePaymentMethod.type === 'CREDIT' || isPendingPaymentMethodName(activePaymentMethod.label)
+               ? 'CREDIT'
+               : activePaymentMethod.type;
+         const previewLine: PaymentEntry = {
+            id: '__preview-auto-finalize__',
+            method: resolvedEntryMethod,
+            methodId: activePaymentMethod.id,
+            methodLabel: activePaymentMethod.label,
+            methodIcon: activePaymentMethod.iconName,
+            amount: typedAmountInBase,
+            timestamp: new Date(),
+            currencyCode: selectedCurrency.code,
+            amountOriginal: typedAmount,
+            exchangeRate: selectedCurrency.rate,
+         };
+         return [...payments, previewLine];
+      }
+      return payments;
+   }, [
+      canFinalizeWithTypedAmount,
+      activePaymentMethod,
+      payments,
+      typedAmountInBase,
+      selectedCurrency.code,
+      selectedCurrency.rate,
+      typedAmount,
+   ]);
+
+   const finalizeBlockedUntilSupervisorPin = useMemo(() => {
+      if (isRefund) return false;
+      if (userPermissions.includes('ALL') || userPermissions.includes('POS_CREDIT_OVERRIDE')) return false;
+      if (isOverrideActive) return false;
+
+      if (isDelinquent && !delinquentSalePreApproved) return true;
+
+      const allowZero =
+         userPermissions.includes('ALL') || userPermissions.includes('POS_ALLOW_ZERO_PRICE');
+      if (items.some((i) => i.price === 0) && !allowZero) return true;
+
+      if (
+         previewPaymentsForSupervisorGate.some((p) =>
+            isPendingPaymentMethodName(p.methodLabel || '')
+         ) &&
+         !customer?.id
+      ) {
+         return true;
+      }
+
+      const creditTotal = sumCreditPaymentsBase(previewPaymentsForSupervisorGate);
+      if (!customer || creditTotal <= 0.005) return false;
+      return Boolean(evaluateCreditSupervisorGate(customer, 0, creditTotal));
+   }, [
+      isRefund,
+      userPermissions,
+      isOverrideActive,
+      isDelinquent,
+      delinquentSalePreApproved,
+      items,
+      previewPaymentsForSupervisorGate,
+      customer,
+   ]);
+
+   const openSupervisorForCurrentGate = useCallback(() => {
+      const creditTotal = sumCreditPaymentsBase(previewPaymentsForSupervisorGate);
+      if (customer && creditTotal > 0.005) {
+         const gate = evaluateCreditSupervisorGate(customer, 0, creditTotal);
+         if (gate) {
+            setCreditSupervisorSummary({
+               currencySymbol,
+               customerName: customer.name,
+               limit: customer.creditLimit || 0,
+               currentDebt: customer.currentDebt || 0,
+               creditOnTicket: gate.creditOnTicket,
+               projected: gate.projected,
+               reason: gate.reason,
+            });
+         } else {
+            setCreditSupervisorSummary(null);
+         }
+      } else {
+         setCreditSupervisorSummary(null);
+      }
+      setShowSupervisorModal(true);
+   }, [previewPaymentsForSupervisorGate, customer, currencySymbol]);
+
    const denominations = selectedCurrency.code === 'USD' ? [1, 5, 10, 20, 50, 100] : [50, 100, 200, 500, 1000, 2000];
 
    useEffect(() => {
@@ -329,6 +418,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({
       if (isFinalizing) return;
       if (!canFinalize) {
          alert("Monto insuficiente");
+         return;
+      }
+      if (finalizeBlockedUntilSupervisorPin) {
+         setFinalizeError('Debe autorizar con PIN de supervisor antes de finalizar.');
+         openSupervisorForCurrentGate();
          return;
       }
 
@@ -765,19 +859,42 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({
                         </div>
                      )}
                   </div>
+                  {finalizeBlockedUntilSupervisorPin && canFinalize && (
+                     <div className="mb-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] font-bold text-amber-950 leading-snug">
+                        Finalizar venta está bloqueado hasta que un supervisor o administrador ingrese su PIN. Use el botón de abajo o «Override» en el aviso de mora.
+                     </div>
+                  )}
                   <button
+                     type="button"
                      onClick={handleFinalize}
-                     disabled={!canFinalize || isFinalizing}
-                     className={`w-full py-3 md:py-4 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${!canFinalize || isFinalizing ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : `${themeBgClass} hover:brightness-110`}`}`}
+                     disabled={!canFinalize || isFinalizing || finalizeBlockedUntilSupervisorPin}
+                     className={`w-full py-3 md:py-4 rounded-xl md:rounded-2xl font-black text-sm md:text-base transition-all shadow-lg ${
+                        !canFinalize || isFinalizing || finalizeBlockedUntilSupervisorPin
+                           ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                           : isRefund
+                              ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                              : `${themeBgClass} hover:brightness-110 text-white`
+                     }`}
                   >
                      {isFinalizing
                         ? 'PROCESANDO...'
                         : !canFinalize
                            ? 'PAGO INCOMPLETO'
-                           : isRefund
-                              ? 'PROCESAR DEVOLUCIÓN'
-                              : 'FINALIZAR VENTA'}
+                           : finalizeBlockedUntilSupervisorPin
+                              ? 'BLOQUEADO — REQUIERE SUPERVISOR'
+                              : isRefund
+                                 ? 'PROCESAR DEVOLUCIÓN'
+                                 : 'FINALIZAR VENTA'}
                   </button>
+                  {finalizeBlockedUntilSupervisorPin && canFinalize && !isFinalizing && (
+                     <button
+                        type="button"
+                        onClick={openSupervisorForCurrentGate}
+                        className="w-full mt-2 py-2.5 rounded-xl bg-amber-600 text-white text-[11px] font-black uppercase tracking-wide shadow-md hover:bg-amber-700 active:scale-[0.99] transition-all"
+                     >
+                        Ingresar PIN de supervisor
+                     </button>
+                  )}
                </div>
             </div>
 
