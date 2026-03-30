@@ -264,7 +264,8 @@ const normalizeMasterHost = (value: string | null | undefined) =>
     .replace(/^https?:\/\//i, '')
     .replace(/\/.*$/, '');
 
-type TerminalSetupMode = 'SERVER' | 'CLIENT';
+type TerminalSetupMode = 'SERVER_LOCAL' | 'SERVER_ERP' | 'CLIENT';
+type TerminalIntegrationMode = 'LOCAL_ONLY' | 'ERP_DIRECT';
 
 type TerminalConfigRestartNotice = {
   receivedAt: string;
@@ -291,7 +292,21 @@ const readTerminalConfigRestartNotice = (): TerminalConfigRestartNotice | null =
 
 const getStoredTerminalSetupMode = (): TerminalSetupMode | null => {
   const storedMode = localStorage.getItem(TERMINAL_SETUP_MODE_KEY);
-  return storedMode === 'SERVER' || storedMode === 'CLIENT' ? storedMode : null;
+  if (storedMode === 'SERVER_LOCAL' || storedMode === 'SERVER_ERP' || storedMode === 'CLIENT') {
+    return storedMode;
+  }
+
+  if (storedMode === 'SERVER') return 'SERVER_LOCAL';
+  if (storedMode === 'CLIENT') return 'CLIENT';
+  return null;
+};
+
+const getTerminalSetupIntegrationMode = (setupMode: TerminalSetupMode | null): TerminalIntegrationMode => {
+  return setupMode === 'SERVER_ERP' ? 'ERP_DIRECT' : 'LOCAL_ONLY';
+};
+
+const getTerminalBindingMode = (setupMode: TerminalSetupMode | null): 'MASTER' | 'SLAVE' => {
+  return setupMode === 'CLIENT' ? 'SLAVE' : 'MASTER';
 };
 
 const hasPendingTerminalSetup = (): boolean => localStorage.getItem(TERMINAL_SETUP_PENDING_KEY) === '1';
@@ -736,6 +751,7 @@ const AppContent: React.FC = () => {
     const canForceStandaloneRebind =
       !hasPendingTerminalSetup() &&
       setupMode !== 'CLIENT' &&
+      setupMode !== 'SERVER_ERP' &&
       !localStorage.getItem('pos_master_ip') &&
       primaryTerminal?.config?.governedByMaster !== true;
 
@@ -810,7 +826,7 @@ const AppContent: React.FC = () => {
     localStorage.removeItem('active_terminal_id');
     localStorage.removeItem('initial_terminal_config');
     localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
-    localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER');
+    localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_LOCAL');
     localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'VERTICAL_SELECTED');
     localStorage.setItem(SETUP_FLOW_VERSION_KEY, SETUP_FLOW_VERSION);
     setConfig(selectedConfig);
@@ -825,10 +841,19 @@ const AppContent: React.FC = () => {
     localStorage.setItem(TERMINAL_SETUP_PENDING_KEY, '1');
     localStorage.setItem(TERMINAL_SETUP_MODE_KEY, mode);
 
-    if (mode === 'SERVER') {
+    if (mode === 'SERVER_LOCAL') {
       localStorage.removeItem('pos_master_ip');
       localStorage.setItem('CLIC_POS_MASTER_URL', buildRuntimeMasterUrl());
       setCurrentView('VERTICAL_SELECTOR');
+      return;
+    }
+
+    if (mode === 'SERVER_ERP') {
+      localStorage.removeItem('pos_master_ip');
+      localStorage.setItem('CLIC_POS_MASTER_URL', buildRuntimeMasterUrl());
+      localStorage.removeItem(SETUP_FLOW_STAGE_KEY);
+      localStorage.removeItem(SETUP_FLOW_VERSION_KEY);
+      setCurrentView('TERMINAL_PAIRING');
       return;
     }
 
@@ -1523,14 +1548,14 @@ const AppContent: React.FC = () => {
         const hasStartupTransactions = Array.isArray(data.transactions) && data.transactions.length > 0;
         const shouldResumeSetupWizard =
           terminalSetupPending &&
-          setupMode === 'SERVER' &&
+          setupMode === 'SERVER_LOCAL' &&
           setupFlowStage === 'VERTICAL_SELECTED' &&
           !masterIp &&
           !localPairedTerminal &&
           !isVisorMode;
         const shouldResumeVerticalSelection =
           terminalSetupPending &&
-          setupMode === 'SERVER' &&
+          setupMode === 'SERVER_LOCAL' &&
           !setupWizardCompleted &&
           !setupFlowStage &&
           !masterIp &&
@@ -1550,6 +1575,11 @@ const AppContent: React.FC = () => {
           !setupMode &&
           !localPairedTerminal &&
           !setupWizardCompleted;
+        const shouldPairAsServerErp =
+          terminalSetupPending &&
+          !isVisorMode &&
+          setupMode === 'SERVER_ERP' &&
+          !localPairedTerminal;
         const shouldPairAsClient =
           terminalSetupPending &&
           !isVisorMode &&
@@ -1557,7 +1587,7 @@ const AppContent: React.FC = () => {
           !localPairedTerminal;
 
         const shouldResolveMasterFromCloud = !masterIp && (
-          !localPairedTerminal || localPairedTerminal?.config?.isPrimaryNode === false || shouldPairAsClient
+          shouldPairAsClient || localPairedTerminal?.config?.isPrimaryNode === false
         );
 
         if (shouldResolveMasterFromCloud) {
@@ -1590,6 +1620,14 @@ const AppContent: React.FC = () => {
 
         if (shouldPairAsClient) {
           console.log('[BOOT] Client mode selected. Redirecting to terminal pairing...');
+          setCurrentView('TERMINAL_PAIRING');
+          setIsDataLoaded(true);
+          setIsSecurityLoaded(true);
+          return;
+        }
+
+        if (shouldPairAsServerErp) {
+          console.log('[BOOT] ERP direct mode selected. Redirecting to ERP terminal pairing...');
           setCurrentView('TERMINAL_PAIRING');
           setIsDataLoaded(true);
           setIsSecurityLoaded(true);
@@ -2313,7 +2351,13 @@ const AppContent: React.FC = () => {
         operationalDocumentState.documentSeries,
         operationalDocumentState.fiscalRanges
       );
-      localStorage.setItem(TERMINAL_SETUP_MODE_KEY, isSlave ? 'CLIENT' : 'SERVER');
+      const storedSetupMode = getStoredTerminalSetupMode();
+      const nextSetupMode: TerminalSetupMode = isSlave
+        ? 'CLIENT'
+        : storedSetupMode === 'SERVER_ERP'
+          ? 'SERVER_ERP'
+          : 'SERVER_LOCAL';
+      localStorage.setItem(TERMINAL_SETUP_MODE_KEY, nextSetupMode);
       localStorage.setItem(
         'active_tenant_id',
         setupResult?.tenantId || localStorage.getItem('active_tenant_id') || 'default-tenant'
@@ -2512,7 +2556,7 @@ const AppContent: React.FC = () => {
       const effectiveDeviceId = deviceId || localStorage.getItem('pos_device_id') || '';
 
       localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
-      localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER');
+      localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_LOCAL');
       localStorage.setItem(SETUP_WIZARD_COMPLETED_KEY, '1');
       localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'COMPLETE');
       localStorage.setItem(SETUP_FLOW_VERSION_KEY, SETUP_FLOW_VERSION);
@@ -3867,6 +3911,8 @@ const AppContent: React.FC = () => {
             adminUsers={users}
             tenantId={resolveSetupTenantId()}
             erpBaseUrl={resolveSetupErpBaseUrl() || undefined}
+            initialBindingMode={getTerminalBindingMode(getStoredTerminalSetupMode())}
+            integrationMode={getTerminalSetupIntegrationMode(getStoredTerminalSetupMode())}
             onPair={handlePairTerminal}
             onConfigUpdate={handleConfigUpdate}
             onUsersUpdate={async (newUsers) => {

@@ -29,6 +29,8 @@ interface TerminalBindingScreenProps {
   adminUsers: UserType[];
   tenantId?: string;
   erpBaseUrl?: string;
+  initialBindingMode?: 'MASTER' | 'SLAVE';
+  integrationMode?: 'LOCAL_ONLY' | 'ERP_DIRECT';
   onPair: (terminalId: string, result?: PairingResult, options?: PairingOptions) => Promise<void>;
   onConfigUpdate?: (newConfig: BusinessConfig) => void | Promise<void>;
   onUsersUpdate?: (users: UserType[]) => void | Promise<void>;
@@ -42,6 +44,8 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   adminUsers,
   tenantId,
   erpBaseUrl,
+  initialBindingMode,
+  integrationMode = 'LOCAL_ONLY',
   onPair,
   onConfigUpdate,
   onUsersUpdate,
@@ -49,7 +53,15 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   initialMasterIp,
 }) => {
   const [step, setStep] = useState<'MODE_SELECT' | 'SLAVE_CONNECT' | 'AUTH' | 'SELECT'>(
-    initialError ? 'SLAVE_CONNECT' : 'MODE_SELECT'
+    initialError
+      ? initialBindingMode === 'SLAVE'
+        ? 'SLAVE_CONNECT'
+        : 'AUTH'
+      : initialBindingMode === 'SLAVE'
+        ? 'SLAVE_CONNECT'
+        : initialBindingMode === 'MASTER'
+          ? 'AUTH'
+          : 'MODE_SELECT'
   );
   const [adminPin, setAdminPin] = useState('');
   const [error, setError] = useState<string | null>(initialError || null);
@@ -57,7 +69,13 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
   const [isConnecting, setIsConnecting] = useState(false);
   const [masterAdmins, setMasterAdmins] = useState<UserType[]>([]);
   const [localIps, setLocalIps] = useState<string[]>([]);
-  const [bindingMode, setBindingMode] = useState<'MASTER' | 'SLAVE'>('MASTER');
+  const [bindingMode, setBindingMode] = useState<'MASTER' | 'SLAVE'>(initialBindingMode || 'MASTER');
+
+  React.useEffect(() => {
+    if (initialBindingMode) {
+      setBindingMode(initialBindingMode);
+    }
+  }, [initialBindingMode]);
 
   const resolveReachableMaster = async (host: string) => {
     const normalizedHost = normalizeMasterHost(host);
@@ -215,7 +233,11 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                   </div>
                   <div className="min-w-0">
                     <h3 className="font-black text-slate-900">Caja Maestra / Independiente</h3>
-                    <p className="mt-1 text-xs font-medium leading-relaxed text-slate-400">Servidor local o única caja operando en este equipo.</p>
+                    <p className="mt-1 text-xs font-medium leading-relaxed text-slate-400">
+                      {integrationMode === 'ERP_DIRECT'
+                        ? 'Caja maestra conectada al ERP para operar y sincronizar directamente.'
+                        : 'Servidor local o única caja operando en este equipo.'}
+                    </p>
                   </div>
                 </div>
               </button>
@@ -333,6 +355,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
               currentConfig={config}
               deviceId={deviceId}
               bindingMode={bindingMode}
+              integrationMode={integrationMode}
               tenantId={tenantId}
               erpBaseUrl={erpBaseUrl}
               masterIp={masterIp}
