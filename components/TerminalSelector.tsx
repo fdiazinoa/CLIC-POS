@@ -239,11 +239,17 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   }, [masterIp]);
 
   const apiBase = useMemo(() => {
+    const normalizedMasterHost = normalizeMasterHost(masterIpInput);
+
+    if (bindingMode === 'SLAVE' && normalizedMasterHost) {
+      return getSetupApiBase(normalizedMasterHost);
+    }
+
     if (isNativeAndroid) {
       return `${buildMasterUrlFromHost(window.location.hostname)}/api/setup`;
     }
     return getSetupApiBase(masterIpInput);
-  }, [isNativeAndroid, masterIpInput]);
+  }, [bindingMode, isNativeAndroid, masterIpInput]);
 
   const fetchTerminals = useCallback(async () => {
     if (shouldBlockAlreadyBound) {
