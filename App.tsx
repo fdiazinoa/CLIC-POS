@@ -165,6 +165,8 @@ const normalizeSetupBaseUrl = (value?: string | null): string | null => {
   }
 };
 
+const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.vercel.app';
+
 const resolveSetupErpBaseUrl = (): string | null => {
   const env = (import.meta as any).env || {};
   const candidates = [
@@ -173,6 +175,7 @@ const resolveSetupErpBaseUrl = (): string | null => {
     env.VITE_ERP_BASE_URL,
     env.VITE_ERP_SYNC_API_URL,
     env.VITE_SYNC_API_URL,
+    DEFAULT_PUBLIC_ERP_BASE_URL,
   ];
 
   for (const candidate of candidates) {

@@ -134,6 +134,8 @@ const resolveTenantEmail = (): string | null => {
   return (localStorage.getItem('clic_tenant_email') || '').trim().toLowerCase() || null;
 };
 
+const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.vercel.app';
+
 const resolveErpBaseUrl = (): string | null => {
   const current = new URL(window.location.origin);
   const localErpOrigin = `${current.protocol}//${current.hostname}:4001`;
@@ -146,6 +148,7 @@ const resolveErpBaseUrl = (): string | null => {
     (import.meta as any)?.env?.VITE_ERP_BASE_URL,
     (import.meta as any)?.env?.VITE_ERP_SYNC_API_URL,
     (import.meta as any)?.env?.VITE_SYNC_API_URL,
+    DEFAULT_PUBLIC_ERP_BASE_URL,
     localErpOrigin,
   ];
 
