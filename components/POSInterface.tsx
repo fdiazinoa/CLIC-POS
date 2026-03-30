@@ -23,6 +23,7 @@ import {
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import UnifiedPaymentModal, { type PaymentConfirmOptions } from './PaymentModal';
+import { evaluateCreditSupervisorGate, sumCreditPaymentsBase } from '../utils/paymentMethodGuards';
 import TicketOptionsModal from './TicketOptionsModal';
 import CartItemOptionsModal from './CartItemOptionsModal';
 import ProductVariantSelector from './ProductVariantSelector';
@@ -1665,6 +1666,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             return null;
          }
 
+         const creditTotalForGate = sumCreditPaymentsBase(payments);
+         const creditGateNeedSupervisor =
+            !isRefundOnly && selectedCustomer && creditTotalForGate > 0.005
+               ? evaluateCreditSupervisorGate(selectedCustomer, 0, creditTotalForGate)
+               : null;
+         const creditSupervisorAuthorized =
+            hasPermission('POS_CREDIT_OVERRIDE') || Boolean(options?.creditSupervisorOk);
+         if (creditGateNeedSupervisor && !creditSupervisorAuthorized) {
+            alert(
+               'Operación bloqueada: hay monto Pendiente / a crédito que requiere autorización de supervisor (PIN en Cobrar). Si su rol no debe autorizar, pida a un supervisor.'
+            );
+            return null;
+         }
+
          const refundSeriesId = activeTerminalConfig?.documentAssignments?.['REFUND'] || 'REFUND';
          const assignedSequenceId = activeTerminalConfig?.documentAssignments?.['TICKET']!;
          const normalizedRefundItems = processedCart
@@ -1790,6 +1805,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   }
                }
 
+               const splitCreditTotal = sumCreditPaymentsBase(payments);
                const splitPayload: Parameters<typeof transactionService.createSplitTransaction>[0] = {
                      saleTransaction: {
                         documentType: 'TICKET' as const,
@@ -1806,8 +1822,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         ncfType: fiscalStatus.type,
                         taxAmount: saleTaxAmount,
                         netAmount: saleNetAmount,
-                        pendingBalance: payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0) || undefined,
-                        dueDate: payments.some(p => p.method === 'CREDIT') ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined,
+                        pendingBalance: splitCreditTotal > 0 ? splitCreditTotal : undefined,
+                        dueDate: splitCreditTotal > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined,
                         customerSnapshot: selectedCustomer ? {
                            name: selectedCustomer.name,
                            taxId: selectedCustomer.taxId
@@ -1903,7 +1919,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
-               const creditAmount = payments.filter(p => p.method === 'CREDIT').reduce((acc, p) => acc + p.amount, 0);
+               const creditAmount = sumCreditPaymentsBase(payments);
                const refundDocumentTotal = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
                const documentItems = isRefundOnly ? normalizedRefundItems : processedCart;
 
