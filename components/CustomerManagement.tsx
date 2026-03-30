@@ -16,7 +16,13 @@ import CreditAccountDashboard from './CreditAccountDashboard';
 import { agendaService } from '../services/AgendaService';
 import ActivityModal from './ActivityModal';
 import LoyaltyDashboard from './LoyaltyDashboard';
+import FiscalSyncBadge from './FiscalSyncBadge';
 import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/fiscalBreakdown';
+import {
+   canRetryFiscalTransaction,
+   getFiscalRetryActionLabel,
+   isRefundLikeTransaction
+} from '../utils/fiscal/fiscalHelpers';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -32,6 +38,7 @@ interface CustomerManagementProps {
    onUpdateCollections: (collections: Collection[]) => void;
    rooms: any[];
    users: User[];
+   onRetryFiscalDocument?: (transaction: Transaction) => Promise<string>;
 }
 
 const CustomerManagement: React.FC<CustomerManagementProps> = ({
@@ -47,7 +54,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
    collections,
    onUpdateCollections,
    rooms,
-   users
+   users,
+   onRetryFiscalDocument
 }) => {
    const [searchTerm, setSearchTerm] = useState('');
    const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
@@ -90,6 +98,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
    // --- TRANSACTION DETAIL STATE ---
    const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
+   const [retryingFiscalTransactionId, setRetryingFiscalTransactionId] = useState<string | null>(null);
+   const [fiscalRetryFeedback, setFiscalRetryFeedback] = useState<string | null>(null);
    const [customerTransactions, setCustomerTransactions] = useState<Transaction[]>([]);
    const [walletMovements, setWalletMovements] = useState<WalletTransaction[]>([]);
 
@@ -701,6 +711,27 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       };
    }, [restoreViewportAfterClose]);
 
+   useEffect(() => {
+      setRetryingFiscalTransactionId(null);
+      setFiscalRetryFeedback(null);
+   }, [selectedTransactionId]);
+
+   const handleRetryFiscal = useCallback(async (transaction: Transaction) => {
+      if (!onRetryFiscalDocument) return;
+
+      setRetryingFiscalTransactionId(transaction.id);
+      setFiscalRetryFeedback(null);
+      try {
+         const message = await onRetryFiscalDocument(transaction);
+         setFiscalRetryFeedback(message);
+      } catch (error: any) {
+         console.error('❌ Error retrying fiscal document from customer history:', error);
+         setFiscalRetryFeedback(error?.message || 'No se pudo iniciar el reintento fiscal.');
+      } finally {
+         setRetryingFiscalTransactionId(null);
+      }
+   }, [onRetryFiscalDocument]);
+
 
    // --- ADDRESS LOGIC ---
    const handleCreateWallet = () => {
@@ -1172,6 +1203,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                     customerTransactions.map((tx) => {
                                        const effectivePending = getEffectivePendingBalance(tx);
                                        const isRefund = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+                                       const fiscalNumber = (tx.ncf || tx.electronicNcf || tx.legacyNcf || '').toString().trim();
 
                                        // Dynamic Document Name Detection
                                        const getDocumentName = () => {
@@ -1203,6 +1235,10 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                                    <p className="text-[10px] font-medium text-gray-400 uppercase tracking-widest">
                                                       {new Date(tx.date).toLocaleDateString()} • {tx.items.length} items
                                                    </p>
+                                                   <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                      <span className="text-[10px] font-bold text-gray-400">{fiscalNumber || 'Sin NCF'}</span>
+                                                      <FiscalSyncBadge transaction={tx} compact />
+                                                   </div>
                                                 </div>
                                              </div>
                                              <div className="text-right">
@@ -1774,11 +1810,13 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
             const payments = Array.isArray(tx.payments) ? tx.payments : [];
             const paymentTotal = payments.reduce((acc, p: any) => acc + Number(p?.amount || 0), 0);
-            const isRefundDoc = tx.documentType === 'REFUND' || tx.ncfType === 'B04';
+            const isRefundDoc = isRefundLikeTransaction(tx);
             const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
             const affectedNCF = (tx.affectedNCF || '').toString().trim();
             const terminalConfig = config.terminals?.find(t => t.id === tx.terminalId)?.config;
             const fiscalSummary = calculateTransactionFiscalSummary(tx, config, { terminalConfig });
+            const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
+            const retryActionLabel = getFiscalRetryActionLabel(tx) || 'Reintentar envío';
 
             return (
                <div className="fixed inset-0 z-[100] overflow-hidden">
@@ -1877,6 +1915,57 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                               <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
                                  <p className="text-[10px] font-bold text-gray-400 uppercase">NCF</p>
                                  <p className="text-xs font-bold text-gray-800 truncate">{tx.ncf || 'Sin NCF'}</p>
+                              </div>
+                              <div className="col-span-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                 <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                       <p className="text-[10px] font-bold text-slate-400 uppercase">Estado Fiscal</p>
+                                       <div className="mt-2 flex flex-wrap items-center gap-2">
+                                          <FiscalSyncBadge transaction={tx} />
+                                          {tx.ncfType && (
+                                             <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600">
+                                                {tx.ncfType}
+                                             </span>
+                                          )}
+                                          {tx.fiscalProvider && tx.fiscalProvider !== 'NONE' && (
+                                             <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600">
+                                                {tx.fiscalProvider}
+                                             </span>
+                                          )}
+                                       </div>
+                                    </div>
+                                    {tx.fiscalSyncedAt && (
+                                       <div className="text-right">
+                                          <p className="text-[10px] font-bold text-slate-400 uppercase">Última actualización</p>
+                                          <p className="text-xs font-bold text-slate-700">{new Date(tx.fiscalSyncedAt).toLocaleString()}</p>
+                                       </div>
+                                    )}
+                                 </div>
+                                 {tx.fiscalReferenceId && (
+                                    <p className="mt-3 text-[11px] font-bold text-slate-500">
+                                       Referencia proveedor: {tx.fiscalReferenceId}
+                                    </p>
+                                 )}
+                                 {tx.fiscalResponseMessage && (
+                                    <p className={`mt-2 text-[11px] ${tx.fiscalSyncStatus === 'ERROR' ? 'text-red-600' : 'text-slate-500'}`}>
+                                       {tx.fiscalResponseMessage}
+                                    </p>
+                                 )}
+                                 {canRetryFiscal && (
+                                    <div className="mt-3 flex flex-wrap items-center gap-3">
+                                       <button
+                                          onClick={() => handleRetryFiscal(tx)}
+                                          disabled={retryingFiscalTransactionId === tx.id}
+                                          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-black text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                                       >
+                                          <ArrowRightLeft size={12} />
+                                          {retryingFiscalTransactionId === tx.id ? 'Procesando...' : retryActionLabel}
+                                       </button>
+                                       {fiscalRetryFeedback && (
+                                          <p className="text-[11px] font-bold text-slate-500">{fiscalRetryFeedback}</p>
+                                       )}
+                                    </div>
+                                 )}
                               </div>
                               {isRefundDoc && (
                                  <div className="p-3 bg-red-50/60 rounded-xl border border-red-100">
