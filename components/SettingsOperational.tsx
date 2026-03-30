@@ -13,38 +13,24 @@ interface SettingsOperationalProps {
 }
 
 const Toggle = ({ label, description, checked, onChange, icon: Icon, disabled }: any) => (
-    <button
-        type="button"
-        onClick={() => !disabled && onChange(!checked)}
-        disabled={disabled}
-        aria-pressed={checked}
-        className={`w-full flex items-center justify-between p-4 rounded-2xl border text-left transition-all ${checked ? 'bg-indigo-50/50 border-indigo-200 shadow-sm' : 'bg-white border-gray-100'} ${disabled ? 'opacity-70 cursor-not-allowed grayscale' : 'cursor-pointer hover:border-indigo-300 active:scale-[0.995]'}`}
-    >
-        <div className="flex items-start gap-4 flex-1 min-w-0">
-            <div className={`p-3 rounded-xl shrink-0 ${checked ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
+    <div className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${checked ? 'bg-indigo-50/50 border-indigo-200' : 'bg-white border-gray-100'} ${disabled ? 'opacity-60 grayscale' : 'hover:border-indigo-300'}`}>
+        <div className="flex items-start gap-4 flex-1">
+            <div className={`p-3 rounded-xl ${checked ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
                 {Icon && <Icon size={20} />}
             </div>
-            <div className="space-y-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-sm font-black text-gray-800 tracking-tight">{label}</p>
-                    {disabled && (
-                        <span className="px-2 py-1 rounded-full bg-slate-100 text-[10px] font-black uppercase tracking-wide text-slate-500">
-                            Heredado
-                        </span>
-                    )}
-                </div>
+            <div className="space-y-1">
+                <p className="text-sm font-black text-gray-800 tracking-tight">{label}</p>
                 <p className="text-[11px] text-gray-500 leading-tight pr-4">{description}</p>
             </div>
         </div>
-        <div className="flex items-center gap-3 shrink-0 pl-4">
-            <span className={`text-[10px] font-black uppercase tracking-[0.18em] ${checked ? 'text-indigo-600' : 'text-gray-400'}`}>
-                {checked ? 'On' : 'Off'}
-            </span>
-            <div className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${checked ? 'bg-indigo-600' : 'bg-gray-200'}`}>
-                <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${checked ? 'translate-x-6' : 'translate-x-1'}`} />
-            </div>
-        </div>
-    </button>
+        <button
+            onClick={() => !disabled && onChange(!checked)}
+            disabled={disabled}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${checked ? 'bg-indigo-600' : 'bg-gray-200'}`}
+        >
+            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${checked ? 'translate-x-6' : 'translate-x-1'}`} />
+        </button>
+    </div>
 );
 
 const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpdate, isReadOnly }) => {
@@ -82,17 +68,6 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {isReadOnly && (
-                <div className="flex items-start gap-4 p-5 rounded-[2rem] border border-amber-200 bg-amber-50 text-amber-800">
-                    <Info className="mt-0.5 shrink-0" size={18} />
-                    <div className="space-y-1">
-                        <p className="text-sm font-black">Configuración heredada de la caja maestra</p>
-                        <p className="text-[11px] leading-relaxed">
-                            Esta terminal está gobernada por una maestra. Por eso los controles operativos se muestran en solo lectura desde el APK.
-                        </p>
-                    </div>
-                </div>
-            )}
             {/* Header / Intro */}
             <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-8 rounded-[2.5rem] text-white shadow-xl relative overflow-hidden">
                 <div className="relative z-10">

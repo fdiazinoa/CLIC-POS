@@ -4,7 +4,17 @@ import { createClient } from '@supabase/supabase-js';
 const _env = (import.meta as any).env || {};
 const supabaseUrl = _env.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = _env.VITE_SUPABASE_ANON_KEY || '';
-const hasSupabaseConfig = Boolean(supabaseUrl && supabaseAnonKey);
+export const hasSupabaseConfig = Boolean(supabaseUrl && supabaseAnonKey);
+
+export const getSupabaseConfigError = (): string | null => {
+    if (hasSupabaseConfig) return null;
+
+    const missing: string[] = [];
+    if (!supabaseUrl) missing.push('VITE_SUPABASE_URL');
+    if (!supabaseAnonKey) missing.push('VITE_SUPABASE_ANON_KEY');
+
+    return `Falta configurar ${missing.join(' y ')} en .env.local para usar la activación web.`;
+};
 
 if (!hasSupabaseConfig) {
     console.warn('⚠️ Supabase credentials missing in .env. Cloud features will be disabled.');

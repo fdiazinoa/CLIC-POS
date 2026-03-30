@@ -7,6 +7,11 @@ import {
   Key, Server, CheckCircle2, AlertCircle, Wifi, RefreshCw, Calendar
 } from 'lucide-react';
 import { BusinessConfig, PaymentMethodDefinition, PaymentMethod } from '../types';
+import {
+  isPendingPaymentMethodName,
+  normalizePaymentMethodDefinition,
+  toValidCreditDays,
+} from '../utils/paymentMethodGuards';
 
 interface PaymentSettingsProps {
   config: BusinessConfig;
@@ -52,37 +57,11 @@ const PROVIDER_SCHEMAS: Record<string, { key: string; label: string; type: 'text
   ]
 };
 
-const isPendingPaymentMethod = (name: string): boolean => name.trim().toLowerCase() === 'pendiente';
-
-const toValidCreditDays = (days?: number): number => {
-  const parsed = Number(days);
-  if (!Number.isFinite(parsed)) return 0;
-  return Math.max(0, Math.floor(parsed));
-};
-
-const normalizePaymentMethod = (method: PaymentMethodDefinition): PaymentMethodDefinition => {
-  const forcedType: PaymentMethod = isPendingPaymentMethod(method.name) ? 'CREDIT' : method.type;
-
-  const normalizedMethod: PaymentMethodDefinition = {
-    ...method,
-    type: forcedType,
-    integration: forcedType === 'CARD' ? method.integration || 'NONE' : 'NONE',
-    integrationConfig: forcedType === 'CARD' ? method.integrationConfig || {} : {}
-  };
-
-  if (forcedType === 'CREDIT') {
-    return { ...normalizedMethod, paymentTermDays: toValidCreditDays(method.paymentTermDays) };
-  }
-
-  const { paymentTermDays, ...withoutCreditDays } = normalizedMethod;
-  return withoutCreditDays;
-};
-
 const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfig, onClose }) => {
 
   // State Initialization
   const [methods, setMethods] = useState<PaymentMethodDefinition[]>(
-    (config.paymentMethods || DEFAULT_METHODS).map(normalizePaymentMethod)
+    (config.paymentMethods || DEFAULT_METHODS).map(normalizePaymentMethodDefinition)
   );
 
   // Method Editing State
@@ -136,14 +115,14 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
   };
 
   const handleEditMethod = (method: PaymentMethodDefinition) => {
-    setEditingMethod(normalizePaymentMethod({ ...method, integrationConfig: method.integrationConfig || {} }));
+    setEditingMethod(normalizePaymentMethodDefinition({ ...method, integrationConfig: method.integrationConfig || {} }));
     setConnectionStatus('IDLE');
     setIsMethodModalOpen(true);
   };
 
   const handleSaveMethod = () => {
     if (!editingMethod) return;
-    const normalizedMethod = normalizePaymentMethod(editingMethod);
+    const normalizedMethod = normalizePaymentMethodDefinition(editingMethod);
     setMethods(prev => {
       const exists = prev.find(m => m.id === normalizedMethod.id);
       if (exists) {
@@ -340,8 +319,8 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                     value={editingMethod.name}
                     onChange={(e) => {
                       const nextName = e.target.value;
-                      const nextType = isPendingPaymentMethod(nextName) ? 'CREDIT' : editingMethod.type;
-                      setEditingMethod(normalizePaymentMethod({ ...editingMethod, name: nextName, type: nextType }));
+                      const nextType = isPendingPaymentMethodName(nextName) ? 'CREDIT' : editingMethod.type;
+                      setEditingMethod(normalizePaymentMethodDefinition({ ...editingMethod, name: nextName, type: nextType }));
                     }}
                     className="w-full p-3 bg-gray-50 rounded-xl border-none outline-none focus:ring-2 focus:ring-blue-500"
                   />
@@ -350,15 +329,20 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tipo de Fondo</label>
                   <select
                     value={editingMethod.type}
-                    onChange={(e) => setEditingMethod(normalizePaymentMethod({ ...editingMethod, type: e.target.value as PaymentMethod }))}
-                    disabled={isPendingPaymentMethod(editingMethod.name)}
+                    onChange={(e) =>
+                      setEditingMethod(
+                        normalizePaymentMethodDefinition({ ...editingMethod, type: e.target.value as PaymentMethod })
+                      )
+                    }
+                    disabled={isPendingPaymentMethodName(editingMethod.name)}
                     className="w-full p-3 bg-gray-50 rounded-xl border-none outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-70 disabled:cursor-not-allowed"
                   >
                     <option value="CASH">Efectivo</option>
                     <option value="CARD">Tarjeta</option>
                     <option value="QR">Transferencia / QR</option>
+                    <option value="CREDIT">Crédito</option>
                   </select>
-                  {isPendingPaymentMethod(editingMethod.name) && (
+                  {isPendingPaymentMethodName(editingMethod.name) && (
                     <p className="mt-1 text-[11px] font-medium text-cyan-700">
                       El método &quot;Pendiente&quot; siempre se guarda como Crédito.
                     </p>
