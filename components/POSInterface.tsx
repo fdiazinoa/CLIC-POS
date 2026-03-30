@@ -2653,6 +2653,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      isOpen={showSupervisorAuth}
                      onClose={() => setShowSupervisorAuth(false)}
                      users={users}
+                     roles={roles || config.roles}
                      requiredPermission="CAN_REFUND"
                      onSuccess={(supervisor) => {
                         console.log("Authorized by:", supervisor.name);

@@ -1,4 +1,37 @@
-import type { PaymentMethod, PaymentMethodDefinition, PaymentEntry } from '../types';
+import type { PaymentMethod, PaymentMethodDefinition, PaymentEntry, Customer } from '../types';
+
+/** Resultado de si hace falta supervisor para líneas a crédito (incluye cupo = 0). */
+export type CreditSupervisorGate = {
+   required: true;
+   reason: 'NO_LIMIT' | 'OVER_LIMIT';
+   projected: number;
+   /** Suma de montos CREDIT en el ticket tras la operación. */
+   creditOnTicket: number;
+};
+
+/**
+ * Cupo &gt; 0 y dentro del límite: no requiere supervisor.
+ * Cupo &gt; 0 y proyectado &gt; límite: requiere supervisor.
+ * Cupo &lt;= 0 (sin configurar): cualquier monto a crédito requiere supervisor.
+ */
+export const evaluateCreditSupervisorGate = (
+   customer: Customer,
+   creditAlreadyOnTicket: number,
+   additionalCredit: number
+): CreditSupervisorGate | null => {
+   if (additionalCredit <= 0) return null;
+   const limit = customer.creditLimit || 0;
+   const debt = customer.currentDebt || 0;
+   const creditOnTicket = creditAlreadyOnTicket + additionalCredit;
+   const projected = debt + creditOnTicket;
+   if (limit > 0) {
+      if (projected > limit) {
+         return { required: true, reason: 'OVER_LIMIT', projected, creditOnTicket };
+      }
+      return null;
+   }
+   return { required: true, reason: 'NO_LIMIT', projected, creditOnTicket };
+};
 
 /** Nombre reservado: venta queda como crédito / CxC, no como efectivo en caja. */
 export const isPendingPaymentMethodName = (name: string): boolean =>

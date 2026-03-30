@@ -10,6 +10,7 @@ import {
    isPendingPaymentMethodName,
    resolvePaymentMethodTypeForRuntime,
    sumCreditPaymentsBase,
+   evaluateCreditSupervisorGate,
 } from '../utils/paymentMethodGuards';
 import { printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
@@ -101,7 +102,7 @@ const createPaymentId = (): string => {
    return `PAY-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 };
 
-import SupervisorAuthModal from './SupervisorAuthModal';
+import SupervisorAuthModal, { type CreditSupervisorSummary } from './SupervisorAuthModal';
 
 const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({
    total,
@@ -132,6 +133,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({
    const [verifiedBalance, setVerifiedBalance] = useState<number | null>(null);
    const [showSupervisorModal, setShowSupervisorModal] = useState(false);
    const [isOverrideActive, setIsOverrideActive] = useState(false);
+   const [creditSupervisorSummary, setCreditSupervisorSummary] = useState<CreditSupervisorSummary | null>(null);
 
    const userPermissions = useMemo(() => {
       if (!currentUser) return [];
@@ -276,18 +278,25 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({
       const amountInBase = valInSelectedCurrency * selectedCurrency.rate;
 
       const creditAlreadyOnTicket = sumCreditPaymentsBase(payments);
-      if (activePaymentMethod.type === 'CREDIT' && !isOverrideActive && !hasPermission('POS_CREDIT_OVERRIDE')) {
-         const limit = customer?.creditLimit || 0;
-         if (limit > 0 && customer) {
-            const currentDebt = customer.currentDebt || 0;
-            const projected = currentDebt + creditAlreadyOnTicket + amountInBase;
-            if (projected > limit) {
-               setFinalizeError(
-                  `Límite de crédito excedido (límite ${currencySymbol}${limit.toFixed(2)}, deuda ${currencySymbol}${currentDebt.toFixed(2)}, ya en ticket ${currencySymbol}${creditAlreadyOnTicket.toFixed(2)}). Requiere autorización de supervisor.`
-               );
-               setShowSupervisorModal(true);
-               return;
-            }
+      if (activePaymentMethod.type === 'CREDIT' && !isOverrideActive && !hasPermission('POS_CREDIT_OVERRIDE') && customer) {
+         const gate = evaluateCreditSupervisorGate(customer, creditAlreadyOnTicket, amountInBase);
+         if (gate) {
+            setFinalizeError(
+               gate.reason === 'NO_LIMIT'
+                  ? 'Cliente sin cupo de crédito definido: Pendiente requiere autorización de supervisor.'
+                  : `Límite de crédito excedido. Cupo ${currencySymbol}${(customer.creditLimit || 0).toFixed(2)}. Requiere supervisor.`
+            );
+            setCreditSupervisorSummary({
+               currencySymbol,
+               customerName: customer.name,
+               limit: customer.creditLimit || 0,
+               currentDebt: customer.currentDebt || 0,
+               creditOnTicket: gate.creditOnTicket,
+               projected: gate.projected,
+               reason: gate.reason,
+            });
+            setShowSupervisorModal(true);
+            return;
          }
       }
 
@@ -334,6 +343,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({
             setFinalizeError(
                'Cliente con cupo de crédito agotado o en mora. Requiere autorización de supervisor para cobrar.'
             );
+            setCreditSupervisorSummary(null);
             setShowSupervisorModal(true);
             setIsFinalizing(false);
             return;
@@ -372,19 +382,26 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({
             }
 
             const creditBeforeAuto = sumCreditPaymentsBase(payments);
-            if (activePaymentMethod.type === 'CREDIT' && !isOverrideActive && !hasPermission('POS_CREDIT_OVERRIDE')) {
-               const limit = customer?.creditLimit || 0;
-               if (limit > 0 && customer) {
-                  const currentDebt = customer.currentDebt || 0;
-                  const projected = currentDebt + creditBeforeAuto + typedAmountInBase;
-                  if (projected > limit) {
-                     setFinalizeError(
-                        `Límite de crédito excedido (límite ${currencySymbol}${limit.toFixed(2)}). Requiere autorización de supervisor.`
-                     );
-                     setShowSupervisorModal(true);
-                     setIsFinalizing(false);
-                     return;
-                  }
+            if (activePaymentMethod.type === 'CREDIT' && !isOverrideActive && !hasPermission('POS_CREDIT_OVERRIDE') && customer) {
+               const gate = evaluateCreditSupervisorGate(customer, creditBeforeAuto, typedAmountInBase);
+               if (gate) {
+                  setFinalizeError(
+                     gate.reason === 'NO_LIMIT'
+                        ? 'Cliente sin cupo definido: Pendiente requiere supervisor.'
+                        : `Límite de crédito excedido. Requiere supervisor.`
+                  );
+                  setCreditSupervisorSummary({
+                     currencySymbol,
+                     customerName: customer.name,
+                     limit: customer.creditLimit || 0,
+                     currentDebt: customer.currentDebt || 0,
+                     creditOnTicket: gate.creditOnTicket,
+                     projected: gate.projected,
+                     reason: gate.reason,
+                  });
+                  setShowSupervisorModal(true);
+                  setIsFinalizing(false);
+                  return;
                }
             }
 
@@ -418,17 +435,25 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({
          if (!isOverrideActive && !hasPermission('POS_CREDIT_OVERRIDE') && customer) {
             const creditTotal = sumCreditPaymentsBase(paymentsToConfirm);
             if (creditTotal > 0) {
-               const limit = customer.creditLimit || 0;
-               if (limit > 0) {
-                  const projected = (customer.currentDebt || 0) + creditTotal;
-                  if (projected > limit) {
-                     setFinalizeError(
-                        `El total a crédito supera el límite del cliente (${currencySymbol}${limit.toFixed(2)}). Requiere autorización de supervisor.`
-                     );
-                     setShowSupervisorModal(true);
-                     setIsFinalizing(false);
-                     return;
-                  }
+               const gate = evaluateCreditSupervisorGate(customer, 0, creditTotal);
+               if (gate) {
+                  setFinalizeError(
+                     gate.reason === 'NO_LIMIT'
+                        ? 'Pendiente / crédito sin cupo en ficha del cliente. Requiere supervisor.'
+                        : `Total a crédito supera el cupo (${currencySymbol}${(customer.creditLimit || 0).toFixed(2)}). Requiere supervisor.`
+                  );
+                  setCreditSupervisorSummary({
+                     currencySymbol,
+                     customerName: customer.name,
+                     limit: customer.creditLimit || 0,
+                     currentDebt: customer.currentDebt || 0,
+                     creditOnTicket: gate.creditOnTicket,
+                     projected: gate.projected,
+                     reason: gate.reason,
+                  });
+                  setShowSupervisorModal(true);
+                  setIsFinalizing(false);
+                  return;
                }
             }
          }
@@ -437,6 +462,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({
          const hasZeroPriceItem = items.some(item => item.price === 0);
          if (hasZeroPriceItem && !hasPermission('POS_ALLOW_ZERO_PRICE') && !isOverrideActive) {
             setFinalizeError(`Venta contiene artículos con precio en $0.00. Requiere autorización.`);
+            setCreditSupervisorSummary(null);
             setShowSupervisorModal(true);
             setIsFinalizing(false);
             return;
@@ -859,13 +885,21 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({
          {showSupervisorModal && (
             <SupervisorAuthModal
                isOpen={showSupervisorModal}
-               onClose={() => setShowSupervisorModal(false)}
+               onClose={() => {
+                  setShowSupervisorModal(false);
+                  setCreditSupervisorSummary(null);
+               }}
                onSuccess={() => {
                   setIsOverrideActive(true);
+                  setCreditSupervisorSummary(null);
                   setShowSupervisorModal(false);
                }}
                users={users}
+               roles={roles || config?.roles}
                requiredPermission="POS_CREDIT_OVERRIDE"
+               creditSummary={creditSupervisorSummary}
+               title={creditSupervisorSummary ? 'Autorizar Pendiente / crédito' : undefined}
+               description={creditSupervisorSummary ? 'PIN de supervisor o administrador' : undefined}
             />
          )}
       </div>
