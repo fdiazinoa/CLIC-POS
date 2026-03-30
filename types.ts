@@ -1166,7 +1166,7 @@ export interface Transaction {
   terminalId?: string;
 
   // Status
-  status: 'COMPLETED' | 'REFUNDED' | 'PARTIAL_REFUND';
+  status: 'COMPLETED' | 'PENDING' | 'REFUNDED' | 'PARTIAL_REFUND';
 
   // Audit (RBAC)
   authorizedById?: string;
