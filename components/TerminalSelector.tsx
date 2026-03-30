@@ -220,7 +220,10 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   const [erpBaseUrl, setErpBaseUrl] = useState<string | null>(() => normalizeBaseUrl(initialErpBaseUrl) || resolveErpBaseUrl());
   const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
   const expectsErpDirect = bindingMode === 'MASTER' && integrationMode === 'ERP_DIRECT';
-  const usesErpDirect = expectsErpDirect && Boolean(erpBaseUrl);
+  // On Android, prefer the local setup API as a proxy to ERP so the WebView
+  // doesn't need to talk directly to the ERP host during pairing.
+  const usesErpProxy = expectsErpDirect && isNativeAndroid;
+  const usesErpDirect = expectsErpDirect && Boolean(erpBaseUrl) && !usesErpProxy;
   const isSetupPending = localStorage.getItem('clic_pos_terminal_setup_pending') === '1';
   const shouldBlockAlreadyBound = isAlreadyBound && !isSetupPending;
 
