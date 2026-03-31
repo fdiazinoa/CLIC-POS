@@ -48,13 +48,26 @@ const getCollectionForSync = (collection: string): any[] => {
     const resolved = resolveCollectionName(collection);
     const data = getCollection(resolved);
 
-    if (collection !== 'transactions' || !Array.isArray(data)) {
+    if (!Array.isArray(data)) {
         return data;
+    }
+
+    const activeItems = data.filter((item: any) => {
+        if (!item || typeof item !== 'object') return true;
+
+        const deletedAt = normalizeIdentityString(item.deleted_at) || normalizeIdentityString(item.deletedAt);
+        if (deletedAt) return false;
+        if (item.isActive === false) return false;
+        return true;
+    });
+
+    if (collection !== 'transactions') {
+        return activeItems;
     }
 
     // Do not sync table-open placeholder rows (ORD-*) as sales tickets.
     // These rows are operational state for restaurant tables, not fiscal documents.
-    return data.filter((txn: any) => {
+    return activeItems.filter((txn: any) => {
         const id = typeof txn?.id === 'string' ? txn.id.trim() : '';
         const displayId = typeof txn?.displayId === 'string' ? txn.displayId.trim() : '';
         const documentType = typeof txn?.documentType === 'string' ? txn.documentType.trim().toUpperCase() : '';
@@ -567,6 +580,22 @@ const softDeleteStructuredRow = (table: string, id: string, deletedAt: string) =
 
     values.push(id);
     db.prepare(`UPDATE ${quoteSqlIdentifier(table)} SET ${assignments.join(', ')} WHERE id = ?`).run(...values);
+};
+
+const softDeleteMissingRows = (table: string, incomingIds: string[], deletedAt: string) => {
+    const columns = getTableColumns(table);
+    if (!columns.length || !hasColumn(columns, 'deleted_at')) return;
+
+    const rows = db.prepare(
+        `SELECT id FROM ${quoteSqlIdentifier(table)} WHERE COALESCE(deleted_at, '') = ''`
+    ).all() as Array<{ id: string }>;
+
+    const incoming = new Set(incomingIds.map(id => String(id)));
+    for (const row of rows) {
+        if (!incoming.has(String(row.id))) {
+            softDeleteStructuredRow(table, String(row.id), deletedAt);
+        }
+    }
 };
 
 const APPEND_ONLY_COLLECTIONS = new Set([
@@ -1171,15 +1200,29 @@ router.post('/collections/:collection/push', async (req, res) => {
                 }
 
                 if (pushMode === 'FULL_REPLACE' && collection !== 'products') {
-                    // Full replace (force push) - Only for non-critical collections
-                    db.prepare(`DELETE FROM ${resolvedCollection}`).run();
+                    // Full replace (force push) without physical deletes:
+                    // upsert incoming active rows, apply tombstones from incoming when present,
+                    // then soft-delete active rows that are missing from the incoming snapshot.
+                    const activeIncomingIds: string[] = [];
 
                     if (hasDataColumn) {
-                        const stmt = db.prepare(`INSERT INTO ${resolvedCollection} (id, data) VALUES (?, ?)`);
+                        const stmt = db.prepare(`INSERT INTO ${resolvedCollection} (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`);
                         for (const rawItem of items) {
                             if (!rawItem?.id) continue;
                             const item = normalizeAuditEnvelope(rawItem, now);
-                            stmt.run(item.id, JSON.stringify(item));
+                            const existingRow = readExistingStructuredItem(resolvedCollection, item.id, columns, hasDataColumn);
+
+                            if (item.deleted_at) {
+                                if (existingRow) {
+                                    softDeleteStructuredRow(resolvedCollection, String(item.id), item.deleted_at);
+                                } else {
+                                    ignoredCount++;
+                                }
+                                continue;
+                            }
+
+                            stmt.run(item.id, JSON.stringify({ ...item, deleted_at: null }));
+                            activeIncomingIds.push(String(item.id));
                         }
                     } else {
                         const colNames = columns.map(c => c.name);
@@ -1191,9 +1234,20 @@ router.post('/collections/:collection/push', async (req, res) => {
                         for (const rawItem of items) {
                             if (!rawItem?.id) continue;
                             const item = normalizeAuditEnvelope(rawItem, now);
+                            const existingRow = readExistingStructuredItem(resolvedCollection, item.id, columns, hasDataColumn);
+
+                            if (item.deleted_at) {
+                                if (existingRow) {
+                                    softDeleteStructuredRow(resolvedCollection, String(item.id), item.deleted_at);
+                                } else {
+                                    ignoredCount++;
+                                }
+                                continue;
+                            }
+
                             const values = colNames.map(col => {
                                 if (col === 'updated_at') return item.updated_at;
-                                if (col === 'deleted_at') return item.deleted_at;
+                                if (col === 'deleted_at') return null;
 
                                 let val = item[col];
                                 if (fieldsToStringify.includes(col)) {
@@ -1204,8 +1258,11 @@ router.post('/collections/:collection/push', async (req, res) => {
                                 return val;
                             });
                             stmt.run(...values);
+                            activeIncomingIds.push(String(item.id));
                         }
                     }
+
+                    softDeleteMissingRows(resolvedCollection, activeIncomingIds, now);
 
                     // Full replace resets change log and forces full download for slaves
                     clearChangesForCollection(collection);
@@ -1381,7 +1438,7 @@ router.post('/collections/:collection/push', async (req, res) => {
         res.json({
             success: true,
             version: getCurrentVersion(collection),
-            itemCount: (getCollection(collection) || []).length,
+            itemCount: getItemCount(collection),
             ignoredCount
         });
     } catch (error: any) {
