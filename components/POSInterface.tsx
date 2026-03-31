@@ -3448,10 +3448,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  )}
                                  <div className="flex justify-between items-start text-xs font-bold text-gray-500">
                                     <div className="flex flex-col gap-0.5">
-                                       <div className="flex items-center gap-2">
+                                       <div className="flex items-center gap-2.5">
                                           <span>IMPUESTOS</span>
                                           {primaryTaxLabel && (
-                                             <span className="text-[10px] font-black uppercase tracking-wide text-slate-400">
+                                             <span className="ml-1 inline-flex items-center rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-slate-400">
                                                 {primaryTaxLabel}
                                              </span>
                                           )}
@@ -3472,7 +3472,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                                  <div className="flex items-end justify-between gap-4 pt-3">
                                     <div className="space-y-1">
-                                       <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.28em]">Total</p>
+                                       <p className="text-sm text-slate-500 font-black uppercase tracking-[0.22em]">Total</p>
                                        {pointsEarned > 0 && <p className="text-[10px] font-bold text-purple-500">+{pointsEarned} Puntos</p>}
                                     </div>
                                     <div className="text-right text-[2.65rem] font-black text-slate-900 leading-none tracking-tighter">
