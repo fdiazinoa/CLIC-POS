@@ -192,6 +192,15 @@ const resolveSetupErpBaseUrl = (): string | null => {
   return null;
 };
 
+const persistSetupErpBaseUrls = (value?: string | null) => {
+  const normalized = normalizeSetupBaseUrl(value);
+  if (!normalized) return;
+
+  localStorage.setItem('CLIC_ERP_BASE_URL', normalized);
+  localStorage.setItem('erp_base_url', normalized);
+  localStorage.setItem('CLIC_ERP_SYNC_URL', `${normalized}/api/sync`);
+};
+
 const normalizeTerminalDocumentAssignments = (
   sourceConfig: BusinessConfig | null | undefined
 ): { config: BusinessConfig | null | undefined; changed: boolean } => {
@@ -4083,8 +4092,7 @@ const AppContent: React.FC = () => {
                 }
 
                 if (activatedErpBaseUrl) {
-                  localStorage.setItem('CLIC_ERP_BASE_URL', activatedErpBaseUrl);
-                  localStorage.setItem('erp_base_url', activatedErpBaseUrl);
+                  persistSetupErpBaseUrls(activatedErpBaseUrl);
                 }
 
                 localStorage.removeItem(SETUP_WIZARD_COMPLETED_KEY);
