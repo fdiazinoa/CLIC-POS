@@ -116,6 +116,15 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
   }
 };
 
+const persistErpBaseUrls = (value?: string | null) => {
+  const normalized = normalizeBaseUrl(value);
+  if (!normalized) return;
+
+  localStorage.setItem('CLIC_ERP_BASE_URL', normalized);
+  localStorage.setItem('erp_base_url', normalized);
+  localStorage.setItem('CLIC_ERP_SYNC_URL', `${normalized}/api/sync`);
+};
+
 const resolveTenantId = (): string | null => {
   const candidates = [
     localStorage.getItem('active_tenant_id'),
@@ -297,8 +306,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
 
         if (resolvedBase) {
-          localStorage.setItem('CLIC_ERP_BASE_URL', resolvedBase);
-          localStorage.setItem('erp_base_url', resolvedBase);
+          persistErpBaseUrls(resolvedBase);
         }
       } else {
         const params = new URLSearchParams({
@@ -326,8 +334,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         }
 
         if (resolvedBase) {
-          localStorage.setItem('CLIC_ERP_BASE_URL', resolvedBase);
-          localStorage.setItem('erp_base_url', resolvedBase);
+          persistErpBaseUrls(resolvedBase);
         }
       }
     } catch (err) {
@@ -484,8 +491,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           localStorage.setItem('active_tenant_id', data.tenant_id);
         }
         if (erpBaseUrl) {
-          localStorage.setItem('CLIC_ERP_BASE_URL', erpBaseUrl);
-          localStorage.setItem('erp_base_url', erpBaseUrl);
+          persistErpBaseUrls(erpBaseUrl);
         }
         const resolvedMasterBinding =
           bindingMode === 'SLAVE'

@@ -103,16 +103,33 @@ const normalizeOptional = (value?: string | null) => (typeof value === 'string' 
 const asObject = <T extends Record<string, unknown>>(value: unknown): T =>
     (value && typeof value === 'object' && !Array.isArray(value) ? value as T : {} as T);
 
+const normalizeSyncApiBase = (value?: string | null): string => {
+    const raw = normalizeOptional(value || null);
+    if (!raw) return '';
+
+    const trimmed = raw.replace(/\/$/, '');
+    return trimmed.endsWith('/api/sync') ? trimmed : `${trimmed}/api/sync`;
+};
+
 const getSyncApiBase = () => {
     const env = (import.meta as any).env || {};
-    const explicitBase = normalizeOptional(
-        String(env.VITE_SYNC_API_URL || env.VITE_ERP_SYNC_API_URL || localStorage.getItem(SYNC_API_URL_STORAGE_KEY) || '')
-    );
+    const candidates = [
+        env.VITE_SYNC_API_URL,
+        env.VITE_ERP_SYNC_API_URL,
+        localStorage.getItem(SYNC_API_URL_STORAGE_KEY),
+        localStorage.getItem('CLIC_ERP_BASE_URL'),
+        localStorage.getItem('erp_base_url'),
+        env.VITE_ERP_BASE_URL,
+    ];
 
-    if (!explicitBase) return '';
+    for (const candidate of candidates) {
+        const normalized = normalizeSyncApiBase(candidate);
+        if (normalized) {
+            return normalized;
+        }
+    }
 
-    const trimmed = explicitBase.replace(/\/$/, '');
-    return trimmed.endsWith('/api/sync') ? trimmed : `${trimmed}/api/sync`;
+    return '';
 };
 
 const isConfigured = () => Boolean(getSyncApiBase());
