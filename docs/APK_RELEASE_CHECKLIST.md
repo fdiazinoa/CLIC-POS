@@ -73,6 +73,41 @@ En otros equipos, sustituye la parte base por tu clon; el worktree firmado debe 
 
 9. **APK release** en la carpeta de salida del worktree (punto “Rutas de referencia”).
 
+### Opción recomendada: script unificado
+
+Si quieres forzar este protocolo sin depender de memoria, usa:
+
+```bash
+npm run android:release:protocol
+```
+
+Por defecto compila desde `origin/develop`.
+
+Si necesitas un commit o rama explícita del release:
+
+```bash
+./scripts/release-android.sh <git-ref>
+```
+
+Ejemplos:
+
+```bash
+./scripts/release-android.sh origin/develop
+./scripts/release-android.sh 3582a13
+./scripts/release-android.sh fix/sync-full-replace-soft-delete
+```
+
+El script:
+
+- verifica que la worktree canónica esté limpia
+- crea una worktree temporal limpia alineada al commit fuente
+- copia firma y `local.properties`
+- calcula el siguiente `versionCode` de forma monotónica
+- compila y verifica firma
+- deja junto al APK:
+  - `output-metadata-<version>.json`
+  - `release-report-<version>.txt`
+
 10. **Validar en dispositivo físico**:
    - Login vertical y horizontal
    - Activación de terminal

@@ -137,6 +137,27 @@ Antes de compilar el APK:
    - smoke tests ejecutados
 ```
 
+## Script recomendado
+
+Cuando exista el script de release, úsalo como primer camino:
+
+```bash
+npm run android:release:protocol
+```
+
+o con un ref explícito:
+
+```bash
+./scripts/release-android.sh <git-ref>
+```
+
+Eso reduce el riesgo de:
+
+- compilar desde una base incorrecta
+- olvidar el gate de limpieza
+- bajar accidentalmente el contador de versión
+- perder trazabilidad del commit fuente
+
 ## Criterio de cierre
 
 Un APK solo se considera correcto si podemos responder con precisión:
