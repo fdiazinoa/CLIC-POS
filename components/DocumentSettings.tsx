@@ -790,10 +790,20 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors"><X size={24} /></button>
          </div>
 
-         <div className="px-8 bg-white border-b border-gray-200 flex gap-8 shrink-0">
-            <button onClick={() => setActiveSubTab('SERIES')} className={`py-4 text-sm font-bold border-b-4 transition-all ${activeSubTab === 'SERIES' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>Secuencias Internas</button>
-            <button onClick={() => setActiveSubTab('FISCAL_POOL')} className={`py-4 text-sm font-bold border-b-4 transition-all flex items-center gap-2 ${activeSubTab === 'FISCAL_POOL' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
-               <Landmark size={16} /> Pool Fiscal DGII
+         <div className="px-8 py-3 bg-white border-b border-gray-100 flex gap-3 shrink-0">
+            <button 
+               onClick={() => setActiveSubTab('SERIES')} 
+               className={`px-5 py-2.5 text-sm font-bold rounded-xl transition-all flex items-center gap-2 outline-none focus:ring-2 focus:ring-blue-500/20 ${activeSubTab === 'SERIES' ? 'bg-blue-50 text-blue-700 shadow-sm border border-blue-200/60' : 'bg-white text-gray-500 hover:bg-gray-50 border border-gray-200 hover:border-gray-300 hover:text-gray-700'}`}
+            >
+               <FileText size={18} />
+               Secuencias Internas
+            </button>
+            <button 
+               onClick={() => setActiveSubTab('FISCAL_POOL')} 
+               className={`px-5 py-2.5 text-sm font-bold rounded-xl transition-all flex items-center gap-2 outline-none focus:ring-2 focus:ring-indigo-500/20 ${activeSubTab === 'FISCAL_POOL' ? 'bg-indigo-50 text-indigo-700 shadow-sm border border-indigo-200/60' : 'bg-white text-gray-500 hover:bg-gray-50 border border-gray-200 hover:border-gray-300 hover:text-gray-700'}`}
+            >
+               <Landmark size={18} /> 
+               Pool Fiscal DGII
             </button>
          </div>
 
