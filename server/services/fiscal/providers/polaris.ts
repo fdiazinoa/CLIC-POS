@@ -44,6 +44,71 @@ const toIsoDate = (value: unknown): string => {
 const normalizeTaxId = (value: unknown): string =>
     String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
+const resolvePricingContext = (
+    transaction: FiscalTransactionInput,
+    taxRatePercent: number
+) => {
+    const total = round2(Math.abs(sanitizeNumber(transaction.total)));
+    const hasReportedTaxAmount = transaction.taxAmount != null;
+    const hasReportedNetAmount = transaction.netAmount != null;
+    const reportedTaxAmount = hasReportedTaxAmount
+        ? round2(Math.abs(sanitizeNumber(transaction.taxAmount)))
+        : 0;
+    const reportedNetAmount = hasReportedNetAmount
+        ? round2(Math.abs(sanitizeNumber(transaction.netAmount)))
+        : 0;
+    const hasExplicitItemTaxes = (transaction.items || []).some(item => (item.appliedTaxIds || []).length > 0);
+    const grossItemsTotal = round2(
+        (transaction.items || []).reduce((sum, item) => {
+            const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
+            const unitPrice = round2(Math.abs(sanitizeNumber(item.price)));
+            return sum + (quantity * unitPrice);
+        }, 0)
+    );
+    const inferredTaxIncluded =
+        taxRatePercent > 0
+        && (hasReportedTaxAmount || hasReportedNetAmount)
+        && amountsMatch(grossItemsTotal, total)
+        && !amountsMatch(grossItemsTotal, reportedNetAmount);
+    const useTaxIncludedPricing = transaction.isTaxIncluded === true || inferredTaxIncluded;
+
+    const derived = (transaction.items || []).reduce((acc, item) => {
+        const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
+        const rawUnitPrice = round2(Math.abs(sanitizeNumber(item.price)));
+        const isTaxed = hasExplicitItemTaxes
+            ? Boolean(item.appliedTaxIds?.length)
+            : taxRatePercent > 0;
+        const lineNetUnitPrice = useTaxIncludedPricing && isTaxed && taxRatePercent > 0
+            ? round2(rawUnitPrice / (1 + (taxRatePercent / 100)))
+            : rawUnitPrice;
+        const lineNet = round2(quantity * lineNetUnitPrice);
+        const lineGross = useTaxIncludedPricing || !isTaxed
+            ? round2(quantity * rawUnitPrice)
+            : round2(lineNet * (1 + (taxRatePercent / 100)));
+        const lineTax = round2(lineGross - lineNet);
+
+        acc.netAmount = round2(acc.netAmount + lineNet);
+        acc.taxAmount = round2(acc.taxAmount + (isTaxed ? lineTax : 0));
+        acc.total = round2(acc.total + lineGross);
+        return acc;
+    }, {
+        netAmount: 0,
+        taxAmount: 0,
+        total: 0
+    });
+
+    return {
+        total,
+        reportedTaxAmount,
+        reportedNetAmount,
+        hasExplicitItemTaxes,
+        useTaxIncludedPricing,
+        derivedNetAmount: derived.netAmount,
+        derivedTaxAmount: derived.taxAmount,
+        derivedTotal: derived.total
+    };
+};
+
 const assertCompanyCredentialAlignment = (
     companyRnc: string | undefined,
     resolvedCredentialKey: string | undefined
@@ -347,25 +412,10 @@ const buildItemPayload = (
     options: FiscalDocumentIssueRequest['options'],
     taxRatePercent: number
 ) => {
-    const hasExplicitItemTaxes = (transaction.items || []).some(item => Array.isArray(item.appliedTaxIds));
-    const total = round2(Math.abs(sanitizeNumber(transaction.total)));
-    const taxAmount = round2(Math.abs(sanitizeNumber(transaction.taxAmount)));
-    const netAmount = round2(
-        Math.abs(sanitizeNumber(transaction.netAmount)) || Math.max(0, total - taxAmount)
-    );
-    const grossItemsTotal = round2(
-        (transaction.items || []).reduce((sum, item) => {
-            const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
-            const unitPrice = round2(Math.abs(sanitizeNumber(item.price)));
-            return sum + (quantity * unitPrice);
-        }, 0)
-    );
-    const inferredTaxIncluded =
-        taxRatePercent > 0
-        && taxAmount > 0
-        && amountsMatch(grossItemsTotal, total)
-        && !amountsMatch(grossItemsTotal, netAmount);
-    const useTaxIncludedPricing = transaction.isTaxIncluded === true || inferredTaxIncluded;
+    const {
+        hasExplicitItemTaxes,
+        useTaxIncludedPricing
+    } = resolvePricingContext(transaction, taxRatePercent);
 
     return (transaction.items || []).map(item => {
         const quantity = Math.abs(sanitizeNumber(item.quantity)) || 1;
@@ -395,11 +445,21 @@ const buildItemPayload = (
 };
 
 const buildTotals = (transaction: FiscalTransactionInput, taxRatePercent: number) => {
-    const total = round2(Math.abs(sanitizeNumber(transaction.total)));
-    const taxAmount = round2(Math.abs(sanitizeNumber(transaction.taxAmount)));
-    const netAmount = round2(
-        Math.abs(sanitizeNumber(transaction.netAmount)) || Math.max(0, total - taxAmount)
-    );
+    const {
+        total: reportedTotal,
+        reportedTaxAmount,
+        reportedNetAmount,
+        derivedNetAmount,
+        derivedTaxAmount,
+        derivedTotal
+    } = resolvePricingContext(transaction, taxRatePercent);
+    const taxAmount = reportedTaxAmount > 0 ? reportedTaxAmount : derivedTaxAmount;
+    const total = reportedTotal > 0 ? reportedTotal : derivedTotal;
+    const netAmount = reportedNetAmount > 0
+        ? reportedNetAmount
+        : derivedNetAmount > 0
+            ? derivedNetAmount
+            : Math.max(0, total - taxAmount);
     const hasTax = taxAmount > 0 && taxRatePercent > 0;
 
     return {

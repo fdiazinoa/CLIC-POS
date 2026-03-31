@@ -22,6 +22,8 @@ import {
    PaymentEntry, Table, Reservation, ZReport, Room, Permission
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
+import { getFiscalComplianceConfig, getDefaultFiscalProvider, resolveCreditNoteFiscalCode } from '../utils/fiscal/fiscalHelpers';
+import { calculateTransactionTaxSummary } from '../utils/taxSummary';
 import UnifiedPaymentModal from './PaymentModal';
 import {
    evaluateCreditSupervisorGate,
@@ -2320,29 +2322,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const handleProcessReturn = async (originalTransaction: Transaction, itemsToReturn: { itemId: string, quantity: number }[]) => {
       // 1. Calculate Refund Totals
-      let refundTotal = 0;
       const returnItems: CartItem[] = [];
 
       itemsToReturn.forEach(returnItem => {
          const originalItem = (originalTransaction.items || []).find(i => i.cartId === returnItem.itemId);
          if (originalItem) {
-            const itemTotal = originalItem.price * returnItem.quantity;
-            refundTotal += itemTotal;
-
             returnItems.push({
                ...originalItem,
                quantity: Math.abs(returnItem.quantity),
-               cartId: `RET-${Date.now()}-${returnItem.itemId}`
+               cartId: `RET-${Date.now()}-${returnItem.itemId}`,
+               price: originalItem.price
             });
          }
       });
 
-      let refundNcf: string | undefined;
-      try {
-         refundNcf = await db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50);
-      } catch (refundNcfError) {
-         console.warn('No se pudo generar NCF B04 para devolución QR:', refundNcfError);
-      }
+      const refundSummary = calculateTransactionTaxSummary(
+         returnItems,
+         config.taxes || [],
+         Boolean(originalTransaction.isTaxIncluded),
+         config.taxRate || 0
+      );
+      const refundTotal = refundSummary.total;
+
+      const fiscalCompliance = getFiscalComplianceConfig(config);
+      const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
+      const creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, terminalId, 50);
 
       // 2. Create Refund Transaction
       const refundTxn = await transactionService.createTransaction({
@@ -2359,10 +2363,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          customerId: originalTransaction.customerId,
          customerName: originalTransaction.customerName,
          originalTransactionId: originalTransaction.id,
-         affectedInvoiceNumber: originalTransaction.displayId || originalTransaction.id,
+         electronicNcf: creditNoteFiscalType.startsWith('E') ? creditNoteNcf : undefined,
+         fiscalMode: fiscalCompliance.mode,
+         fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
+         taxAmount: refundSummary.taxAmount,
+         netAmount: refundSummary.netAmount,
          affectedNCF: originalTransaction.ncf,
-         ncf: refundNcf,
-         ncfType: refundNcf ? 'B04' : undefined,
+         affectedInvoiceNumber: originalTransaction.displayId || originalTransaction.id,
+         ncf: creditNoteNcf,
+         ncfType: creditNoteFiscalType,
          refundReason: 'Smart QR Return',
          isTaxIncluded: originalTransaction.isTaxIncluded
       });

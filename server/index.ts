@@ -16,6 +16,7 @@ import activationRoutes from './routes/activationRoutes.js';
 import cloudRegistryRoutes from './routes/cloudRegistry.js';
 import setupRoutes from './routes/setupRoutes.js';
 import terminalConfigRoutes from './routes/terminalConfigRoutes.js';
+import fiscalRoutes from './routes/fiscalRoutes.js';
 import os from 'os';
 import { createServer } from 'http';
 import { initSocket } from './socket.js';
@@ -151,6 +152,7 @@ server.use('/api/audit', auditRoutes);
 server.use('/api/activation', activationRoutes);
 server.use('/api/setup', setupRoutes);
 server.use('/api/sync/terminals', terminalConfigRoutes);
+server.use('/api/fiscal', fiscalRoutes);
 
 // --- Mesas & Salas Endpoints ---
 server.get('/api/mesas', (req, res) => {

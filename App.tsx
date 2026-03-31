@@ -49,7 +49,7 @@ import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
 import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
 import { calculateZReportStats } from './utils/analytics';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
-import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
+import { calculateTransactionTaxSummary } from './utils/taxSummary';
 import { extractTerminalOperationalDocumentState } from './utils/terminalConfigSnapshot';
 import { resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
@@ -128,7 +128,9 @@ import {
   canRetryFiscalTransaction,
   getFiscalComplianceConfig,
   getFiscalProviderConfig,
-  getProviderEnvironment
+  getProviderEnvironment,
+  getDefaultFiscalProvider,
+  resolveCreditNoteFiscalCode
 } from './utils/fiscal/fiscalHelpers';
 import { getFiscalDocumentStatus, issueFiscalDocument } from './services/fiscal/fiscalService';
 
@@ -3846,18 +3848,13 @@ const AppContent: React.FC = () => {
     }
 
     // 1. Calculations
-    const refundSubtotalRaw = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-    const refundTerminalConfig = config.terminals?.find(t => t.id === originalTx.terminalId)?.config;
-    const refundSummary = calculateTransactionFiscalSummary({
-      items: normalizedRefundItems,
-      total: 0,
-      discountAmount: 0,
-      taxAmount: 0,
-      isTaxIncluded: !!originalTx.isTaxIncluded,
-    }, config, { terminalConfig: refundTerminalConfig });
-    const refundTotal = originalTx.isTaxIncluded
-      ? refundSubtotalRaw
-      : refundSummary.total;
+    const refundSummary = calculateTransactionTaxSummary(
+      itemsToRefund,
+      config.taxes || [],
+      Boolean(originalTx.isTaxIncluded),
+      config.taxRate || 0
+    );
+    const refundTotal = refundSummary.total;
 
     // Check if full refund
     const totalOriginalQty = originalTx.items.reduce((acc, i) => acc + Math.abs(Number(i.quantity || 0)), 0);
@@ -3875,13 +3872,15 @@ const AppContent: React.FC = () => {
     const resolvedCustomerId = originalTx.customerId || matchedCustomer?.id;
     const resolvedCustomerName = originalTx.customerName || matchedCustomer?.name;
 
-    // 2. NCF B04 Generation
+    // 2. Resolución fiscal para la nota de crédito
     const currentTerminalId = getCurrentTerminal()?.id || config.terminals?.[0]?.id || 't1';
-    let ncfB04: string | null = null;
+    const fiscalCompliance = getFiscalComplianceConfig(config);
+    const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
+    let creditNoteNcf: string | undefined;
     try {
-      ncfB04 = await db.getNextNCF('B04', currentTerminalId);
+      creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, currentTerminalId) || undefined;
     } catch (e) {
-      console.warn("No se pudo generar NCF B04:", e);
+      console.warn(`No se pudo generar NCF ${creditNoteFiscalType}:`, e);
     }
 
     // 3. Document Sequence (Internal Refund Series)
@@ -3910,8 +3909,14 @@ const AppContent: React.FC = () => {
       status: 'REFUNDED',
       customerId: resolvedCustomerId,
       customerName: resolvedCustomerName,
-      ncf: ncfB04 || undefined,
-      ncfType: 'B04',
+      ncf: creditNoteNcf || undefined,
+      ncfType: creditNoteFiscalType,
+      legacyNcf: creditNoteFiscalType.startsWith('E') ? undefined : creditNoteNcf || undefined,
+      electronicNcf: creditNoteFiscalType.startsWith('E') ? creditNoteNcf || undefined : undefined,
+      fiscalMode: fiscalCompliance.mode,
+      fiscalProvider: creditNoteFiscalType.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
+      taxAmount: refundSummary.taxAmount,
+      netAmount: refundSummary.netAmount,
       affectedNCF: originalTx.ncf,
       affectedInvoiceNumber: originalTx.displayId || originalTx.id,
       originalTransactionId: originalTx.id,
@@ -4028,7 +4033,7 @@ const AppContent: React.FC = () => {
     // Sync
     backgroundSyncManager.triggerSync().catch(console.error);
 
-    alert(`Devolución procesada correctamente.\nDocumento: ${displayId}\n${ncfB04 ? 'NCF: ' + ncfB04 : ''}`);
+    alert(`Devolución procesada correctamente.\nDocumento: ${displayId}\n${creditNoteNcf ? 'NCF: ' + creditNoteNcf : ''}`);
   };
 
   const renderView = () => {

@@ -17,6 +17,8 @@ import { mergeDocumentSeriesCollection } from './documentSeriesIdentity';
 const DB_KEY = 'clic_pos_db_v1';
 let initPromise: Promise<any> | null = null;
 const INVENTORY_CLOSE_LOCK_MESSAGE = 'Acción denegada: El inventario a esta fecha ya ha sido cerrado y auditado.';
+const getFiscalSequencePadding = (type: FiscalDocumentCode): number =>
+  type.startsWith('E') ? 10 : 8;
 
 const getSnapshotLockDate = (snapshot: any): number => {
   const lockRef = snapshot?.lockDate || snapshot?.cutoffDate || snapshot?.closedAt || snapshot?.createdAt;
@@ -937,14 +939,14 @@ export const db = {
     };
   },
 
-  canRequestMoreNCF: async (type: NCFType): Promise<boolean> => {
+  canRequestMoreNCF: async (type: FiscalDocumentCode): Promise<boolean> => {
     const ranges = await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges');
     const range = ranges?.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
     if (!range) return false;
     return range.currentGlobal < range.endNumber;
   },
 
-  requestFiscalBatch: async (terminalId: string, type: NCFType, batchSize: number): Promise<LocalFiscalBuffer | null> => {
+  requestFiscalBatch: async (terminalId: string, type: FiscalDocumentCode, batchSize: number): Promise<LocalFiscalBuffer | null> => {
     const ranges = await dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges');
     const range = ranges?.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
     if (!range || range.currentGlobal >= range.endNumber) return null;
@@ -966,7 +968,7 @@ export const db = {
     return localBuffer;
   },
 
-  getNextNCF: async (type: NCFType, terminalId: string, customBatchSize?: number): Promise<string | null> => {
+  getNextNCF: async (type: FiscalDocumentCode, terminalId: string, customBatchSize?: number): Promise<string | null> => {
     let buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
     let buffer = (buffers || []).find((b: LocalFiscalBuffer) => b.type === type);
 
@@ -983,7 +985,7 @@ export const db = {
       return null;
     }
 
-    const ncf = `${buffer.prefix}${buffer.currentNumber.toString().padStart(8, '0')}`;
+    const ncf = `${buffer.prefix}${buffer.currentNumber.toString().padStart(getFiscalSequencePadding(type), '0')}`;
 
     if (buffer.currentNumber > buffer.endNumber) return null;
 

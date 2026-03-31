@@ -285,6 +285,20 @@ class TransactionService {
             isTaxIncluded: data.isTaxIncluded,
             ncf: data.ncf,
             ncfType: data.ncfType,
+            legacyNcf: data.legacyNcf,
+            electronicNcf: data.electronicNcf,
+            fiscalMode: data.fiscalMode,
+            fiscalProvider: data.fiscalProvider,
+            fiscalSyncStatus: data.fiscalSyncStatus,
+            fiscalSyncError: data.fiscalSyncError,
+            fiscalSyncedAt: data.fiscalSyncedAt,
+            fiscalReferenceId: data.fiscalReferenceId,
+            fiscalResponseMessage: data.fiscalResponseMessage,
+            affectedInvoiceDate: data.affectedInvoiceDate,
+            observations: data.observations,
+            cloudSyncStatus: data.cloudSyncStatus,
+            cloudSyncError: data.cloudSyncError,
+            cloudSyncedAt: data.cloudSyncedAt,
             relatedTransactions: data.relatedTransactions,
             originalTransactionId: data.originalTransactionId,
             refundReason: data.refundReason,
@@ -293,7 +307,9 @@ class TransactionService {
             priorAdvancePaid: data.priorAdvancePaid,
             balanceDueAtSale: data.balanceDueAtSale,
             pendingBalance: data.pendingBalance,
-            dueDate: data.dueDate
+            dueDate: data.dueDate,
+            walletDepositAmount: data.walletDepositAmount,
+            walletPaymentAmount: data.walletPaymentAmount
         };
 
         const normalizedTransaction = normalizeTransactionForSync(transaction);
