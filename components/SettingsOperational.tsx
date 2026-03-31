@@ -56,6 +56,7 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
         pedir_comensales: true,
         reservationPolicy: {
             validityDays: 7,
+            printCopies: 1,
             requireAdvance: false,
             minimumAdvancePercent: 20
         },
@@ -64,6 +65,7 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
 
     const reservationPolicy = operational.reservationPolicy || {
         validityDays: 7,
+        printCopies: 1,
         requireAdvance: false,
         minimumAdvancePercent: 20
     };
@@ -72,7 +74,7 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
         onUpdate('operational', key, val);
     };
 
-    const handleReservationPolicyChange = (key: 'validityDays' | 'requireAdvance' | 'minimumAdvancePercent', value: number | boolean) => {
+    const handleReservationPolicyChange = (key: 'validityDays' | 'printCopies' | 'requireAdvance' | 'minimumAdvancePercent', value: number | boolean) => {
         const nextPolicy = {
             ...reservationPolicy,
             [key]: value
@@ -332,6 +334,24 @@ const SettingsOperational: React.FC<SettingsOperationalProps> = ({ config, onUpd
                         <p className="text-[11px] text-slate-500 mt-2">
                             Define cuándo caduca una pre-factura de reserva.
                         </p>
+
+                        <div className="mt-5">
+                            <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-3">
+                                Cantidad de Copias
+                            </label>
+                            <input
+                                type="number"
+                                min={1}
+                                max={10}
+                                disabled={isReadOnly}
+                                value={reservationPolicy.printCopies}
+                                onChange={(e) => handleReservationPolicyChange('printCopies', Math.max(1, Math.min(10, parseInt(e.target.value, 10) || 1)))}
+                                className="w-full p-3 rounded-xl border border-slate-200 bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-100"
+                            />
+                            <p className="text-[11px] text-slate-500 mt-2">
+                                Define cuántas notas de reserva se imprimen por defecto.
+                            </p>
+                        </div>
                     </div>
 
                     <div className="p-5 rounded-2xl border border-gray-100 bg-slate-50 space-y-4">

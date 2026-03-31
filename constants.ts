@@ -136,6 +136,7 @@ export const DEFAULT_TERMINAL_CONFIG = {
     defaultTaxIds: [],
     reservationPolicy: {
       validityDays: 7,
+      printCopies: 1,
       requireAdvance: false,
       minimumAdvancePercent: 20
     }

@@ -531,6 +531,7 @@ export interface TerminalConfig {
     defaultTaxIds?: string[];
     reservationPolicy?: {
       validityDays: number;
+      printCopies: number;
       requireAdvance: boolean;
       minimumAdvancePercent: number;
     };
@@ -824,6 +825,7 @@ export interface BusinessConfig {
     usa_modulos_cocina: boolean;
     reservationPolicy?: {
       validityDays: number;
+      printCopies: number;
       requireAdvance: boolean;
       minimumAdvancePercent: number;
     };

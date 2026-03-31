@@ -411,7 +411,11 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
     }
 };
 
-export const printReservation = async (reservation: Reservation, config: BusinessConfig): Promise<boolean> => {
+export const printReservation = async (
+    reservation: Reservation,
+    config: BusinessConfig,
+    copies = 1
+): Promise<boolean> => {
     const { companyInfo, currencySymbol, receiptConfig } = config;
     const dateStr = new Date(reservation.createdAt).toLocaleDateString();
     const timeStr = new Date(reservation.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -551,6 +555,7 @@ export const printReservation = async (reservation: Reservation, config: Busines
             terminalId: reservation.terminalId,
             jobType: 'TICKET',
             referenceId: reservation.id,
+            copies,
         });
     }
 
@@ -563,6 +568,7 @@ export const printReservation = async (reservation: Reservation, config: Busines
             role: 'TICKET',
             jobType: 'TICKET',
             referenceId: reservation.id,
+            copies,
         });
     }
 
