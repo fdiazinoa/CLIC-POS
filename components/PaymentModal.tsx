@@ -12,6 +12,7 @@ import {
    resolvePaymentMethodTypeForRuntime,
    sumCreditPaymentsBase
 } from '../utils/creditRules';
+import { isLoyaltyRedeemMethod } from '../utils/loyaltyEngine';
 import { printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
 
@@ -196,6 +197,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       ? resolvePaymentMethodTypeForRuntime(activePaymentMethod.type, activePaymentMethod.label, activePaymentMethod.id)
       : 'CASH';
    const activeIsCxCCredit = activeRuntimeMethod === 'CREDIT';
+   const activeIsLoyaltyRedeem = activePaymentMethod
+      ? isLoyaltyRedeemMethod(activePaymentMethod.type, activePaymentMethod.label, activePaymentMethod.id)
+      : false;
+   const activeRequiresOnline =
+      activeIsCxCCredit ||
+      activePaymentMethod?.type === 'WALLET' ||
+      activeIsLoyaltyRedeem;
 
    const denominations = selectedCurrency.code === 'USD' ? [1, 5, 10, 20, 50, 100] : [50, 100, 200, 500, 1000, 2000];
 
@@ -265,7 +273,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       }
 
       // Strict Online Check: Credit and Wallet require connection (unless Master)
-      if (!isOnline && !isMaster && (activeIsCxCCredit || activePaymentMethod.type === 'WALLET')) {
+      if (!isOnline && !isMaster && activeRequiresOnline) {
          setFinalizeError(`El pago con ${activePaymentMethod.label} requiere conexión con la Terminal Master.`);
          return;
       }
@@ -327,7 +335,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             }
 
             // Strict Online Check: Credit and Wallet require connection during finalization too (unless Master)
-            if (!isOnline && !isMaster && (activeIsCxCCredit || activePaymentMethod.type === 'WALLET')) {
+            if (!isOnline && !isMaster && activeRequiresOnline) {
                setFinalizeError(`El pago con ${activePaymentMethod.label} requiere conexión con la Terminal Master.`);
                setIsFinalizing(false);
                return;
@@ -384,7 +392,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
          // Final safety check: ensure no CREDIT or WALLET payments are sent while offline (unless Master)
          if (!isOnline && !isMaster) {
-            const blockedPayment = paymentsToConfirm.find(p => p.method === 'CREDIT' || p.method === 'WALLET');
+            const blockedPayment = paymentsToConfirm.find(p =>
+               p.method === 'CREDIT' ||
+               p.method === 'WALLET' ||
+               isLoyaltyRedeemMethod(p.method, p.methodLabel, p.methodId)
+            );
             if (blockedPayment) {
                setFinalizeError(`El pago con ${blockedPayment.methodLabel} requiere conexión con la Terminal Master.`);
                setIsFinalizing(false);
@@ -685,17 +697,26 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                {/* Payment Methods */}
                <div className="flex flex-wrap p-3 md:p-4 gap-3 md:gap-4 shrink-0">
                   {configuredMethods.map(method => {
-                     const isExceeded = method.type === 'CREDIT' && isDelinquent && !isOverrideActive;
+                     const methodRuntimeType = resolvePaymentMethodTypeForRuntime(method.type, method.label, method.id);
+                     const methodIsCredit = methodRuntimeType === 'CREDIT';
+                     const methodIsLoyaltyRedeem = isLoyaltyRedeemMethod(method.type, method.label, method.id);
+                     const methodRequiresOnline = method.type === 'WALLET' || methodIsCredit || methodIsLoyaltyRedeem;
+                     const methodDisabledOffline = !isOnline && !isMaster && methodRequiresOnline;
+                     const isExceeded = methodIsCredit && isDelinquent && !isOverrideActive;
                      return (
                         <button
                            key={method.key}
-                           onClick={() => setActiveMethodKey(method.key)}
-                           className={`min-w-[calc(50%-0.375rem)] lg:min-w-[calc(33.333%-0.75rem)] xl:min-w-[120px] flex-1 py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center justify-center gap-1 md:gap-2 transition-all bg-white ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} shadow-sm` : 'border-gray-200 text-slate-500 hover:border-gray-300 hover:bg-white'} ${isExceeded ? 'bg-red-50/50 border-red-200' : ''}`}
+                           onClick={() => !methodDisabledOffline && setActiveMethodKey(method.key)}
+                           disabled={methodDisabledOffline}
+                           className={`min-w-[calc(50%-0.375rem)] lg:min-w-[calc(33.333%-0.75rem)] xl:min-w-[120px] flex-1 py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center justify-center gap-1 md:gap-2 transition-all bg-white ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} shadow-sm` : 'border-gray-200 text-slate-500 hover:border-gray-300 hover:bg-white'} ${isExceeded ? 'bg-red-50/50 border-red-200' : ''} ${methodDisabledOffline ? 'opacity-50 cursor-not-allowed bg-gray-50 hover:border-gray-200 hover:bg-gray-50' : ''}`}
                         >
                            <method.Icon size={24} className="md:w-8 md:h-8" strokeWidth={2.4} />
                            <span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{method.label}</span>
                            {isExceeded && (
                               <span className="text-[7px] text-red-600 font-bold">LÍMITE EXCEDIDO</span>
+                           )}
+                           {methodDisabledOffline && (
+                              <span className="text-[7px] text-amber-600 font-bold">REQUIERE CONEXIÓN</span>
                            )}
                         </button>
                      );
@@ -765,7 +786,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
                   <button
                      onClick={() => handleAddPayment()}
-                     className={`row-span-2 rounded-2xl md:rounded-[2rem] font-black text-white shadow-xl flex flex-col items-center justify-center gap-1 md:gap-2 ${themeBgClass} active:scale-95 hover:brightness-110`}
+                     disabled={!isOnline && !isMaster && activeRequiresOnline}
+                     className={`row-span-2 rounded-2xl md:rounded-[2rem] font-black shadow-xl flex flex-col items-center justify-center gap-1 md:gap-2 ${!isOnline && !isMaster && activeRequiresOnline ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} text-white active:scale-95 hover:brightness-110`}`}
                   >
                      <Plus size={28} className="md:w-8 md:h-8" />
                      <span className="text-[10px] tracking-widest uppercase">Agregar</span>
