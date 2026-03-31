@@ -27,6 +27,7 @@
     "@capacitor/android": "^8.1.0",
     "@capacitor/cli": "^8.1.0",
     "@capacitor/core": "^8.1.0",
+    "@capacitor/filesystem": "^8.1.2",
     "@google/genai": "^1.35.0",
     "@supabase/supabase-js": "^2.98.0",
     "@types/nodemailer": "^7.0.5",
