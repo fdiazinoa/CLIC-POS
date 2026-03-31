@@ -1,4 +1,4 @@
-import { BusinessConfig, TerminalConfig } from '../../types';
+import { BusinessConfig, Product, TerminalConfig } from '../../types';
 
 export interface RuntimeTerminalCard {
   id: string;
@@ -37,6 +37,7 @@ export interface RuntimeInitialConfigResponse {
   config?: BusinessConfig;
   terminal_config?: Record<string, any>;
   snapshot_meta?: Record<string, any>;
+  items?: Product[];
 }
 
 type BindingMode = 'MASTER' | 'SLAVE';
@@ -659,6 +660,9 @@ export const fetchInitialConfigFromErp = async (input: {
     terminal_id: asString(terminalConfig.terminal_id) || input.erpTerminalId,
     erp_terminal_id: input.erpTerminalId,
     terminal_config: terminalConfig,
+    items: Array.isArray(payload?.items)
+      ? payload.items
+      : (Array.isArray(terminalConfig?.masters?.items) ? terminalConfig.masters.items : []),
   };
 };
 
