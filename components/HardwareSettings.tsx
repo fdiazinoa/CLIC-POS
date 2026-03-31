@@ -7,11 +7,12 @@ import {
    Save, Info, AlertTriangle, Check, Tv, MonitorPlay, QrCode, Trash2,
    Cable, Radio, MousePointer2, Image as ImageIcon, ArrowLeft,
    Smartphone, Wallet, ShieldCheck, Database, HardDrive, Loader2, Wifi,
-   Cpu, Keyboard, Activity, Layers, Activity as Wave, Barcode
+   Cpu, Keyboard, Activity, Layers, Activity as Wave, Barcode, Fingerprint
 } from 'lucide-react';
 import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech, PrinterDevice, ConnectionType, ScaleLabelConfig } from '../types';
 import { parseScaleBarcode } from '../utils/barcodeParser';
 import { nativePrintBridge } from '../services/printer/NativePrintBridge';
+import { biometricService } from '../services/BiometricAuthService';
 
 // Perfiles predefinidos de balanzas populares
 const SCALE_PRESETS = [
@@ -51,7 +52,7 @@ interface HardwareSettingsProps {
    terminalId?: string;
 }
 
-type HardwareTab = 'PERIPHERALS' | 'SCALES' | 'DISPLAY' | 'CASHDRO' | 'LABELS';
+type HardwareTab = 'PERIPHERALS' | 'SCALES' | 'DISPLAY' | 'CASHDRO' | 'LABELS' | 'FINGERPRINT';
 
 const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfig, products, onUpdateConfig, onClose, terminalId }) => {
    const [activeTab, setActiveTab] = useState<HardwareTab>('PERIPHERALS');
@@ -84,6 +85,11 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    const [displayConfig, setDisplayConfig] = useState<CustomerDisplayConfig>(
       currentTerminalConfig?.config?.hardware?.customerDisplay || DEFAULT_DISPLAY_CONFIG
    );
+   const [allowBiometrics, setAllowBiometrics] = useState<boolean>(
+      currentTerminalConfig?.config?.security?.allowBiometrics || false
+   );
+   const [biometricAvailable, setBiometricAvailable] = useState(false);
+   const [biometricChecking, setBiometricChecking] = useState(true);
    const [previewMode, setPreviewMode] = useState<'IDLE' | 'CHECKOUT'>('CHECKOUT');
    const [currentPreviewAdIndex, setCurrentPreviewAdIndex] = useState(0);
 
@@ -98,6 +104,36 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          setCurrentPreviewAdIndex(0);
       }
    }, [previewMode, displayConfig.ads?.length]);
+
+   useEffect(() => {
+      setAllowBiometrics(currentTerminalConfig?.config?.security?.allowBiometrics || false);
+   }, [currentTerminalConfig?.config?.security?.allowBiometrics]);
+
+   useEffect(() => {
+      let mounted = true;
+
+      const checkBiometricAvailability = async () => {
+         setBiometricChecking(true);
+         try {
+            const available = await biometricService.isAvailable();
+            if (mounted) {
+               setBiometricAvailable(available);
+            }
+         } catch (error) {
+            console.warn('No se pudo validar la disponibilidad biométrica:', error);
+            if (mounted) {
+               setBiometricAvailable(false);
+            }
+         } finally {
+            if (mounted) {
+               setBiometricChecking(false);
+            }
+         }
+      };
+
+      void checkBiometricAvailability();
+      return () => { mounted = false; };
+   }, []);
 
    useEffect(() => {
       let cancelled = false;
@@ -195,6 +231,10 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                      hardware: {
                         ...t.config.hardware,
                         customerDisplay: displayConfig
+                     },
+                     security: {
+                        ...t.config.security,
+                        allowBiometrics
                      }
                   }
                };
@@ -204,6 +244,84 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       }
       onUpdateConfig(newConfig);
       alert("Configuración de hardware sincronizada con éxito.");
+   };
+
+   const renderFingerprintSettings = () => {
+      const biometricRuntime = nativePrintBridge.getRuntime();
+      const secureContextReady = window.isSecureContext || window.location.hostname === 'localhost';
+
+      return (
+         <div className="bg-white p-8 rounded-[2.5rem] border border-gray-200 shadow-sm animate-in slide-in-from-right-4">
+            <div className="flex justify-between items-center mb-8 pb-4 border-b border-slate-50">
+               <div>
+                  <h3 className="text-xl font-black text-slate-800 flex items-center gap-3">
+                     <Fingerprint className="text-cyan-600" />
+                     Detector de Huella
+                  </h3>
+                  <p className="text-xs text-slate-400 font-medium">
+                     Controla si esta terminal puede usar autenticación biométrica y valida la compatibilidad del dispositivo actual.
+                  </p>
+               </div>
+               <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                     type="checkbox"
+                     checked={allowBiometrics}
+                     onChange={(e) => setAllowBiometrics(e.target.checked)}
+                     className="sr-only peer"
+                  />
+                  <div className="w-14 h-7 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-cyan-600"></div>
+               </label>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+               <div className="p-5 rounded-3xl border border-slate-200 bg-slate-50">
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-3">Estado del Detector</p>
+                  <div className="flex items-center gap-3">
+                     <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${biometricAvailable ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'}`}>
+                        <Fingerprint size={22} />
+                     </div>
+                     <div>
+                        <p className="text-sm font-black text-slate-800">
+                           {biometricChecking ? 'Verificando...' : biometricAvailable ? 'Disponible' : 'No detectado'}
+                        </p>
+                        <p className="text-xs text-slate-500">Compatibilidad del dispositivo actual</p>
+                     </div>
+                  </div>
+               </div>
+
+               <div className="p-5 rounded-3xl border border-slate-200 bg-slate-50">
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-3">Runtime</p>
+                  <p className="text-lg font-black text-slate-800">{biometricRuntime}</p>
+                  <p className="text-xs text-slate-500 mt-1">Usado para interpretar el soporte del equipo actual.</p>
+               </div>
+
+               <div className="p-5 rounded-3xl border border-slate-200 bg-slate-50">
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-3">Entorno Seguro</p>
+                  <p className={`text-lg font-black ${secureContextReady ? 'text-emerald-600' : 'text-amber-600'}`}>
+                     {secureContextReady ? 'Listo' : 'Requerido'}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1">WebAuthn necesita HTTPS o localhost para funcionar correctamente.</p>
+               </div>
+            </div>
+
+            <div className="mt-6 rounded-[2rem] border border-cyan-100 bg-cyan-50 p-6">
+               <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 shrink-0 rounded-2xl bg-white text-cyan-600 border border-cyan-100 flex items-center justify-center">
+                     <ShieldCheck size={22} />
+                  </div>
+                  <div className="space-y-2">
+                     <p className="text-sm font-black text-cyan-900">Autenticación biométrica para la terminal</p>
+                     <p className="text-sm text-cyan-800 leading-relaxed">
+                        Al habilitar esta opción, la terminal permitirá login por huella donde el dispositivo y el navegador lo soporten.
+                     </p>
+                     <p className="text-xs font-semibold text-cyan-700">
+                        Nota: la disponibilidad mostrada arriba corresponde al dispositivo actual desde el que estás abriendo esta pantalla.
+                     </p>
+                  </div>
+               </div>
+            </div>
+         </div>
+      );
    };
 
    const handleSaveScale = () => {
@@ -708,6 +826,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                   { id: 'SCALES', label: 'Balanzas', icon: Scale },
                   { id: 'LABELS', label: 'Etiquetas', icon: Barcode },
                   { id: 'DISPLAY', label: 'Visor Cliente', icon: Tv },
+                  { id: 'FINGERPRINT', label: 'Detector de Huella', icon: Fingerprint },
                ].map(tab => (
                   <button
                      key={tab.id}
@@ -991,6 +1110,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                   </div>
                )}
                {activeTab === 'DISPLAY' && renderCustomerDisplay()}
+               {activeTab === 'FINGERPRINT' && renderFingerprintSettings()}
             </div>
          </div>
 

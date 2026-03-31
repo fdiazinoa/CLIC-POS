@@ -349,6 +349,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const isRetailMode = activeTerminalConfig?.ux?.viewMode === 'RETAIL';
    const reservationPolicy = activeTerminalConfig?.operational?.reservationPolicy || {
       validityDays: 7,
+      printCopies: 1,
       requireAdvance: false,
       minimumAdvancePercent: 20
    };
@@ -3909,7 +3910,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               if (isPrintingReservationReceipt) return;
                               setIsPrintingReservationReceipt(true);
                               try {
-                                 const printed = await printReservation(showReservationReceipt, config);
+                                 const printed = await printReservation(
+                                    showReservationReceipt,
+                                    config,
+                                    Math.max(1, Math.floor(Number(reservationPolicy.printCopies || 1)))
+                                 );
                                  if (printed) {
                                     setSuccessToast(`Reserva ${showReservationReceipt.code} enviada a impresión`);
                                  } else {
