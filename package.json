@@ -11,6 +11,7 @@
     "android:run": "npm run android:sync && npx cap run android",
     "android:apk:debug": "npm run android:sync && cd android && ./gradlew assembleDebug",
     "android:apk:release": "npm run android:sync && cd android && ./gradlew assembleRelease",
+    "android:release:protocol": "./scripts/release-android.sh",
     "lint": "eslint .",
     "preview": "vite preview",
     "server": "nodemon",
