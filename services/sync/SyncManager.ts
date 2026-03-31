@@ -12,6 +12,7 @@ import { NetworkScanner } from './NetworkScanner';
 import { v4 as uuidv4 } from 'uuid';
 import { permissionService } from './PermissionService';
 import { realtimeNotificationService } from './RealtimeNotificationService';
+import { productImageCacheService } from './ProductImageCacheService';
 import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig } from '../../types';
 import {
     applyTerminalConfigSnapshot,
@@ -739,6 +740,12 @@ class SyncManager {
                 if (!item?.id) continue;
                 const localProduct = localById.get(item.id);
                 if (!localProduct) continue;
+                if (typeof localProduct.imageUrl === 'string' && localProduct.imageUrl.trim().length > 0) {
+                    if (item.hash) {
+                        this.productImageHashes.set(item.id, item.hash);
+                    }
+                    continue;
+                }
 
                 manifestById.set(item.id, item);
                 const cachedHash = this.productImageHashes.get(item.id);
@@ -1174,6 +1181,7 @@ class SyncManager {
                         }
 
                         if (collection === 'products') {
+                            await productImageCacheService.syncSnapshotItems(safeItems as Product[]);
                             try {
                                 await this.syncProductImages({ forceManifestCheck: true });
                             } catch (error) {
@@ -1229,9 +1237,14 @@ class SyncManager {
                     ? await this.mergeTransactionsFullSnapshot(cleanItems)
                     : cleanItems;
                 await db.save(collection, safeItems);
+
+                if (collection === 'products') {
+                    await productImageCacheService.syncSnapshotItems(safeItems as Product[]);
+                }
             } else {
                 // Incremental update (Upsert / Delete)
                 console.log(`💾 SyncManager: Performing INCREMENTAL update for ${collection}...`);
+                const updatedProductsForImageSync: Product[] = [];
                 for (const item of items) {
                     const op = item._op;
                     const { _op, ...cleanItem } = item;
@@ -1253,8 +1266,15 @@ class SyncManager {
                         }
 
                         await db.saveDocument(collection, finalItem);
+                        if (collection === 'products') {
+                            updatedProductsForImageSync.push(finalItem as Product);
+                        }
                         // console.log(`[LOCAL_UPDATE] ${new Date().toISOString()} Registro actualizado en IndexedDB: ${finalItem.id}`);
                     }
+                }
+
+                if (collection === 'products' && updatedProductsForImageSync.length > 0) {
+                    await productImageCacheService.syncSnapshotItems(updatedProductsForImageSync);
                 }
             }
 
@@ -2039,7 +2059,7 @@ class SyncManager {
 
     /** Catálogo tal cual viene del ERP/master; el POS no inventa tarifas ni almacenes. */
     private async enrichPulledProducts(items: any[]): Promise<any[]> {
-        return Array.isArray(items) ? items : [];
+        return await productImageCacheService.normalizeIncomingProducts(Array.isArray(items) ? items : []);
     }
 
     /**
