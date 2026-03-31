@@ -175,6 +175,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showSafetyGate, setShowSafetyGate] = useState(false);
    const [safetyAction, setSafetyAction] = useState<{ name: string, callback: () => void, isCritical: boolean } | null>(null);
 
+   // --- TICKET TABS STRATEGY STATE ---
+   const [rightSidebarTab, setRightSidebarTab] = useState<'CART' | 'ACTIONS'>('CART');
+
    const triggerSafetyGate = (name: string, callback: () => void) => {
       const isCritical = cart.length > 0 || parkedTickets.length > 0 || (activeTable !== null && activeTable !== undefined);
       setSafetyAction({ name, callback, isCritical });
@@ -2850,21 +2853,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
             )}
 
-            {/* --- Novedad: ActionGrid (Rediseño Adaptativo) --- */}
-            {activeTerminalConfig?.operational?.expandTicket && !isMobile && (
-               <div ref={desktopActionGridRef}>
-                  <ActionGrid
-                     orientation="horizontal"
-                     onAction={handleGridAction}
-                     parkedTicketsCount={parkedTickets.length}
-                     isReturnMode={isReturnMode}
-                     config={config}
-                     hasCartItems={cart.length > 0}
-                     globalDiscountValue={globalDiscount.value}
-                     showLogout={false}
-                  />
-               </div>
-            )}
+            {/* --- Novedad: ActionGrid (Rediseño Adaptativo) REEMPLAZADO POR TABS EN PANEL DERECHO --- */}
+            {/* (Removido para usar Option 2: Tabs) */}
          </div >
 
          {/* RIGHT SIDEBAR: CURRENT TICKET */}
@@ -3145,7 +3135,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
             </div >
 
-            {/* --- CART ITEMS LIST --- */}
+            {/* --- CART ITEMS LIST & TAB VIEWS --- */}
             {isRetailMode ? (
                // SUPERMARKET MODE (DENSE TABLE)
                <ProductTableSupermarket
@@ -3158,12 +3148,49 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                />
             ) : (
                // STANDARD RESTAURANT/RETAIL LIST
-               <div
-                  className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-gray-50/50"
-                  style={isMobile ? bottomAwareScrollStyle : undefined}
-               >
-                  {
-                     processedCart.map((item, idx) => {
+               <>
+                  {/* TICKET TABS (DESKTOP) */}
+                  {!isMobile && (
+                     <div className="flex bg-gray-100/80 p-1 mx-4 mt-3 mb-1 rounded-xl shrink-0">
+                        <button 
+                           onClick={() => setRightSidebarTab('CART')}
+                           className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${rightSidebarTab === 'CART' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-400 hover:text-gray-600'}`}
+                        >
+                           CARRITO {cart.length > 0 && `(${cart.length})`}
+                        </button>
+                        <button 
+                           onClick={() => setRightSidebarTab('ACTIONS')}
+                           className={`flex-[0.85] py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${rightSidebarTab === 'ACTIONS' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-400 hover:text-gray-600'}`}
+                        >
+                           ACCIONES
+                        </button>
+                     </div>
+                  )}
+
+                  <div
+                     className="flex-1 min-h-0 overflow-y-auto p-4 pt-1 space-y-3 custom-scrollbar bg-gray-50/50"
+                     style={isMobile ? bottomAwareScrollStyle : undefined}
+                  >
+                     {rightSidebarTab === 'ACTIONS' && !isMobile ? (
+                        <div className="animate-in fade-in zoom-in-95 duration-200 mt-2">
+                           <ActionGrid
+                              orientation="vertical"
+                              onAction={(action) => {
+                                 handleGridAction(action);
+                                 if (['PARK', 'RECOVER', 'PRINT_RESERVE', 'KITCHEN'].includes(action)) {
+                                    setRightSidebarTab('CART');
+                                 }
+                              }}
+                              config={config}
+                              parkedTicketsCount={parkedTickets.length}
+                              isReturnMode={isReturnMode}
+                              hasCartItems={cart.length > 0}
+                              globalDiscountValue={globalDiscount.value}
+                              showLogout={false}
+                           />
+                        </div>
+                     ) : (
+                        processedCart.map((item, idx) => {
                         const hasDiscount = item.originalPrice && item.price < item.originalPrice;
                         const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
                         const lineNet = item.price * item.quantity;
@@ -3286,10 +3313,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </div>
                         );
                      })
-                  }
-               </div >
+                  )}
+                  </div >
+               </>
             )}
-            < div ref={cartEndRef} />
+            <div ref={cartEndRef} />
 
             {activeRecoveredReservation && (
                <div className="mx-4 mb-3 p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-800">
@@ -3418,21 +3446,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </div>
                         ) : (
                            <>
-                              {/* --- BOTONES DE ACCIÓN (ActionGrid Adaptativo) --- */}
-                              {!activeTerminalConfig?.operational?.expandTicket && (
-                                 <div className="animate-in fade-in duration-300">
-                                    <ActionGrid
-                                       orientation="vertical"
-                                       onAction={handleGridAction}
-                                       config={config}
-                                       parkedTicketsCount={parkedTickets.length}
-                                       isReturnMode={isReturnMode}
-                                       hasCartItems={cart.length > 0}
-                                       globalDiscountValue={globalDiscount.value}
-                                       showLogout={false}
-                                    />
-                                 </div>
-                              )}
+                              {/* --- BOTONES DE ACCIÓN MOVIDOS A PESTAÑAS (Tabs) --- */}
+
 
                               {/* --- BLOQUE DE TOTALES --- */}
                               <div className="space-y-1.5 pt-1 border-t border-dashed border-gray-200 mt-2">

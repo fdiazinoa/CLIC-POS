@@ -3158,18 +3158,18 @@ const AppContent: React.FC = () => {
     if (!documentCode || !documentCode.startsWith('E')) return;
     if (!electronicNcf) return;
 
-    const fiscalCompliance = getFiscalComplianceConfig(config);
-    const environment = getProviderEnvironment(fiscalCompliance, providerId);
-    const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
-    const baseTransaction: Transaction = {
-      ...transaction,
-      fiscalSyncStatus: 'PENDING',
-      fiscalSyncError: undefined
-    };
-
-    await upsertFiscalTransaction(baseTransaction);
-
     try {
+      const fiscalCompliance = getFiscalComplianceConfig(config);
+      const environment = getProviderEnvironment(fiscalCompliance, providerId);
+      const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
+      const baseTransaction: Transaction = {
+        ...transaction,
+        fiscalSyncStatus: 'PENDING',
+        fiscalSyncError: undefined
+      };
+
+      await upsertFiscalTransaction(baseTransaction);
+
       const result = await issueFiscalDocument({
         providerId,
         environment,
@@ -3208,11 +3208,12 @@ const AppContent: React.FC = () => {
         }, 3000);
       }
     } catch (error: any) {
+      console.error('Error during syncFiscalDocument:', error);
       const failedTransaction: Transaction = {
-        ...baseTransaction,
+        ...transaction,
         fiscalSyncStatus: 'ERROR',
-        fiscalSyncError: error?.message || 'No se pudo emitir el comprobante electrónico.',
-        fiscalResponseMessage: error?.message || 'No se pudo emitir el comprobante electrónico.'
+        fiscalSyncError: error?.message || 'No se pudo inicializar la emisión del comprobante.',
+        fiscalResponseMessage: error?.message || 'Error en configuración fiscal.'
       };
       await upsertFiscalTransaction(failedTransaction);
     }

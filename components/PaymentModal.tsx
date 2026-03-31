@@ -240,6 +240,19 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
    const canBypassCreditLimit = isOverrideActive || hasPermission('POS_CREDIT_OVERRIDE');
 
+   const isCreditActionBlocked = useMemo(() => {
+      if (canBypassCreditLimit) return false;
+      const creditInPayments = sumCreditPaymentsBase(payments);
+      const activeProjected = canFinalizeWithTypedAmount && activeIsCxCCredit ? typedAmountInBase : 0;
+      const projectedCreditTotal = creditInPayments + activeProjected;
+      
+      if (projectedCreditTotal > 0) {
+         const gate = evaluateCreditSupervisorGate(customer, 0, projectedCreditTotal);
+         if (gate) return true;
+      }
+      return false;
+   }, [canBypassCreditLimit, payments, canFinalizeWithTypedAmount, activeIsCxCCredit, typedAmountInBase, customer]);
+
    const enforceCreditRules = (projectedCreditTotal: number): boolean => {
       const gate = evaluateCreditSupervisorGate(customer, 0, projectedCreditTotal);
       if (!gate) return true;
@@ -311,6 +324,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       if (isFinalizing) return;
       if (!canFinalize) {
          alert("Monto insuficiente");
+         return;
+      }
+
+      if (isCreditActionBlocked) {
+         setFinalizeError('Límite de crédito excedido. Requiere autorización.');
+         setShowSupervisorModal(true);
          return;
       }
 
