@@ -1375,6 +1375,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [processedCart, config, discountAmount, isTaxIncluded, activeTerminalConfig]);
 
    const cartTax = taxBreakdown.reduce((sum, t) => sum + t.amount, 0);
+   const primaryTaxLabel = useMemo(() => {
+      if (taxBreakdown.length === 1) {
+         return formatTaxLineLabel(taxBreakdown[0]);
+      }
+      return null;
+   }, [taxBreakdown]);
+   const combinedTaxBreakdown = useMemo(() => {
+      if (taxBreakdown.length <= 1) return [];
+      return taxBreakdown.map((tax) => ({
+         id: tax.id,
+         label: formatTaxLineLabel(tax),
+         amount: tax.amount,
+      }));
+   }, [taxBreakdown]);
 
    let cartTotal = 0;
    let netSubtotal = 0;
@@ -3424,26 +3438,45 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               <div className="space-y-1.5 pt-1 border-t border-dashed border-gray-200 mt-2">
                                  <div className="flex justify-between items-center text-xs font-bold text-gray-500">
                                     <span>SUBTOTAL</span>
-                                    <span>{baseCurrency.symbol}{cartSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    <span>{formatCurrency(cartSubtotal, baseCurrency.symbol)}</span>
                                  </div>
                                  {discountAmount > 0 && (
                                     <div className="flex justify-between items-center text-xs font-black text-red-500">
                                        <span>DESCUENTO</span>
-                                       <span>-{baseCurrency.symbol}{discountAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                       <span>-{formatCurrency(discountAmount, baseCurrency.symbol)}</span>
                                     </div>
                                  )}
-                                 <div className="flex justify-between items-center text-xs font-bold text-gray-500">
-                                    <span>IMPUESTOS</span>
-                                    <span>{baseCurrency.symbol}{cartTax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                 <div className="flex justify-between items-start text-xs font-bold text-gray-500">
+                                    <div className="flex flex-col gap-0.5">
+                                       <div className="flex items-center gap-2">
+                                          <span>IMPUESTOS</span>
+                                          {primaryTaxLabel && (
+                                             <span className="text-[10px] font-black uppercase tracking-wide text-slate-400">
+                                                {primaryTaxLabel}
+                                             </span>
+                                          )}
+                                       </div>
+                                       {combinedTaxBreakdown.length > 0 && (
+                                          <div className="space-y-0.5 pt-0.5">
+                                             {combinedTaxBreakdown.map((tax) => (
+                                                <div key={tax.id} className="flex items-center justify-between gap-4 text-[10px] font-bold text-slate-400">
+                                                   <span>{tax.label}</span>
+                                                   <span>{formatCurrency(tax.amount, baseCurrency.symbol)}</span>
+                                                </div>
+                                             ))}
+                                          </div>
+                                       )}
+                                    </div>
+                                    <span className="shrink-0 pt-0.5">{formatCurrency(cartTax, baseCurrency.symbol)}</span>
                                  </div>
 
-                                 <div className="flex justify-between items-end pt-2">
-                                    <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
-                                       {baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                    </div>
-                                    <div className="text-right">
-                                       <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total General</p>
+                                 <div className="flex items-end justify-between gap-4 pt-3">
+                                    <div className="space-y-1">
+                                       <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.28em]">Total</p>
                                        {pointsEarned > 0 && <p className="text-[10px] font-bold text-purple-500">+{pointsEarned} Puntos</p>}
+                                    </div>
+                                    <div className="text-right text-[2.65rem] font-black text-slate-900 leading-none tracking-tighter">
+                                       {formatCurrency(cartTotal, baseCurrency.symbol)}
                                     </div>
                                  </div>
                               </div>
