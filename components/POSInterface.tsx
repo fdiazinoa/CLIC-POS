@@ -3168,7 +3168,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   )}
 
                   <div
-                     className="flex-1 min-h-0 overflow-y-auto p-4 pt-1 space-y-3 custom-scrollbar bg-gray-50/50"
+                     className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3 custom-scrollbar bg-gray-100/70"
                      style={isMobile ? bottomAwareScrollStyle : undefined}
                   >
                      {rightSidebarTab === 'ACTIONS' && !isMobile ? (
