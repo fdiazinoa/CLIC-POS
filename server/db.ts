@@ -12,6 +12,213 @@ export const db = new Database(DB_PATH);
 db.pragma('foreign_keys = ON');
 db.pragma('journal_mode = WAL'); // Better concurrency
 
+const quoteIdentifier = (identifier: string): string => `"${identifier.replace(/"/g, '""')}"`;
+
+const tableExists = (table: string): boolean => {
+    const row = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name = ?"
+    ).get(table);
+    return Boolean(row);
+};
+
+const getTableColumns = (table: string): string[] => {
+    if (!tableExists(table)) return [];
+    const rows = db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all() as Array<{ name: string }>;
+    return rows.map(row => row.name);
+};
+
+export const ensureColumn = (table: string, column: string, definition: string) => {
+    if (!tableExists(table)) return;
+    const columns = getTableColumns(table);
+    if (columns.includes(column)) return;
+    db.exec(`ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteIdentifier(column)} ${definition}`);
+};
+
+const ensureIndex = (indexName: string, table: string, columns: string[]) => {
+    if (!tableExists(table)) return;
+    db.exec(
+        `CREATE INDEX IF NOT EXISTS ${quoteIdentifier(indexName)} ON ${quoteIdentifier(table)} (${columns
+            .map(quoteIdentifier)
+            .join(', ')})`
+    );
+};
+
+const SYNC_AUDIT_TABLES = [
+    'roles',
+    'users',
+    'warehouses',
+    'customers',
+    'products',
+    'rooms',
+    'tables',
+    'product_stocks',
+    'inventory_commitments',
+    'inventory_ledger',
+    'transactions',
+    'transaction_history',
+    'suppliers',
+    'purchase_orders',
+    'transfers',
+    'z_reports',
+    'cash_movements',
+    'receptions',
+    'reservations',
+    'wallets',
+    'wallet_transactions',
+];
+
+const SCOPED_TABLE_COLUMNS: Record<string, string[]> = {
+    warehouses: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+    customers: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+    products: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+    product_stocks: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+    inventory_commitments: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+    inventory_ledger: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT', 'warehouse_id TEXT'],
+    transactions: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT', 'warehouse_id TEXT'],
+    transaction_history: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT', 'warehouse_id TEXT'],
+    suppliers: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+    purchase_orders: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+    transfers: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+    receptions: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+    reservations: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+    z_reports: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+    cash_movements: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+    wallets: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+    wallet_transactions: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
+};
+
+const applyAuditAndScopeColumns = () => {
+    for (const table of SYNC_AUDIT_TABLES) {
+        ensureColumn(table, 'updated_at', 'TEXT');
+        ensureColumn(table, 'deleted_at', 'TEXT');
+    }
+
+    Object.entries(SCOPED_TABLE_COLUMNS).forEach(([table, definitions]) => {
+        definitions.forEach(definition => {
+            const [column] = definition.split(' ');
+            ensureColumn(table, column, definition);
+        });
+    });
+};
+
+const ensureSyncIndexes = () => {
+    ensureIndex('idx_products_deleted_at', 'products', ['deleted_at']);
+    ensureIndex('idx_products_tenant_store', 'products', ['tenant_id', 'store_id']);
+    ensureIndex('idx_customers_deleted_at', 'customers', ['deleted_at']);
+    ensureIndex('idx_customers_tenant_store', 'customers', ['tenant_id', 'store_id']);
+    ensureIndex('idx_warehouses_deleted_at', 'warehouses', ['deleted_at']);
+    ensureIndex('idx_warehouses_tenant_store', 'warehouses', ['tenant_id', 'store_id']);
+    ensureIndex('idx_product_stocks_deleted_at', 'product_stocks', ['deleted_at']);
+    ensureIndex('idx_product_stocks_tenant_store', 'product_stocks', ['tenant_id', 'store_id']);
+    ensureIndex('idx_inventory_ledger_deleted_at', 'inventory_ledger', ['deleted_at']);
+    ensureIndex('idx_inventory_ledger_tenant_store', 'inventory_ledger', ['tenant_id', 'store_id']);
+    ensureIndex('idx_transactions_deleted_at', 'transactions', ['deleted_at']);
+    ensureIndex('idx_transactions_tenant_store', 'transactions', ['tenant_id', 'store_id']);
+    ensureIndex('idx_transaction_history_deleted_at', 'transaction_history', ['deleted_at']);
+    ensureIndex('idx_transaction_history_tenant_store', 'transaction_history', ['tenant_id', 'store_id']);
+};
+
+export const backfillAuditColumns = () => {
+    const auditBackfills: Array<{ table: string; expression: string }> = [
+        { table: 'roles', expression: 'CURRENT_TIMESTAMP' },
+        { table: 'users', expression: 'CURRENT_TIMESTAMP' },
+        { table: 'warehouses', expression: 'CURRENT_TIMESTAMP' },
+        { table: 'customers', expression: 'COALESCE(updated_at, createdAt, CURRENT_TIMESTAMP)' },
+        { table: 'products', expression: 'COALESCE(updated_at, updatedAt, createdAt, CURRENT_TIMESTAMP)' },
+        { table: 'rooms', expression: 'CURRENT_TIMESTAMP' },
+        { table: 'tables', expression: 'CURRENT_TIMESTAMP' },
+        { table: 'product_stocks', expression: 'COALESCE(updated_at, updatedAt, CURRENT_TIMESTAMP)' },
+        { table: 'inventory_commitments', expression: 'COALESCE(updated_at, updatedAt, CURRENT_TIMESTAMP)' },
+        { table: 'inventory_ledger', expression: 'COALESCE(updated_at, createdAt, CURRENT_TIMESTAMP)' },
+        { table: 'transactions', expression: 'COALESCE(updated_at, date, CURRENT_TIMESTAMP)' },
+        { table: 'transaction_history', expression: 'COALESCE(updated_at, date, CURRENT_TIMESTAMP)' },
+        { table: 'suppliers', expression: 'CURRENT_TIMESTAMP' },
+        { table: 'purchase_orders', expression: 'CURRENT_TIMESTAMP' },
+        { table: 'transfers', expression: 'CURRENT_TIMESTAMP' },
+        { table: 'z_reports', expression: 'COALESCE(updated_at, closedAt, openedAt, CURRENT_TIMESTAMP)' },
+        { table: 'cash_movements', expression: 'COALESCE(updated_at, createdAt, CURRENT_TIMESTAMP)' },
+        { table: 'receptions', expression: 'CURRENT_TIMESTAMP' },
+        { table: 'reservations', expression: 'COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)' },
+        { table: 'wallets', expression: 'COALESCE(updated_at, updatedAt, CURRENT_TIMESTAMP)' },
+        { table: 'wallet_transactions', expression: 'COALESCE(updated_at, createdAt, CURRENT_TIMESTAMP)' },
+    ];
+
+    for (const { table, expression } of auditBackfills) {
+        if (!tableExists(table) || !getTableColumns(table).includes('updated_at')) continue;
+        db.exec(
+            `UPDATE ${quoteIdentifier(table)}
+             SET updated_at = ${expression}
+             WHERE updated_at IS NULL OR TRIM(updated_at) = ''`
+        );
+    }
+
+    if (tableExists('warehouses') && getTableColumns('warehouses').includes('store_id')) {
+        db.exec(`
+            UPDATE warehouses
+            SET store_id = COALESCE(NULLIF(store_id, ''), storeId)
+            WHERE store_id IS NULL OR TRIM(store_id) = ''
+        `);
+    }
+
+    if (tableExists('product_stocks') && tableExists('warehouses') && getTableColumns('product_stocks').includes('store_id')) {
+        db.exec(`
+            UPDATE product_stocks
+            SET store_id = COALESCE(
+                NULLIF(store_id, ''),
+                (
+                    SELECT w.storeId
+                    FROM warehouses w
+                    WHERE w.id = product_stocks.warehouseId
+                    LIMIT 1
+                )
+            )
+            WHERE store_id IS NULL OR TRIM(store_id) = ''
+        `);
+    }
+
+    if (tableExists('inventory_commitments') && tableExists('warehouses') && getTableColumns('inventory_commitments').includes('store_id')) {
+        db.exec(`
+            UPDATE inventory_commitments
+            SET store_id = COALESCE(
+                NULLIF(store_id, ''),
+                (
+                    SELECT w.storeId
+                    FROM warehouses w
+                    WHERE w.id = inventory_commitments.warehouseId
+                    LIMIT 1
+                )
+            )
+            WHERE store_id IS NULL OR TRIM(store_id) = ''
+        `);
+    }
+
+    if (tableExists('inventory_ledger')) {
+        const inventoryLedgerColumns = getTableColumns('inventory_ledger');
+        if (inventoryLedgerColumns.includes('warehouse_id')) {
+            db.exec(`
+                UPDATE inventory_ledger
+                SET warehouse_id = COALESCE(NULLIF(warehouse_id, ''), warehouseId)
+                WHERE warehouse_id IS NULL OR TRIM(warehouse_id) = ''
+            `);
+        }
+        if (inventoryLedgerColumns.includes('store_id') && tableExists('warehouses')) {
+            db.exec(`
+                UPDATE inventory_ledger
+                SET store_id = COALESCE(
+                    NULLIF(store_id, ''),
+                    (
+                        SELECT COALESCE(w.store_id, w.storeId)
+                        FROM warehouses w
+                        WHERE w.id = COALESCE(inventory_ledger.warehouse_id, inventory_ledger.warehouseId)
+                        LIMIT 1
+                    )
+                )
+                WHERE store_id IS NULL OR TRIM(store_id) = ''
+            `);
+        }
+    }
+};
+
 // Ensure sync change log exists (for versioned delta sync)
 db.exec(`
     CREATE TABLE IF NOT EXISTS sync_changes (
@@ -38,6 +245,12 @@ db.exec(`
     CREATE TABLE IF NOT EXISTS inventory_ledger (
         id TEXT PRIMARY KEY,
         createdAt TEXT NOT NULL,
+        updated_at TEXT,
+        deleted_at TEXT,
+        tenant_id TEXT,
+        company_id TEXT,
+        store_id TEXT,
+        warehouse_id TEXT,
         warehouseId TEXT NOT NULL,
         productId TEXT NOT NULL,
         concept TEXT NOT NULL,
@@ -107,6 +320,10 @@ try {
 } catch (e) {
     // Column already exists
 }
+
+applyAuditAndScopeColumns();
+ensureSyncIndexes();
+backfillAuditColumns();
 
 /**
  * Helper to get a collection (mimics lowdb .get().value())

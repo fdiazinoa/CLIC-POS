@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS roles (
     permissions TEXT, -- JSON array
     maxDiscountPercent REAL,
     isSystem INTEGER DEFAULT 0,
-    zReportConfig TEXT -- JSON object
+    zReportConfig TEXT, -- JSON object
+    updated_at TEXT,
+    deleted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -49,6 +51,8 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT,
     roleId TEXT,
     photo TEXT,
+    updated_at TEXT,
+    deleted_at TEXT,
     FOREIGN KEY (roleId) REFERENCES roles(id)
 );
 
@@ -61,7 +65,12 @@ CREATE TABLE IF NOT EXISTS warehouses (
     allowPosSale INTEGER DEFAULT 1,
     allowNegativeStock INTEGER DEFAULT 0,
     isMain INTEGER DEFAULT 0,
-    storeId TEXT
+    storeId TEXT,
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS customers (
@@ -86,7 +95,12 @@ CREATE TABLE IF NOT EXISTS customers (
     applyChainedTax INTEGER DEFAULT 0,
     addresses TEXT, -- JSON array
     creditDays INTEGER DEFAULT 0,
-    defaultNcfType TEXT
+    defaultNcfType TEXT,
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS products (
@@ -124,7 +138,12 @@ CREATE TABLE IF NOT EXISTS products (
     batchYield REAL DEFAULT 1,
     primarySupplierId TEXT,
     createdAt TEXT,
-    updatedAt TEXT
+    updatedAt TEXT,
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS rooms (
@@ -134,7 +153,9 @@ CREATE TABLE IF NOT EXISTS rooms (
     capacidad_personas INTEGER DEFAULT 0,
     cargo_servicio_pct REAL DEFAULT 0,
     orden INTEGER DEFAULT 0,
-    data TEXT -- JSON: dimensions, gridConfig, etc.
+    data TEXT, -- JSON: dimensions, gridConfig, etc.
+    updated_at TEXT,
+    deleted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tables (
@@ -145,6 +166,8 @@ CREATE TABLE IF NOT EXISTS tables (
     status TEXT DEFAULT 'FREE',
     consumo_minimo_mesa REAL DEFAULT 0,
     comensales_minimos INTEGER DEFAULT 1,
+    updated_at TEXT,
+    deleted_at TEXT,
     FOREIGN KEY (roomId) REFERENCES rooms(id)
 );
 
@@ -165,6 +188,11 @@ CREATE TABLE IF NOT EXISTS product_stocks (
     qtyCommitted REAL DEFAULT 0,
     qtyAvailable REAL DEFAULT 0,
     updatedAt TEXT,
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT,
     UNIQUE(productId, warehouseId),
     FOREIGN KEY (productId) REFERENCES products(id),
     FOREIGN KEY (warehouseId) REFERENCES warehouses(id)
@@ -176,6 +204,11 @@ CREATE TABLE IF NOT EXISTS inventory_commitments (
     warehouseId TEXT NOT NULL,
     qtyCommitted REAL DEFAULT 0,
     updatedAt TEXT,
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT,
     UNIQUE(productId, warehouseId),
     FOREIGN KEY (productId) REFERENCES products(id),
     FOREIGN KEY (warehouseId) REFERENCES warehouses(id)
@@ -184,6 +217,12 @@ CREATE TABLE IF NOT EXISTS inventory_commitments (
 CREATE TABLE IF NOT EXISTS inventory_ledger (
     id TEXT PRIMARY KEY,
     createdAt TEXT NOT NULL,
+    updated_at TEXT,
+    deleted_at TEXT,
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    warehouse_id TEXT,
     warehouseId TEXT NOT NULL,
     productId TEXT NOT NULL,
     concept TEXT NOT NULL,
@@ -234,6 +273,12 @@ CREATE TABLE IF NOT EXISTS transactions (
     balance_due_at_sale REAL DEFAULT 0,
     affectedInvoiceNumber TEXT,
     affectedNCF TEXT,
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    warehouse_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT,
     syncStatus TEXT DEFAULT 'PENDING',
     syncError TEXT
 );
@@ -271,6 +316,12 @@ CREATE TABLE IF NOT EXISTS transaction_history (
     balance_due_at_sale REAL DEFAULT 0,
     affectedInvoiceNumber TEXT,
     affectedNCF TEXT,
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    warehouse_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT,
     syncStatus TEXT DEFAULT 'PENDING',
     syncError TEXT,
     zReportId TEXT
@@ -279,17 +330,32 @@ CREATE TABLE IF NOT EXISTS transaction_history (
 -- 6. Other Collections (Flexible)
 CREATE TABLE IF NOT EXISTS suppliers (
     id TEXT PRIMARY KEY,
-    data TEXT -- JSON object
+    data TEXT, -- JSON object
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS purchase_orders (
     id TEXT PRIMARY KEY,
-    data TEXT -- JSON object
+    data TEXT, -- JSON object
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS transfers (
     id TEXT PRIMARY KEY,
-    data TEXT -- JSON object
+    data TEXT, -- JSON object
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS z_reports (
@@ -318,6 +384,11 @@ CREATE TABLE IF NOT EXISTS z_reports (
     notes TEXT,
     baseCurrency TEXT,
     status TEXT,
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT,
     syncStatus TEXT DEFAULT 'PENDING',
     syncError TEXT
 );
@@ -332,13 +403,23 @@ CREATE TABLE IF NOT EXISTS cash_movements (
     userName TEXT,
     terminalId TEXT,
     zReportId TEXT,
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT,
     syncStatus TEXT DEFAULT 'PENDING',
     syncError TEXT
 );
 
 CREATE TABLE IF NOT EXISTS receptions (
     id TEXT PRIMARY KEY,
-    data TEXT -- JSON object
+    data TEXT, -- JSON object
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS reservations (
@@ -358,6 +439,10 @@ CREATE TABLE IF NOT EXISTS reservations (
     created_by_name TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    deleted_at TEXT,
     invoiced_at TEXT,
     invoiced_transaction_id TEXT,
     expired_at TEXT,
@@ -409,6 +494,11 @@ CREATE TABLE IF NOT EXISTS wallets (
     currency TEXT DEFAULT 'DOP',
     status TEXT DEFAULT 'ACTIVE',
     updatedAt TEXT,
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT,
     FOREIGN KEY (customerId) REFERENCES customers(id)
 );
 
@@ -419,6 +509,11 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
     amount REAL NOT NULL,
     referenceId TEXT, -- Transaction displayId
     createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+    tenant_id TEXT,
+    company_id TEXT,
+    store_id TEXT,
+    updated_at TEXT,
+    deleted_at TEXT,
     FOREIGN KEY (walletId) REFERENCES wallets(id)
 );
 
@@ -443,6 +538,20 @@ CREATE INDEX IF NOT EXISTS idx_inventory_commitments_product ON inventory_commit
 CREATE INDEX IF NOT EXISTS idx_inventory_ledger_product ON inventory_ledger(productId);
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
 CREATE INDEX IF NOT EXISTS idx_transactions_sync ON transactions(syncStatus);
+CREATE INDEX IF NOT EXISTS idx_products_deleted_at ON products(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_products_tenant_store ON products(tenant_id, store_id);
+CREATE INDEX IF NOT EXISTS idx_customers_deleted_at ON customers(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_customers_tenant_store ON customers(tenant_id, store_id);
+CREATE INDEX IF NOT EXISTS idx_warehouses_deleted_at ON warehouses(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_warehouses_tenant_store ON warehouses(tenant_id, store_id);
+CREATE INDEX IF NOT EXISTS idx_product_stocks_deleted_at ON product_stocks(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_product_stocks_tenant_store ON product_stocks(tenant_id, store_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_ledger_deleted_at ON inventory_ledger(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_inventory_ledger_tenant_store ON inventory_ledger(tenant_id, store_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_deleted_at ON transactions(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_transactions_tenant_store ON transactions(tenant_id, store_id);
+CREATE INDEX IF NOT EXISTS idx_transaction_history_deleted_at ON transaction_history(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_transaction_history_tenant_store ON transaction_history(tenant_id, store_id);
 CREATE INDEX IF NOT EXISTS idx_z_reports_terminal ON z_reports(terminalId);
 CREATE INDEX IF NOT EXISTS idx_cash_movements_zreport ON cash_movements(zReportId);
 CREATE INDEX IF NOT EXISTS idx_currency_audit_currency ON currency_audit_logs(currencyCode);
