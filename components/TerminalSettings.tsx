@@ -135,14 +135,13 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
             } else {
                const parts = sectionPath.split('.');
                let current: any = newConfig;
-               for (let i = 0; i < parts.length; i++) {
-                  if (!current[parts[i]]) current[parts[i]] = {};
-                  if (i === parts.length - 1) {
-                     current[parts[i]] = value;
-                  } else {
-                     current = current[parts[i]];
+               for (const part of parts) {
+                  if (!current[part] || typeof current[part] !== 'object') {
+                     current[part] = {};
                   }
+                  current = current[part];
                }
+               current[key] = value;
             }
             return { ...t, config: newConfig };
          }
@@ -394,8 +393,22 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                         {activeTab === 'SESSION' && (
                            <div className="space-y-6">
                               <h3 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Clock className="text-purple-500" /> Sesión</h3>
-                              <Toggle label="Cierre Ciego" checked={activeTerminal.config.workflow.session.blindClose} onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'blindClose', v)} icon={ShieldQuestion} />
-                              <Toggle label="Validar Mesas" checked={activeTerminal.config.workflow.session.checkOpenOrders} onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'checkOpenOrders', v)} icon={ListChecks} />
+                              <Toggle
+                                 label="Cierre Ciego"
+                                 description="Permite cerrar la caja sin exigir arqueo visible al cajero."
+                                 checked={activeTerminal.config.workflow.session.blindClose}
+                                 onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'blindClose', v)}
+                                 icon={ShieldQuestion}
+                                 disabled={isReadOnly}
+                              />
+                              <Toggle
+                                 label="Validar Mesas"
+                                 description="Verifica órdenes abiertas o pendientes antes del cierre operativo."
+                                 checked={activeTerminal.config.workflow.session.checkOpenOrders}
+                                 onChange={(v: boolean) => handleUpdateActiveConfig('workflow.session', 'checkOpenOrders', v)}
+                                 icon={ListChecks}
+                                 disabled={isReadOnly}
+                              />
                            </div>
                         )}
 
