@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { type Request } from 'express';
 import { db, getCollection, getSetting, saveSetting } from '../db.js';
 import fs from 'fs';
 import path from 'path';
@@ -176,6 +176,463 @@ const normalizeIdentityString = (value: any): string | null => {
     if (typeof value !== 'string') return null;
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
+};
+
+type PullScope = {
+    tenantId: string | null;
+    companyId: string | null;
+    storeId: string | null;
+    warehouseId: string | null;
+    allowedCategories: string[];
+};
+
+const parseCsvList = (value: unknown): string[] => {
+    if (Array.isArray(value)) {
+        return value.map(entry => String(entry).trim().toLowerCase()).filter(Boolean);
+    }
+
+    if (typeof value === 'string') {
+        return value.split(',').map(entry => entry.trim().toLowerCase()).filter(Boolean);
+    }
+
+    return [];
+};
+
+const resolvePullScope = (req: Request): PullScope => ({
+    tenantId: normalizeIdentityString(req.query.tenant_id) || normalizeIdentityString(req.body?.tenant_id),
+    companyId: normalizeIdentityString(req.query.company_id) || normalizeIdentityString(req.body?.company_id),
+    storeId: normalizeIdentityString(req.query.store_id) || normalizeIdentityString(req.body?.store_id),
+    warehouseId: normalizeIdentityString(req.query.warehouse_id) || normalizeIdentityString(req.body?.warehouse_id),
+    allowedCategories: parseCsvList(req.query.allowedCategories ?? req.body?.allowedCategories),
+});
+
+const buildPlaceholders = (size: number) => Array.from({ length: size }, () => '?').join(', ');
+
+const hydrateScopedRows = (collection: string, rows: any[]): any[] => {
+    const jsonFields: Record<string, string[]> = {
+        products: ['images', 'attributes', 'variants', 'tariffs', 'stockBalances', 'activeInWarehouses', 'appliedTaxIds', 'warehouseSettings', 'availableModifiers', 'operationalFlags', 'recipeDetails'],
+        customers: ['tags', 'addresses'],
+        transactions: ['items', 'payments', 'customerSnapshot', 'relatedTransactions'],
+    };
+
+    const booleanFields: Record<string, string[]> = {
+        warehouses: ['allowPosSale', 'allowNegativeStock', 'isMain'],
+        customers: ['requiresFiscalInvoice', 'prefersEmail', 'isTaxExempt', 'applyChainedTax'],
+        transactions: ['isTaxIncluded'],
+        products: ['hasActivePromotion', 'is_sellable'],
+    };
+
+    return rows.map(row => {
+        const next = { ...row };
+
+        for (const field of jsonFields[collection] || []) {
+            if (typeof next[field] === 'string' && next[field] !== null) {
+                try {
+                    next[field] = JSON.parse(next[field]);
+                } catch {
+                    next[field] = null;
+                }
+            }
+        }
+
+        for (const field of booleanFields[collection] || []) {
+            if (!(field in next)) continue;
+
+            if (field === 'is_sellable' && (next[field] === null || next[field] === undefined)) {
+                next[field] = true;
+            } else {
+                next[field] = next[field] === 1;
+            }
+        }
+
+        return next;
+    });
+};
+
+const filterSyncItemsForCollection = (collection: string, items: any[]): any[] => {
+    if (collection !== 'transactions') return items;
+
+    return items.filter((txn: any) => {
+        const id = typeof txn?.id === 'string' ? txn.id.trim() : '';
+        const displayId = typeof txn?.displayId === 'string' ? txn.displayId.trim() : '';
+        const documentType = typeof txn?.documentType === 'string' ? txn.documentType.trim().toUpperCase() : '';
+
+        if (id.startsWith('ORD-') && !displayId && !documentType) return false;
+        return true;
+    });
+};
+
+const queryScopedCollection = (collection: string, scope: PullScope): any[] => {
+    const params: any[] = [];
+
+    switch (collection) {
+        case 'products': {
+            const where = [`COALESCE(p.deleted_at, '') = ''`];
+
+            if (scope.tenantId) {
+                where.push(`COALESCE(p.tenant_id, ps.tenant_id, w.tenant_id) = ?`);
+                params.push(scope.tenantId);
+            }
+            if (scope.companyId) {
+                where.push(`COALESCE(p.company_id, ps.company_id, w.company_id) = ?`);
+                params.push(scope.companyId);
+            }
+            if (scope.storeId) {
+                where.push(`COALESCE(ps.store_id, w.store_id, w.storeId, p.store_id) = ?`);
+                params.push(scope.storeId);
+            }
+            if (scope.warehouseId) {
+                where.push(`COALESCE(ps.warehouse_id, ps.warehouseId, w.id) = ?`);
+                params.push(scope.warehouseId);
+            }
+            if (scope.allowedCategories.length > 0) {
+                where.push(`LOWER(COALESCE(p.category, '')) IN (${buildPlaceholders(scope.allowedCategories.length)})`);
+                params.push(...scope.allowedCategories);
+            }
+
+            const rows = db.prepare(`
+                SELECT DISTINCT p.*
+                FROM products p
+                LEFT JOIN product_stocks ps
+                    ON ps.productId = p.id
+                   AND COALESCE(ps.deleted_at, '') = ''
+                LEFT JOIN warehouses w
+                    ON w.id = ps.warehouseId
+                   AND COALESCE(w.deleted_at, '') = ''
+                WHERE ${where.join(' AND ')}
+            `).all(...params) as any[];
+
+            return hydrateScopedRows('products', rows);
+        }
+
+        case 'customers': {
+            const where = [`COALESCE(deleted_at, '') = ''`];
+
+            if (scope.tenantId) {
+                where.push(`tenant_id = ?`);
+                params.push(scope.tenantId);
+            }
+            if (scope.companyId) {
+                where.push(`company_id = ?`);
+                params.push(scope.companyId);
+            }
+            if (scope.storeId) {
+                where.push(`(COALESCE(store_id, '') = '' OR store_id = ?)`);
+                params.push(scope.storeId);
+            }
+
+            const rows = db.prepare(`
+                SELECT *
+                FROM customers
+                WHERE ${where.join(' AND ')}
+            `).all(...params) as any[];
+
+            return hydrateScopedRows('customers', rows);
+        }
+
+        case 'warehouses': {
+            const where = [`COALESCE(deleted_at, '') = ''`];
+
+            if (scope.tenantId) {
+                where.push(`tenant_id = ?`);
+                params.push(scope.tenantId);
+            }
+            if (scope.companyId) {
+                where.push(`company_id = ?`);
+                params.push(scope.companyId);
+            }
+            if (scope.storeId) {
+                where.push(`COALESCE(store_id, storeId) = ?`);
+                params.push(scope.storeId);
+            }
+            if (scope.warehouseId) {
+                where.push(`id = ?`);
+                params.push(scope.warehouseId);
+            }
+
+            const rows = db.prepare(`
+                SELECT *
+                FROM warehouses
+                WHERE ${where.join(' AND ')}
+            `).all(...params) as any[];
+
+            return hydrateScopedRows('warehouses', rows);
+        }
+
+        case 'productStocks': {
+            const where = [
+                `COALESCE(ps.deleted_at, '') = ''`,
+                `COALESCE(p.deleted_at, '') = ''`,
+                `COALESCE(w.deleted_at, '') = ''`,
+            ];
+
+            if (scope.tenantId) {
+                where.push(`COALESCE(ps.tenant_id, p.tenant_id, w.tenant_id) = ?`);
+                params.push(scope.tenantId);
+            }
+            if (scope.companyId) {
+                where.push(`COALESCE(ps.company_id, p.company_id, w.company_id) = ?`);
+                params.push(scope.companyId);
+            }
+            if (scope.storeId) {
+                where.push(`COALESCE(ps.store_id, w.store_id, w.storeId) = ?`);
+                params.push(scope.storeId);
+            }
+            if (scope.warehouseId) {
+                where.push(`COALESCE(ps.warehouse_id, ps.warehouseId, w.id) = ?`);
+                params.push(scope.warehouseId);
+            }
+            if (scope.allowedCategories.length > 0) {
+                where.push(`LOWER(COALESCE(p.category, '')) IN (${buildPlaceholders(scope.allowedCategories.length)})`);
+                params.push(...scope.allowedCategories);
+            }
+
+            const rows = db.prepare(`
+                SELECT ps.*
+                FROM product_stocks ps
+                INNER JOIN products p ON p.id = ps.productId
+                INNER JOIN warehouses w ON w.id = ps.warehouseId
+                WHERE ${where.join(' AND ')}
+            `).all(...params) as any[];
+
+            return hydrateScopedRows('productStocks', rows);
+        }
+
+        case 'inventoryLedger': {
+            const where = [
+                `COALESCE(il.deleted_at, '') = ''`,
+                `COALESCE(p.deleted_at, '') = ''`,
+                `COALESCE(w.deleted_at, '') = ''`,
+            ];
+
+            if (scope.tenantId) {
+                where.push(`COALESCE(il.tenant_id, p.tenant_id, w.tenant_id) = ?`);
+                params.push(scope.tenantId);
+            }
+            if (scope.companyId) {
+                where.push(`COALESCE(il.company_id, p.company_id, w.company_id) = ?`);
+                params.push(scope.companyId);
+            }
+            if (scope.storeId) {
+                where.push(`COALESCE(il.store_id, w.store_id, w.storeId) = ?`);
+                params.push(scope.storeId);
+            }
+            if (scope.warehouseId) {
+                where.push(`COALESCE(il.warehouse_id, il.warehouseId, w.id) = ?`);
+                params.push(scope.warehouseId);
+            }
+            if (scope.allowedCategories.length > 0) {
+                where.push(`LOWER(COALESCE(p.category, '')) IN (${buildPlaceholders(scope.allowedCategories.length)})`);
+                params.push(...scope.allowedCategories);
+            }
+
+            const rows = db.prepare(`
+                SELECT il.*
+                FROM inventory_ledger il
+                LEFT JOIN products p ON p.id = il.productId
+                LEFT JOIN warehouses w ON w.id = COALESCE(il.warehouse_id, il.warehouseId)
+                WHERE ${where.join(' AND ')}
+            `).all(...params) as any[];
+
+            return hydrateScopedRows('inventoryLedger', rows);
+        }
+
+        case 'transactions': {
+            const where = [`COALESCE(deleted_at, '') = ''`];
+
+            if (scope.tenantId) {
+                where.push(`tenant_id = ?`);
+                params.push(scope.tenantId);
+            }
+            if (scope.companyId) {
+                where.push(`company_id = ?`);
+                params.push(scope.companyId);
+            }
+            if (scope.storeId) {
+                where.push(`store_id = ?`);
+                params.push(scope.storeId);
+            }
+            if (scope.warehouseId) {
+                where.push(`warehouse_id = ?`);
+                params.push(scope.warehouseId);
+            }
+
+            const rows = db.prepare(`
+                SELECT *
+                FROM transactions
+                WHERE ${where.join(' AND ')}
+            `).all(...params) as any[];
+
+            return filterSyncItemsForCollection('transactions', hydrateScopedRows('transactions', rows));
+        }
+
+        default:
+            return getCollectionForSync(collection);
+    }
+};
+
+const SCOPED_COLLECTIONS = new Set([
+    'products',
+    'customers',
+    'warehouses',
+    'productStocks',
+    'inventoryLedger',
+    'transactions',
+]);
+
+const mustUseScopedPull = (collection: string, scope: PullScope): boolean =>
+    SCOPED_COLLECTIONS.has(collection) &&
+    Boolean(scope.tenantId || scope.companyId || scope.storeId || scope.warehouseId || scope.allowedCategories.length > 0);
+
+const quoteSqlIdentifier = (identifier: string): string => `"${identifier.replace(/"/g, '""')}"`;
+
+const getTableColumns = (table: string) =>
+    db.prepare(`PRAGMA table_info(${quoteSqlIdentifier(table)})`).all() as Array<{ name: string }>;
+
+const hasColumn = (columns: Array<{ name: string }>, column: string) =>
+    columns.some(col => col.name === column);
+
+const resolveIncomingUpdatedAt = (item: any, fallback: string): string =>
+    normalizeIdentityString(item?.updated_at) ||
+    normalizeIdentityString(item?.updatedAt) ||
+    normalizeIdentityString(item?.date) ||
+    normalizeIdentityString(item?.createdAt) ||
+    fallback;
+
+const normalizeAuditEnvelope = (rawItem: any, now: string) => ({
+    ...rawItem,
+    updated_at: resolveIncomingUpdatedAt(rawItem, now),
+    deleted_at:
+        normalizeIdentityString(rawItem?.deleted_at) ||
+        normalizeIdentityString(rawItem?.deletedAt) ||
+        (rawItem?._op === 'DELETE' || rawItem?.isActive === false ? now : null),
+});
+
+const softDeleteStructuredRow = (table: string, id: string, deletedAt: string) => {
+    const columns = getTableColumns(table);
+    if (!columns.length) return;
+
+    const hasDataColumn = hasColumn(columns, 'data');
+    if (hasDataColumn) {
+        const existing = db.prepare(`SELECT data FROM ${quoteSqlIdentifier(table)} WHERE id = ?`).get(id) as any;
+        const currentData = existing?.data ? JSON.parse(existing.data) : {};
+        const nextPayload = {
+            ...currentData,
+            deleted_at: deletedAt,
+            updated_at: deletedAt,
+            isActive: false,
+        };
+
+        const assignments: string[] = ['data = ?'];
+        const values: any[] = [JSON.stringify(nextPayload)];
+
+        if (hasColumn(columns, 'updated_at')) {
+            assignments.push('updated_at = ?');
+            values.push(deletedAt);
+        }
+        if (hasColumn(columns, 'deleted_at')) {
+            assignments.push('deleted_at = ?');
+            values.push(deletedAt);
+        }
+
+        values.push(id);
+        db.prepare(`UPDATE ${quoteSqlIdentifier(table)} SET ${assignments.join(', ')} WHERE id = ?`).run(...values);
+        return;
+    }
+
+    const assignments: string[] = [];
+    const values: any[] = [];
+
+    if (hasColumn(columns, 'updated_at')) {
+        assignments.push('updated_at = ?');
+        values.push(deletedAt);
+    }
+    if (hasColumn(columns, 'deleted_at')) {
+        assignments.push('deleted_at = ?');
+        values.push(deletedAt);
+    }
+    if (hasColumn(columns, 'updatedAt')) {
+        assignments.push('updatedAt = ?');
+        values.push(deletedAt);
+    }
+    if (hasColumn(columns, 'deletedAt')) {
+        assignments.push('deletedAt = ?');
+        values.push(deletedAt);
+    }
+    if (hasColumn(columns, 'isActive')) {
+        assignments.push('isActive = 0');
+    }
+
+    if (assignments.length === 0) return;
+
+    values.push(id);
+    db.prepare(`UPDATE ${quoteSqlIdentifier(table)} SET ${assignments.join(', ')} WHERE id = ?`).run(...values);
+};
+
+const APPEND_ONLY_COLLECTIONS = new Set([
+    'transactions',
+    'inventoryLedger',
+    'cashMovements',
+    'zReports',
+    'wallet_transactions',
+    'loyalty_events',
+]);
+
+const LWW_COLLECTIONS = new Set([
+    'products',
+    'customers',
+    'suppliers',
+    'users',
+    'roles',
+    'warehouses',
+    'paymentMethods',
+    'internalSequences',
+    'fiscalRanges',
+]);
+
+const toMillis = (value: any): number => {
+    const raw = normalizeIdentityString(value);
+    if (!raw) return 0;
+    const parsed = new Date(raw).getTime();
+    return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const incomingWinsLww = (incoming: any, current: any): boolean => {
+    const incomingTs = Math.max(
+        toMillis(incoming?.updated_at),
+        toMillis(incoming?.updatedAt),
+        toMillis(incoming?.date),
+        toMillis(incoming?.createdAt)
+    );
+
+    const currentTs = Math.max(
+        toMillis(current?.updated_at),
+        toMillis(current?.updatedAt),
+        toMillis(current?.date),
+        toMillis(current?.createdAt)
+    );
+
+    return incomingTs >= currentTs;
+};
+
+const readExistingStructuredItem = (
+    table: string,
+    id: string,
+    columns: Array<{ name: string }>,
+    hasDataColumn: boolean
+) => {
+    const row = db.prepare(`SELECT ${columns.map(column => quoteSqlIdentifier(column.name)).join(', ')} FROM ${quoteSqlIdentifier(table)} WHERE id = ?`).get(id) as any;
+    if (!row) return null;
+
+    if (hasDataColumn && row.data) {
+        try {
+            return { ...row, ...JSON.parse(row.data) };
+        } catch {
+            return row;
+        }
+    }
+
+    return row;
 };
 
 const normalizeTransactionIdentity = (txn: any) => {
@@ -441,7 +898,10 @@ router.get('/collections/:collection/data', async (req, res) => {
     }
 
     try {
-        const items = getCollectionForSync(collection);
+        const scope = resolvePullScope(req);
+        const items = mustUseScopedPull(collection, scope)
+            ? queryScopedCollection(collection, scope)
+            : getCollectionForSync(collection);
         const metadata = ensureMetadata(collection);
 
         const requestedVersion = sinceVersion ? parseInt(sinceVersion as string) : 0;
@@ -485,6 +945,7 @@ router.get('/delta/:collection', async (req, res) => {
         const metadata = ensureMetadata(collection);
         const latestVersion = metadata.version || 0;
         const fullSyncVersion = metadata.fullSyncVersion || 0;
+        const scope = resolvePullScope(req);
 
         const requestedVersion = sinceVersion ? parseInt(sinceVersion as string) : 0;
 
@@ -494,6 +955,17 @@ router.get('/delta/:collection', async (req, res) => {
                 return res.json({ success: true, items: [], serverTime: new Date().toISOString(), isFullDownload: false, latestVersion });
             }
             return res.json({ success: true, items: items ? [items] : [], serverTime: new Date().toISOString(), isFullDownload: true, latestVersion });
+        }
+
+        if (mustUseScopedPull(collection, scope)) {
+            const scopedItems = queryScopedCollection(collection, scope);
+            return res.json({
+                success: true,
+                items: scopedItems,
+                serverTime: new Date().toISOString(),
+                isFullDownload: true,
+                latestVersion
+            });
         }
 
         // If no version provided, or a full sync is required, return full download
