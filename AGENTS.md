@@ -4,14 +4,24 @@
 
 Frontend POS (Vite/React) con shell Android vía Capacitor; SQLite nativo en APK.
 
+## Fuente de verdad y rutas operativas
+
+Para evitar releases incompletos, usa siempre esta jerarquía:
+
+1. **`develop` es la única fuente oficial** del código que puede llegar a un APK release.
+2. **Worktrees de runtime/laboratorio** (por ejemplo Polaris) sirven para validar y depurar, pero **ningún fix debe vivir solo ahí**.
+3. **La worktree firmada** sirve para compilar el APK release. No se usa para desarrollar features ni para acumular fixes sueltos.
+
 ## Dónde trabajar (no confundir rutas)
 
 | Objetivo | Ubicación |
 |----------|-----------|
 | Código, commits y PRs | **Repo principal** (este directorio). |
 | APK **release firmado** (keystore) | **Worktree** `_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite` en la misma máquina de build. |
+| Runtime/laboratorio Polaris | **Worktree separada**; útil para pruebas, no para releases oficiales. |
 
 Detalle operativo: [docs/APK_RELEASE_CHECKLIST.md](./docs/APK_RELEASE_CHECKLIST.md).
+Protocolo de coordinación con agentes: [docs/AGENT_RELEASE_PROTOCOL.md](./docs/AGENT_RELEASE_PROTOCOL.md).
 
 ## Ramas
 
@@ -26,4 +36,5 @@ En `android/app/build.gradle`, **`versionCode`** debe subir en cada subida a Pla
 ## Lecturas útiles
 
 - [docs/APK_RELEASE_CHECKLIST.md](./docs/APK_RELEASE_CHECKLIST.md) — flujo build + firma + verificación.
+- [docs/AGENT_RELEASE_PROTOCOL.md](./docs/AGENT_RELEASE_PROTOCOL.md) — protocolo para Codex, Cursor y AG; evita mezclar fixes entre ramas, runtime y APK.
 - [docs/ANDROID_APK_SQLITE.md](./docs/ANDROID_APK_SQLITE.md) — notas SQLite / APK (si aplica a tu tarea).
