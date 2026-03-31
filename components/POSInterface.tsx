@@ -2940,47 +2940,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             {/* DESKTOP HEADER (HIDDEN ON MOBILE) */}
             <div className="hidden md:flex p-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none" >
                <div className="flex justify-between items-center gap-4">
-                  <div className="flex items-center gap-2 shrink-0">
-                     <div className="flex flex-col">
-                        <h2 className="font-black text-gray-800 uppercase text-xs tracking-widest whitespace-nowrap">
-                           {activeTable ? (
-                              <div className="flex flex-col">
-                                 {(() => {
-                                    const room = rooms?.find(r => r.id === activeTable.roomId);
-                                    if (room) {
-                                       return (
-                                          <span className="text-[9px] text-gray-400 font-bold mb-0.5">
-                                             {room.name || room.nombre}
-                                          </span>
-                                       );
-                                    }
-                                    return null;
-                                 })()}
-                                 <span className="flex items-center gap-1.5 text-blue-600">
-                                    <Layout size={14} className="shrink-0" />
-                                    Mesa {activeTable.nombre || activeTable.name}
-                                 </span>
-                              </div>
-                           ) : (
-                              'Ticket Actual'
-                           )}
-                        </h2>
-                        {
-                           (() => {
-                              const ticketSeriesId = activeTerminalConfig?.documentAssignments?.['TICKET'];
-                              const ticketSeries = activeTerminalConfig?.documentSeries?.find(s => s.id === ticketSeriesId);
-                              if (ticketSeries) {
-                                 return (
-                                    <span className="text-[10px] text-gray-400 font-mono font-bold">
-                                       {ticketSeries.prefix}{String(ticketSeries.nextNumber).padStart(ticketSeries.padding, '0')}
-                                    </span>
-                                 );
-                              }
-                              return null;
-                           })()
-                        }
-                     </div>
-                  </div>
 
                   {/* RETAIL MODE SEARCH BAR */}
                   {isRetailMode && (
@@ -3075,19 +3034,36 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  <div className="flex gap-1 shrink-0">
-                     {!isRetailMode && (
-                        <>
-                           <button onClick={handleOpenDrawer} title="Abrir Cajón" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-emerald-50 rounded-lg text-gray-400 hover:text-emerald-600 transition-colors"><Box size={18} /></button>
-                           <button onClick={openParkAliasModal} title="Guardar Ticket" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Save size={18} /></button>
-                           <button onClick={() => setShowParkedList(!showParkedList)} title="Recuperar Ticket" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-orange-50 rounded-lg text-gray-400 hover:text-orange-600 transition-colors relative">
-                              <Inbox size={18} />
-                              {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute top-0 right-0 w-3 h-3 bg-orange-500 rounded-full border-2 border-white"></span>}
-                           </button>
-                           <button onClick={onOpenHistory} title="Historial" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><History size={18} /></button>
-                        </>
-                     )}
-                     <button onClick={() => onOpenSettings()} title="Configuración" className="p-2 bg-white border border-gray-200 shadow-sm hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Settings size={18} /></button>
+                  {!isRetailMode && <div className="flex-1" />}
+
+                  <div className="flex items-center gap-2 shrink-0">
+                     <button
+                        onClick={() => setRightSidebarTab('CART')}
+                        className={`inline-flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-xs font-black uppercase tracking-[0.22em] transition-all ${
+                           rightSidebarTab === 'CART'
+                              ? 'border-red-200 bg-red-100 text-red-700 shadow-sm'
+                              : 'border-red-100 bg-red-50 text-red-600 hover:bg-red-100'
+                        }`}
+                     >
+                        <ShoppingCart size={16} />
+                        <span>Carrito</span>
+                        {cart.length > 0 && (
+                           <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-white/90 px-1.5 py-0.5 text-[10px] font-black text-red-700">
+                              {cart.length}
+                           </span>
+                        )}
+                     </button>
+                     <button
+                        onClick={() => setRightSidebarTab('ACTIONS')}
+                        className={`inline-flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-xs font-black uppercase tracking-[0.22em] transition-all ${
+                           rightSidebarTab === 'ACTIONS'
+                              ? 'border-blue-200 bg-blue-100 text-blue-700 shadow-sm'
+                              : 'border-blue-100 bg-blue-50 text-blue-600 hover:bg-blue-100'
+                        }`}
+                     >
+                        <MoreVertical size={16} />
+                        <span>Acciones</span>
+                     </button>
                   </div>
                </div>
 
@@ -3158,30 +3134,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             ) : (
                // STANDARD RESTAURANT/RETAIL LIST
                <>
-                  {/* TICKET TABS (DESKTOP) */}
-                  {!isMobile && (
-                     <div className="flex bg-gray-100/80 p-1 mx-4 mt-3 mb-1 rounded-xl shrink-0">
-                        <button 
-                           onClick={() => setRightSidebarTab('CART')}
-                           className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${rightSidebarTab === 'CART' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-400 hover:text-gray-600'}`}
-                        >
-                           CARRITO {cart.length > 0 && `(${cart.length})`}
-                        </button>
-                        <button 
-                           onClick={() => setRightSidebarTab('ACTIONS')}
-                           className={`flex-[0.85] py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${rightSidebarTab === 'ACTIONS' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-400 hover:text-gray-600'}`}
-                        >
-                           ACCIONES
-                        </button>
-                     </div>
-                  )}
-
                   <div
                      className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3 custom-scrollbar bg-gray-100/70"
                      style={isMobile ? bottomAwareScrollStyle : undefined}
                   >
                      {rightSidebarTab === 'ACTIONS' && !isMobile ? (
                         <div className="animate-in fade-in zoom-in-95 duration-200 mt-2">
+                           <button
+                              onClick={onOpenHistory}
+                              className="mb-3 flex w-full items-center justify-between rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-left text-sm font-black text-blue-700 shadow-sm transition-all hover:bg-blue-100"
+                           >
+                              <div className="flex items-center gap-3">
+                                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/90 text-blue-600 shadow-sm">
+                                    <History size={18} />
+                                 </div>
+                                 <div className="flex flex-col">
+                                    <span className="text-[10px] uppercase tracking-[0.22em] text-blue-400">Acciones</span>
+                                    <span>Historial de Facturas</span>
+                                 </div>
+                              </div>
+                              <ChevronRight size={18} />
+                           </button>
                            <ActionGrid
                               orientation="vertical"
                               onAction={(action) => {
