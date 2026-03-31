@@ -1,4 +1,26 @@
-import { CartItem, BusinessConfig, Product } from '../types';
+import { CartItem, BusinessConfig, Product, PaymentMethod } from '../types';
+
+const LOYALTY_REDEEM_MARKERS = new Set([
+    'LOYALTY',
+    'LOYALTY_POINTS',
+    'POINTS',
+    'PUNTOS',
+    'REWARD',
+    'REWARDS'
+]);
+
+const normalizeLoyaltyMarker = (value: unknown): string =>
+    typeof value === 'string' ? value.trim().toUpperCase() : '';
+
+export const isLoyaltyRedeemMethod = (
+    methodType?: PaymentMethod | string,
+    label?: string,
+    methodId?: string
+): boolean => {
+    return [methodType, label, methodId].some(value =>
+        LOYALTY_REDEEM_MARKERS.has(normalizeLoyaltyMarker(value))
+    );
+};
 
 /**
  * Calculates the total loyalty points earned for a given cart.
