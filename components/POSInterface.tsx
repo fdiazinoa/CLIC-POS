@@ -2939,7 +2939,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* DESKTOP HEADER (HIDDEN ON MOBILE) */}
             <div className="hidden md:flex p-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none" >
-               <div className="flex justify-between items-center gap-4">
+               <div className={`flex items-center gap-4 ${isRetailMode ? 'justify-between' : 'justify-center'}`}>
 
                   {/* RETAIL MODE SEARCH BAR */}
                   {isRetailMode && (
@@ -3034,9 +3034,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  {!isRetailMode && <div className="flex-1" />}
-
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className={`flex items-center shrink-0 ${isRetailMode ? 'gap-2' : 'gap-3 mx-auto'}`}>
                      <button
                         onClick={() => setRightSidebarTab('CART')}
                         className={`inline-flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-xs font-black uppercase tracking-[0.22em] transition-all ${
