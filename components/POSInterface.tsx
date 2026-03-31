@@ -3805,14 +3805,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </div>
                            <button
                               onClick={() => {
-                                 closeRecoverReservationModal();
-                                 setIsScannerOpen(true);
+                                 if (isMobile) {
+                                    closeRecoverReservationModal();
+                                    setIsScannerOpen(true);
+                                    return;
+                                 }
+
+                                 setSuccessToast('Escanee la reserva con el lector QR del equipo.');
+                                 setTimeout(() => setSuccessToast(null), 2200);
                               }}
                               className="px-4 py-2.5 rounded-xl border border-teal-200 bg-teal-50 text-teal-700 font-bold hover:bg-teal-100"
                            >
-                              Escanear QR
+                              {isMobile ? 'Escanear QR' : 'Leer con Lector'}
                            </button>
                         </div>
+
+                        {!isMobile && (
+                           <div className="rounded-xl border border-sky-100 bg-sky-50 px-3 py-2.5">
+                              <p className="text-[11px] font-black uppercase tracking-[0.14em] text-sky-600">
+                                 Desktop
+                              </p>
+                              <p className="mt-1 text-xs font-semibold text-sky-900">
+                                 El lector QR funciona como teclado. No hace falta abrir la cámara para recuperar la reserva.
+                              </p>
+                           </div>
+                        )}
 
                         {reservationCustomerFilterId && (
                            <div className="flex items-center justify-between rounded-xl border border-teal-100 bg-teal-50 px-3 py-2">
