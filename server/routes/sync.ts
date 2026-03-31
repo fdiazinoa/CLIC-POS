@@ -985,7 +985,12 @@ router.get('/delta/:collection', async (req, res) => {
             if (r.op === 'DELETE') {
                 let payload: any = {};
                 try { payload = r.payload ? JSON.parse(r.payload) : {}; } catch { }
-                return { id: r.itemId, deletedAt: payload.deletedAt || new Date().toISOString(), _op: 'DELETE' };
+                return {
+                    id: r.itemId,
+                    deletedAt: payload.deletedAt || payload.deleted_at || new Date().toISOString(),
+                    deleted_at: payload.deleted_at || payload.deletedAt || new Date().toISOString(),
+                    _op: 'DELETE'
+                };
             }
             let payload: any = {};
             try { payload = r.payload ? JSON.parse(r.payload) : {}; } catch { }
@@ -1137,6 +1142,7 @@ router.post('/collections/:collection/push', async (req, res) => {
         }
 
         const pushMode = mode === 'FULL_REPLACE' ? 'FULL_REPLACE' : 'UPSERT';
+        let ignoredCount = 0;
 
         // Define JSON fields (must match db.ts)
         const jsonFields: Record<string, string[]> = {
@@ -1170,7 +1176,11 @@ router.post('/collections/:collection/push', async (req, res) => {
 
                     if (hasDataColumn) {
                         const stmt = db.prepare(`INSERT INTO ${resolvedCollection} (id, data) VALUES (?, ?)`);
-                        for (const item of items) stmt.run(item.id, JSON.stringify(item));
+                        for (const rawItem of items) {
+                            if (!rawItem?.id) continue;
+                            const item = normalizeAuditEnvelope(rawItem, now);
+                            stmt.run(item.id, JSON.stringify(item));
+                        }
                     } else {
                         const colNames = columns.map(c => c.name);
                         const placeholders = colNames.map(() => '?').join(',');
@@ -1178,8 +1188,13 @@ router.post('/collections/:collection/push', async (req, res) => {
                         const stmt = db.prepare(`INSERT INTO ${resolvedCollection} (${colNames.join(',')}) VALUES (${placeholders}) ON CONFLICT(id) DO UPDATE SET ${updateSet}`);
                         const fieldsToStringify = jsonFields[collection] || [];
 
-                        for (const item of items) {
+                        for (const rawItem of items) {
+                            if (!rawItem?.id) continue;
+                            const item = normalizeAuditEnvelope(rawItem, now);
                             const values = colNames.map(col => {
+                                if (col === 'updated_at') return item.updated_at;
+                                if (col === 'deleted_at') return item.deleted_at;
+
                                 let val = item[col];
                                 if (fieldsToStringify.includes(col)) {
                                     return typeof val === 'object' ? JSON.stringify(val) : (val || '[]');
@@ -1219,53 +1234,85 @@ router.post('/collections/:collection/push', async (req, res) => {
                             continue;
                         }
 
-                        // Optimistic Locking Check
-                        if (collection === 'products' || collection === 'customers') {
-                            const current = db.prepare(`SELECT version FROM ${resolvedCollection} WHERE id = ?`).get(rawItem.id) as any;
-                            // If Slave version is behind Master, conflict.
-                            // Slave must pull before pushing their changes.
-                            if (current && rawItem.version !== undefined && rawItem.version < current.version) {
-                                throw new Error(`CONFLICT: Version mismatch for ${collection}:${rawItem.id}. Slave: ${rawItem.version}, Master: ${current.version}`);
-                            }
-                        }
+                        const item = normalizeAuditEnvelope(rawItem, now);
+                        const op = item.deleted_at ? 'DELETE' : 'UPSERT';
+                        const existingRow = readExistingStructuredItem(resolvedCollection, item.id, columns, hasDataColumn);
 
-                        const item = { ...rawItem };
-                        const op = item._op === 'DELETE' || item.deletedAt || item.isActive === false ? 'DELETE' : 'UPSERT';
-
-                        if (op === 'DELETE') {
-                            if (item.id) {
-                                db.prepare(`DELETE FROM ${resolvedCollection} WHERE id = ?`).run(item.id);
+                        if (APPEND_ONLY_COLLECTIONS.has(collection)) {
+                            if (existingRow) {
+                                ignoredCount++;
+                                continue;
                             }
-                        } else {
+
                             if (hasDataColumn && dataStmt) {
-                                dataStmt.run(item.id, JSON.stringify(item));
+                                dataStmt.run(item.id, JSON.stringify({ ...item, deleted_at: null }));
                             } else if (structuredStmt) {
-                                let existingRow: Record<string, any> | null | undefined = undefined;
                                 const values = colNames.map(col => {
-                                    let val = item[col];
-                                    if (val === undefined) {
-                                        if (existingRow === undefined) {
-                                            existingRow = db.prepare(`SELECT ${colNames.join(',')} FROM ${resolvedCollection} WHERE id = ?`).get(item.id) as Record<string, any> | null;
-                                        }
-                                        if (existingRow && Object.prototype.hasOwnProperty.call(existingRow, col)) {
-                                            val = existingRow[col];
-                                        }
-                                    }
+                                    if (col === 'updated_at') return item.updated_at;
+                                    if (col === 'deleted_at') return null;
+
+                                    const val = item[col];
                                     if (fieldsToStringify.includes(col)) {
                                         return typeof val === 'object' ? JSON.stringify(val) : (val || '[]');
                                     }
                                     if (typeof val === 'boolean') return val ? 1 : 0;
-                                    if (val === undefined) return null;
-                                    return val;
+                                    return val === undefined ? null : val;
                                 });
                                 structuredStmt.run(...values);
                             }
+
+                            const version = bumpVersion(collection, item.id);
+                            insertChangeStmt.run(collection, item.id, version, 'UPSERT', JSON.stringify({ ...item, deleted_at: null }), now);
+                            continue;
+                        }
+
+                        if (op === 'DELETE') {
+                            if (!existingRow) {
+                                ignoredCount++;
+                                continue;
+                            }
+
+                            softDeleteStructuredRow(resolvedCollection, String(item.id), item.deleted_at!);
+                            const version = bumpVersion(collection, item.id);
+                            insertChangeStmt.run(
+                                collection,
+                                item.id,
+                                version,
+                                'DELETE',
+                                JSON.stringify({ id: item.id, deleted_at: item.deleted_at, deletedAt: item.deleted_at }),
+                                now
+                            );
+                            continue;
+                        }
+
+                        if (LWW_COLLECTIONS.has(collection) && existingRow && !incomingWinsLww(item, existingRow)) {
+                            ignoredCount++;
+                            continue;
+                        }
+
+                        if (hasDataColumn && dataStmt) {
+                            const { data: _data, ...currentPayload } = existingRow || {};
+                            dataStmt.run(item.id, JSON.stringify({ ...currentPayload, ...item, deleted_at: null }));
+                        } else if (structuredStmt) {
+                            const values = colNames.map(col => {
+                                if (col === 'updated_at') return item.updated_at;
+                                if (col === 'deleted_at') return null;
+
+                                let val = item[col];
+                                if (val === undefined && existingRow && Object.prototype.hasOwnProperty.call(existingRow, col)) {
+                                    val = existingRow[col];
+                                }
+                                if (fieldsToStringify.includes(col)) {
+                                    return typeof val === 'object' ? JSON.stringify(val) : (val || '[]');
+                                }
+                                if (typeof val === 'boolean') return val ? 1 : 0;
+                                return val === undefined ? null : val;
+                            });
+                            structuredStmt.run(...values);
                         }
 
                         const version = bumpVersion(collection, item.id);
-                        const payload = op === 'DELETE'
-                            ? JSON.stringify({ id: item.id, deletedAt: item.deletedAt || now })
-                            : JSON.stringify(item);
+                        const payload = JSON.stringify({ ...item, deleted_at: null });
                         insertChangeStmt.run(collection, item.id, version, op, payload, now);
                     }
 
@@ -1274,7 +1321,7 @@ router.post('/collections/:collection/push', async (req, res) => {
             } else {
                 // Settings-based collection (array)
                 if (pushMode === 'FULL_REPLACE') {
-                    saveSetting(collection, items);
+                    saveSetting(collection, items.map((item: any) => item?.id ? normalizeAuditEnvelope(item, now) : item));
                     clearChangesForCollection(collection);
                     const newVersion = bumpVersion(collection);
                     updateMetadata(collection, newVersion, newVersion, tokens[authToken]);
@@ -1283,19 +1330,46 @@ router.post('/collections/:collection/push', async (req, res) => {
                     const map = new Map(existing.map((i: any) => [i.id, i]));
 
                     for (const rawItem of items) {
-                        const item = { ...rawItem };
-                        const op = item._op === 'DELETE' || item.deletedAt || item.isActive === false ? 'DELETE' : 'UPSERT';
-                        if (op === 'DELETE') {
-                            map.delete(item.id);
+                        if (!rawItem?.id) continue;
+
+                        const item = normalizeAuditEnvelope(rawItem, now);
+                        const current = map.get(item.id);
+
+                        if (APPEND_ONLY_COLLECTIONS.has(collection)) {
+                            if (current) {
+                                ignoredCount++;
+                                continue;
+                            }
+
+                            map.set(item.id, { ...item, deleted_at: null });
+                        } else if (item.deleted_at) {
+                            if (!current) {
+                                ignoredCount++;
+                                continue;
+                            }
+
+                            map.set(item.id, {
+                                ...current,
+                                deleted_at: item.deleted_at,
+                                updated_at: item.updated_at,
+                                isActive: false
+                            });
+                        } else if (!current || !LWW_COLLECTIONS.has(collection) || incomingWinsLww(item, current)) {
+                            map.set(item.id, {
+                                ...current,
+                                ...item,
+                                deleted_at: null
+                            });
                         } else {
-                            map.set(item.id, item);
+                            ignoredCount++;
+                            continue;
                         }
 
-                        const version = bumpVersion(collection);
-                        const payload = op === 'DELETE'
-                            ? JSON.stringify({ id: item.id, deletedAt: item.deletedAt || now })
-                            : JSON.stringify(item);
-                        insertChangeStmt.run(collection, item.id, version, op, payload, now);
+                        const version = bumpVersion(collection, item.id);
+                        const payload = item.deleted_at
+                            ? JSON.stringify({ id: item.id, deleted_at: item.deleted_at, deletedAt: item.deleted_at })
+                            : JSON.stringify({ ...item, deleted_at: null });
+                        insertChangeStmt.run(collection, item.id, version, item.deleted_at ? 'DELETE' : 'UPSERT', payload, now);
                     }
 
                     saveSetting(collection, Array.from(map.values()));
@@ -1304,16 +1378,19 @@ router.post('/collections/:collection/push', async (req, res) => {
             }
         })();
 
-        res.json({ success: true, version: getCurrentVersion(collection), itemCount: (getCollection(collection) || []).length });
+        res.json({
+            success: true,
+            version: getCurrentVersion(collection),
+            itemCount: (getCollection(collection) || []).length,
+            ignoredCount
+        });
     } catch (error: any) {
-        if (error.message && error.message.startsWith('CONFLICT:')) {
-            console.warn(`[Sync] Conflict detected for ${collection}: ${error.message}`);
-            return res.status(409).json({ success: false, message: error.message });
-        }
-
         console.error(`❌ Error pushing to ${collection}:`, error);
-        // ... rest of error log ...
-        res.status(500).json({ success: false, message: error.message, details: error.stack });
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Sync push failed',
+            details: error.stack
+        });
     }
 });
 
