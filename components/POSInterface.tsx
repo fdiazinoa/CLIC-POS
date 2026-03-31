@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
 import {
-   Search, ShoppingCart, Trash2, MoreVertical,
+   Search, Trash2, MoreVertical,
    CreditCard, User, Tag, Grid, Save,
    Settings, Users, History, Wallet,
    UserPlus, PlusCircle, X, Percent, ArrowLeft, ChevronRight,
@@ -3034,33 +3034,59 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  <div className={`flex items-center shrink-0 ${isRetailMode ? 'gap-2' : 'gap-3 mx-auto'}`}>
+                  <div className={`flex items-center shrink-0 w-full ${isRetailMode ? 'max-w-[360px] justify-end gap-3' : 'max-w-[340px] mx-auto gap-3'}`}>
                      <button
                         onClick={() => setRightSidebarTab('CART')}
-                        className={`inline-flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-xs font-black uppercase tracking-[0.22em] transition-all ${
+                        className={`group relative flex min-w-0 flex-1 items-center gap-3 rounded-[1.35rem] border px-4 py-3 transition-all duration-200 ${
                            rightSidebarTab === 'CART'
-                              ? 'border-red-200 bg-red-100 text-red-700 shadow-sm'
-                              : 'border-red-100 bg-red-50 text-red-600 hover:bg-red-100'
+                              ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_12px_28px_rgba(248,113,113,0.16)]'
+                              : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50/70 hover:text-red-600'
                         }`}
                      >
-                        <ShoppingCart size={16} />
-                        <span>Carrito</span>
+                        <span
+                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                              rightSidebarTab === 'CART'
+                                 ? 'border-red-200/80 bg-white/90 text-red-600 shadow-sm'
+                                 : 'border-slate-200 bg-slate-50 text-slate-400 group-hover:border-red-100 group-hover:bg-white group-hover:text-red-500'
+                           }`}
+                        >
+                           <ShoppingBag size={18} strokeWidth={2.3} />
+                        </span>
+                        <span className="min-w-0 flex-1 text-left">
+                           <span className="block text-[11px] font-black uppercase tracking-[0.24em]">Carrito</span>
+                           <span className={`mt-1 block text-[10px] font-semibold ${rightSidebarTab === 'CART' ? 'text-red-500/80' : 'text-slate-400 group-hover:text-red-400'}`}>
+                              {cart.length > 0 ? `${cart.length} artículos` : 'Sin artículos'}
+                           </span>
+                        </span>
                         {cart.length > 0 && (
-                           <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-white/90 px-1.5 py-0.5 text-[10px] font-black text-red-700">
+                           <span className="inline-flex min-w-7 items-center justify-center self-start rounded-full border border-white/80 bg-white/95 px-2 py-1 text-[10px] font-black leading-none text-red-700 shadow-sm">
                               {cart.length}
                            </span>
                         )}
                      </button>
                      <button
                         onClick={() => setRightSidebarTab('ACTIONS')}
-                        className={`inline-flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-xs font-black uppercase tracking-[0.22em] transition-all ${
+                        className={`group flex min-w-0 flex-1 items-center gap-3 rounded-[1.35rem] border px-4 py-3 transition-all duration-200 ${
                            rightSidebarTab === 'ACTIONS'
-                              ? 'border-blue-200 bg-blue-100 text-blue-700 shadow-sm'
-                              : 'border-blue-100 bg-blue-50 text-blue-600 hover:bg-blue-100'
+                              ? 'border-blue-200 bg-gradient-to-br from-blue-50 via-sky-50 to-blue-100 text-blue-700 shadow-[0_12px_28px_rgba(59,130,246,0.16)]'
+                              : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50/70 hover:text-blue-600'
                         }`}
                      >
-                        <MoreVertical size={16} />
-                        <span>Acciones</span>
+                        <span
+                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                              rightSidebarTab === 'ACTIONS'
+                                 ? 'border-blue-200/80 bg-white/90 text-blue-600 shadow-sm'
+                                 : 'border-slate-200 bg-slate-50 text-slate-400 group-hover:border-blue-100 group-hover:bg-white group-hover:text-blue-500'
+                           }`}
+                        >
+                           <Layers size={18} strokeWidth={2.3} />
+                        </span>
+                        <span className="min-w-0 flex-1 text-left">
+                           <span className="block text-[11px] font-black uppercase tracking-[0.24em]">Acciones</span>
+                           <span className={`mt-1 block text-[10px] font-semibold ${rightSidebarTab === 'ACTIONS' ? 'text-blue-500/80' : 'text-slate-400 group-hover:text-blue-400'}`}>
+                              Atajos y herramientas
+                           </span>
+                        </span>
                      </button>
                   </div>
                </div>
