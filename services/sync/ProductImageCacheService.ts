@@ -2,6 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import type { Product } from '../../types';
 import { db } from '../../utils/db';
+import { posImageDebugLog, posImageDebugMatchesRaw, posCatalogDebugSummarizeItem } from '../../utils/posCatalogDebugTrace';
 
 type IncomingProduct = Partial<Product> & Record<string, any>;
 
@@ -98,6 +99,14 @@ class ProductImageCacheService {
 
         const path = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
         const resolved = new URL(path, `${baseUrl}/`).toString();
+        if (posImageDebugMatchesRaw(item)) {
+          posImageDebugLog('resolveRemoteImageUrl: relative', {
+            rawUrl,
+            baseUrl,
+            resolved,
+            item: posCatalogDebugSummarizeItem(item),
+          });
+        }
         this.logger.info('[ProductImageCacheService] Resolved relative image URL', {
           rawUrl,
           baseUrl,
@@ -108,6 +117,14 @@ class ProductImageCacheService {
 
       if (this.isNativeAndroid() && (rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1'))) {
         const rewritten = this.rewriteLoopbackHostname(rawUrl, masterUrl);
+        if (posImageDebugMatchesRaw(item)) {
+          posImageDebugLog('resolveRemoteImageUrl: rewrite loopback', {
+            rawUrl,
+            masterUrl,
+            rewritten,
+            item: posCatalogDebugSummarizeItem(item),
+          });
+        }
         this.logger.info('[ProductImageCacheService] Rewrote loopback image URL', {
           rawUrl,
           masterUrl,
@@ -118,6 +135,13 @@ class ProductImageCacheService {
 
       return rawUrl;
     } catch (e) {
+      if (posImageDebugMatchesRaw(item)) {
+        posImageDebugLog('resolveRemoteImageUrl: exception', {
+          rawUrl,
+          error: String((e as Error)?.message || e),
+          item: posCatalogDebugSummarizeItem(item),
+        });
+      }
       this.logger.warn(`[ProductImageCacheService] Failed to rewrite remote URL: ${rawUrl}`, e);
       return rawUrl;
     }
@@ -338,6 +362,14 @@ class ProductImageCacheService {
     const relativePath = this.buildRelativePath(product.id, imageVersion, imageUrl);
 
     console.log(`[ProductImageCacheService] 📥 DOWNLOADING NATIVE IMAGE for ${product.id} -> URL: ${imageUrl}`);
+    if (posImageDebugMatchesRaw(product)) {
+      posImageDebugLog('saveLocalImage: begin', {
+        product: posCatalogDebugSummarizeItem(product as any),
+        imageUrl,
+        imageVersion,
+        relativePath,
+      });
+    }
 
     await Filesystem.downloadFile({
       url: imageUrl,
@@ -370,6 +402,15 @@ class ProductImageCacheService {
     });
 
     console.log(`[ProductImageCacheService] ✅ NATIVE IMAGE SAVED for ${product.id}`);
+    if (posImageDebugMatchesRaw(product)) {
+      posImageDebugLog('saveLocalImage: success', {
+        productId: product.id,
+        imageUrl,
+        imageVersion,
+        fileUri,
+        renderablePath,
+      });
+    }
     return true;
   }
 
@@ -432,6 +473,12 @@ class ProductImageCacheService {
       }
 
       const localProduct = this.findLocalProductMatch(rawItem, lookups);
+      if (posImageDebugMatchesRaw(rawItem)) {
+        posImageDebugLog('syncSnapshotItems: local match', {
+          rawItem: posCatalogDebugSummarizeItem(rawItem),
+          localProduct: localProduct ? posCatalogDebugSummarizeItem(localProduct as any) : null,
+        });
+      }
       if (!localProduct) {
         skipped += 1;
         continue;
@@ -439,9 +486,24 @@ class ProductImageCacheService {
 
       const imageUrl = this.resolveRemoteImageUrl(rawItem);
       const imageVersion = this.resolveRemoteImageVersion(rawItem, imageUrl);
+      if (posImageDebugMatchesRaw(rawItem)) {
+        posImageDebugLog('syncSnapshotItems: resolved image', {
+          rawItem: posCatalogDebugSummarizeItem(rawItem),
+          localProduct: posCatalogDebugSummarizeItem(localProduct as any),
+          imageUrl,
+          imageVersion,
+        });
+      }
 
       if (!imageUrl) {
         const cleared = await this.clearCachedImage(localProduct);
+        if (posImageDebugMatchesRaw(rawItem)) {
+          posImageDebugLog('syncSnapshotItems: no image url', {
+            cleared,
+            rawItem: posCatalogDebugSummarizeItem(rawItem),
+            localProduct: posCatalogDebugSummarizeItem(localProduct as any),
+          });
+        }
         if (cleared) touched += 1;
         skipped += 1;
         continue;
@@ -453,6 +515,14 @@ class ProductImageCacheService {
         (this.isNativeAndroid() ? asString(localProduct.imageLocalPath).length > 0 : asString(localProduct.image).length > 0);
 
       if (sameVersion) {
+        if (posImageDebugMatchesRaw(rawItem)) {
+          posImageDebugLog('syncSnapshotItems: same version skip', {
+            rawItem: posCatalogDebugSummarizeItem(rawItem),
+            localProduct: posCatalogDebugSummarizeItem(localProduct as any),
+            imageUrl,
+            imageVersion,
+          });
+        }
         skipped += 1;
         continue;
       }
@@ -472,6 +542,16 @@ class ProductImageCacheService {
         }
       } catch (error) {
         failed += 1;
+        if (posImageDebugMatchesRaw(rawItem)) {
+          posImageDebugLog('syncSnapshotItems: download failed', {
+            rawItem: posCatalogDebugSummarizeItem(rawItem),
+            localProduct: posCatalogDebugSummarizeItem(localProduct as any),
+            imageUrl,
+            imageVersion,
+            error: String((error as Error)?.message || error),
+            errorJson: JSON.stringify(error, Object.getOwnPropertyNames(error as object)),
+          });
+        }
         console.error(`[ProductImageCacheService] 🚨 FAILED TO DOWNLOAD/CACHE ${itemId}:`, error);
         this.logger.warn(`[ProductImageCacheService] Failed to cache image for ${itemId}:`, error);
       }
