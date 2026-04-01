@@ -125,7 +125,7 @@ import {
 } from './utils/cloudMasterRegistry';
 import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, persistStoredErpSyncBinding } from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
-import { posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
+import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
 import {
   canRetryFiscalTransaction,
   getFiscalComplianceConfig,
@@ -2201,6 +2201,7 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     // --- SYNC EVENT LISTENERS (For Slave Terminals) ---
     const handleSyncUpdate = async (event: Event) => {
+      const startedAt = posCatalogDebugNow();
       const collection = event.type.replace('Updated', '');
       console.log(`🔔 App: Sync update received for ${collection}. Refreshing state...`);
 
@@ -2219,6 +2220,7 @@ const AppContent: React.FC = () => {
             if (matching.length > 0) {
               posCatalogDebugLog('App: productsUpdated → setProducts', {
                 count: Array.isArray(freshData) ? freshData.length : 0,
+                elapsedMs: posCatalogDebugElapsedMs(startedAt),
                 matching,
               });
               void posCatalogDebugLogDbRows('App handleSyncUpdate after setProducts');

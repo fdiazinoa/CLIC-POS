@@ -26,9 +26,11 @@ import {
     resolveDocumentSeriesDisplayPrefix,
 } from '../../utils/documentSeriesIdentity';
 import {
+    posCatalogDebugElapsedMs,
     posCatalogDebugLog,
     posCatalogDebugLogDbRows,
     posCatalogDebugMatchesRaw,
+    posCatalogDebugNow,
     posCatalogDebugSummarizeItem,
 } from '../../utils/posCatalogDebugTrace';
 
@@ -685,6 +687,7 @@ class SyncManager {
         }
     ): Promise<BusinessConfig | null> {
         if (this.isDisabled) return null;
+        const refreshStartedAt = posCatalogDebugNow();
 
         const loadedConfig = options?.baseConfig ?? (await db.get('config') as unknown);
         const baseConfig = loadedConfig && !Array.isArray(loadedConfig)
@@ -774,6 +777,7 @@ class SyncManager {
             let lastFetchError: unknown = null;
 
             for (const endpointCandidate of endpointCandidates) {
+                const fetchAttemptStartedAt = posCatalogDebugNow();
                 const params = new URLSearchParams();
                 if (context.tenantId) params.set('tenant_id', context.tenantId);
                 if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
@@ -823,6 +827,7 @@ class SyncManager {
                         source: payload?.source || null,
                         endpointMode: endpointCandidate.mode,
                         contentType: responseContentType,
+                        elapsedMs: posCatalogDebugElapsedMs(fetchAttemptStartedAt),
                         usedCatalogDelta: Boolean(catalogDelta),
                         nextCatalogCursor,
                         traceRows,
@@ -853,6 +858,7 @@ class SyncManager {
                         endpointMode: endpointCandidate.mode,
                         endpointBaseUrl: endpointCandidate.baseUrl,
                         hasPendingSnapshot: Boolean(pendingSnapshot),
+                        elapsedMs: posCatalogDebugElapsedMs(fetchAttemptStartedAt),
                         error: String((remoteSnapshotError as Error)?.message || remoteSnapshotError),
                     });
                 }
@@ -883,15 +889,21 @@ class SyncManager {
         }
 
         try {
+            const applyStartedAt = posCatalogDebugNow();
             if (catalogDelta) {
                 await this.applyCatalogDelta(catalogDelta);
             } else {
                 await this.applySnapshotProducts(snapshot);
             }
             await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
+            posCatalogDebugLog('refreshTerminalResolvedConfig: product apply success', {
+                usedCatalogDelta: Boolean(catalogDelta),
+                elapsedMs: posCatalogDebugElapsedMs(applyStartedAt),
+            });
         } catch (error) {
             console.warn('⚠️ SyncManager: Could not apply snapshot products from terminal config push:', error);
             posCatalogDebugLog('refreshTerminalResolvedConfig: product apply failed', {
+                elapsedMs: posCatalogDebugElapsedMs(refreshStartedAt),
                 error: String((error as Error)?.message || error),
             });
         }
@@ -936,10 +948,18 @@ class SyncManager {
             window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfig }));
         }
 
+        posCatalogDebugLog('refreshTerminalResolvedConfig: completed', {
+            changed,
+            usedCatalogDelta: Boolean(catalogDelta),
+            nextCatalogCursor,
+            elapsedMs: posCatalogDebugElapsedMs(refreshStartedAt),
+        });
+
         return nextConfig;
     }
 
     private async applySnapshotProducts(snapshot: unknown): Promise<number> {
+        const startedAt = posCatalogDebugNow();
         const rawItems = Array.isArray((snapshot as any)?.masters?.items)
             ? (snapshot as any).masters.items
             : [];
@@ -1045,7 +1065,12 @@ class SyncManager {
             }
         }
 
+        const imageSyncStartedAt = posCatalogDebugNow();
         await productImageCacheService.syncSnapshotItems(normalizedItems as Product[]);
+        posCatalogDebugLog('applySnapshotProducts: syncSnapshotItems complete', {
+            elapsedMs: posCatalogDebugElapsedMs(imageSyncStartedAt),
+            normalizedCount: normalizedItems.length,
+        });
         if (traceRaw.length > 0) {
             await posCatalogDebugLogDbRows('after applySnapshotProducts syncSnapshotItems');
         }
@@ -1053,6 +1078,14 @@ class SyncManager {
         if (updatedCount > 0) {
             window.dispatchEvent(new CustomEvent('productsUpdated'));
         }
+
+        posCatalogDebugLog('applySnapshotProducts: completed', {
+            rawCount: rawItems.length,
+            normalizedCount: normalizedItems.length,
+            updatedCount,
+            duplicateDeletes: duplicateIdsToRemove.size,
+            elapsedMs: posCatalogDebugElapsedMs(startedAt),
+        });
 
         return updatedCount;
     }

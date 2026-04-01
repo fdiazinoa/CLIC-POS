@@ -69,6 +69,23 @@ export const posCatalogDebugLog = (stage: string, payload?: Record<string, unkno
   }
 };
 
+export const posCatalogDebugNow = (): number => {
+  try {
+    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+      return performance.now();
+    }
+  } catch {
+    // ignore
+  }
+
+  return Date.now();
+};
+
+export const posCatalogDebugElapsedMs = (startedAt: number): number => {
+  const elapsed = posCatalogDebugNow() - startedAt;
+  return Number.isFinite(elapsed) ? Math.round(elapsed) : 0;
+};
+
 export async function posCatalogDebugLogDbRows(reason: string): Promise<void> {
   try {
     const products = (await db.get('products')) as Record<string, unknown>[];
