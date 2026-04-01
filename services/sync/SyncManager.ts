@@ -599,6 +599,37 @@ class SyncManager {
             return 0;
         }
 
+        const localProducts = (await db.get('products')) as Product[];
+        const localById = new Map<string, Product>();
+        const localByBarcode = new Map<string, Product>();
+        const localByCode = new Map<string, Product>();
+
+        for (const product of Array.isArray(localProducts) ? localProducts : []) {
+            const localId = typeof product?.id === 'string' ? product.id.trim() : String(product?.id || '').trim();
+            if (!localId) continue;
+
+            localById.set(localId, product);
+
+            const barcode = typeof product?.barcode === 'string' ? product.barcode.trim() : String(product?.barcode || '').trim();
+            if (barcode && !localByBarcode.has(barcode)) {
+                localByBarcode.set(barcode, product);
+            }
+
+            const codeCandidates = [
+                localId,
+                typeof (product as any)?.sku === 'string' ? (product as any).sku.trim() : String((product as any)?.sku || '').trim(),
+                typeof (product as any)?.item_code === 'string' ? (product as any).item_code.trim() : String((product as any)?.item_code || '').trim(),
+                typeof (product as any)?.code === 'string' ? (product as any).code.trim() : String((product as any)?.code || '').trim(),
+                barcode,
+            ].filter(Boolean);
+
+            for (const code of codeCandidates) {
+                if (!localByCode.has(code)) {
+                    localByCode.set(code, product);
+                }
+            }
+        }
+
         const traceRaw = rawItems.filter((row: unknown) => posImageDebugMatchesRaw(row));
         if (traceRaw.length > 0) {
             posImageDebugLog('applySnapshotProducts: raw masters.items', {
@@ -619,10 +650,56 @@ class SyncManager {
         let updatedCount = 0;
         const duplicateIdsToRemove = new Set<string>();
 
-        for (const [index, item] of normalizedItems.entries()) {
-            if (!item?.id) continue;
+        for (const [index, normalizedItem] of normalizedItems.entries()) {
+            if (!normalizedItem?.id) continue;
             const rawItem = rawItems[index] as Record<string, unknown> | undefined;
             const rawId = typeof rawItem?.id === 'string' ? rawItem.id.trim() : String(rawItem?.id || '').trim();
+            let item = normalizedItem;
+
+            const canonicalLocalProduct = (() => {
+                const incomingCodes = new Set<string>();
+                if (rawItem) {
+                    for (const code of posImageDebugIncomingCodes(rawItem)) {
+                        if (code) incomingCodes.add(code);
+                    }
+                }
+                for (const code of posImageDebugIncomingCodes(item as Record<string, unknown>)) {
+                    if (code) incomingCodes.add(code);
+                }
+
+                for (const code of incomingCodes) {
+                    if (localById.has(code)) return localById.get(code);
+                }
+                for (const code of incomingCodes) {
+                    if (localByCode.has(code)) return localByCode.get(code);
+                }
+                for (const code of incomingCodes) {
+                    if (localByBarcode.has(code)) return localByBarcode.get(code);
+                }
+                return undefined;
+            })();
+
+            if (canonicalLocalProduct?.id && canonicalLocalProduct.id !== item.id) {
+                item = {
+                    ...canonicalLocalProduct,
+                    ...item,
+                    id: canonicalLocalProduct.id,
+                };
+
+                if (posImageDebugMatchesRaw(rawItem) || posImageDebugMatchesRaw(item)) {
+                    posImageDebugLog('applySnapshotProducts: forced canonical local product match', {
+                        rawId,
+                        previousNormalizedId: typeof normalizedItem.id === 'string' ? normalizedItem.id.trim() : String(normalizedItem.id || '').trim(),
+                        canonicalLocalId: canonicalLocalProduct.id,
+                        barcode: (item as any).barcode ?? (rawItem as any)?.barcode ?? null,
+                        incomingCodes: Array.from(new Set([
+                            ...posImageDebugIncomingCodes(rawItem || {}),
+                            ...posImageDebugIncomingCodes(item as Record<string, unknown>),
+                        ])),
+                    });
+                }
+            }
+
             const normalizedId = typeof item.id === 'string' ? item.id.trim() : String(item.id || '').trim();
 
             if (rawId && normalizedId && rawId !== normalizedId) {
@@ -646,6 +723,16 @@ class SyncManager {
                 });
             }
             await db.saveDocument('products', item);
+            localById.set(normalizedId, item as Product);
+            const savedBarcode = typeof (item as any)?.barcode === 'string' ? (item as any).barcode.trim() : String((item as any)?.barcode || '').trim();
+            if (savedBarcode) {
+                localByBarcode.set(savedBarcode, item as Product);
+            }
+            for (const code of posImageDebugIncomingCodes(item as Record<string, unknown>)) {
+                if (code) {
+                    localByCode.set(code, item as Product);
+                }
+            }
             updatedCount += 1;
         }
 
