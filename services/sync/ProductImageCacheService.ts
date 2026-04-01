@@ -344,6 +344,7 @@ class ProductImageCacheService {
       path: relativePath,
       directory: Directory.Data,
       progress: false,
+      recursive: true,
     });
 
     const uriResult = await Filesystem.getUri({
