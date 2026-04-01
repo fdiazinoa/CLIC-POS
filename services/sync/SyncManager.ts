@@ -10,9 +10,11 @@ import { dbAdapter } from '../db';
 import { apiSyncAdapter, ProductImageManifestItem, ProductImagePayloadItem } from './ApiSyncAdapter';
 import { NetworkScanner } from './NetworkScanner';
 import { v4 as uuidv4 } from 'uuid';
+import { Capacitor } from '@capacitor/core';
 import { permissionService } from './PermissionService';
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { productImageCacheService } from './ProductImageCacheService';
+import { masterDataImageCacheService, type ImageBackedCollection } from './MasterDataImageCacheService';
 import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig } from '../../types';
 import {
     applyTerminalConfigSnapshot,
@@ -24,6 +26,14 @@ import {
     looksLikeUuidString,
     resolveDocumentSeriesDisplayPrefix,
 } from '../../utils/documentSeriesIdentity';
+import {
+    posCatalogDebugElapsedMs,
+    posCatalogDebugLog,
+    posCatalogDebugLogDbRows,
+    posCatalogDebugMatchesRaw,
+    posCatalogDebugNow,
+    posCatalogDebugSummarizeItem,
+} from '../../utils/posCatalogDebugTrace';
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities';
 
@@ -54,6 +64,10 @@ class SyncManager {
 
     public isInitialized: boolean = false;
 
+    private isImageBackedCollection(collection: SyncableCollection): collection is ImageBackedCollection {
+        return collection === 'customers' || collection === 'suppliers';
+    }
+
     private normalizeMasterUrlForStorage(value: string): string {
         const trimmed = value.trim();
         if (!trimmed) return '';
@@ -75,6 +89,72 @@ class SyncManager {
                 Number.isFinite(numericPort) && numericPort > 0 ? numericPort : 3001,
             );
         }
+    }
+
+    private resolveConfigErpBaseUrl(value: unknown): string | null {
+        const raw = typeof value === 'string' ? value.trim() : '';
+        if (!raw) return null;
+
+        const withProtocol = /^https?:\/\//i.test(raw) ? raw : `${window.location.protocol}//${raw}`;
+
+        try {
+            const url = new URL(withProtocol);
+            return url
+                .toString()
+                .replace(/\/api\/sync\/?$/i, '')
+                .replace(/\/api\/?$/i, '')
+                .replace(/\/+$/, '');
+        } catch {
+            return null;
+        }
+    }
+
+    private resolveSyncApiBase(value: unknown): string | null {
+        const normalizedBase = this.resolveConfigErpBaseUrl(value);
+        return normalizedBase ? `${normalizedBase}/api/sync` : null;
+    }
+
+    private shouldUseAbsoluteTerminalConfigEndpoint(): boolean {
+        try {
+            return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+        } catch {
+            return false;
+        }
+    }
+
+    private resolveTerminalConfigSyncApiBase(context: { erpBaseUrl: string | null }): string | null {
+        const env = (import.meta as any)?.env || {};
+        const candidates = [
+            localStorage.getItem('CLIC_ERP_SYNC_URL'),
+            env.VITE_SYNC_API_URL,
+            env.VITE_ERP_SYNC_API_URL,
+            context.erpBaseUrl,
+            localStorage.getItem('CLIC_ERP_BASE_URL'),
+            localStorage.getItem('erp_base_url'),
+            env.VITE_ERP_BASE_URL,
+        ];
+
+        for (const candidate of candidates) {
+            const resolved = this.resolveSyncApiBase(candidate);
+            if (resolved) {
+                return resolved;
+            }
+        }
+
+        return null;
+    }
+
+    private resolveLocalSyncApiBaseCandidates(): string[] {
+        const candidates = [
+            'http://127.0.0.1:3001/api/sync',
+            'http://localhost:3001/api/sync',
+        ];
+
+        if (window.location.protocol.startsWith('http') && window.location.hostname) {
+            candidates.unshift(`${window.location.protocol}//${window.location.hostname}:3001/api/sync`);
+        }
+
+        return Array.from(new Set(candidates.map((value) => value.trim()).filter(Boolean)));
     }
 
     /**
@@ -442,10 +522,15 @@ class SyncManager {
             currentTerminal?.config?.erpBinding?.tenantId ||
             localStorage.getItem('clic_erp_sync_tenant_id') ||
             localStorage.getItem('active_tenant_id') ||
+            localStorage.getItem('clic_tenant_id') ||
             null;
         const erpBaseUrl =
-            localStorage.getItem('CLIC_ERP_BASE_URL') ||
-            localStorage.getItem('erp_base_url') ||
+            this.resolveConfigErpBaseUrl(localStorage.getItem('CLIC_ERP_BASE_URL')) ||
+            this.resolveConfigErpBaseUrl(localStorage.getItem('erp_base_url')) ||
+            this.resolveConfigErpBaseUrl(localStorage.getItem('CLIC_ERP_SYNC_URL')) ||
+            this.resolveConfigErpBaseUrl((import.meta as any)?.env?.VITE_ERP_BASE_URL) ||
+            this.resolveConfigErpBaseUrl((import.meta as any)?.env?.VITE_ERP_SYNC_API_URL) ||
+            this.resolveConfigErpBaseUrl((import.meta as any)?.env?.VITE_SYNC_API_URL) ||
             null;
 
         const posDeviceId =
@@ -506,11 +591,11 @@ class SyncManager {
         ));
     }
 
-    private async deleteSnapshotProducts(itemsToDelete: unknown[]): Promise<number> {
-        const incoming = Array.isArray(itemsToDelete) ? itemsToDelete : [];
-        if (incoming.length === 0) return 0;
-
-        const localProducts = (await db.get('products')) as Product[];
+    private buildLocalProductLookupMaps(localProducts: Product[]): {
+        localById: Map<string, Product>;
+        localByBarcode: Map<string, Product>;
+        localByCode: Map<string, Product>;
+    } {
         const localById = new Map<string, Product>();
         const localByBarcode = new Map<string, Product>();
         const localByCode = new Map<string, Product>();
@@ -541,6 +626,16 @@ class SyncManager {
             }
         }
 
+        return { localById, localByBarcode, localByCode };
+    }
+
+    private async deleteSnapshotProducts(itemsToDelete: unknown[]): Promise<number> {
+        const incoming = Array.isArray(itemsToDelete) ? itemsToDelete : [];
+        if (incoming.length === 0) return 0;
+
+        const localProducts = (await db.get('products')) as Product[];
+        const { localById, localByBarcode, localByCode } = this.buildLocalProductLookupMaps(localProducts);
+
         const idsToDelete = new Set<string>();
 
         for (const rawItem of incoming) {
@@ -569,21 +664,131 @@ class SyncManager {
         return idsToDelete.size;
     }
 
+    private imageBackedDeleteCandidates(
+        collection: ImageBackedCollection,
+        item: Record<string, unknown>
+    ): string[] {
+        const candidates = [
+            typeof item.id === 'string' ? item.id.trim() : String(item.id || '').trim(),
+            typeof item.taxId === 'string' ? item.taxId.trim() : String(item.taxId || '').trim(),
+            typeof item.email === 'string' ? item.email.trim().toLowerCase() : String(item.email || '').trim().toLowerCase(),
+            typeof item.phone === 'string' ? item.phone.trim() : String(item.phone || '').trim(),
+        ].filter(Boolean);
+
+        if (collection === 'customers') {
+            return [
+                ...candidates,
+                typeof item.name === 'string' ? item.name.trim() : String(item.name || '').trim(),
+            ].filter(Boolean);
+        }
+
+        return candidates;
+    }
+
+    private async deleteSnapshotImageBackedCollection(
+        collection: ImageBackedCollection,
+        itemsToDelete: unknown[]
+    ): Promise<number> {
+        const incoming = Array.isArray(itemsToDelete) ? itemsToDelete : [];
+        if (incoming.length === 0) return 0;
+
+        const localItems = (await db.get(collection)) as Record<string, unknown>[];
+        const byId = new Map<string, string>();
+        const byTaxId = new Map<string, string>();
+        const byEmail = new Map<string, string>();
+        const byPhone = new Map<string, string>();
+        const byName = new Map<string, string>();
+
+        for (const localItem of Array.isArray(localItems) ? localItems : []) {
+            const localId = typeof localItem?.id === 'string' ? localItem.id.trim() : String(localItem?.id || '').trim();
+            if (!localId) continue;
+
+            byId.set(localId, localId);
+
+            const taxId = typeof localItem?.taxId === 'string' ? localItem.taxId.trim() : String(localItem?.taxId || '').trim();
+            if (taxId) byTaxId.set(taxId, localId);
+
+            const email = typeof localItem?.email === 'string' ? localItem.email.trim().toLowerCase() : String(localItem?.email || '').trim().toLowerCase();
+            if (email) byEmail.set(email, localId);
+
+            const phone = typeof localItem?.phone === 'string' ? localItem.phone.trim() : String(localItem?.phone || '').trim();
+            if (phone) byPhone.set(phone, localId);
+
+            if (collection === 'customers') {
+                const name = typeof localItem?.name === 'string' ? localItem.name.trim() : String(localItem?.name || '').trim();
+                if (name) byName.set(name, localId);
+            }
+        }
+
+        const idsToDelete = new Set<string>();
+
+        for (const rawItem of incoming) {
+            const item = rawItem && typeof rawItem === 'object' && !Array.isArray(rawItem)
+                ? (rawItem as Record<string, unknown>)
+                : {};
+
+            for (const candidate of this.imageBackedDeleteCandidates(collection, item)) {
+                const normalized = candidate.trim();
+                if (!normalized) continue;
+
+                const match =
+                    byId.get(normalized) ||
+                    byTaxId.get(normalized) ||
+                    byEmail.get(normalized.toLowerCase()) ||
+                    byPhone.get(normalized) ||
+                    (collection === 'customers' ? byName.get(normalized) : undefined);
+
+                if (match) {
+                    idsToDelete.add(match);
+                }
+            }
+        }
+
+        for (const id of idsToDelete) {
+            await db.deleteDocument(collection, id);
+        }
+
+        if (idsToDelete.size > 0) {
+            window.dispatchEvent(new CustomEvent(`${collection}Updated`));
+        }
+
+        return idsToDelete.size;
+    }
+
     private async applyCatalogDelta(deltaPayload: unknown): Promise<{ upserted: number; deleted: number }> {
         const delta = deltaPayload && typeof deltaPayload === 'object'
             ? (deltaPayload as Record<string, unknown>)
             : {};
         const itemsUpsert = Array.isArray(delta.items_upsert) ? delta.items_upsert : [];
         const itemsDelete = Array.isArray(delta.items_delete) ? delta.items_delete : [];
+        const customersUpsert = Array.isArray(delta.customers_upsert) ? delta.customers_upsert : [];
+        const customersDelete = Array.isArray(delta.customers_delete) ? delta.customers_delete : [];
+        const suppliersUpsert = Array.isArray(delta.suppliers_upsert) ? delta.suppliers_upsert : [];
+        const suppliersDelete = Array.isArray(delta.suppliers_delete) ? delta.suppliers_delete : [];
 
-        const upserted = itemsUpsert.length > 0
+        const productUpserted = itemsUpsert.length > 0
             ? await this.applySnapshotProducts({ masters: { items: itemsUpsert } })
             : 0;
-        const deleted = itemsDelete.length > 0
+        const productDeleted = itemsDelete.length > 0
             ? await this.deleteSnapshotProducts(itemsDelete)
             : 0;
+        const customerUpserted = customersUpsert.length > 0
+            ? await this.applySnapshotImageBackedCollection('customers', customersUpsert)
+            : 0;
+        const customerDeleted = customersDelete.length > 0
+            ? await this.deleteSnapshotImageBackedCollection('customers', customersDelete)
+            : 0;
+        const supplierUpserted = suppliersUpsert.length > 0
+            ? await this.applySnapshotImageBackedCollection('suppliers', suppliersUpsert)
+            : 0;
+        const supplierDeleted = suppliersDelete.length > 0
+            ? await this.deleteSnapshotImageBackedCollection('suppliers', suppliersDelete)
+            : 0;
 
-        return { upserted, deleted };
+        return {
+            upserted: productUpserted + customerUpserted + supplierUpserted,
+            deleted: productDeleted + customerDeleted + supplierDeleted,
+        };
     }
 
     async refreshTerminalResolvedConfig(
@@ -592,9 +797,12 @@ class SyncManager {
             baseConfig?: BusinessConfig | null;
             persist?: boolean;
             dispatchEvent?: boolean;
+            forceRemoteFetch?: boolean;
+            forceFullCatalog?: boolean;
         }
     ): Promise<BusinessConfig | null> {
         if (this.isDisabled) return null;
+        const refreshStartedAt = posCatalogDebugNow();
 
         const loadedConfig = options?.baseConfig ?? (await db.get('config') as unknown);
         const baseConfig = loadedConfig && !Array.isArray(loadedConfig)
@@ -617,52 +825,178 @@ class SyncManager {
         let nextCatalogCursor: string | null = null;
 
         let snapshot = extractTerminalConfigSnapshot(snapshotOverride);
+        const pendingSnapshot = snapshot
+            ? null
+            : this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
+        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
+        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
+        const endpointCandidates = useAbsoluteEndpoint
+            ? [
+                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
+                    baseUrl,
+                    mode: 'local-loopback-proxy',
+                    includeErpBaseUrl: true,
+                })),
+                ...(syncApiBase
+                    ? [{
+                        baseUrl: syncApiBase,
+                        mode: 'absolute-sync-api',
+                        includeErpBaseUrl: false,
+                    }]
+                    : []),
+            ]
+            : [{
+                baseUrl: '/api/sync',
+                mode: 'relative-local-proxy',
+                includeErpBaseUrl: true,
+            }];
+        const canFetchRemote = Boolean(
+            context.terminalId &&
+            context.tenantId &&
+            endpointCandidates.length > 0
+        );
+        const allowPendingFallback = !options?.forceRemoteFetch;
 
-        if (!snapshot) {
-            snapshot = this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
+        posCatalogDebugLog('refreshTerminalResolvedConfig: context', {
+            terminalId: context.terminalId,
+            localTerminalId: snapshotTerminalId,
+            tenantIdPresent: Boolean(context.tenantId),
+            erpBaseUrlPresent: Boolean(context.erpBaseUrl),
+            syncApiBasePresent: Boolean(syncApiBase),
+            useAbsoluteEndpoint,
+            endpointCandidates: endpointCandidates.map((candidate) => ({
+                mode: candidate.mode,
+                baseUrl: candidate.baseUrl,
+            })),
+            forceRemoteFetch: Boolean(options?.forceRemoteFetch),
+            forceFullCatalog: Boolean(options?.forceFullCatalog),
+            hasCatalogCursor: Boolean(currentCatalogCursor),
+            hasPendingSnapshot: Boolean(pendingSnapshot),
+        });
+
+        if (!snapshot && options?.forceRemoteFetch && !canFetchRemote) {
+            posCatalogDebugLog('refreshTerminalResolvedConfig: remote fetch unavailable', {
+                terminalId: context.terminalId,
+                localTerminalId: snapshotTerminalId,
+                tenantId: context.tenantId || null,
+                erpBaseUrl: context.erpBaseUrl || null,
+                syncApiBase: syncApiBase || null,
+                endpointCandidates: endpointCandidates.map((candidate) => ({
+                    mode: candidate.mode,
+                    baseUrl: candidate.baseUrl,
+                })),
+            });
         }
 
-        if (!snapshot) {
-            const params = new URLSearchParams();
-            if (context.tenantId) params.set('tenant_id', context.tenantId);
-            if (context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
-            if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
-            if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
-            if (currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
+        if (!snapshot && canFetchRemote) {
+            let lastFetchError: unknown = null;
 
-            const endpoint = `/api/sync/terminals/${encodeURIComponent(context.terminalId)}/config${params.toString() ? `?${params.toString()}` : ''}`;
-            const response = await fetch(endpoint);
-            if (!response.ok) {
-                const detail = await response.text().catch(() => '');
-                throw new Error(detail || `No se pudo refrescar la configuración de terminal (${response.status}).`);
+            for (const endpointCandidate of endpointCandidates) {
+                const fetchAttemptStartedAt = posCatalogDebugNow();
+                const params = new URLSearchParams();
+                if (context.tenantId) params.set('tenant_id', context.tenantId);
+                if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
+                if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+                if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
+                if (!options?.forceFullCatalog && currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
+
+                try {
+                    const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/config`;
+                    const endpoint = `${endpointCandidate.baseUrl}${endpointPath}${params.toString() ? `?${params.toString()}` : ''}`;
+                    posCatalogDebugLog('refreshTerminalResolvedConfig: fetch begin', {
+                        endpoint,
+                        endpointMode: endpointCandidate.mode,
+                        forceRemoteFetch: Boolean(options?.forceRemoteFetch),
+                        forceFullCatalog: Boolean(options?.forceFullCatalog),
+                        catalogCursorSent: !options?.forceFullCatalog ? currentCatalogCursor : null,
+                    });
+                    const response = await fetch(endpoint, {
+                        headers: {
+                            Accept: 'application/json',
+                        },
+                    });
+                    if (!response.ok) {
+                        const detail = await response.text().catch(() => '');
+                        throw new Error(detail || `No se pudo refrescar la configuración de terminal (${response.status}).`);
+                    }
+
+                    const responseContentType = response.headers.get('content-type') || null;
+                    payload = await response.json();
+                    snapshot = extractTerminalConfigSnapshot(payload?.terminal_config ?? payload);
+                    catalogDelta = payload?.catalog_delta && typeof payload.catalog_delta === 'object'
+                        ? payload.catalog_delta
+                        : null;
+                    nextCatalogCursor =
+                        typeof payload?.snapshot_meta?.catalog_cursor === 'string'
+                            ? payload.snapshot_meta.catalog_cursor.trim() || null
+                            : null;
+
+                    const snapshotMasters = (snapshot as any)?.masters;
+                    const traceRows = Array.isArray(snapshotMasters?.items)
+                        ? snapshotMasters.items
+                            .filter((item: unknown) => posCatalogDebugMatchesRaw(item))
+                            .map((item: Record<string, unknown>) => posCatalogDebugSummarizeItem(item))
+                        : [];
+
+                    posCatalogDebugLog('refreshTerminalResolvedConfig: fetch success', {
+                        source: payload?.source || null,
+                        endpointMode: endpointCandidate.mode,
+                        contentType: responseContentType,
+                        elapsedMs: posCatalogDebugElapsedMs(fetchAttemptStartedAt),
+                        usedCatalogDelta: Boolean(catalogDelta),
+                        nextCatalogCursor,
+                        traceRows,
+                    });
+
+                    if (!snapshot && payload?.config && !Array.isArray(payload.config)) {
+                        const incomingConfig = payload.config as BusinessConfig;
+                        const changed =
+                            JSON.stringify(this.sanitizeConfig(baseConfig)) !==
+                            JSON.stringify(this.sanitizeConfig(incomingConfig));
+
+                        if (options?.persist !== false && changed) {
+                            await db.save('config', incomingConfig);
+                        }
+
+                        if (options?.dispatchEvent !== false && changed) {
+                            window.dispatchEvent(new CustomEvent('configUpdated', { detail: incomingConfig }));
+                        }
+
+                        return incomingConfig;
+                    }
+
+                    break;
+                } catch (remoteSnapshotError) {
+                    lastFetchError = remoteSnapshotError;
+                    posCatalogDebugLog('refreshTerminalResolvedConfig: fetch failed', {
+                        allowPendingFallback,
+                        endpointMode: endpointCandidate.mode,
+                        endpointBaseUrl: endpointCandidate.baseUrl,
+                        hasPendingSnapshot: Boolean(pendingSnapshot),
+                        elapsedMs: posCatalogDebugElapsedMs(fetchAttemptStartedAt),
+                        error: String((remoteSnapshotError as Error)?.message || remoteSnapshotError),
+                    });
+                }
             }
 
-            payload = await response.json();
-            snapshot = extractTerminalConfigSnapshot(payload?.terminal_config ?? payload);
-            catalogDelta = payload?.catalog_delta && typeof payload.catalog_delta === 'object'
-                ? payload.catalog_delta
-                : null;
-            nextCatalogCursor =
-                typeof payload?.snapshot_meta?.catalog_cursor === 'string'
-                    ? payload.snapshot_meta.catalog_cursor.trim() || null
-                    : null;
-
-            if (!snapshot && payload?.config && !Array.isArray(payload.config)) {
-                const incomingConfig = payload.config as BusinessConfig;
-                const changed =
-                    JSON.stringify(this.sanitizeConfig(baseConfig)) !==
-                    JSON.stringify(this.sanitizeConfig(incomingConfig));
-
-                if (options?.persist !== false && changed) {
-                    await db.save('config', incomingConfig);
+            if (!snapshot && lastFetchError) {
+                if (!pendingSnapshot || !allowPendingFallback) {
+                    throw lastFetchError;
                 }
-
-                if (options?.dispatchEvent !== false && changed) {
-                    window.dispatchEvent(new CustomEvent('configUpdated', { detail: incomingConfig }));
-                }
-
-                return incomingConfig;
+                console.warn('⚠️ SyncManager: Could not fetch remote terminal snapshot. Falling back to pending snapshot.', lastFetchError);
             }
+        }
+
+        if (!snapshot && pendingSnapshot && allowPendingFallback) {
+            const traceRows = Array.isArray(pendingSnapshot?.masters?.items)
+                ? pendingSnapshot.masters.items
+                    .filter((item: unknown) => posCatalogDebugMatchesRaw(item))
+                    .map((item: Record<string, unknown>) => posCatalogDebugSummarizeItem(item))
+                : [];
+            posCatalogDebugLog('refreshTerminalResolvedConfig: using pending snapshot fallback', {
+                traceRows,
+            });
+            snapshot = pendingSnapshot;
         }
 
         if (!snapshot) {
@@ -670,13 +1004,23 @@ class SyncManager {
         }
 
         try {
+            const applyStartedAt = posCatalogDebugNow();
             if (catalogDelta) {
                 await this.applyCatalogDelta(catalogDelta);
             } else {
                 await this.applySnapshotProducts(snapshot);
             }
+            await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
+            posCatalogDebugLog('refreshTerminalResolvedConfig: product apply success', {
+                usedCatalogDelta: Boolean(catalogDelta),
+                elapsedMs: posCatalogDebugElapsedMs(applyStartedAt),
+            });
         } catch (error) {
             console.warn('⚠️ SyncManager: Could not apply snapshot products from terminal config push:', error);
+            posCatalogDebugLog('refreshTerminalResolvedConfig: product apply failed', {
+                elapsedMs: posCatalogDebugElapsedMs(refreshStartedAt),
+                error: String((error as Error)?.message || error),
+            });
         }
 
         const applied = applyTerminalConfigSnapshot(baseConfig, {
@@ -715,14 +1059,28 @@ class SyncManager {
             this.persistCatalogCursor(snapshotTerminalId, nextCatalogCursor);
         }
 
+        try {
+            await this.refreshTerminalSupplementalMasterData(snapshot, catalogDelta);
+        } catch (error) {
+            console.warn('⚠️ SyncManager: Supplemental customer/supplier refresh failed after terminal config update:', error);
+        }
+
         if (options?.dispatchEvent !== false && changed) {
             window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfig }));
         }
+
+        posCatalogDebugLog('refreshTerminalResolvedConfig: completed', {
+            changed,
+            usedCatalogDelta: Boolean(catalogDelta),
+            nextCatalogCursor,
+            elapsedMs: posCatalogDebugElapsedMs(refreshStartedAt),
+        });
 
         return nextConfig;
     }
 
     private async applySnapshotProducts(snapshot: unknown): Promise<number> {
+        const startedAt = posCatalogDebugNow();
         const rawItems = Array.isArray((snapshot as any)?.masters?.items)
             ? (snapshot as any).masters.items
             : [];
@@ -732,21 +1090,213 @@ class SyncManager {
         }
 
         const normalizedItems = await this.enrichPulledProducts(rawItems);
+        const localProducts = (await db.get('products')) as Product[];
+        const { localById, localByBarcode, localByCode } = this.buildLocalProductLookupMaps(localProducts);
         let updatedCount = 0;
+        const duplicateIdsToRemove = new Set<string>();
+        const traceRaw = rawItems.filter((item: unknown) => posCatalogDebugMatchesRaw(item));
 
-        for (const item of normalizedItems) {
+        if (traceRaw.length > 0) {
+            posCatalogDebugLog('applySnapshotProducts: raw snapshot items', {
+                traceRows: traceRaw.map((item: Record<string, unknown>) => posCatalogDebugSummarizeItem(item)),
+            });
+        }
+
+        for (const [index, normalizedItem] of normalizedItems.entries()) {
+            if (!normalizedItem?.id) continue;
+            const rawItem = rawItems[index] as Record<string, unknown> | undefined;
+            let item = normalizedItem;
+
+            const incomingCodes = new Set<string>([
+                ...this.catalogDeleteCandidates(rawItem || null),
+                ...this.catalogDeleteCandidates(normalizedItem as Record<string, unknown>),
+            ]);
+
+            let canonicalLocalProduct: Product | undefined;
+            for (const code of incomingCodes) {
+                if (localById.has(code)) {
+                    canonicalLocalProduct = localById.get(code);
+                    break;
+                }
+            }
+            if (!canonicalLocalProduct) {
+                for (const code of incomingCodes) {
+                    if (localByCode.has(code)) {
+                        canonicalLocalProduct = localByCode.get(code);
+                        break;
+                    }
+                }
+            }
+            if (!canonicalLocalProduct) {
+                for (const code of incomingCodes) {
+                    if (localByBarcode.has(code)) {
+                        canonicalLocalProduct = localByBarcode.get(code);
+                        break;
+                    }
+                }
+            }
+
+            if (canonicalLocalProduct?.id && canonicalLocalProduct.id !== normalizedItem.id) {
+                if (posCatalogDebugMatchesRaw(rawItem || normalizedItem)) {
+                    posCatalogDebugLog('applySnapshotProducts: canonical remap', {
+                        rawId: typeof rawItem?.id === 'string' ? rawItem.id.trim() : String(rawItem?.id || '').trim(),
+                        normalizedId: typeof normalizedItem?.id === 'string' ? normalizedItem.id.trim() : String(normalizedItem?.id || '').trim(),
+                        canonicalLocalId: canonicalLocalProduct.id,
+                        canonicalName: canonicalLocalProduct.name,
+                    });
+                }
+                item = {
+                    ...canonicalLocalProduct,
+                    ...normalizedItem,
+                    id: canonicalLocalProduct.id,
+                };
+
+                const rawId = typeof rawItem?.id === 'string' ? rawItem.id.trim() : String(rawItem?.id || '').trim();
+                if (rawId) {
+                    duplicateIdsToRemove.add(rawId);
+                }
+            }
+
             if (!item?.id) continue;
             await db.saveDocument('products', item);
+            if (posCatalogDebugMatchesRaw(rawItem || item)) {
+                posCatalogDebugLog('applySnapshotProducts: saved product', {
+                    saved: posCatalogDebugSummarizeItem(item as Record<string, unknown>),
+                });
+            }
+            const savedId = typeof item.id === 'string' ? item.id.trim() : String(item.id || '').trim();
+            if (savedId) {
+                localById.set(savedId, item as Product);
+            }
+            const savedBarcode = typeof (item as any)?.barcode === 'string' ? (item as any).barcode.trim() : String((item as any)?.barcode || '').trim();
+            if (savedBarcode) {
+                localByBarcode.set(savedBarcode, item as Product);
+            }
+            for (const code of this.catalogDeleteCandidates(item as Record<string, unknown>)) {
+                localByCode.set(code, item as Product);
+            }
             updatedCount += 1;
         }
 
-        await productImageCacheService.syncSnapshotItems(normalizedItems as Product[]);
+        for (const duplicateId of duplicateIdsToRemove) {
+            try {
+                await db.deleteDocument('products', duplicateId as any);
+            } catch (error) {
+                console.warn(`⚠️ SyncManager: could not delete remapped duplicate product ${duplicateId}:`, error);
+            }
+        }
+
+        const imageSyncStartedAt = posCatalogDebugNow();
+        await productImageCacheService.syncSnapshotItems(rawItems as any[]);
+        posCatalogDebugLog('applySnapshotProducts: syncSnapshotItems complete', {
+            elapsedMs: posCatalogDebugElapsedMs(imageSyncStartedAt),
+            normalizedCount: normalizedItems.length,
+        });
+        if (traceRaw.length > 0) {
+            await posCatalogDebugLogDbRows('after applySnapshotProducts syncSnapshotItems');
+        }
 
         if (updatedCount > 0) {
             window.dispatchEvent(new CustomEvent('productsUpdated'));
         }
 
+        posCatalogDebugLog('applySnapshotProducts: completed', {
+            rawCount: rawItems.length,
+            normalizedCount: normalizedItems.length,
+            updatedCount,
+            duplicateDeletes: duplicateIdsToRemove.size,
+            elapsedMs: posCatalogDebugElapsedMs(startedAt),
+        });
+
         return updatedCount;
+    }
+
+    private snapshotMasterRows(snapshot: unknown, key: 'customers' | 'suppliers'): unknown[] | null {
+        const masters = snapshot && typeof snapshot === 'object'
+            ? (snapshot as Record<string, any>).masters
+            : null;
+
+        if (!masters || typeof masters !== 'object') {
+            return null;
+        }
+
+        if (!Object.prototype.hasOwnProperty.call(masters, key)) {
+            return null;
+        }
+
+        return Array.isArray((masters as Record<string, unknown>)[key])
+            ? ((masters as Record<string, unknown>)[key] as unknown[])
+            : [];
+    }
+
+    private async applySnapshotImageBackedCollection(
+        collection: ImageBackedCollection,
+        incomingItems: unknown[]
+    ): Promise<number> {
+        const cleanItems = (Array.isArray(incomingItems) ? incomingItems : [])
+            .map((item) => {
+                if (!item || typeof item !== 'object' || Array.isArray(item)) {
+                    return null;
+                }
+                const { _op, ...rest } = item as Record<string, unknown>;
+                return rest;
+            })
+            .filter(Boolean) as Record<string, unknown>[];
+
+        const normalizedItems = await masterDataImageCacheService.normalizeIncomingItems(collection, cleanItems as any[]);
+        await db.save(collection, normalizedItems);
+        await masterDataImageCacheService.syncSnapshotItems(collection, cleanItems as any[]);
+        window.dispatchEvent(new CustomEvent(`${collection}Updated`));
+        return normalizedItems.length;
+    }
+
+    private async refreshTerminalSupplementalMasterData(
+        snapshot: unknown,
+        catalogDelta?: Record<string, unknown> | null
+    ): Promise<{
+        customers: number;
+        suppliers: number;
+    }> {
+        const startedAt = posCatalogDebugNow();
+        const collections: ImageBackedCollection[] = ['customers', 'suppliers'];
+        const results: Record<ImageBackedCollection, number> = {
+            customers: 0,
+            suppliers: 0,
+        };
+
+        for (const collection of collections) {
+            const deltaHasCollection =
+                Boolean(catalogDelta) &&
+                (
+                    Array.isArray((catalogDelta as Record<string, unknown>)[`${collection}_upsert`]) ||
+                    Array.isArray((catalogDelta as Record<string, unknown>)[`${collection}_delete`])
+                );
+
+            if (deltaHasCollection) {
+                continue;
+            }
+
+            const snapshotRows = this.snapshotMasterRows(snapshot, collection);
+
+            if (snapshotRows !== null) {
+                results[collection] = await this.applySnapshotImageBackedCollection(collection, snapshotRows);
+                continue;
+            }
+
+            try {
+                results[collection] = await this.pullCatalog(collection, false, { ignoreThrottle: true });
+            } catch (error) {
+                console.warn(`⚠️ SyncManager: Could not pull ${collection} after terminal config refresh:`, error);
+            }
+        }
+
+        posCatalogDebugLog('refreshTerminalResolvedConfig: supplemental master data complete', {
+            customers: results.customers,
+            suppliers: results.suppliers,
+            elapsedMs: posCatalogDebugElapsedMs(startedAt),
+        });
+
+        return results;
     }
 
     private isRecoveringConnection = false;
@@ -1250,7 +1800,13 @@ class SyncManager {
         return this.isInternalSyncing;
     }
 
-    async pullCatalog(collection: SyncableCollection, force: boolean = false): Promise<number> {
+    async pullCatalog(
+        collection: SyncableCollection,
+        force: boolean = false,
+        options?: {
+            ignoreThrottle?: boolean;
+        }
+    ): Promise<number> {
         if (this.isDisabled) return 0;
 
         // Throttling...
@@ -1261,7 +1817,7 @@ class SyncManager {
         }
 
         const now = Date.now();
-        if (!force && (now - this.lastSyncTime < this.MIN_SYNC_INTERVAL_MS)) {
+        if (!force && !options?.ignoreThrottle && (now - this.lastSyncTime < this.MIN_SYNC_INTERVAL_MS)) {
             // console.log(`⏳ SyncManager: Pull skipped for ${collection} (Throttled: ${((this.MIN_SYNC_INTERVAL_MS - (now - this.lastSyncTime)) / 1000).toFixed(1)}s remaining)`);
             return 0;
         }
@@ -1402,6 +1958,8 @@ class SyncManager {
 
                 if (collection === 'products') {
                     cleanItems = await this.enrichPulledProducts(cleanItems);
+                } else if (this.isImageBackedCollection(collection)) {
+                    cleanItems = await masterDataImageCacheService.normalizeIncomingItems(collection, cleanItems as any[]);
                 }
 
                 const safeItems = collection === 'transactions'
@@ -1411,11 +1969,14 @@ class SyncManager {
 
                 if (collection === 'products') {
                     await productImageCacheService.syncSnapshotItems(safeItems as Product[]);
+                } else if (this.isImageBackedCollection(collection)) {
+                    await masterDataImageCacheService.syncSnapshotItems(collection, items as any[]);
                 }
             } else {
                 // Incremental update (Upsert / Delete)
                 console.log(`💾 SyncManager: Performing INCREMENTAL update for ${collection}...`);
                 const updatedProductsForImageSync: Product[] = [];
+                const updatedMasterDataForImageSync: any[] = [];
                 for (const item of items) {
                     const op = item._op;
                     const { _op, ...cleanItem } = item;
@@ -1429,6 +1990,8 @@ class SyncManager {
                         if (collection === 'products') {
                             const enriched = await this.enrichPulledProducts([finalItem]);
                             finalItem = enriched[0];
+                        } else if (this.isImageBackedCollection(collection)) {
+                            finalItem = await masterDataImageCacheService.normalizeIncomingItem(collection, finalItem as any);
                         }
 
                         // Master as Proxy logic: Default cloudSyncStatus to PENDING for audited documents if missing
@@ -1439,6 +2002,8 @@ class SyncManager {
                         await db.saveDocument(collection, finalItem);
                         if (collection === 'products') {
                             updatedProductsForImageSync.push(finalItem as Product);
+                        } else if (this.isImageBackedCollection(collection)) {
+                            updatedMasterDataForImageSync.push(cleanItem);
                         }
                         // console.log(`[LOCAL_UPDATE] ${new Date().toISOString()} Registro actualizado en IndexedDB: ${finalItem.id}`);
                     }
@@ -1446,6 +2011,8 @@ class SyncManager {
 
                 if (collection === 'products' && updatedProductsForImageSync.length > 0) {
                     await productImageCacheService.syncSnapshotItems(updatedProductsForImageSync);
+                } else if (this.isImageBackedCollection(collection) && updatedMasterDataForImageSync.length > 0) {
+                    await masterDataImageCacheService.syncSnapshotItems(collection, updatedMasterDataForImageSync);
                 }
             }
 

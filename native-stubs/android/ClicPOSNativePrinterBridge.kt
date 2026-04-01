@@ -218,6 +218,35 @@ class AndroidPrinterBridge(context: Context) {
     fun listPrinters(payloadJson: String?): String = discoverPrinters(payloadJson)
 
     @JavascriptInterface
+    fun debugLog(payloadJson: String?): String {
+        return try {
+            val payload = JSONObject(payloadJson ?: "{}")
+            val tag = payload.optString("tag", "ClicPOSDebug").ifBlank { "ClicPOSDebug" }
+            val message = payload.optString("message", "Native debug log").ifBlank { "Native debug log" }
+            val data = payload.opt("data")
+            val suffix = when {
+                data == null || data == JSONObject.NULL -> ""
+                data is JSONObject || data is JSONArray -> " ${data}"
+                else -> " ${data.toString()}"
+            }
+
+            Log.i(tag, message + suffix)
+
+            JSONObject()
+                .put("success", true)
+                .put("tag", tag)
+                .put("message", message)
+                .toString()
+        } catch (e: Exception) {
+            Log.w("ClicPOSDebug", "debugLog bridge failed: ${e.message}", e)
+            JSONObject()
+                .put("success", false)
+                .put("error", e.message ?: "DEBUG_LOG_ERROR")
+                .toString()
+        }
+    }
+
+    @JavascriptInterface
     fun pairPrinter(payloadJson: String?): String {
         return try {
             val payload = JSONObject(payloadJson ?: "{}")

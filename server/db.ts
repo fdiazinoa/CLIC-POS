@@ -320,6 +320,9 @@ try {
 } catch (e) {
     // Column already exists
 }
+ensureColumn('customers', 'image', 'TEXT');
+ensureColumn('customers', 'imageUrl', 'TEXT');
+ensureColumn('customers', 'imageVersion', 'TEXT');
 
 applyAuditAndScopeColumns();
 ensureSyncIndexes();

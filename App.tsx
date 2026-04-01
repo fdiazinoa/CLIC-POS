@@ -125,6 +125,8 @@ import {
 } from './utils/cloudMasterRegistry';
 import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, persistStoredErpSyncBinding } from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
+import { resolveCustomerImageSrc } from './utils/entityImage';
+import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
 import {
   canRetryFiscalTransaction,
   getFiscalComplianceConfig,
@@ -564,6 +566,24 @@ const AppContent: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    const handleTerminalConfigSyncRequested = async () => {
+      try {
+        await syncManager.refreshTerminalResolvedConfig(undefined, {
+          forceRemoteFetch: true,
+          forceFullCatalog: true,
+        });
+      } catch (error) {
+        console.warn('⚠️ Failed to apply terminal config refresh requested by ERP outbox:', error);
+      }
+    };
+
+    window.addEventListener('terminalConfigSyncRequested', handleTerminalConfigSyncRequested as EventListener);
+    return () => {
+      window.removeEventListener('terminalConfigSyncRequested', handleTerminalConfigSyncRequested as EventListener);
+    };
+  }, []);
+
   const dismissTerminalConfigRestartNotice = useCallback(() => {
     localStorage.removeItem(TERMINAL_CONFIG_RESTART_NOTICE_KEY);
     setTerminalConfigRestartNotice(null);
@@ -928,6 +948,25 @@ const AppContent: React.FC = () => {
         if (!disposed && result?.heartbeat?.terminal?.id) {
           console.log(`[ERP SYNC] Terminal ${terminalName} enlazada con ${result.heartbeat.terminal.id}`);
         }
+
+        if (!disposed && (result?.outbox?.applied || 0) > 0) {
+          try {
+            const refreshedConfig = await syncManager.refreshTerminalResolvedConfig(undefined, {
+              forceRemoteFetch: true,
+              forceFullCatalog: true,
+            });
+            if (refreshedConfig && !Array.isArray(refreshedConfig) && refreshedConfig.terminals) {
+              setConfig(refreshedConfig);
+            }
+
+            const refreshedProducts = await db.get('products') as Product[];
+            if (Array.isArray(refreshedProducts)) {
+              setProducts(refreshedProducts);
+            }
+          } catch (refreshError) {
+            console.warn('[ERP SYNC] Outbox applied but runtime refresh failed:', refreshError);
+          }
+        }
       } catch (error) {
         console.warn('[ERP SYNC] lifecycle registration skipped:', error);
       }
@@ -1098,10 +1137,14 @@ const AppContent: React.FC = () => {
 
     const selectedWalletBalance = Number(selectedCustomer.wallet?.balance || 0);
     const refreshedWalletBalance = Number(refreshedCustomer.wallet?.balance || 0);
+    const selectedCustomerImage = resolveCustomerImageSrc(selectedCustomer);
+    const refreshedCustomerImage = resolveCustomerImageSrc(refreshedCustomer);
     const shouldRefreshSelection =
+      refreshedCustomer.name !== selectedCustomer.name ||
       refreshedCustomer.currentDebt !== selectedCustomer.currentDebt ||
       refreshedCustomer.creditLimit !== selectedCustomer.creditLimit ||
       refreshedCustomer.updatedAt !== selectedCustomer.updatedAt ||
+      refreshedCustomerImage !== selectedCustomerImage ||
       refreshedWalletBalance !== selectedWalletBalance;
 
     if (shouldRefreshSelection) {
@@ -2163,6 +2206,7 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     // --- SYNC EVENT LISTENERS (For Slave Terminals) ---
     const handleSyncUpdate = async (event: Event) => {
+      const startedAt = posCatalogDebugNow();
       const collection = event.type.replace('Updated', '');
       console.log(`🔔 App: Sync update received for ${collection}. Refreshing state...`);
 
@@ -2170,7 +2214,24 @@ const AppContent: React.FC = () => {
       if (!freshData) return;
 
       switch (collection) {
-        case 'products': setProducts(freshData as Product[]); break;
+        case 'products':
+          setProducts(freshData as Product[]);
+          {
+            const matching = Array.isArray(freshData)
+              ? (freshData as Record<string, unknown>[])
+                  .filter((item) => posCatalogDebugMatchesRaw(item))
+                  .map((item) => posCatalogDebugSummarizeItem(item))
+              : [];
+            if (matching.length > 0) {
+              posCatalogDebugLog('App: productsUpdated → setProducts', {
+                count: Array.isArray(freshData) ? freshData.length : 0,
+                elapsedMs: posCatalogDebugElapsedMs(startedAt),
+                matching,
+              });
+              void posCatalogDebugLogDbRows('App handleSyncUpdate after setProducts');
+            }
+          }
+          break;
         case 'customers': setCustomers(freshData as Customer[]); break;
         case 'suppliers': setSuppliers(freshData as Supplier[]); break;
         case 'internalSequences': /* No state for this, used directly from DB */ break;

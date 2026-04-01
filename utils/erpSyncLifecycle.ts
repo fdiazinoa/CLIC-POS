@@ -387,6 +387,14 @@ const persistPendingTerminalConfigSnapshot = (event: SyncOutboxEvent) => {
     };
 
     localStorage.setItem(TERMINAL_CONFIG_PENDING_SNAPSHOT_KEY, JSON.stringify(pendingSnapshot));
+    window.dispatchEvent(new CustomEvent('terminalConfigSyncRequested', {
+        detail: {
+            source: 'erp_outbox',
+            eventId: normalizeOptional(event.id || null) || null,
+            terminalId: pendingSnapshot.erpTerminalId,
+            localTerminalId: pendingSnapshot.localTerminalId,
+        },
+    }));
 };
 
 const pullErpOutbox = async (bindingTerminalId: string | null, deviceId: string): Promise<SyncOutboxPullResponse | null> => {

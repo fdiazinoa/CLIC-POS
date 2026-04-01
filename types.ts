@@ -419,6 +419,12 @@ export interface TerminalConfigSnapshot {
   terminal_name?: string;
   station_number?: string | number;
   role?: string;
+  masters?: {
+    items?: Record<string, any>[];
+    customers?: Customer[];
+    suppliers?: Supplier[];
+    [key: string]: any;
+  };
   resolved?: TerminalConfigResolvedSnapshot;
   config?: Record<string, any>;
   resolution_error?: any;
@@ -889,6 +895,18 @@ export interface Customer {
   phone?: string;
   email?: string;
   taxId?: string;
+  image?: string;
+  imageUrl?: string;
+  imageVersion?: string;
+  imageLocalPath?: string | null;
+  photo?: string;
+  photoUrl?: string;
+  photoVersion?: string;
+  photoLocalPath?: string | null;
+  avatar?: string;
+  avatarUrl?: string;
+  avatarVersion?: string;
+  avatarLocalPath?: string | null;
   address?: string;
   notes?: string;
   loyaltyPoints?: number;
@@ -1437,6 +1455,14 @@ export interface Supplier {
   taxId: string; // RNC o Cédula
   email: string;
   phone: string;
+  image?: string;
+  imageUrl?: string;
+  imageVersion?: string;
+  imageLocalPath?: string | null;
+  logo?: string;
+  logoUrl?: string;
+  logoVersion?: string;
+  logoLocalPath?: string | null;
   contactPerson: string;
   paymentMethod: 'CASH' | 'TRANSFER' | 'CARD' | 'CREDIT';
   paymentTermDays: number; // Días de crédito

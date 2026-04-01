@@ -19,8 +19,6 @@ const asBoolean = (value: unknown, fallback = false): boolean => {
   return fallback;
 };
 
-const isHttpUrl = (value: string): boolean => /^https?:\/\//i.test(value);
-
 const uniqueStrings = (values: unknown[]): string[] =>
   Array.from(new Set(values.map((value) => asString(value)).filter(Boolean)));
 
@@ -32,22 +30,85 @@ class ProductImageCacheService {
     return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
   }
 
-  private resolveRemoteImageUrl(item: IncomingProduct): string | null {
-    const explicitUrl =
-      asString(item.imageUrl) ||
-      asString(item.image_url) ||
-      asString(item.metadata?.image_url);
+  private readMasterUrl(): string | null {
+    return asString(localStorage.getItem('CLIC_POS_MASTER_URL')) || null;
+  }
 
-    if (explicitUrl && isHttpUrl(explicitUrl)) {
-      return explicitUrl;
+  private rewriteLoopbackHostname(urlValue: string, masterUrlValue: string | null): string {
+    if (!masterUrlValue || !this.isNativeAndroid()) {
+      return urlValue;
     }
 
-    const rawImage = asString(item.image);
-    if (rawImage && isHttpUrl(rawImage)) {
-      return rawImage;
+    try {
+      const urlObj = new URL(urlValue);
+      if (urlObj.hostname !== 'localhost' && urlObj.hostname !== '127.0.0.1') {
+        return urlValue;
+      }
+
+      const masterObj = new URL(masterUrlValue);
+      urlObj.protocol = masterObj.protocol;
+      urlObj.hostname = masterObj.hostname;
+      return urlObj.toString();
+    } catch {
+      return urlValue;
+    }
+  }
+
+  private resolveRelativeImageBaseUrl(masterUrl: string | null): string | null {
+    const env = (import.meta as any)?.env || {};
+    const candidates = uniqueStrings([
+      env.VITE_SUPABASE_URL,
+      localStorage.getItem('CLIC_SUPABASE_URL'),
+      localStorage.getItem('SUPABASE_URL'),
+      localStorage.getItem('CLIC_ERP_BASE_URL'),
+      localStorage.getItem('erp_base_url'),
+      masterUrl,
+    ]);
+
+    for (const candidate of candidates) {
+      try {
+        const normalized = this.rewriteLoopbackHostname(candidate, masterUrl);
+        const urlObj = new URL(normalized);
+        return urlObj.toString().replace(/\/$/, '');
+      } catch {
+        continue;
+      }
     }
 
     return null;
+  }
+
+  private resolveRemoteImageUrl(item: IncomingProduct): string | null {
+    const rawUrl =
+      asString(item.imageUrl) ||
+      asString(item.image_url) ||
+      asString(item.metadata?.image_url) ||
+      asString(item.image);
+
+    if (!rawUrl) return null;
+    if (rawUrl.startsWith('blob:') || rawUrl.startsWith('data:')) return rawUrl;
+
+    try {
+      const masterUrl = this.readMasterUrl();
+
+      // Handle relative paths (e.g. "storage/v1/..." or "/storage/v1/...")
+      if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+        const baseUrl = this.resolveRelativeImageBaseUrl(masterUrl);
+        if (!baseUrl) return rawUrl;
+
+        const path = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
+        return new URL(path, `${baseUrl}/`).toString();
+      }
+
+      if (this.isNativeAndroid() && (rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1'))) {
+        return this.rewriteLoopbackHostname(rawUrl, masterUrl);
+      }
+
+      return rawUrl;
+    } catch (e) {
+      this.logger.warn(`[ProductImageCacheService] Failed to rewrite remote URL: ${rawUrl}`, e);
+      return rawUrl;
+    }
   }
 
   private resolveRemoteImageVersion(item: IncomingProduct, imageUrl: string | null): string | null {
@@ -101,10 +162,92 @@ class ProductImageCacheService {
     return localById;
   }
 
+  private async getLocalProductLookups(): Promise<{
+    localById: Map<string, Product>;
+    localByBarcode: Map<string, Product>;
+    localByCode: Map<string, Product>;
+  }> {
+    const products = await db.get('products') as Product[];
+    const localById = new Map<string, Product>();
+    const localByBarcode = new Map<string, Product>();
+    const localByCode = new Map<string, Product>();
+
+    for (const product of Array.isArray(products) ? products : []) {
+      const localId = asString(product?.id);
+      if (!localId) continue;
+
+      localById.set(localId, product);
+
+      const barcode = asString(product?.barcode);
+      if (barcode && !localByBarcode.has(barcode)) {
+        localByBarcode.set(barcode, product);
+      }
+
+      const codeCandidates = uniqueStrings([
+        localId,
+        (product as any)?.sku,
+        (product as any)?.item_code,
+        (product as any)?.code,
+        barcode,
+      ]);
+
+      for (const code of codeCandidates) {
+        if (!localByCode.has(code)) {
+          localByCode.set(code, product);
+        }
+      }
+    }
+
+    return { localById, localByBarcode, localByCode };
+  }
+
+  private incomingProductCodeCandidates(item: IncomingProduct): string[] {
+    return uniqueStrings([
+      item?.id,
+      item?.sku,
+      item?.item_code,
+      item?.code,
+      item?.barcode,
+    ]);
+  }
+
+  private findLocalProductMatch(
+    item: IncomingProduct,
+    lookups: {
+      localById: Map<string, Product>;
+      localByBarcode: Map<string, Product>;
+      localByCode: Map<string, Product>;
+    }
+  ): Product | undefined {
+    const incomingId = asString(item?.id);
+    if (incomingId && lookups.localById.has(incomingId)) {
+      return lookups.localById.get(incomingId);
+    }
+
+    for (const code of this.incomingProductCodeCandidates(item)) {
+      if (code && lookups.localById.has(code)) {
+        return lookups.localById.get(code);
+      }
+    }
+
+    for (const code of this.incomingProductCodeCandidates(item)) {
+      if (code && lookups.localByCode.has(code)) {
+        return lookups.localByCode.get(code);
+      }
+    }
+
+    for (const code of this.incomingProductCodeCandidates(item)) {
+      if (code && lookups.localByBarcode.has(code)) {
+        return lookups.localByBarcode.get(code);
+      }
+    }
+
+    return undefined;
+  }
+
   private normalizeSingleIncomingProduct(item: IncomingProduct, localProduct?: Product): IncomingProduct {
     const imageUrl = this.resolveRemoteImageUrl(item);
     const imageVersion = this.resolveRemoteImageVersion(item, imageUrl);
-    const hadRemoteImageLocally = Boolean(asString(localProduct?.imageUrl) || asString(localProduct?.imageLocalPath));
 
     const normalized: IncomingProduct = {
       ...item,
@@ -112,11 +255,14 @@ class ProductImageCacheService {
       price: asNumber(item.price ?? item.precio_venta, localProduct?.price ?? 0),
       cost: asNumber(item.cost ?? item.costo_unitario, localProduct?.cost ?? 0),
       category: asString(item.category) || asString(item.categoria) || localProduct?.category || 'GENERAL',
-      image: item.image,
-      imageUrl: imageUrl || undefined,
-      imageVersion: imageVersion || undefined,
-      imageLocalPath: item.imageLocalPath ?? localProduct?.imageLocalPath ?? null,
-      images: uniqueStrings(Array.isArray(item.images) ? item.images : localProduct?.images || []),
+      image: localProduct?.image || undefined,
+      imageUrl: localProduct?.imageUrl || undefined,
+      imageVersion: localProduct?.imageVersion || undefined,
+      imageLocalPath: localProduct?.imageLocalPath || null,
+      images: uniqueStrings([
+        ...(Array.isArray(localProduct?.images) ? localProduct.images : []),
+        localProduct?.image,
+      ]),
       attributes: Array.isArray(item.attributes) ? item.attributes : localProduct?.attributes || [],
       variants: Array.isArray(item.variants) ? item.variants : localProduct?.variants || [],
       tariffs: Array.isArray(item.tariffs) ? item.tariffs : localProduct?.tariffs || [],
@@ -148,6 +294,8 @@ class ProductImageCacheService {
       if (canReuseLocalImage) {
         normalized.imageLocalPath = localProduct?.imageLocalPath || null;
         normalized.image = localProduct?.image || undefined;
+        normalized.imageUrl = imageUrl;
+        normalized.imageVersion = imageVersion;
         normalized.images = uniqueStrings([
           ...(Array.isArray(localProduct?.images) ? localProduct.images : []),
           localProduct?.image,
@@ -156,21 +304,9 @@ class ProductImageCacheService {
         normalized.imageLocalPath = null;
         normalized.image = this.buildRenderableWebPath(imageUrl);
         normalized.images = uniqueStrings([normalized.image]);
-      } else {
-        normalized.imageLocalPath = null;
-        normalized.image = undefined;
-        normalized.images = [];
+        normalized.imageUrl = imageUrl;
+        normalized.imageVersion = imageVersion;
       }
-
-      return normalized;
-    }
-
-    if (hadRemoteImageLocally) {
-      normalized.imageLocalPath = null;
-      normalized.imageUrl = undefined;
-      normalized.imageVersion = undefined;
-      normalized.image = undefined;
-      normalized.images = [];
       return normalized;
     }
 
@@ -182,22 +318,33 @@ class ProductImageCacheService {
       return [];
     }
 
-    const localById = await this.getLocalProductsMap();
-    return items.map((item) => {
-      const itemId = asString(item?.id);
-      const localProduct = itemId ? localById.get(itemId) : undefined;
-      return this.normalizeSingleIncomingProduct(item, localProduct);
-    });
+    const lookups = await this.getLocalProductLookups();
+    return items.map((item) => this.normalizeSingleIncomingProduct(item, this.findLocalProductMatch(item, lookups)));
   }
 
   private async saveLocalImage(product: Product, imageUrl: string, imageVersion: string): Promise<boolean> {
     const relativePath = this.buildRelativePath(product.id, imageVersion, imageUrl);
+
+    try {
+      await Filesystem.mkdir({
+        path: this.imageFolder,
+        directory: Directory.Data,
+        recursive: true,
+      });
+    } catch (error) {
+      const message = String((error as Error)?.message || error || '');
+      const alreadyExists = /exist/i.test(message);
+      if (!alreadyExists) {
+        throw error;
+      }
+    }
 
     await Filesystem.downloadFile({
       url: imageUrl,
       path: relativePath,
       directory: Directory.Data,
       progress: false,
+      recursive: true,
     });
 
     const uriResult = await Filesystem.getUri({
@@ -269,7 +416,7 @@ class ProductImageCacheService {
       return { scanned: 0, queued: 0, downloaded: 0, skipped: 0, failed: 0 };
     }
 
-    const localById = await this.getLocalProductsMap();
+    const lookups = await this.getLocalProductLookups();
     let queued = 0;
     let downloaded = 0;
     let skipped = 0;
@@ -283,7 +430,7 @@ class ProductImageCacheService {
         continue;
       }
 
-      const localProduct = localById.get(itemId);
+      const localProduct = this.findLocalProductMatch(rawItem, lookups);
       if (!localProduct) {
         skipped += 1;
         continue;

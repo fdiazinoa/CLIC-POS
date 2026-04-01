@@ -23,6 +23,7 @@ import {
    getFiscalRetryActionLabel,
    isRefundLikeTransaction
 } from '../utils/fiscal/fiscalHelpers';
+import { resolveCustomerImageSrc } from '../utils/entityImage';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -1035,9 +1036,17 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                            className={`p-4 border-b border-gray-50 cursor-pointer transition-colors hover:bg-blue-50/50 flex items-center gap-3 ${selectedCustomerId === customer.id ? 'bg-blue-50 border-l-4 border-l-blue-500' : 'border-l-4 border-l-transparent'
                               }`}
                         >
-                           <div className="w-10 h-10 rounded-full bg-gradient-to-br from-slate-200 to-slate-300 flex items-center justify-center font-bold text-slate-600 text-sm">
-                              {customer.name.charAt(0)}
-                           </div>
+                           {resolveCustomerImageSrc(customer) ? (
+                              <img
+                                 src={resolveCustomerImageSrc(customer)}
+                                 alt={customer.name}
+                                 className="w-10 h-10 rounded-full object-cover border border-blue-100 bg-white"
+                              />
+                           ) : (
+                              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-slate-200 to-slate-300 flex items-center justify-center font-bold text-slate-600 text-sm">
+                                 {customer.name.charAt(0)}
+                              </div>
+                           )}
                            <div className="flex-1 min-w-0">
                               <h4 className={`font-bold text-sm truncate ${selectedCustomerId === customer.id ? 'text-blue-700' : 'text-gray-800'}`}>{customer.name}</h4>
                               <div className="flex items-center gap-2">
@@ -1081,9 +1090,17 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
                               {/* Identity */}
                               <div className="flex items-center gap-5">
-                                 <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-3xl font-black shadow-lg shadow-blue-200">
-                                    {selectedCustomer.name.charAt(0)}
-                                 </div>
+                                 {resolveCustomerImageSrc(selectedCustomer) ? (
+                                    <img
+                                       src={resolveCustomerImageSrc(selectedCustomer)}
+                                       alt={selectedCustomer.name}
+                                       className="w-20 h-20 rounded-full object-cover border-4 border-white shadow-lg shadow-blue-200"
+                                    />
+                                 ) : (
+                                    <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-3xl font-black shadow-lg shadow-blue-200">
+                                       {selectedCustomer.name.charAt(0)}
+                                    </div>
+                                 )}
                                  <div>
                                     <h2 className="text-2xl font-black text-gray-900 leading-tight">{selectedCustomer.name}</h2>
                                     <div className="flex items-center gap-2 mt-1">
