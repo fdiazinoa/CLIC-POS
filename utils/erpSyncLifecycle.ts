@@ -389,6 +389,58 @@ const persistPendingTerminalConfigSnapshot = (event: SyncOutboxEvent) => {
     localStorage.setItem(TERMINAL_CONFIG_PENDING_SNAPSHOT_KEY, JSON.stringify(pendingSnapshot));
 };
 
+const resolveOutboxTerminalId = (event: SyncOutboxEvent): string | null => {
+    const payload = asObject<Record<string, unknown>>(event.payload);
+    const terminalConfig = asObject<Record<string, unknown>>(payload.terminal_config);
+    const binding = getStoredErpSyncBinding();
+
+    return (
+        normalizeOptional(String(payload.terminal_id || ''))
+        || normalizeOptional(String(payload.terminalId || ''))
+        || normalizeOptional(String(terminalConfig.terminal_id || ''))
+        || binding.terminalId
+        || null
+    );
+};
+
+const fetchTerminalConfigSnapshot = async (terminalId: string) => {
+    if (!terminalId) {
+        throw new Error('Terminal ERP no disponible para refrescar snapshot.');
+    }
+
+    const payload = await getJson<{ status?: string; terminal_config?: Record<string, unknown> }>(
+        `/terminals/${encodeURIComponent(terminalId)}/config`,
+        {},
+    );
+
+    return asObject<Record<string, unknown>>(payload?.terminal_config);
+};
+
+const applyTerminalSnapshotImmediately = async (snapshot: Record<string, unknown>) => {
+    if (Object.keys(snapshot).length === 0) {
+        throw new Error('Snapshot de terminal vacío.');
+    }
+
+    const [{ syncManager }] = await Promise.all([
+        import('../services/sync/SyncManager'),
+    ]);
+
+    await syncManager.refreshTerminalResolvedConfig(snapshot);
+};
+
+const fallbackPersistTerminalSnapshot = (event: SyncOutboxEvent, snapshot: Record<string, unknown>) => {
+    const fallbackEvent: SyncOutboxEvent = {
+        ...event,
+        payload: {
+            ...asObject<Record<string, unknown>>(event.payload),
+            terminal_config: snapshot,
+        },
+    };
+
+    persistPendingTerminalConfigSnapshot(fallbackEvent);
+    persistTerminalConfigRestartNotice(fallbackEvent);
+};
+
 const pullErpOutbox = async (bindingTerminalId: string | null, deviceId: string): Promise<SyncOutboxPullResponse | null> => {
     if (!isConfigured()) return null;
     if (!bindingTerminalId && !deviceId) return null;
@@ -560,9 +612,35 @@ export const processErpSyncOutbox = async (
 
             try {
                 if (eventType === 'CONFIG_PUSH') {
-                    console.info('[ERP SYNC] CONFIG_PUSH recibido desde outbox. Se marca reinicio requerido.');
-                    persistPendingTerminalConfigSnapshot(event);
-                    persistTerminalConfigRestartNotice(event);
+                    const payload = asObject<Record<string, unknown>>(event.payload);
+                    const snapshot = asObject<Record<string, unknown>>(payload.terminal_config);
+
+                    console.info('[ERP SYNC] CONFIG_PUSH recibido desde outbox. Aplicando snapshot inmediato...');
+                    try {
+                        await applyTerminalSnapshotImmediately(snapshot);
+                    } catch (applyError) {
+                        console.warn('[ERP SYNC] CONFIG_PUSH no pudo aplicarse en caliente. Se conserva como pendiente.', applyError);
+                        fallbackPersistTerminalSnapshot(event, snapshot);
+                    }
+
+                    await ackErpOutboxEvent(event.id, 'APPLIED');
+                    applied += 1;
+                    continue;
+                }
+
+                if (eventType === 'BOOTSTRAP_REQUESTED') {
+                    const terminalId = resolveOutboxTerminalId(event);
+
+                    console.info('[ERP SYNC] BOOTSTRAP_REQUESTED recibido desde outbox. Descargando snapshot...');
+                    const snapshot = await fetchTerminalConfigSnapshot(terminalId || '');
+
+                    try {
+                        await applyTerminalSnapshotImmediately(snapshot);
+                    } catch (applyError) {
+                        console.warn('[ERP SYNC] BOOTSTRAP_REQUESTED no pudo aplicarse en caliente. Se conserva como pendiente.', applyError);
+                        fallbackPersistTerminalSnapshot(event, snapshot);
+                    }
+
                     await ackErpOutboxEvent(event.id, 'APPLIED');
                     applied += 1;
                     continue;
