@@ -24,6 +24,12 @@ import {
     looksLikeUuidString,
     resolveDocumentSeriesDisplayPrefix,
 } from '../../utils/documentSeriesIdentity';
+import {
+    posCatalogDebugLog,
+    posCatalogDebugLogDbRows,
+    posCatalogDebugMatchesRaw,
+    posCatalogDebugSummarizeItem,
+} from '../../utils/posCatalogDebugTrace';
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities';
 
@@ -74,6 +80,24 @@ class SyncManager {
                 host,
                 Number.isFinite(numericPort) && numericPort > 0 ? numericPort : 3001,
             );
+        }
+    }
+
+    private resolveConfigErpBaseUrl(value: unknown): string | null {
+        const raw = typeof value === 'string' ? value.trim() : '';
+        if (!raw) return null;
+
+        const withProtocol = /^https?:\/\//i.test(raw) ? raw : `${window.location.protocol}//${raw}`;
+
+        try {
+            const url = new URL(withProtocol);
+            return url
+                .toString()
+                .replace(/\/api\/sync\/?$/i, '')
+                .replace(/\/api\/?$/i, '')
+                .replace(/\/+$/, '');
+        } catch {
+            return null;
         }
     }
 
@@ -442,10 +466,15 @@ class SyncManager {
             currentTerminal?.config?.erpBinding?.tenantId ||
             localStorage.getItem('clic_erp_sync_tenant_id') ||
             localStorage.getItem('active_tenant_id') ||
+            localStorage.getItem('clic_tenant_id') ||
             null;
         const erpBaseUrl =
-            localStorage.getItem('CLIC_ERP_BASE_URL') ||
-            localStorage.getItem('erp_base_url') ||
+            this.resolveConfigErpBaseUrl(localStorage.getItem('CLIC_ERP_BASE_URL')) ||
+            this.resolveConfigErpBaseUrl(localStorage.getItem('erp_base_url')) ||
+            this.resolveConfigErpBaseUrl(localStorage.getItem('CLIC_ERP_SYNC_URL')) ||
+            this.resolveConfigErpBaseUrl((import.meta as any)?.env?.VITE_ERP_BASE_URL) ||
+            this.resolveConfigErpBaseUrl((import.meta as any)?.env?.VITE_ERP_SYNC_API_URL) ||
+            this.resolveConfigErpBaseUrl((import.meta as any)?.env?.VITE_SYNC_API_URL) ||
             null;
 
         const posDeviceId =
@@ -633,6 +662,27 @@ class SyncManager {
             ? null
             : this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
         const canFetchRemote = Boolean(context.terminalId && context.tenantId && context.erpBaseUrl);
+        const allowPendingFallback = !options?.forceRemoteFetch;
+
+        posCatalogDebugLog('refreshTerminalResolvedConfig: context', {
+            terminalId: context.terminalId,
+            localTerminalId: snapshotTerminalId,
+            tenantIdPresent: Boolean(context.tenantId),
+            erpBaseUrlPresent: Boolean(context.erpBaseUrl),
+            forceRemoteFetch: Boolean(options?.forceRemoteFetch),
+            forceFullCatalog: Boolean(options?.forceFullCatalog),
+            hasCatalogCursor: Boolean(currentCatalogCursor),
+            hasPendingSnapshot: Boolean(pendingSnapshot),
+        });
+
+        if (!snapshot && options?.forceRemoteFetch && !canFetchRemote) {
+            posCatalogDebugLog('refreshTerminalResolvedConfig: remote fetch unavailable', {
+                terminalId: context.terminalId,
+                localTerminalId: snapshotTerminalId,
+                tenantId: context.tenantId || null,
+                erpBaseUrl: context.erpBaseUrl || null,
+            });
+        }
 
         if (!snapshot && canFetchRemote) {
             const params = new URLSearchParams();
@@ -644,6 +694,12 @@ class SyncManager {
 
             try {
                 const endpoint = `/api/sync/terminals/${encodeURIComponent(context.terminalId)}/config${params.toString() ? `?${params.toString()}` : ''}`;
+                posCatalogDebugLog('refreshTerminalResolvedConfig: fetch begin', {
+                    endpoint,
+                    forceRemoteFetch: Boolean(options?.forceRemoteFetch),
+                    forceFullCatalog: Boolean(options?.forceFullCatalog),
+                    catalogCursorSent: !options?.forceFullCatalog ? currentCatalogCursor : null,
+                });
                 const response = await fetch(endpoint);
                 if (!response.ok) {
                     const detail = await response.text().catch(() => '');
@@ -659,6 +715,20 @@ class SyncManager {
                     typeof payload?.snapshot_meta?.catalog_cursor === 'string'
                         ? payload.snapshot_meta.catalog_cursor.trim() || null
                         : null;
+
+                const snapshotMasters = (snapshot as any)?.masters;
+                const traceRows = Array.isArray(snapshotMasters?.items)
+                    ? snapshotMasters.items
+                        .filter((item: unknown) => posCatalogDebugMatchesRaw(item))
+                        .map((item: Record<string, unknown>) => posCatalogDebugSummarizeItem(item))
+                    : [];
+
+                posCatalogDebugLog('refreshTerminalResolvedConfig: fetch success', {
+                    source: payload?.source || null,
+                    usedCatalogDelta: Boolean(catalogDelta),
+                    nextCatalogCursor,
+                    traceRows,
+                });
 
                 if (!snapshot && payload?.config && !Array.isArray(payload.config)) {
                     const incomingConfig = payload.config as BusinessConfig;
@@ -677,14 +747,27 @@ class SyncManager {
                     return incomingConfig;
                 }
             } catch (remoteSnapshotError) {
-                if (!pendingSnapshot) {
+                posCatalogDebugLog('refreshTerminalResolvedConfig: fetch failed', {
+                    allowPendingFallback,
+                    hasPendingSnapshot: Boolean(pendingSnapshot),
+                    error: String((remoteSnapshotError as Error)?.message || remoteSnapshotError),
+                });
+                if (!pendingSnapshot || !allowPendingFallback) {
                     throw remoteSnapshotError;
                 }
                 console.warn('⚠️ SyncManager: Could not fetch remote terminal snapshot. Falling back to pending snapshot.', remoteSnapshotError);
             }
         }
 
-        if (!snapshot && pendingSnapshot) {
+        if (!snapshot && pendingSnapshot && allowPendingFallback) {
+            const traceRows = Array.isArray(pendingSnapshot?.masters?.items)
+                ? pendingSnapshot.masters.items
+                    .filter((item: unknown) => posCatalogDebugMatchesRaw(item))
+                    .map((item: Record<string, unknown>) => posCatalogDebugSummarizeItem(item))
+                : [];
+            posCatalogDebugLog('refreshTerminalResolvedConfig: using pending snapshot fallback', {
+                traceRows,
+            });
             snapshot = pendingSnapshot;
         }
 
@@ -698,8 +781,12 @@ class SyncManager {
             } else {
                 await this.applySnapshotProducts(snapshot);
             }
+            await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
         } catch (error) {
             console.warn('⚠️ SyncManager: Could not apply snapshot products from terminal config push:', error);
+            posCatalogDebugLog('refreshTerminalResolvedConfig: product apply failed', {
+                error: String((error as Error)?.message || error),
+            });
         }
 
         const applied = applyTerminalConfigSnapshot(baseConfig, {
@@ -759,6 +846,13 @@ class SyncManager {
         const { localById, localByBarcode, localByCode } = this.buildLocalProductLookupMaps(localProducts);
         let updatedCount = 0;
         const duplicateIdsToRemove = new Set<string>();
+        const traceRaw = rawItems.filter((item: unknown) => posCatalogDebugMatchesRaw(item));
+
+        if (traceRaw.length > 0) {
+            posCatalogDebugLog('applySnapshotProducts: raw snapshot items', {
+                traceRows: traceRaw.map((item: Record<string, unknown>) => posCatalogDebugSummarizeItem(item)),
+            });
+        }
 
         for (const [index, normalizedItem] of normalizedItems.entries()) {
             if (!normalizedItem?.id) continue;
@@ -795,6 +889,14 @@ class SyncManager {
             }
 
             if (canonicalLocalProduct?.id && canonicalLocalProduct.id !== normalizedItem.id) {
+                if (posCatalogDebugMatchesRaw(rawItem || normalizedItem)) {
+                    posCatalogDebugLog('applySnapshotProducts: canonical remap', {
+                        rawId: typeof rawItem?.id === 'string' ? rawItem.id.trim() : String(rawItem?.id || '').trim(),
+                        normalizedId: typeof normalizedItem?.id === 'string' ? normalizedItem.id.trim() : String(normalizedItem?.id || '').trim(),
+                        canonicalLocalId: canonicalLocalProduct.id,
+                        canonicalName: canonicalLocalProduct.name,
+                    });
+                }
                 item = {
                     ...canonicalLocalProduct,
                     ...normalizedItem,
@@ -809,6 +911,11 @@ class SyncManager {
 
             if (!item?.id) continue;
             await db.saveDocument('products', item);
+            if (posCatalogDebugMatchesRaw(rawItem || item)) {
+                posCatalogDebugLog('applySnapshotProducts: saved product', {
+                    saved: posCatalogDebugSummarizeItem(item as Record<string, unknown>),
+                });
+            }
             const savedId = typeof item.id === 'string' ? item.id.trim() : String(item.id || '').trim();
             if (savedId) {
                 localById.set(savedId, item as Product);
@@ -832,6 +939,9 @@ class SyncManager {
         }
 
         await productImageCacheService.syncSnapshotItems(normalizedItems as Product[]);
+        if (traceRaw.length > 0) {
+            await posCatalogDebugLogDbRows('after applySnapshotProducts syncSnapshotItems');
+        }
 
         if (updatedCount > 0) {
             window.dispatchEvent(new CustomEvent('productsUpdated'));

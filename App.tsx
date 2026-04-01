@@ -125,6 +125,7 @@ import {
 } from './utils/cloudMasterRegistry';
 import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, persistStoredErpSyncBinding } from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
+import { posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
 import {
   canRetryFiscalTransaction,
   getFiscalComplianceConfig,
@@ -2207,7 +2208,23 @@ const AppContent: React.FC = () => {
       if (!freshData) return;
 
       switch (collection) {
-        case 'products': setProducts(freshData as Product[]); break;
+        case 'products':
+          setProducts(freshData as Product[]);
+          {
+            const matching = Array.isArray(freshData)
+              ? (freshData as Record<string, unknown>[])
+                  .filter((item) => posCatalogDebugMatchesRaw(item))
+                  .map((item) => posCatalogDebugSummarizeItem(item))
+              : [];
+            if (matching.length > 0) {
+              posCatalogDebugLog('App: productsUpdated → setProducts', {
+                count: Array.isArray(freshData) ? freshData.length : 0,
+                matching,
+              });
+              void posCatalogDebugLogDbRows('App handleSyncUpdate after setProducts');
+            }
+          }
+          break;
         case 'customers': setCustomers(freshData as Customer[]); break;
         case 'suppliers': setSuppliers(freshData as Supplier[]); break;
         case 'internalSequences': /* No state for this, used directly from DB */ break;
