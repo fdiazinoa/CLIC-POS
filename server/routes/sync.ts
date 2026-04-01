@@ -191,6 +191,65 @@ const normalizeIdentityString = (value: any): string | null => {
     return trimmed.length > 0 ? trimmed : null;
 };
 
+const firstDefinedImageValue = (values: any[]): string | null => {
+    for (const value of values) {
+        const normalized = normalizeIdentityString(value);
+        if (normalized && (/^file:\/\//i.test(normalized) || /^content:\/\//i.test(normalized) || normalized.includes('/_capacitor_file_'))) {
+            continue;
+        }
+        if (normalized) return normalized;
+    }
+    return null;
+};
+
+const normalizeMasterDataImageFields = (collection: string, item: any) => {
+    if (!item || typeof item !== 'object') return item;
+    if (collection !== 'customers' && collection !== 'suppliers') return item;
+
+    const next = { ...item };
+    const imageUrl = firstDefinedImageValue([
+        item.imageUrl,
+        item.image_url,
+        item.photoUrl,
+        item.photo_url,
+        item.avatarUrl,
+        item.avatar_url,
+        item.logoUrl,
+        item.logo_url,
+        item.metadata?.imageUrl,
+        item.metadata?.image_url,
+        item.image,
+        item.photo,
+        item.avatar,
+        item.logo,
+    ]);
+    const imageVersion = firstDefinedImageValue([
+        item.imageVersion,
+        item.image_version,
+        item.photoVersion,
+        item.photo_version,
+        item.avatarVersion,
+        item.avatar_version,
+        item.logoVersion,
+        item.logo_version,
+        item.metadata?.imageVersion,
+        item.metadata?.image_version,
+        item.updatedAt,
+        item.updated_at,
+    ]);
+
+    if (imageUrl) {
+        next.image = normalizeIdentityString(item.image) || imageUrl;
+        next.imageUrl = normalizeIdentityString(item.imageUrl) || imageUrl;
+    }
+
+    if (imageVersion) {
+        next.imageVersion = normalizeIdentityString(item.imageVersion) || imageVersion;
+    }
+
+    return next;
+};
+
 type PullScope = {
     tenantId: string | null;
     companyId: string | null;
@@ -1209,7 +1268,7 @@ router.post('/collections/:collection/push', async (req, res) => {
                         const stmt = db.prepare(`INSERT INTO ${resolvedCollection} (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`);
                         for (const rawItem of items) {
                             if (!rawItem?.id) continue;
-                            const item = normalizeAuditEnvelope(rawItem, now);
+                            const item = normalizeAuditEnvelope(normalizeMasterDataImageFields(collection, rawItem), now);
                             const existingRow = readExistingStructuredItem(resolvedCollection, item.id, columns, hasDataColumn);
 
                             if (item.deleted_at) {
@@ -1233,7 +1292,7 @@ router.post('/collections/:collection/push', async (req, res) => {
 
                         for (const rawItem of items) {
                             if (!rawItem?.id) continue;
-                            const item = normalizeAuditEnvelope(rawItem, now);
+                            const item = normalizeAuditEnvelope(normalizeMasterDataImageFields(collection, rawItem), now);
                             const existingRow = readExistingStructuredItem(resolvedCollection, item.id, columns, hasDataColumn);
 
                             if (item.deleted_at) {
@@ -1291,7 +1350,7 @@ router.post('/collections/:collection/push', async (req, res) => {
                             continue;
                         }
 
-                        const item = normalizeAuditEnvelope(rawItem, now);
+                        const item = normalizeAuditEnvelope(normalizeMasterDataImageFields(collection, rawItem), now);
                         const op = item.deleted_at ? 'DELETE' : 'UPSERT';
                         const existingRow = readExistingStructuredItem(resolvedCollection, item.id, columns, hasDataColumn);
 
@@ -1378,7 +1437,7 @@ router.post('/collections/:collection/push', async (req, res) => {
             } else {
                 // Settings-based collection (array)
                 if (pushMode === 'FULL_REPLACE') {
-                    saveSetting(collection, items.map((item: any) => item?.id ? normalizeAuditEnvelope(item, now) : item));
+                    saveSetting(collection, items.map((item: any) => item?.id ? normalizeAuditEnvelope(normalizeMasterDataImageFields(collection, item), now) : item));
                     clearChangesForCollection(collection);
                     const newVersion = bumpVersion(collection);
                     updateMetadata(collection, newVersion, newVersion, tokens[authToken]);
@@ -1389,7 +1448,7 @@ router.post('/collections/:collection/push', async (req, res) => {
                     for (const rawItem of items) {
                         if (!rawItem?.id) continue;
 
-                        const item = normalizeAuditEnvelope(rawItem, now);
+                        const item = normalizeAuditEnvelope(normalizeMasterDataImageFields(collection, rawItem), now);
                         const current = map.get(item.id);
 
                         if (APPEND_ONLY_COLLECTIONS.has(collection)) {

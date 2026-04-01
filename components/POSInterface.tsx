@@ -70,6 +70,7 @@ import MobileCartButton from './MobileCartButton';
 import { calculateTaxBreakdownFromItems, formatTaxLineLabel, resolveEffectiveTaxIds } from '../utils/fiscalBreakdown';
 import { formatCurrency } from '../utils/format';
 import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from '../services/localRefundPersistence';
+import { resolveCustomerImageSrc } from '../utils/entityImage';
 
 // ... existing imports
 
@@ -2916,7 +2917,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   selectedCustomer ? (
                      <div className="flex items-center justify-between bg-blue-50 px-4 py-2 rounded-full border border-blue-100" onClick={onOpenCustomers}>
                         <div className="flex items-center gap-2">
-                           <div className="w-6 h-6 bg-blue-200 text-blue-700 rounded-full flex items-center justify-center font-bold text-[10px]">{selectedCustomer.name.charAt(0)}</div>
+                           {resolveCustomerImageSrc(selectedCustomer) ? (
+                              <img
+                                 src={resolveCustomerImageSrc(selectedCustomer)}
+                                 alt={selectedCustomer.name}
+                                 className="w-6 h-6 rounded-full object-cover border border-blue-200 bg-white"
+                              />
+                           ) : (
+                              <div className="w-6 h-6 bg-blue-200 text-blue-700 rounded-full flex items-center justify-center font-bold text-[10px]">{selectedCustomer.name.charAt(0)}</div>
+                           )}
                            <span className="text-xs font-bold text-blue-900 truncate max-w-[150px]">{selectedCustomer.name}</span>
                         </div>
                         <div className="flex items-center gap-1">
@@ -3095,9 +3104,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                {
                   selectedCustomer ? (
                      <div className="flex items-center gap-3 mb-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
-                        <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-black">
-                           {selectedCustomer.name.substring(0, 2).toUpperCase()}
-                        </div>
+                        {resolveCustomerImageSrc(selectedCustomer) ? (
+                           <img
+                              src={resolveCustomerImageSrc(selectedCustomer)}
+                              alt={selectedCustomer.name}
+                              className="w-10 h-10 rounded-full object-cover border border-blue-200 bg-white"
+                           />
+                        ) : (
+                           <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-black">
+                              {selectedCustomer.name.substring(0, 2).toUpperCase()}
+                           </div>
+                        )}
                         <div className="flex-1 min-w-0">
                            <div className="flex items-center gap-2">
                               <p className="font-bold text-gray-800 truncate">{selectedCustomer.name}</p>

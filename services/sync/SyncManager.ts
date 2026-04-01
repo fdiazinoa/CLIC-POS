@@ -14,6 +14,7 @@ import { Capacitor } from '@capacitor/core';
 import { permissionService } from './PermissionService';
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { productImageCacheService } from './ProductImageCacheService';
+import { masterDataImageCacheService, type ImageBackedCollection } from './MasterDataImageCacheService';
 import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig } from '../../types';
 import {
     applyTerminalConfigSnapshot,
@@ -62,6 +63,10 @@ class SyncManager {
     private readonly IMAGE_SYNC_BATCH_SIZE = 40;
 
     public isInitialized: boolean = false;
+
+    private isImageBackedCollection(collection: SyncableCollection): collection is ImageBackedCollection {
+        return collection === 'customers' || collection === 'suppliers';
+    }
 
     private normalizeMasterUrlForStorage(value: string): string {
         const trimmed = value.trim();
@@ -1743,6 +1748,8 @@ class SyncManager {
 
                 if (collection === 'products') {
                     cleanItems = await this.enrichPulledProducts(cleanItems);
+                } else if (this.isImageBackedCollection(collection)) {
+                    cleanItems = await masterDataImageCacheService.normalizeIncomingItems(collection, cleanItems as any[]);
                 }
 
                 const safeItems = collection === 'transactions'
@@ -1752,11 +1759,14 @@ class SyncManager {
 
                 if (collection === 'products') {
                     await productImageCacheService.syncSnapshotItems(safeItems as Product[]);
+                } else if (this.isImageBackedCollection(collection)) {
+                    await masterDataImageCacheService.syncSnapshotItems(collection, items as any[]);
                 }
             } else {
                 // Incremental update (Upsert / Delete)
                 console.log(`💾 SyncManager: Performing INCREMENTAL update for ${collection}...`);
                 const updatedProductsForImageSync: Product[] = [];
+                const updatedMasterDataForImageSync: any[] = [];
                 for (const item of items) {
                     const op = item._op;
                     const { _op, ...cleanItem } = item;
@@ -1770,6 +1780,8 @@ class SyncManager {
                         if (collection === 'products') {
                             const enriched = await this.enrichPulledProducts([finalItem]);
                             finalItem = enriched[0];
+                        } else if (this.isImageBackedCollection(collection)) {
+                            finalItem = await masterDataImageCacheService.normalizeIncomingItem(collection, finalItem as any);
                         }
 
                         // Master as Proxy logic: Default cloudSyncStatus to PENDING for audited documents if missing
@@ -1780,6 +1792,8 @@ class SyncManager {
                         await db.saveDocument(collection, finalItem);
                         if (collection === 'products') {
                             updatedProductsForImageSync.push(finalItem as Product);
+                        } else if (this.isImageBackedCollection(collection)) {
+                            updatedMasterDataForImageSync.push(cleanItem);
                         }
                         // console.log(`[LOCAL_UPDATE] ${new Date().toISOString()} Registro actualizado en IndexedDB: ${finalItem.id}`);
                     }
@@ -1787,6 +1801,8 @@ class SyncManager {
 
                 if (collection === 'products' && updatedProductsForImageSync.length > 0) {
                     await productImageCacheService.syncSnapshotItems(updatedProductsForImageSync);
+                } else if (this.isImageBackedCollection(collection) && updatedMasterDataForImageSync.length > 0) {
+                    await masterDataImageCacheService.syncSnapshotItems(collection, updatedMasterDataForImageSync);
                 }
             }
 

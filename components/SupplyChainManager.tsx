@@ -19,6 +19,7 @@ import OrderMatrixModal from './OrderMatrixModal';
 import { formatSafeDate } from '../utils/dateUtils';
 import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
+import { resolveSupplierImageSrc } from '../utils/entityImage';
 
 interface SupplyChainManagerProps {
    products: Product[];
@@ -1087,6 +1088,7 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
 
       const isOverLimit = editingSupplier.balance > editingSupplier.creditLimit && editingSupplier.creditLimit > 0;
       const nearLimit = editingSupplier.balance > (editingSupplier.creditLimit * 0.9) && editingSupplier.creditLimit > 0;
+      const editingSupplierImage = resolveSupplierImageSrc(editingSupplier);
 
       return (
          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
@@ -1094,9 +1096,17 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
                {/* Modal Header */}
                <div className="p-8 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
                   <div className="flex items-center gap-4">
-                     <div className={`p-4 rounded-2xl ${isOverLimit ? 'bg-red-100 text-red-600' : 'bg-indigo-100 text-indigo-600'}`}>
-                        <Truck size={32} />
-                     </div>
+                     {editingSupplierImage ? (
+                        <img
+                           src={editingSupplierImage}
+                           alt={editingSupplier.name}
+                           className="w-16 h-16 rounded-2xl object-cover border border-indigo-100 bg-white shadow-sm"
+                        />
+                     ) : (
+                        <div className={`p-4 rounded-2xl ${isOverLimit ? 'bg-red-100 text-red-600' : 'bg-indigo-100 text-indigo-600'}`}>
+                           <Truck size={32} />
+                        </div>
+                     )}
                      <div>
                         <h2 className="text-2xl font-black text-gray-800 tracking-tight">Gestión de Proveedor</h2>
                         <div className="flex items-center gap-2 mt-1">
@@ -1406,14 +1416,23 @@ const SupplyChainManager: React.FC<SupplyChainManagerProps> = ({
          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {safeSuppliers.map(supplier => {
                const isOverLimit = (supplier.balance || 0) > (supplier.creditLimit || 0) && (supplier.creditLimit || 0) > 0;
+               const supplierImage = resolveSupplierImageSrc(supplier);
 
                return (
                   <div key={supplier.id} onClick={() => { setEditingSupplier(supplier); setSupplierModalTab('GENERAL'); }} className={`group relative bg-white p-6 rounded-[2rem] shadow-sm border transition-all cursor-pointer hover:shadow-xl hover:-translate-y-1 ${isOverLimit ? 'border-red-100 bg-red-50/10' : 'border-gray-100 hover:border-indigo-100'}`}>
                      <div className="flex justify-between items-start mb-4">
                         <div className="flex items-center gap-3">
-                           <div className={`p-3 rounded-2xl transition-colors ${isOverLimit ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-400 group-hover:bg-indigo-100 group-hover:text-indigo-600'}`}>
-                              <Truck size={24} />
-                           </div>
+                           {supplierImage ? (
+                              <img
+                                 src={supplierImage}
+                                 alt={supplier.name}
+                                 className="w-12 h-12 rounded-2xl object-cover border border-indigo-100 bg-white"
+                              />
+                           ) : (
+                              <div className={`p-3 rounded-2xl transition-colors ${isOverLimit ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-400 group-hover:bg-indigo-100 group-hover:text-indigo-600'}`}>
+                                 <Truck size={24} />
+                              </div>
+                           )}
                            <div>
                               <p className="font-black text-gray-800 tracking-tight leading-none mb-1">{supplier.name}</p>
                               <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{supplier.id}</p>

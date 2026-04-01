@@ -125,6 +125,7 @@ import {
 } from './utils/cloudMasterRegistry';
 import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, persistStoredErpSyncBinding } from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
+import { resolveCustomerImageSrc } from './utils/entityImage';
 import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
 import {
   canRetryFiscalTransaction,
@@ -1136,10 +1137,14 @@ const AppContent: React.FC = () => {
 
     const selectedWalletBalance = Number(selectedCustomer.wallet?.balance || 0);
     const refreshedWalletBalance = Number(refreshedCustomer.wallet?.balance || 0);
+    const selectedCustomerImage = resolveCustomerImageSrc(selectedCustomer);
+    const refreshedCustomerImage = resolveCustomerImageSrc(refreshedCustomer);
     const shouldRefreshSelection =
+      refreshedCustomer.name !== selectedCustomer.name ||
       refreshedCustomer.currentDebt !== selectedCustomer.currentDebt ||
       refreshedCustomer.creditLimit !== selectedCustomer.creditLimit ||
       refreshedCustomer.updatedAt !== selectedCustomer.updatedAt ||
+      refreshedCustomerImage !== selectedCustomerImage ||
       refreshedWalletBalance !== selectedWalletBalance;
 
     if (shouldRefreshSelection) {
