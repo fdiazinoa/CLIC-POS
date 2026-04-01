@@ -101,13 +101,59 @@ class ProductImageCacheService {
     return localById;
   }
 
+  private async getLocalProductLookups(): Promise<{
+    byId: Map<string, Product>;
+    byBarcode: Map<string, Product>;
+  }> {
+    const products = await db.get('products') as Product[];
+    const byId = new Map<string, Product>();
+    const byBarcode = new Map<string, Product>();
+
+    for (const product of Array.isArray(products) ? products : []) {
+      if (!product?.id) continue;
+      byId.set(product.id, product);
+
+      const barcode = asString(product.barcode);
+      if (barcode && !byBarcode.has(barcode)) {
+        byBarcode.set(barcode, product);
+      }
+    }
+
+    return { byId, byBarcode };
+  }
+
+  private resolveIncomingLocalProduct(
+    item: IncomingProduct,
+    localById: Map<string, Product>,
+    localByBarcode: Map<string, Product>,
+  ): Product | undefined {
+    const incomingId = asString(item?.id);
+    if (incomingId && localById.has(incomingId)) {
+      return localById.get(incomingId);
+    }
+
+    const barcode = asString(item?.barcode);
+    if (barcode && localByBarcode.has(barcode)) {
+      return localByBarcode.get(barcode);
+    }
+
+    const skuLike = asString(item?.sku) || asString(item?.item_code) || asString(item?.code);
+    if (skuLike && localById.has(skuLike)) {
+      return localById.get(skuLike);
+    }
+
+    return undefined;
+  }
+
   private normalizeSingleIncomingProduct(item: IncomingProduct, localProduct?: Product): IncomingProduct {
     const imageUrl = this.resolveRemoteImageUrl(item);
     const imageVersion = this.resolveRemoteImageVersion(item, imageUrl);
     const hadRemoteImageLocally = Boolean(asString(localProduct?.imageUrl) || asString(localProduct?.imageLocalPath));
+    const canonicalId = asString(localProduct?.id) || asString(item?.id);
 
     const normalized: IncomingProduct = {
       ...item,
+      id: canonicalId || item.id,
       name: asString(item.name) || asString(item.nombre) || localProduct?.name || '',
       price: asNumber(item.price ?? item.precio_venta, localProduct?.price ?? 0),
       cost: asNumber(item.cost ?? item.costo_unitario, localProduct?.cost ?? 0),
@@ -182,10 +228,9 @@ class ProductImageCacheService {
       return [];
     }
 
-    const localById = await this.getLocalProductsMap();
+    const { byId: localById, byBarcode: localByBarcode } = await this.getLocalProductLookups();
     return items.map((item) => {
-      const itemId = asString(item?.id);
-      const localProduct = itemId ? localById.get(itemId) : undefined;
+      const localProduct = this.resolveIncomingLocalProduct(item, localById, localByBarcode);
       return this.normalizeSingleIncomingProduct(item, localProduct);
     });
   }
