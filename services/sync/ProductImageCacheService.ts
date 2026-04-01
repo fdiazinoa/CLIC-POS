@@ -47,8 +47,12 @@ class ProductImageCacheService {
 
       const masterUrl = masterUrlStr.endsWith('/') ? masterUrlStr.slice(0, -1) : masterUrlStr;
 
-      if (rawUrl.startsWith('/')) {
-        return `${masterUrl}${rawUrl}`;
+      // Handle relative paths (e.g. "storage/v1/..." or "/storage/v1/...")
+      if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+        const path = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
+        // Exceptions for blob: or data: URIs shouldn't be overridden like this
+        if (rawUrl.startsWith('blob:') || rawUrl.startsWith('data:')) return rawUrl;
+        return `${masterUrl}${path}`;
       }
 
       if (this.isNativeAndroid() && (rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1'))) {
@@ -61,7 +65,7 @@ class ProductImageCacheService {
 
       return rawUrl;
     } catch (e) {
-      this.logger.warn(`Failed to rewrite remote URL: ${rawUrl}`, e);
+      this.logger.warn(`[ProductImageCacheService] Failed to rewrite remote URL: ${rawUrl}`, e);
       return rawUrl;
     }
   }
@@ -280,6 +284,8 @@ class ProductImageCacheService {
   private async saveLocalImage(product: Product, imageUrl: string, imageVersion: string): Promise<boolean> {
     const relativePath = this.buildRelativePath(product.id, imageVersion, imageUrl);
 
+    console.log(`[ProductImageCacheService] 📥 DOWNLOADING NATIVE IMAGE for ${product.id} -> URL: ${imageUrl}`);
+
     await Filesystem.downloadFile({
       url: imageUrl,
       path: relativePath,
@@ -309,6 +315,7 @@ class ProductImageCacheService {
       imageLocalPath: fileUri,
     });
 
+    console.log(`[ProductImageCacheService] ✅ NATIVE IMAGE SAVED for ${product.id}`);
     return true;
   }
 
@@ -411,6 +418,7 @@ class ProductImageCacheService {
         }
       } catch (error) {
         failed += 1;
+        console.error(`[ProductImageCacheService] 🚨 FAILED TO DOWNLOAD/CACHE ${itemId}:`, error);
         this.logger.warn(`[ProductImageCacheService] Failed to cache image for ${itemId}:`, error);
       }
     }
