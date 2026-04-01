@@ -137,6 +137,19 @@ class SyncManager {
         return null;
     }
 
+    private resolveLocalSyncApiBaseCandidates(): string[] {
+        const candidates = [
+            'http://127.0.0.1:3001/api/sync',
+            'http://localhost:3001/api/sync',
+        ];
+
+        if (window.location.protocol.startsWith('http') && window.location.hostname) {
+            candidates.unshift(`${window.location.protocol}//${window.location.hostname}:3001/api/sync`);
+        }
+
+        return Array.from(new Set(candidates.map((value) => value.trim()).filter(Boolean)));
+    }
+
     /**
      * Helper: Check if debug mode for sync is enabled
      */
@@ -699,10 +712,30 @@ class SyncManager {
             : this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
         const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
         const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
+        const endpointCandidates = useAbsoluteEndpoint
+            ? [
+                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
+                    baseUrl,
+                    mode: 'local-loopback-proxy',
+                    includeErpBaseUrl: true,
+                })),
+                ...(syncApiBase
+                    ? [{
+                        baseUrl: syncApiBase,
+                        mode: 'absolute-sync-api',
+                        includeErpBaseUrl: false,
+                    }]
+                    : []),
+            ]
+            : [{
+                baseUrl: '/api/sync',
+                mode: 'relative-local-proxy',
+                includeErpBaseUrl: true,
+            }];
         const canFetchRemote = Boolean(
             context.terminalId &&
             context.tenantId &&
-            (useAbsoluteEndpoint ? syncApiBase : context.erpBaseUrl)
+            endpointCandidates.length > 0
         );
         const allowPendingFallback = !options?.forceRemoteFetch;
 
@@ -713,6 +746,10 @@ class SyncManager {
             erpBaseUrlPresent: Boolean(context.erpBaseUrl),
             syncApiBasePresent: Boolean(syncApiBase),
             useAbsoluteEndpoint,
+            endpointCandidates: endpointCandidates.map((candidate) => ({
+                mode: candidate.mode,
+                baseUrl: candidate.baseUrl,
+            })),
             forceRemoteFetch: Boolean(options?.forceRemoteFetch),
             forceFullCatalog: Boolean(options?.forceFullCatalog),
             hasCatalogCursor: Boolean(currentCatalogCursor),
@@ -726,100 +763,111 @@ class SyncManager {
                 tenantId: context.tenantId || null,
                 erpBaseUrl: context.erpBaseUrl || null,
                 syncApiBase: syncApiBase || null,
+                endpointCandidates: endpointCandidates.map((candidate) => ({
+                    mode: candidate.mode,
+                    baseUrl: candidate.baseUrl,
+                })),
             });
         }
 
         if (!snapshot && canFetchRemote) {
-            const params = new URLSearchParams();
-            if (context.tenantId) params.set('tenant_id', context.tenantId);
-            if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
-            if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
-            if (!options?.forceFullCatalog && currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
+            let lastFetchError: unknown = null;
 
-            try {
-                if (!useAbsoluteEndpoint && context.erpBaseUrl) {
-                    params.set('erp_base_url', context.erpBaseUrl);
-                }
+            for (const endpointCandidate of endpointCandidates) {
+                const params = new URLSearchParams();
+                if (context.tenantId) params.set('tenant_id', context.tenantId);
+                if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
+                if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+                if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
+                if (!options?.forceFullCatalog && currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
 
-                const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/config`;
-                const endpointBase = useAbsoluteEndpoint
-                    ? syncApiBase
-                    : '/api/sync';
-                const endpoint = `${endpointBase}${endpointPath}${params.toString() ? `?${params.toString()}` : ''}`;
-                posCatalogDebugLog('refreshTerminalResolvedConfig: fetch begin', {
-                    endpoint,
-                    endpointMode: useAbsoluteEndpoint ? 'absolute-sync-api' : 'relative-local-proxy',
-                    forceRemoteFetch: Boolean(options?.forceRemoteFetch),
-                    forceFullCatalog: Boolean(options?.forceFullCatalog),
-                    catalogCursorSent: !options?.forceFullCatalog ? currentCatalogCursor : null,
-                });
-                const response = await fetch(endpoint, {
-                    headers: context.tenantId
-                        ? {
-                            Accept: 'application/json',
-                            'X-Tenant-Id': context.tenantId,
-                        }
-                        : {
-                            Accept: 'application/json',
-                        },
-                });
-                if (!response.ok) {
-                    const detail = await response.text().catch(() => '');
-                    throw new Error(detail || `No se pudo refrescar la configuración de terminal (${response.status}).`);
-                }
+                try {
+                    const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/config`;
+                    const endpoint = `${endpointCandidate.baseUrl}${endpointPath}${params.toString() ? `?${params.toString()}` : ''}`;
+                    posCatalogDebugLog('refreshTerminalResolvedConfig: fetch begin', {
+                        endpoint,
+                        endpointMode: endpointCandidate.mode,
+                        forceRemoteFetch: Boolean(options?.forceRemoteFetch),
+                        forceFullCatalog: Boolean(options?.forceFullCatalog),
+                        catalogCursorSent: !options?.forceFullCatalog ? currentCatalogCursor : null,
+                    });
+                    const response = await fetch(endpoint, {
+                        headers: context.tenantId
+                            ? {
+                                Accept: 'application/json',
+                                'X-Tenant-Id': context.tenantId,
+                            }
+                            : {
+                                Accept: 'application/json',
+                            },
+                    });
+                    if (!response.ok) {
+                        const detail = await response.text().catch(() => '');
+                        throw new Error(detail || `No se pudo refrescar la configuración de terminal (${response.status}).`);
+                    }
 
-                const responseContentType = response.headers.get('content-type') || null;
-                payload = await response.json();
-                snapshot = extractTerminalConfigSnapshot(payload?.terminal_config ?? payload);
-                catalogDelta = payload?.catalog_delta && typeof payload.catalog_delta === 'object'
-                    ? payload.catalog_delta
-                    : null;
-                nextCatalogCursor =
-                    typeof payload?.snapshot_meta?.catalog_cursor === 'string'
-                        ? payload.snapshot_meta.catalog_cursor.trim() || null
+                    const responseContentType = response.headers.get('content-type') || null;
+                    payload = await response.json();
+                    snapshot = extractTerminalConfigSnapshot(payload?.terminal_config ?? payload);
+                    catalogDelta = payload?.catalog_delta && typeof payload.catalog_delta === 'object'
+                        ? payload.catalog_delta
                         : null;
+                    nextCatalogCursor =
+                        typeof payload?.snapshot_meta?.catalog_cursor === 'string'
+                            ? payload.snapshot_meta.catalog_cursor.trim() || null
+                            : null;
 
-                const snapshotMasters = (snapshot as any)?.masters;
-                const traceRows = Array.isArray(snapshotMasters?.items)
-                    ? snapshotMasters.items
-                        .filter((item: unknown) => posCatalogDebugMatchesRaw(item))
-                        .map((item: Record<string, unknown>) => posCatalogDebugSummarizeItem(item))
-                    : [];
+                    const snapshotMasters = (snapshot as any)?.masters;
+                    const traceRows = Array.isArray(snapshotMasters?.items)
+                        ? snapshotMasters.items
+                            .filter((item: unknown) => posCatalogDebugMatchesRaw(item))
+                            .map((item: Record<string, unknown>) => posCatalogDebugSummarizeItem(item))
+                        : [];
 
-                posCatalogDebugLog('refreshTerminalResolvedConfig: fetch success', {
-                    source: payload?.source || null,
-                    contentType: responseContentType,
-                    usedCatalogDelta: Boolean(catalogDelta),
-                    nextCatalogCursor,
-                    traceRows,
-                });
+                    posCatalogDebugLog('refreshTerminalResolvedConfig: fetch success', {
+                        source: payload?.source || null,
+                        endpointMode: endpointCandidate.mode,
+                        contentType: responseContentType,
+                        usedCatalogDelta: Boolean(catalogDelta),
+                        nextCatalogCursor,
+                        traceRows,
+                    });
 
-                if (!snapshot && payload?.config && !Array.isArray(payload.config)) {
-                    const incomingConfig = payload.config as BusinessConfig;
-                    const changed =
-                        JSON.stringify(this.sanitizeConfig(baseConfig)) !==
-                        JSON.stringify(this.sanitizeConfig(incomingConfig));
+                    if (!snapshot && payload?.config && !Array.isArray(payload.config)) {
+                        const incomingConfig = payload.config as BusinessConfig;
+                        const changed =
+                            JSON.stringify(this.sanitizeConfig(baseConfig)) !==
+                            JSON.stringify(this.sanitizeConfig(incomingConfig));
 
-                    if (options?.persist !== false && changed) {
-                        await db.save('config', incomingConfig);
+                        if (options?.persist !== false && changed) {
+                            await db.save('config', incomingConfig);
+                        }
+
+                        if (options?.dispatchEvent !== false && changed) {
+                            window.dispatchEvent(new CustomEvent('configUpdated', { detail: incomingConfig }));
+                        }
+
+                        return incomingConfig;
                     }
 
-                    if (options?.dispatchEvent !== false && changed) {
-                        window.dispatchEvent(new CustomEvent('configUpdated', { detail: incomingConfig }));
-                    }
-
-                    return incomingConfig;
+                    break;
+                } catch (remoteSnapshotError) {
+                    lastFetchError = remoteSnapshotError;
+                    posCatalogDebugLog('refreshTerminalResolvedConfig: fetch failed', {
+                        allowPendingFallback,
+                        endpointMode: endpointCandidate.mode,
+                        endpointBaseUrl: endpointCandidate.baseUrl,
+                        hasPendingSnapshot: Boolean(pendingSnapshot),
+                        error: String((remoteSnapshotError as Error)?.message || remoteSnapshotError),
+                    });
                 }
-            } catch (remoteSnapshotError) {
-                posCatalogDebugLog('refreshTerminalResolvedConfig: fetch failed', {
-                    allowPendingFallback,
-                    hasPendingSnapshot: Boolean(pendingSnapshot),
-                    error: String((remoteSnapshotError as Error)?.message || remoteSnapshotError),
-                });
+            }
+
+            if (!snapshot && lastFetchError) {
                 if (!pendingSnapshot || !allowPendingFallback) {
-                    throw remoteSnapshotError;
+                    throw lastFetchError;
                 }
-                console.warn('⚠️ SyncManager: Could not fetch remote terminal snapshot. Falling back to pending snapshot.', remoteSnapshotError);
+                console.warn('⚠️ SyncManager: Could not fetch remote terminal snapshot. Falling back to pending snapshot.', lastFetchError);
             }
         }
 
