@@ -43,6 +43,7 @@ import { parseScaleBarcode } from './utils/barcodeParser';
 import { useKioskMode } from './hooks/useKioskMode';
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 import { db } from './utils/db'; // Import Local DB
+import { posImageDebugLog, posImageDebugLogDbRows } from './utils/posImageDebugTrace';
 import { dbAdapter } from './services/db'; // Import Adapter for Healthcheck
 import { syncManager } from './services/sync/SyncManager';
 import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
@@ -2170,7 +2171,13 @@ const AppContent: React.FC = () => {
       if (!freshData) return;
 
       switch (collection) {
-        case 'products': setProducts(freshData as Product[]); break;
+        case 'products':
+          setProducts(freshData as Product[]);
+          posImageDebugLog('App: productsUpdated → setProducts', {
+            count: Array.isArray(freshData) ? freshData.length : 0,
+          });
+          void posImageDebugLogDbRows('App handleSyncUpdate after setProducts');
+          break;
         case 'customers': setCustomers(freshData as Customer[]); break;
         case 'suppliers': setSuppliers(freshData as Supplier[]); break;
         case 'internalSequences': /* No state for this, used directly from DB */ break;
