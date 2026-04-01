@@ -10,6 +10,7 @@ import { dbAdapter } from '../db';
 import { apiSyncAdapter, ProductImageManifestItem, ProductImagePayloadItem } from './ApiSyncAdapter';
 import { NetworkScanner } from './NetworkScanner';
 import { v4 as uuidv4 } from 'uuid';
+import { Capacitor } from '@capacitor/core';
 import { permissionService } from './PermissionService';
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { productImageCacheService } from './ProductImageCacheService';
@@ -99,6 +100,41 @@ class SyncManager {
         } catch {
             return null;
         }
+    }
+
+    private resolveSyncApiBase(value: unknown): string | null {
+        const normalizedBase = this.resolveConfigErpBaseUrl(value);
+        return normalizedBase ? `${normalizedBase}/api/sync` : null;
+    }
+
+    private shouldUseAbsoluteTerminalConfigEndpoint(): boolean {
+        try {
+            return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+        } catch {
+            return false;
+        }
+    }
+
+    private resolveTerminalConfigSyncApiBase(context: { erpBaseUrl: string | null }): string | null {
+        const env = (import.meta as any)?.env || {};
+        const candidates = [
+            localStorage.getItem('CLIC_ERP_SYNC_URL'),
+            env.VITE_SYNC_API_URL,
+            env.VITE_ERP_SYNC_API_URL,
+            context.erpBaseUrl,
+            localStorage.getItem('CLIC_ERP_BASE_URL'),
+            localStorage.getItem('erp_base_url'),
+            env.VITE_ERP_BASE_URL,
+        ];
+
+        for (const candidate of candidates) {
+            const resolved = this.resolveSyncApiBase(candidate);
+            if (resolved) {
+                return resolved;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -661,7 +697,13 @@ class SyncManager {
         const pendingSnapshot = snapshot
             ? null
             : this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
-        const canFetchRemote = Boolean(context.terminalId && context.tenantId && context.erpBaseUrl);
+        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
+        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
+        const canFetchRemote = Boolean(
+            context.terminalId &&
+            context.tenantId &&
+            (useAbsoluteEndpoint ? syncApiBase : context.erpBaseUrl)
+        );
         const allowPendingFallback = !options?.forceRemoteFetch;
 
         posCatalogDebugLog('refreshTerminalResolvedConfig: context', {
@@ -669,6 +711,8 @@ class SyncManager {
             localTerminalId: snapshotTerminalId,
             tenantIdPresent: Boolean(context.tenantId),
             erpBaseUrlPresent: Boolean(context.erpBaseUrl),
+            syncApiBasePresent: Boolean(syncApiBase),
+            useAbsoluteEndpoint,
             forceRemoteFetch: Boolean(options?.forceRemoteFetch),
             forceFullCatalog: Boolean(options?.forceFullCatalog),
             hasCatalogCursor: Boolean(currentCatalogCursor),
@@ -681,31 +725,50 @@ class SyncManager {
                 localTerminalId: snapshotTerminalId,
                 tenantId: context.tenantId || null,
                 erpBaseUrl: context.erpBaseUrl || null,
+                syncApiBase: syncApiBase || null,
             });
         }
 
         if (!snapshot && canFetchRemote) {
             const params = new URLSearchParams();
             if (context.tenantId) params.set('tenant_id', context.tenantId);
-            if (context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
             if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
             if (!options?.forceFullCatalog && currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
 
             try {
-                const endpoint = `/api/sync/terminals/${encodeURIComponent(context.terminalId)}/config${params.toString() ? `?${params.toString()}` : ''}`;
+                if (!useAbsoluteEndpoint && context.erpBaseUrl) {
+                    params.set('erp_base_url', context.erpBaseUrl);
+                }
+
+                const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/config`;
+                const endpointBase = useAbsoluteEndpoint
+                    ? syncApiBase
+                    : '/api/sync';
+                const endpoint = `${endpointBase}${endpointPath}${params.toString() ? `?${params.toString()}` : ''}`;
                 posCatalogDebugLog('refreshTerminalResolvedConfig: fetch begin', {
                     endpoint,
+                    endpointMode: useAbsoluteEndpoint ? 'absolute-sync-api' : 'relative-local-proxy',
                     forceRemoteFetch: Boolean(options?.forceRemoteFetch),
                     forceFullCatalog: Boolean(options?.forceFullCatalog),
                     catalogCursorSent: !options?.forceFullCatalog ? currentCatalogCursor : null,
                 });
-                const response = await fetch(endpoint);
+                const response = await fetch(endpoint, {
+                    headers: context.tenantId
+                        ? {
+                            Accept: 'application/json',
+                            'X-Tenant-Id': context.tenantId,
+                        }
+                        : {
+                            Accept: 'application/json',
+                        },
+                });
                 if (!response.ok) {
                     const detail = await response.text().catch(() => '');
                     throw new Error(detail || `No se pudo refrescar la configuración de terminal (${response.status}).`);
                 }
 
+                const responseContentType = response.headers.get('content-type') || null;
                 payload = await response.json();
                 snapshot = extractTerminalConfigSnapshot(payload?.terminal_config ?? payload);
                 catalogDelta = payload?.catalog_delta && typeof payload.catalog_delta === 'object'
@@ -725,6 +788,7 @@ class SyncManager {
 
                 posCatalogDebugLog('refreshTerminalResolvedConfig: fetch success', {
                     source: payload?.source || null,
+                    contentType: responseContentType,
                     usedCatalogDelta: Boolean(catalogDelta),
                     nextCatalogCursor,
                     traceRows,
