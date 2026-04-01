@@ -603,6 +603,7 @@ class SyncManager {
             persist?: boolean;
             dispatchEvent?: boolean;
             forceRemoteFetch?: boolean;
+            forceFullCatalog?: boolean;
         }
     ): Promise<BusinessConfig | null> {
         if (this.isDisabled) return null;
@@ -639,7 +640,7 @@ class SyncManager {
             if (context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
             if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
-            if (currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
+            if (!options?.forceFullCatalog && currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
 
             try {
                 const endpoint = `/api/sync/terminals/${encodeURIComponent(context.terminalId)}/config${params.toString() ? `?${params.toString()}` : ''}`;

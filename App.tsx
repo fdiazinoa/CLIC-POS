@@ -567,7 +567,10 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     const handleTerminalConfigSyncRequested = async () => {
       try {
-        await syncManager.refreshTerminalResolvedConfig(undefined, { forceRemoteFetch: true });
+        await syncManager.refreshTerminalResolvedConfig(undefined, {
+          forceRemoteFetch: true,
+          forceFullCatalog: true,
+        });
       } catch (error) {
         console.warn('⚠️ Failed to apply terminal config refresh requested by ERP outbox:', error);
       }
@@ -946,7 +949,10 @@ const AppContent: React.FC = () => {
 
         if (!disposed && (result?.outbox?.applied || 0) > 0) {
           try {
-            const refreshedConfig = await syncManager.refreshTerminalResolvedConfig(undefined, { forceRemoteFetch: true });
+            const refreshedConfig = await syncManager.refreshTerminalResolvedConfig(undefined, {
+              forceRemoteFetch: true,
+              forceFullCatalog: true,
+            });
             if (refreshedConfig && !Array.isArray(refreshedConfig) && refreshedConfig.terminals) {
               setConfig(refreshedConfig);
             }
