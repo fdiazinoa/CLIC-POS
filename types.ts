@@ -419,6 +419,12 @@ export interface TerminalConfigSnapshot {
   terminal_name?: string;
   station_number?: string | number;
   role?: string;
+  masters?: {
+    items?: Record<string, any>[];
+    customers?: Customer[];
+    suppliers?: Supplier[];
+    [key: string]: any;
+  };
   resolved?: TerminalConfigResolvedSnapshot;
   config?: Record<string, any>;
   resolution_error?: any;

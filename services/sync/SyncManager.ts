@@ -949,6 +949,12 @@ class SyncManager {
             this.persistCatalogCursor(snapshotTerminalId, nextCatalogCursor);
         }
 
+        try {
+            await this.refreshTerminalSupplementalMasterData(snapshot);
+        } catch (error) {
+            console.warn('⚠️ SyncManager: Supplemental customer/supplier refresh failed after terminal config update:', error);
+        }
+
         if (options?.dispatchEvent !== false && changed) {
             window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfig }));
         }
@@ -1093,6 +1099,80 @@ class SyncManager {
         });
 
         return updatedCount;
+    }
+
+    private snapshotMasterRows(snapshot: unknown, key: 'customers' | 'suppliers'): unknown[] | null {
+        const masters = snapshot && typeof snapshot === 'object'
+            ? (snapshot as Record<string, any>).masters
+            : null;
+
+        if (!masters || typeof masters !== 'object') {
+            return null;
+        }
+
+        if (!Object.prototype.hasOwnProperty.call(masters, key)) {
+            return null;
+        }
+
+        return Array.isArray((masters as Record<string, unknown>)[key])
+            ? ((masters as Record<string, unknown>)[key] as unknown[])
+            : [];
+    }
+
+    private async applySnapshotImageBackedCollection(
+        collection: ImageBackedCollection,
+        incomingItems: unknown[]
+    ): Promise<number> {
+        const cleanItems = (Array.isArray(incomingItems) ? incomingItems : [])
+            .map((item) => {
+                if (!item || typeof item !== 'object' || Array.isArray(item)) {
+                    return null;
+                }
+                const { _op, ...rest } = item as Record<string, unknown>;
+                return rest;
+            })
+            .filter(Boolean) as Record<string, unknown>[];
+
+        const normalizedItems = await masterDataImageCacheService.normalizeIncomingItems(collection, cleanItems as any[]);
+        await db.save(collection, normalizedItems);
+        await masterDataImageCacheService.syncSnapshotItems(collection, cleanItems as any[]);
+        window.dispatchEvent(new CustomEvent(`${collection}Updated`));
+        return normalizedItems.length;
+    }
+
+    private async refreshTerminalSupplementalMasterData(snapshot: unknown): Promise<{
+        customers: number;
+        suppliers: number;
+    }> {
+        const startedAt = posCatalogDebugNow();
+        const collections: ImageBackedCollection[] = ['customers', 'suppliers'];
+        const results: Record<ImageBackedCollection, number> = {
+            customers: 0,
+            suppliers: 0,
+        };
+
+        for (const collection of collections) {
+            const snapshotRows = this.snapshotMasterRows(snapshot, collection);
+
+            if (snapshotRows !== null) {
+                results[collection] = await this.applySnapshotImageBackedCollection(collection, snapshotRows);
+                continue;
+            }
+
+            try {
+                results[collection] = await this.pullCatalog(collection, false, { ignoreThrottle: true });
+            } catch (error) {
+                console.warn(`⚠️ SyncManager: Could not pull ${collection} after terminal config refresh:`, error);
+            }
+        }
+
+        posCatalogDebugLog('refreshTerminalResolvedConfig: supplemental master data complete', {
+            customers: results.customers,
+            suppliers: results.suppliers,
+            elapsedMs: posCatalogDebugElapsedMs(startedAt),
+        });
+
+        return results;
     }
 
     private isRecoveringConnection = false;
@@ -1596,7 +1676,13 @@ class SyncManager {
         return this.isInternalSyncing;
     }
 
-    async pullCatalog(collection: SyncableCollection, force: boolean = false): Promise<number> {
+    async pullCatalog(
+        collection: SyncableCollection,
+        force: boolean = false,
+        options?: {
+            ignoreThrottle?: boolean;
+        }
+    ): Promise<number> {
         if (this.isDisabled) return 0;
 
         // Throttling...
@@ -1607,7 +1693,7 @@ class SyncManager {
         }
 
         const now = Date.now();
-        if (!force && (now - this.lastSyncTime < this.MIN_SYNC_INTERVAL_MS)) {
+        if (!force && !options?.ignoreThrottle && (now - this.lastSyncTime < this.MIN_SYNC_INTERVAL_MS)) {
             // console.log(`⏳ SyncManager: Pull skipped for ${collection} (Throttled: ${((this.MIN_SYNC_INTERVAL_MS - (now - this.lastSyncTime)) / 1000).toFixed(1)}s remaining)`);
             return 0;
         }
