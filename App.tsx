@@ -943,6 +943,22 @@ const AppContent: React.FC = () => {
         if (!disposed && result?.heartbeat?.terminal?.id) {
           console.log(`[ERP SYNC] Terminal ${terminalName} enlazada con ${result.heartbeat.terminal.id}`);
         }
+
+        if (!disposed && (result?.outbox?.applied || 0) > 0) {
+          try {
+            const refreshedConfig = await syncManager.refreshTerminalResolvedConfig(undefined, { forceRemoteFetch: true });
+            if (refreshedConfig && !Array.isArray(refreshedConfig) && refreshedConfig.terminals) {
+              setConfig(refreshedConfig);
+            }
+
+            const refreshedProducts = await db.get('products') as Product[];
+            if (Array.isArray(refreshedProducts)) {
+              setProducts(refreshedProducts);
+            }
+          } catch (refreshError) {
+            console.warn('[ERP SYNC] Outbox applied but runtime refresh failed:', refreshError);
+          }
+        }
       } catch (error) {
         console.warn('[ERP SYNC] lifecycle registration skipped:', error);
       }
