@@ -538,6 +538,12 @@ class SyncManager {
             return null;
         }
 
+        try {
+            await this.applySnapshotProducts(snapshot);
+        } catch (error) {
+            console.warn('⚠️ SyncManager: Could not apply snapshot products from terminal config push:', error);
+        }
+
         const applied = applyTerminalConfigSnapshot(baseConfig, {
             terminalId: snapshotTerminalId,
             posDeviceId: context.posDeviceId || undefined,
@@ -576,6 +582,33 @@ class SyncManager {
         }
 
         return nextConfig;
+    }
+
+    private async applySnapshotProducts(snapshot: unknown): Promise<number> {
+        const rawItems = Array.isArray((snapshot as any)?.masters?.items)
+            ? (snapshot as any).masters.items
+            : [];
+
+        if (rawItems.length === 0) {
+            return 0;
+        }
+
+        const normalizedItems = await this.enrichPulledProducts(rawItems);
+        let updatedCount = 0;
+
+        for (const item of normalizedItems) {
+            if (!item?.id) continue;
+            await db.saveDocument('products', item);
+            updatedCount += 1;
+        }
+
+        await productImageCacheService.syncSnapshotItems(normalizedItems as Product[]);
+
+        if (updatedCount > 0) {
+            window.dispatchEvent(new CustomEvent('productsUpdated'));
+        }
+
+        return updatedCount;
     }
 
     private isRecoveringConnection = false;
