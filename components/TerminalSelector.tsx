@@ -10,7 +10,7 @@ import {
   Server,
   WifiOff,
 } from 'lucide-react';
-import { BusinessConfig, TerminalConfig, User as UserType } from '../types';
+import { BusinessConfig, Product, TerminalConfig, User as UserType } from '../types';
 import { applyTerminalConfigSnapshot, extractTerminalConfigSnapshot } from '../utils/terminalConfigSnapshot';
 import { buildMasterUrlCandidates, buildMasterUrlFromHost, normalizeMasterHost } from '../utils/cloudMasterRegistry';
 import {
@@ -56,6 +56,7 @@ interface InitialConfigResponse {
   terminal_id: string;
   erp_terminal_id?: string;
   config: BusinessConfig;
+  items?: Product[];
   terminal_config?: Record<string, any>;
   snapshot_meta?: {
     used_resolved?: boolean;
@@ -78,6 +79,7 @@ interface BoundTerminalPayload {
   config: BusinessConfig;
   users?: UserType[];
   masterIp?: string;
+  snapshotItems?: Product[];
   snapshotMeta?: {
     fullPullOnPairing?: boolean;
     resolutionError?: unknown;
@@ -510,6 +512,9 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           config: initialConfigData.config || data.config,
           users: data.users,
           masterIp: bindingMode === 'SLAVE' ? resolvedMasterBinding?.host || masterIpInput.trim() || undefined : undefined,
+          snapshotItems: Array.isArray(initialConfigData.items)
+            ? initialConfigData.items
+            : (Array.isArray(initialConfigData.terminal_config?.masters?.items) ? initialConfigData.terminal_config?.masters?.items : []),
           snapshotMeta: {
             fullPullOnPairing: initialConfigData.snapshot_meta?.full_pull_on_pairing,
             resolutionError: initialConfigData.snapshot_meta?.resolution_error,

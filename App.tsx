@@ -47,6 +47,7 @@ import { dbAdapter } from './services/db'; // Import Adapter for Healthcheck
 import { syncManager } from './services/sync/SyncManager';
 import { apiSyncAdapter } from './services/sync/ApiSyncAdapter';
 import { backgroundSyncManager } from './services/sync/BackgroundSyncManager';
+import { productImageCacheService } from './services/sync/ProductImageCacheService';
 import { calculateZReportStats } from './utils/analytics';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
@@ -2332,6 +2333,7 @@ const AppContent: React.FC = () => {
       boundConfig?: BusinessConfig;
       boundUsers?: User[];
       masterIp?: string;
+      snapshotItems?: Product[];
       snapshotMeta?: {
         fullPullOnPairing?: boolean;
         resolutionError?: unknown;
@@ -2503,6 +2505,13 @@ const AppContent: React.FC = () => {
       if (shouldFullPullOnPairing) {
         await syncManager.fullPull();
       } else {
+        if (Array.isArray(setupResult?.snapshotItems) && setupResult.snapshotItems.length > 0) {
+          const normalizedSnapshotItems = await productImageCacheService.normalizeIncomingProducts(setupResult.snapshotItems);
+          await db.save('products', normalizedSnapshotItems);
+          void productImageCacheService.syncSnapshotItems(normalizedSnapshotItems).catch((error) => {
+            console.warn('⚠️ Snapshot product image sync failed after pairing:', error);
+          });
+        }
         await syncManager.refreshTerminalResolvedConfig();
       }
 
