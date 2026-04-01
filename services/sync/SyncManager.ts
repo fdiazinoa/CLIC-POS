@@ -24,6 +24,12 @@ import {
     looksLikeUuidString,
     resolveDocumentSeriesDisplayPrefix,
 } from '../../utils/documentSeriesIdentity';
+import {
+    posImageDebugIncomingCodes,
+    posImageDebugLog,
+    posImageDebugLogDbRows,
+    posImageDebugMatchesRaw,
+} from '../../utils/posImageDebugTrace';
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities';
 
@@ -593,16 +599,48 @@ class SyncManager {
             return 0;
         }
 
+        const traceRaw = rawItems.filter((row: unknown) => posImageDebugMatchesRaw(row));
+        if (traceRaw.length > 0) {
+            posImageDebugLog('applySnapshotProducts: raw masters.items', {
+                snapshotItemCount: rawItems.length,
+                traceRows: traceRaw.map((row: any) => ({
+                    id: row?.id,
+                    barcode: row?.barcode,
+                    sku: row?.sku,
+                    item_code: row?.item_code,
+                    codeCandidates: posImageDebugIncomingCodes(row as Record<string, unknown>),
+                    image_url: row?.image_url,
+                    image_version: row?.image_version,
+                })),
+            });
+        }
+
         const normalizedItems = await this.enrichPulledProducts(rawItems);
         let updatedCount = 0;
 
         for (const item of normalizedItems) {
             if (!item?.id) continue;
+            if (posImageDebugMatchesRaw(item)) {
+                posImageDebugLog('applySnapshotProducts: db.saveDocument(products)', {
+                    id: item.id,
+                    barcode: (item as any).barcode,
+                    imageUrl: (item as any).imageUrl,
+                    imageVersion: (item as any).imageVersion,
+                    hasRenderableImage: Boolean(String((item as any).image ?? '').trim()),
+                });
+            }
             await db.saveDocument('products', item);
             updatedCount += 1;
         }
 
-        await productImageCacheService.syncSnapshotItems(normalizedItems as Product[]);
+        await posImageDebugLogDbRows('after applySnapshotProducts saveDocument loop');
+
+        const cacheStats = await productImageCacheService.syncSnapshotItems(normalizedItems as Product[]);
+        if (traceRaw.length > 0) {
+            posImageDebugLog('applySnapshotProducts: syncSnapshotItems summary', cacheStats as Record<string, unknown>);
+        }
+
+        await posImageDebugLogDbRows('after syncSnapshotItems');
 
         if (updatedCount > 0) {
             window.dispatchEvent(new CustomEvent('productsUpdated'));

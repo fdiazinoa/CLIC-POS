@@ -38,6 +38,11 @@ import GlobalDiscountModal from './GlobalDiscountModal';
 import LoyaltyScanModal from './LoyaltyScanModal';
 import TrackingSelectionModal from './TrackingSelectionModal';
 import { db } from '../utils/db';
+import {
+  POS_IMAGE_DEBUG_BARCODE,
+  POS_IMAGE_DEBUG_LOCAL_ID,
+  POS_IMAGE_DEBUG_TAG,
+} from '../utils/posImageDebugTrace';
 import { validateTerminalDocument } from '../utils/validation';
 import { isSessionExpired } from '../utils/session';
 import { FiscalRangeDGII } from '../types';
@@ -202,6 +207,33 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setSafetyAction({ name, callback, isCritical });
       setShowSafetyGate(true);
    };
+
+   useEffect(() => {
+      const match = products.find(
+         (product) =>
+            String(product.barcode) === POS_IMAGE_DEBUG_BARCODE ||
+            product.id === POS_IMAGE_DEBUG_LOCAL_ID ||
+            String(product.id).endsWith('-171'),
+      );
+      if (!match) {
+         console.info(POS_IMAGE_DEBUG_TAG, 'POSInterface: no grid row for trace SKU (yet)', {
+            catalogSize: products.length,
+         });
+         return;
+      }
+
+      const image = match.image;
+      console.info(POS_IMAGE_DEBUG_TAG, 'POSInterface: grid row for trace SKU', {
+         id: match.id,
+         barcode: match.barcode,
+         name: match.name?.slice(0, 48),
+         imagePrefix: typeof image === 'string' ? image.slice(0, 96) : image,
+         imageUrl: match.imageUrl,
+         imageVersion: match.imageVersion,
+         imageLocalPathPrefix:
+            typeof match.imageLocalPath === 'string' ? match.imageLocalPath.slice(0, 96) : match.imageLocalPath,
+      });
+   }, [products]);
 
    useEffect(() => {
       if (successToast) {
