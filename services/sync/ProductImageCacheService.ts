@@ -19,8 +19,6 @@ const asBoolean = (value: unknown, fallback = false): boolean => {
   return fallback;
 };
 
-const isHttpUrl = (value: string): boolean => /^https?:\/\//i.test(value);
-
 const uniqueStrings = (values: unknown[]): string[] =>
   Array.from(new Set(values.map((value) => asString(value)).filter(Boolean)));
 
@@ -32,6 +30,54 @@ class ProductImageCacheService {
     return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
   }
 
+  private readMasterUrl(): string | null {
+    return asString(localStorage.getItem('CLIC_POS_MASTER_URL')) || null;
+  }
+
+  private rewriteLoopbackHostname(urlValue: string, masterUrlValue: string | null): string {
+    if (!masterUrlValue || !this.isNativeAndroid()) {
+      return urlValue;
+    }
+
+    try {
+      const urlObj = new URL(urlValue);
+      if (urlObj.hostname !== 'localhost' && urlObj.hostname !== '127.0.0.1') {
+        return urlValue;
+      }
+
+      const masterObj = new URL(masterUrlValue);
+      urlObj.protocol = masterObj.protocol;
+      urlObj.hostname = masterObj.hostname;
+      return urlObj.toString();
+    } catch {
+      return urlValue;
+    }
+  }
+
+  private resolveRelativeImageBaseUrl(masterUrl: string | null): string | null {
+    const env = (import.meta as any)?.env || {};
+    const candidates = uniqueStrings([
+      env.VITE_SUPABASE_URL,
+      localStorage.getItem('CLIC_SUPABASE_URL'),
+      localStorage.getItem('SUPABASE_URL'),
+      localStorage.getItem('CLIC_ERP_BASE_URL'),
+      localStorage.getItem('erp_base_url'),
+      masterUrl,
+    ]);
+
+    for (const candidate of candidates) {
+      try {
+        const normalized = this.rewriteLoopbackHostname(candidate, masterUrl);
+        const urlObj = new URL(normalized);
+        return urlObj.toString().replace(/\/$/, '');
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
+  }
+
   private resolveRemoteImageUrl(item: IncomingProduct): string | null {
     const rawUrl =
       asString(item.imageUrl) ||
@@ -40,27 +86,34 @@ class ProductImageCacheService {
       asString(item.image);
 
     if (!rawUrl) return null;
+    if (rawUrl.startsWith('blob:') || rawUrl.startsWith('data:')) return rawUrl;
 
     try {
-      const masterUrlStr = localStorage.getItem('CLIC_POS_MASTER_URL');
-      if (!masterUrlStr) return rawUrl;
-
-      const masterUrl = masterUrlStr.endsWith('/') ? masterUrlStr.slice(0, -1) : masterUrlStr;
+      const masterUrl = this.readMasterUrl();
 
       // Handle relative paths (e.g. "storage/v1/..." or "/storage/v1/...")
       if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+        const baseUrl = this.resolveRelativeImageBaseUrl(masterUrl);
+        if (!baseUrl) return rawUrl;
+
         const path = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
-        // Exceptions for blob: or data: URIs shouldn't be overridden like this
-        if (rawUrl.startsWith('blob:') || rawUrl.startsWith('data:')) return rawUrl;
-        return `${masterUrl}${path}`;
+        const resolved = new URL(path, `${baseUrl}/`).toString();
+        this.logger.info('[ProductImageCacheService] Resolved relative image URL', {
+          rawUrl,
+          baseUrl,
+          resolved,
+        });
+        return resolved;
       }
 
       if (this.isNativeAndroid() && (rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1'))) {
-        const urlObj = new URL(rawUrl);
-        const masterObj = new URL(masterUrl);
-        urlObj.protocol = masterObj.protocol;
-        urlObj.hostname = masterObj.hostname; // Keep target port (e.g., Supabase 54321)
-        return urlObj.toString();
+        const rewritten = this.rewriteLoopbackHostname(rawUrl, masterUrl);
+        this.logger.info('[ProductImageCacheService] Rewrote loopback image URL', {
+          rawUrl,
+          masterUrl,
+          rewritten,
+        });
+        return rewritten;
       }
 
       return rawUrl;
