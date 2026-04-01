@@ -5,7 +5,14 @@ import { db } from '../../utils/db';
 
 type IncomingProduct = Partial<Product> & Record<string, any>;
 
-const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+/** Incluye números: el JSON del ERP/master suele mandar barcode/sku como number. */
+const asString = (value: unknown): string => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return String(value).trim();
+};
 const asNumber = (value: unknown, fallback = 0): number => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -122,6 +129,26 @@ class ProductImageCacheService {
     return { byId, byBarcode };
   }
 
+  /** Códigos candidatos del payload (ERP / snapshot / master) para cruzar con barcode local. */
+  private incomingProductCodeCandidates(item: IncomingProduct): string[] {
+    const fromArr = Array.isArray(item?.barcodes)
+      ? (item.barcodes as unknown[]).map((b) => asString(b)).filter(Boolean)
+      : [];
+    const single = [
+      asString(item?.barcode),
+      asString(item?.codigo_barras),
+      asString(item?.codigoBarras),
+      asString(item?.sku),
+      asString(item?.item_code),
+      asString(item?.code),
+      asString(item?.referencia),
+      asString(item?.ref),
+      asString(item?.numero_articulo),
+      ...fromArr,
+    ].filter(Boolean);
+    return [...new Set(single)];
+  }
+
   private resolveIncomingLocalProduct(
     item: IncomingProduct,
     localById: Map<string, Product>,
@@ -132,12 +159,16 @@ class ProductImageCacheService {
       return localById.get(incomingId);
     }
 
-    const barcode = asString(item?.barcode);
-    if (barcode && localByBarcode.has(barcode)) {
-      return localByBarcode.get(barcode);
+    for (const code of this.incomingProductCodeCandidates(item)) {
+      if (code && localByBarcode.has(code)) {
+        return localByBarcode.get(code);
+      }
     }
 
     const skuLike = asString(item?.sku) || asString(item?.item_code) || asString(item?.code);
+    if (skuLike && localByBarcode.has(skuLike)) {
+      return localByBarcode.get(skuLike);
+    }
     if (skuLike && localById.has(skuLike)) {
       return localById.get(skuLike);
     }
@@ -343,6 +374,14 @@ class ProductImageCacheService {
     }
 
     const localById = await this.getLocalProductsMap();
+    const localByBarcode = new Map<string, Product>();
+    for (const p of localById.values()) {
+      const bc = asString(p.barcode);
+      if (bc && !localByBarcode.has(bc)) {
+        localByBarcode.set(bc, p);
+      }
+    }
+
     let queued = 0;
     let downloaded = 0;
     let skipped = 0;
@@ -356,7 +395,16 @@ class ProductImageCacheService {
         continue;
       }
 
-      const localProduct = localById.get(itemId);
+      let localProduct = localById.get(itemId);
+      if (!localProduct) {
+        for (const code of this.incomingProductCodeCandidates(rawItem)) {
+          const hit = localByBarcode.get(code);
+          if (hit) {
+            localProduct = hit;
+            break;
+          }
+        }
+      }
       if (!localProduct) {
         skipped += 1;
         continue;
@@ -392,6 +440,12 @@ class ProductImageCacheService {
         if (persisted) {
           downloaded += 1;
           touched += 1;
+          const refreshed = (await db.getDocument('products', localProduct.id)) as Product | null;
+          if (refreshed?.id) {
+            localById.set(refreshed.id, refreshed);
+            const rbc = asString(refreshed.barcode);
+            if (rbc) localByBarcode.set(rbc, refreshed);
+          }
         } else {
           skipped += 1;
         }
@@ -404,6 +458,12 @@ class ProductImageCacheService {
           if (fallbackPersisted) {
             downloaded += 1;
             touched += 1;
+            const refreshed = (await db.getDocument('products', localProduct.id)) as Product | null;
+            if (refreshed?.id) {
+              localById.set(refreshed.id, refreshed);
+              const rbc = asString(refreshed.barcode);
+              if (rbc) localByBarcode.set(rbc, refreshed);
+            }
             continue;
           }
         } catch (fallbackError) {
