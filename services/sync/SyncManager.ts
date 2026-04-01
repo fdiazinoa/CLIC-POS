@@ -1066,7 +1066,7 @@ class SyncManager {
         }
 
         const imageSyncStartedAt = posCatalogDebugNow();
-        await productImageCacheService.syncSnapshotItems(normalizedItems as Product[]);
+        await productImageCacheService.syncSnapshotItems(rawItems as any[]);
         posCatalogDebugLog('applySnapshotProducts: syncSnapshotItems complete', {
             elapsedMs: posCatalogDebugElapsedMs(imageSyncStartedAt),
             normalizedCount: normalizedItems.length,

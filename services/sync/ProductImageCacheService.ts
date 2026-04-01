@@ -38,12 +38,12 @@ class ProductImageCacheService {
       asString(item.image_url) ||
       asString(item.metadata?.image_url);
 
-    if (explicitUrl && isHttpUrl(explicitUrl)) {
+    if (explicitUrl) {
       return explicitUrl;
     }
 
     const rawImage = asString(item.image);
-    if (rawImage && isHttpUrl(rawImage)) {
+    if (rawImage) {
       return rawImage;
     }
 
@@ -187,7 +187,6 @@ class ProductImageCacheService {
   private normalizeSingleIncomingProduct(item: IncomingProduct, localProduct?: Product): IncomingProduct {
     const imageUrl = this.resolveRemoteImageUrl(item);
     const imageVersion = this.resolveRemoteImageVersion(item, imageUrl);
-    const hadRemoteImageLocally = Boolean(asString(localProduct?.imageUrl) || asString(localProduct?.imageLocalPath));
 
     const normalized: IncomingProduct = {
       ...item,
@@ -195,11 +194,14 @@ class ProductImageCacheService {
       price: asNumber(item.price ?? item.precio_venta, localProduct?.price ?? 0),
       cost: asNumber(item.cost ?? item.costo_unitario, localProduct?.cost ?? 0),
       category: asString(item.category) || asString(item.categoria) || localProduct?.category || 'GENERAL',
-      image: item.image,
-      imageUrl: imageUrl || undefined,
-      imageVersion: imageVersion || undefined,
-      imageLocalPath: item.imageLocalPath ?? localProduct?.imageLocalPath ?? null,
-      images: uniqueStrings(Array.isArray(item.images) ? item.images : localProduct?.images || []),
+      image: localProduct?.image || undefined,
+      imageUrl: localProduct?.imageUrl || undefined,
+      imageVersion: localProduct?.imageVersion || undefined,
+      imageLocalPath: localProduct?.imageLocalPath || null,
+      images: uniqueStrings([
+        ...(Array.isArray(localProduct?.images) ? localProduct.images : []),
+        localProduct?.image,
+      ]),
       attributes: Array.isArray(item.attributes) ? item.attributes : localProduct?.attributes || [],
       variants: Array.isArray(item.variants) ? item.variants : localProduct?.variants || [],
       tariffs: Array.isArray(item.tariffs) ? item.tariffs : localProduct?.tariffs || [],
@@ -231,6 +233,8 @@ class ProductImageCacheService {
       if (canReuseLocalImage) {
         normalized.imageLocalPath = localProduct?.imageLocalPath || null;
         normalized.image = localProduct?.image || undefined;
+        normalized.imageUrl = imageUrl;
+        normalized.imageVersion = imageVersion;
         normalized.images = uniqueStrings([
           ...(Array.isArray(localProduct?.images) ? localProduct.images : []),
           localProduct?.image,
@@ -239,21 +243,9 @@ class ProductImageCacheService {
         normalized.imageLocalPath = null;
         normalized.image = this.buildRenderableWebPath(imageUrl);
         normalized.images = uniqueStrings([normalized.image]);
-      } else {
-        normalized.imageLocalPath = null;
-        normalized.image = undefined;
-        normalized.images = [];
+        normalized.imageUrl = imageUrl;
+        normalized.imageVersion = imageVersion;
       }
-
-      return normalized;
-    }
-
-    if (hadRemoteImageLocally) {
-      normalized.imageLocalPath = null;
-      normalized.imageUrl = undefined;
-      normalized.imageVersion = undefined;
-      normalized.image = undefined;
-      normalized.images = [];
       return normalized;
     }
 
