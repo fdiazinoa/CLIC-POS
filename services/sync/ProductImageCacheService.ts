@@ -149,6 +149,22 @@ class ProductImageCacheService {
     const imageUrl = this.resolveRemoteImageUrl(item);
     const imageVersion = this.resolveRemoteImageVersion(item, imageUrl);
     const hadRemoteImageLocally = Boolean(asString(localProduct?.imageUrl) || asString(localProduct?.imageLocalPath));
+    const incomingMentionsImage =
+      Object.prototype.hasOwnProperty.call(item, 'image') ||
+      Object.prototype.hasOwnProperty.call(item, 'imageUrl') ||
+      Object.prototype.hasOwnProperty.call(item, 'image_url') ||
+      Object.prototype.hasOwnProperty.call(item, 'imageVersion') ||
+      Object.prototype.hasOwnProperty.call(item, 'image_version') ||
+      Object.prototype.hasOwnProperty.call(item, 'images') ||
+      (
+        item.metadata &&
+        typeof item.metadata === 'object' &&
+        (
+          Object.prototype.hasOwnProperty.call(item.metadata, 'image_url') ||
+          Object.prototype.hasOwnProperty.call(item.metadata, 'image_version') ||
+          Object.prototype.hasOwnProperty.call(item.metadata, 'image')
+        )
+      );
     const canonicalId = asString(localProduct?.id) || asString(item?.id);
 
     const normalized: IncomingProduct = {
@@ -211,12 +227,24 @@ class ProductImageCacheService {
       return normalized;
     }
 
-    if (hadRemoteImageLocally) {
+    if (hadRemoteImageLocally && incomingMentionsImage) {
       normalized.imageLocalPath = null;
       normalized.imageUrl = undefined;
       normalized.imageVersion = undefined;
       normalized.image = undefined;
       normalized.images = [];
+      return normalized;
+    }
+
+    if (hadRemoteImageLocally) {
+      normalized.imageLocalPath = localProduct?.imageLocalPath || null;
+      normalized.imageUrl = localProduct?.imageUrl || undefined;
+      normalized.imageVersion = localProduct?.imageVersion || undefined;
+      normalized.image = localProduct?.image || undefined;
+      normalized.images = uniqueStrings([
+        ...(Array.isArray(localProduct?.images) ? localProduct.images : []),
+        localProduct?.image,
+      ]);
       return normalized;
     }
 
