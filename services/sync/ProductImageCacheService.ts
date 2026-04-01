@@ -368,8 +368,21 @@ class ProductImageCacheService {
           skipped += 1;
         }
       } catch (error) {
+        this.logger.warn(`[ProductImageCacheService] Failed to cache native image for ${itemId}. Falling back to remote URL.`, error);
+
+        try {
+          const fallbackPersisted = await this.saveWebFallbackImage(localProduct, imageUrl, imageVersion || imageUrl);
+
+          if (fallbackPersisted) {
+            downloaded += 1;
+            touched += 1;
+            continue;
+          }
+        } catch (fallbackError) {
+          this.logger.warn(`[ProductImageCacheService] Failed to persist fallback image for ${itemId}:`, fallbackError);
+        }
+
         failed += 1;
-        this.logger.warn(`[ProductImageCacheService] Failed to cache image for ${itemId}:`, error);
       }
     }
 
