@@ -11,6 +11,21 @@ export const POS_IMAGE_DEBUG_LOCAL_ID = 'prod-171';
 const asStr = (value: unknown): string =>
   typeof value === 'string' ? value.trim() : value != null ? String(value).trim() : '';
 
+const emitNativeLog = (stage: string, payload?: Record<string, unknown>) => {
+  try {
+    const runtimeWindow = window as any;
+    const bridge = runtimeWindow?.AndroidPrinter;
+    if (!bridge || typeof bridge.debugLog !== 'function') return;
+    bridge.debugLog(JSON.stringify({
+      tag: 'ClicPOSDebug',
+      message: `${POS_IMAGE_DEBUG_TAG} ${stage}`,
+      data: payload || null,
+    }));
+  } catch {
+    // Ignore native logging errors in web/runtime without bridge.
+  }
+};
+
 export function posImageDebugIncomingCodes(item: Record<string, unknown> | null | undefined): string[] {
   if (!item || typeof item !== 'object') return [];
   const fromArr = Array.isArray(item.barcodes)
@@ -42,6 +57,7 @@ export function posImageDebugMatchesRaw(item: unknown): boolean {
 }
 
 export function posImageDebugLog(stage: string, payload?: Record<string, unknown>): void {
+  emitNativeLog(stage, payload);
   if (payload && Object.keys(payload).length > 0) {
     console.info(POS_IMAGE_DEBUG_TAG, stage, payload);
   } else {
@@ -90,7 +106,17 @@ export async function posImageDebugLogDbRows(reason: string): Promise<void> {
       totalProducts: products.length,
       rows: summaries,
     });
+    emitNativeLog('DB rows (candidates)', {
+      reason,
+      count: matches.length,
+      totalProducts: products.length,
+      rows: summaries,
+    });
   } catch (error) {
     console.warn(POS_IMAGE_DEBUG_TAG, 'DB scan failed', { reason, error });
+    emitNativeLog('DB scan failed', {
+      reason,
+      error: String((error as Error)?.message || error),
+    });
   }
 }

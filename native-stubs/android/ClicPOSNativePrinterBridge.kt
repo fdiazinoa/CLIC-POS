@@ -48,6 +48,7 @@ import org.json.JSONObject
 class AndroidPrinterBridge(context: Context) {
     companion object {
         private const val DGII_LOG_TAG = "ClicPOSDGII"
+        private const val POS_DEBUG_LOG_TAG = "ClicPOSDebug"
 
         /**
          * Shim para exponer contrato JS unificado como window.ClicPOSNativePrinter.
@@ -91,6 +92,7 @@ class AndroidPrinterBridge(context: Context) {
                     testPrinterConnection: function (payload) { return call('testPrinterConnection', payload); },
                     getPrinterStatus: function (payload) { return call('getPrinterStatus', payload); },
                     checkStatus: function (payload) { return call('checkStatus', payload); },
+                    debugLog: function (payload) { return call('debugLog', payload); },
                     getDeviceProfile: function () { return Promise.resolve(parseResult(window.AndroidPrinter.getDeviceProfile())); },
                     getDeviceInfo: function () { return Promise.resolve(parseResult(window.AndroidPrinter.getDeviceInfo())); }
                   };
@@ -109,6 +111,33 @@ class AndroidPrinterBridge(context: Context) {
     private val manager = ClicPOSBluetoothPrinterManager(appContext)
     private val usbPermissionAction = "${appContext.packageName}.USB_PRINTER_PERMISSION"
     private val dgiiUrl = "https://dgii.gov.do/app/WebApps/ConsultasWeb2/ConsultasWeb/consultas/rnc.aspx"
+
+    @JavascriptInterface
+    fun debugLog(payloadJson: String?): String {
+        return try {
+            val payload = JSONObject(payloadJson ?: "{}")
+            val tag = payload.optString("tag", POS_DEBUG_LOG_TAG).ifBlank { POS_DEBUG_LOG_TAG }
+            val message = payload.optString("message", "").ifBlank { "debugLog" }
+            val data = payload.opt("data")
+
+            if (data != null && data != JSONObject.NULL) {
+                Log.i(tag, "$message $data")
+            } else {
+                Log.i(tag, message)
+            }
+
+            JSONObject()
+                .put("status", "ok")
+                .put("logged", true)
+                .toString()
+        } catch (e: Exception) {
+            JSONObject()
+                .put("status", "error")
+                .put("logged", false)
+                .put("message", e.message ?: "DEBUG_LOG_ERROR")
+                .toString()
+        }
+    }
 
     @JavascriptInterface
     fun printEscPos(payloadJson: String?): String {
