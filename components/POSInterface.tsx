@@ -121,6 +121,15 @@ const buildCartDigest = (items: CartItem[] = []): string =>
       )
       .join('||');
 
+/** Ruta local (Capacitor) o remota; si no hay `image` pero sí `imageUrl` https, muestra la remota (cache nativo puede fallar). */
+const resolvePosProductImageSrc = (p: Pick<Product, 'image' | 'imageUrl'>): string => {
+   const a = typeof p.image === 'string' ? p.image.trim() : '';
+   if (a) return a;
+   const u = typeof p.imageUrl === 'string' ? p.imageUrl.trim() : '';
+   if (u && /^https?:\/\//i.test(u)) return u;
+   return '';
+};
+
 const POSInterface: React.FC<POSInterfaceProps> = ({
    config,
    currentUser,
@@ -2733,6 +2742,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      const hasVariants = product.attributes && product.attributes.length > 0;
                      const isCompactMobileCard = isMobile && !usesExpandedCatalog;
                      const warehouseSaleBlocked = isProductWarehouseBlockedForSale(product);
+                     const gridImageSrc = resolvePosProductImageSrc(product);
 
                      // Long Press Detection Logic
                      let touchTimer: any;
@@ -2774,7 +2784,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         >
                            {uxConfig.showProductImages && (
                               <div className={`${usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-36 rounded-[1.5rem] mb-3 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-3'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
-                                 {product.image ? <img src={product.image} className={`w-full h-full ${usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
+                                 {gridImageSrc ? <img src={gridImageSrc} alt="" className={`w-full h-full ${usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
 
                                  {/* BADGES DE TIPO DE ARTÍCULO */}
                                  {isWeighted && (
@@ -3202,13 +3212,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
                         const lineNet = item.price * item.quantity;
                         const lineTaxSummary = getCartItemTaxSummary(item);
+                        const lineImageSrc = resolvePosProductImageSrc(item);
 
                         // MOBILE CARD DESIGN
                         if (isMobile) {
                            return (
                               <div key={item.cartId || `cart-m-${idx}`} className="bg-white rounded-2xl p-3 shadow-sm border border-gray-100 flex gap-3 animate-in slide-in-from-right-2">
                                  <div className="w-16 h-16 rounded-xl bg-gray-50 overflow-hidden shrink-0 border border-gray-100">
-                                    {item.image ? <img src={item.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={24} /></div>}
+                                    {lineImageSrc ? <img src={lineImageSrc} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={24} /></div>}
                                  </div>
                                  <div className="flex-1 min-w-0 flex flex-col justify-between">
                                     <div>
@@ -3257,7 +3268,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  {/* Item Image */}
                                  {uxConfig.showProductImages && (
                                     <div className="w-12 h-12 rounded-lg bg-gray-50 shrink-0 overflow-hidden border border-gray-100">
-                                       {item.image ? <img src={item.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={20} /></div>}
+                                       {lineImageSrc ? <img src={lineImageSrc} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={20} /></div>}
                                     </div>
                                  )}
 

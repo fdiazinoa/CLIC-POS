@@ -26,8 +26,6 @@ const asBoolean = (value: unknown, fallback = false): boolean => {
   return fallback;
 };
 
-const isHttpUrl = (value: string): boolean => /^https?:\/\//i.test(value);
-
 const uniqueStrings = (values: unknown[]): string[] =>
   Array.from(new Set(values.map((value) => asString(value)).filter(Boolean)));
 
@@ -39,21 +37,61 @@ class ProductImageCacheService {
     return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
   }
 
+  /** Origen del ERP (mismas claves que erpSyncLifecycle) para armar URL absoluta de imágenes relativas. */
+  private getErpWebOrigin(): string | null {
+    try {
+      const env = ((import.meta as unknown as { env?: Record<string, string> }).env) || {};
+      const candidates = [
+        typeof localStorage !== 'undefined' ? localStorage.getItem('CLIC_ERP_BASE_URL') : '',
+        typeof localStorage !== 'undefined' ? localStorage.getItem('CLIC_ERP_SYNC_URL') : '',
+        typeof localStorage !== 'undefined' ? localStorage.getItem('erp_base_url') : '',
+        env.VITE_ERP_BASE_URL || '',
+        env.VITE_SYNC_API_URL || '',
+      ];
+      for (const c of candidates) {
+        const raw = (c || '').trim();
+        if (!raw) continue;
+        const withProto = /^https?:\/\//i.test(raw) ? raw : `https://${raw.replace(/^\/\//, '')}`;
+        return new URL(withProto).origin;
+      }
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+
+  /** Convierte ruta relativa o //cdn... en URL descargable por Filesystem/fetch. */
+  private toAbsoluteImageDownloadUrl(candidate: string): string | null {
+    const t = candidate.trim();
+    if (!t) return null;
+    if (/^https?:\/\//i.test(t)) return t;
+    if (t.startsWith('//')) {
+      return `https:${t}`;
+    }
+    if (t.startsWith('/')) {
+      const origin = this.getErpWebOrigin();
+      if (!origin) return null;
+      return `${origin}${t}`;
+    }
+    return null;
+  }
+
   private resolveRemoteImageUrl(item: IncomingProduct): string | null {
-    const explicitUrl =
-      asString(item.imageUrl) ||
-      asString(item.image_url) ||
-      asString(item.metadata?.image_url);
-
-    if (explicitUrl && isHttpUrl(explicitUrl)) {
-      return explicitUrl;
+    const candidates = [
+      asString(item.imageUrl),
+      asString(item.image_url),
+      asString(item.metadata?.image_url),
+      asString(item.foto_url),
+      asString(item.photo_url),
+      asString(item.thumbnail_url),
+      asString(item.picture_url),
+      asString(item.imagen),
+      asString(item.image),
+    ];
+    for (const c of candidates) {
+      const abs = this.toAbsoluteImageDownloadUrl(c);
+      if (abs) return abs;
     }
-
-    const rawImage = asString(item.image);
-    if (rawImage && isHttpUrl(rawImage)) {
-      return rawImage;
-    }
-
     return null;
   }
 
