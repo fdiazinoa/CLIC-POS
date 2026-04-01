@@ -1,4 +1,5 @@
 import express from 'express';
+import { createHash } from 'node:crypto';
 import { getSetting, saveSetting } from '../db';
 import { applyTerminalConfigSnapshot, extractTerminalConfigSnapshot } from '../../utils/terminalConfigSnapshot';
 import { TerminalConfigSnapshot } from '../../types';
@@ -268,6 +269,128 @@ const saveCachedTerminalSnapshot = (terminalId: string, snapshot: TerminalConfig
   saveSetting('terminal_snapshot_cache', cache);
 };
 
+const stableSerialize = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableSerialize(entry)).join(',')}]`;
+  }
+
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(',')}}`;
+  }
+
+  return JSON.stringify(value ?? null);
+};
+
+const normalizeCatalogItemSignature = (item: Record<string, any>) => ({
+  id: asString(item.id),
+  sku: asString(item.sku),
+  item_code: asString(item.item_code),
+  code: asString(item.code),
+  barcode: asString(item.barcode),
+  name: asString(item.name),
+  price: item.price ?? null,
+  cost: item.cost ?? null,
+  image_url: asString(item.image_url || item.imageUrl || item.metadata?.image_url || item.metadata?.imageUrl),
+  image_version: asString(item.image_version || item.imageVersion || item.metadata?.image_version),
+  updated_at: asString(item.updated_at || item.updatedAt),
+});
+
+const snapshotCatalogItems = (snapshot: TerminalConfigSnapshot | null | undefined): Record<string, any>[] => {
+  const masters = asObject(snapshot).masters;
+  return Array.isArray(asObject(masters).items)
+    ? (asObject(masters).items as Record<string, any>[])
+    : [];
+};
+
+const buildCatalogIdentity = (item: Record<string, any>): string => {
+  const candidates = [
+    asString(item.id),
+    asString(item.sku),
+    asString(item.item_code),
+    asString(item.code),
+    asString(item.barcode),
+  ].filter(Boolean);
+
+  return candidates[0] || stableSerialize(normalizeCatalogItemSignature(item));
+};
+
+const cloneSnapshotWithoutCatalogItems = (snapshot: TerminalConfigSnapshot): TerminalConfigSnapshot => {
+  const masters = asObject(asObject(snapshot).masters);
+  return {
+    ...snapshot,
+    masters: {
+      ...masters,
+      items: [],
+    },
+  } as TerminalConfigSnapshot;
+};
+
+const computeCatalogCursor = (snapshot: TerminalConfigSnapshot | null | undefined): string => {
+  const items = snapshotCatalogItems(snapshot)
+    .map((item) => normalizeCatalogItemSignature(asObject(item)))
+    .sort((a, b) => buildCatalogIdentity(a).localeCompare(buildCatalogIdentity(b)));
+  const resolved = asObject(snapshot?.resolved);
+  const relevantResolved = {
+    pricing: asObject(resolved.pricing),
+    catalog: asObject(resolved.catalog),
+    inventory: asObject(resolved.inventory),
+  };
+
+  return createHash('sha1')
+    .update(stableSerialize({
+      items,
+      resolved: relevantResolved,
+    }))
+    .digest('hex');
+};
+
+const buildCatalogDelta = (
+  previousSnapshot: TerminalConfigSnapshot | null | undefined,
+  nextSnapshot: TerminalConfigSnapshot | null | undefined,
+) => {
+  const previousItems = snapshotCatalogItems(previousSnapshot);
+  const nextItems = snapshotCatalogItems(nextSnapshot);
+
+  const previousMap = new Map<string, Record<string, any>>();
+  const nextMap = new Map<string, Record<string, any>>();
+
+  for (const item of previousItems) {
+    previousMap.set(buildCatalogIdentity(asObject(item)), asObject(item));
+  }
+  for (const item of nextItems) {
+    nextMap.set(buildCatalogIdentity(asObject(item)), asObject(item));
+  }
+
+  const itemsUpsert: Record<string, any>[] = [];
+  const itemsDelete: Array<Record<string, any>> = [];
+
+  for (const [identity, nextItem] of nextMap.entries()) {
+    const previousItem = previousMap.get(identity);
+    if (!previousItem || stableSerialize(normalizeCatalogItemSignature(previousItem)) !== stableSerialize(normalizeCatalogItemSignature(nextItem))) {
+      itemsUpsert.push(nextItem);
+    }
+  }
+
+  for (const [identity, previousItem] of previousMap.entries()) {
+    if (!nextMap.has(identity)) {
+      itemsDelete.push({
+        id: asString(previousItem.id),
+        sku: asString(previousItem.sku),
+        item_code: asString(previousItem.item_code),
+        code: asString(previousItem.code),
+        barcode: asString(previousItem.barcode),
+      });
+    }
+  }
+
+  return {
+    items_upsert: itemsUpsert,
+    items_delete: itemsDelete,
+  };
+};
+
 router.get('/:terminalId/config', async (req, res) => {
   const config = getSetting('config');
   const erpTerminalId = asString(req.params.terminalId);
@@ -277,6 +400,7 @@ router.get('/:terminalId/config', async (req, res) => {
   const tenantEmail = resolveTenantEmail(req);
   const erpBaseUrl = resolveErpBaseUrl(req);
   const posDeviceId = asString(req.query.pos_device_id);
+  const clientCatalogCursor = asString(req.query.catalog_cursor);
 
   if (!erpTerminalId) {
     return res.status(400).json({ status: 'error', message: 'terminalId es obligatorio.' });
@@ -310,6 +434,7 @@ router.get('/:terminalId/config', async (req, res) => {
     }
 
     const cachedSnapshot = getCachedTerminalSnapshot(localTerminalId);
+    const previousCatalogCursor = computeCatalogCursor(cachedSnapshot);
     const applied = applyTerminalConfigSnapshot(config, {
       terminalId: localTerminalId,
       posDeviceId,
@@ -333,6 +458,15 @@ router.get('/:terminalId/config', async (req, res) => {
       lastResolvedAt: new Date().toISOString(),
     });
 
+    const currentCatalogCursor = computeCatalogCursor(snapshot);
+    const canUseCatalogDelta =
+      Boolean(clientCatalogCursor) &&
+      Boolean(previousCatalogCursor) &&
+      clientCatalogCursor === previousCatalogCursor;
+    const catalogDelta = canUseCatalogDelta ? buildCatalogDelta(cachedSnapshot, snapshot) : null;
+    const useCatalogDelta = canUseCatalogDelta;
+    const responseSnapshot = useCatalogDelta ? cloneSnapshotWithoutCatalogItems(snapshot) : snapshot;
+
     return res.json({
       success: true,
       source: applied.snapshotSource,
@@ -340,14 +474,24 @@ router.get('/:terminalId/config', async (req, res) => {
       terminal_id: applied.terminalId,
       erp_terminal_id: erpTerminalId,
       tenant_resolution_source: resolvedTenant.source,
-      terminal_config: snapshot,
+      terminal_config: responseSnapshot,
       config: applied.config,
+      catalog_delta: useCatalogDelta ? {
+        mode: 'DELTA',
+        items_upsert: catalogDelta?.items_upsert || [],
+        items_delete: catalogDelta?.items_delete || [],
+      } : null,
       snapshot_meta: {
         used_resolved: applied.usedResolved,
         used_fallback_config: applied.usedFallbackConfig,
         used_cached_snapshot: applied.usedCachedSnapshot,
         resolution_error: snapshot.resolution_error ?? null,
         full_pull_on_pairing: applied.fullPullOnPairing ?? false,
+        used_catalog_delta: useCatalogDelta,
+        catalog_cursor: currentCatalogCursor,
+        previous_catalog_cursor: previousCatalogCursor || null,
+        catalog_upsert_count: catalogDelta?.items_upsert.length || 0,
+        catalog_delete_count: catalogDelta?.items_delete.length || 0,
       },
     });
   } catch (error: any) {
@@ -373,12 +517,18 @@ router.get('/:terminalId/config', async (req, res) => {
         erp_terminal_id: erpTerminalId,
         terminal_config: cachedSnapshot,
         config: applied.config,
+        catalog_delta: null,
         snapshot_meta: {
           used_resolved: applied.usedResolved,
           used_fallback_config: applied.usedFallbackConfig,
           used_cached_snapshot: true,
           resolution_error: null,
           full_pull_on_pairing: applied.fullPullOnPairing ?? false,
+          used_catalog_delta: false,
+          catalog_cursor: computeCatalogCursor(cachedSnapshot),
+          previous_catalog_cursor: null,
+          catalog_upsert_count: 0,
+          catalog_delete_count: 0,
         },
       });
     }

@@ -467,6 +467,125 @@ class SyncManager {
         };
     }
 
+    private getCatalogCursorStorageKey(localTerminalId: string): string {
+        return `clic_pos_terminal_catalog_cursor:${localTerminalId}`;
+    }
+
+    private readStoredCatalogCursor(localTerminalId: string | null): string | null {
+        if (!localTerminalId) return null;
+        const raw = localStorage.getItem(this.getCatalogCursorStorageKey(localTerminalId));
+        const value = typeof raw === 'string' ? raw.trim() : '';
+        return value || null;
+    }
+
+    private persistCatalogCursor(localTerminalId: string | null, cursor: unknown): void {
+        if (!localTerminalId) return;
+        const value = typeof cursor === 'string' ? cursor.trim() : '';
+        const key = this.getCatalogCursorStorageKey(localTerminalId);
+        if (value) {
+            localStorage.setItem(key, value);
+        } else {
+            localStorage.removeItem(key);
+        }
+    }
+
+    private catalogDeleteCandidates(item: Record<string, unknown> | null | undefined): string[] {
+        if (!item || typeof item !== 'object') return [];
+        const rawCandidates = [
+            item.id,
+            item.sku,
+            item.item_code,
+            item.code,
+            item.barcode,
+        ];
+
+        return Array.from(new Set(
+            rawCandidates
+                .map((value) => (typeof value === 'string' ? value.trim() : value != null ? String(value).trim() : ''))
+                .filter(Boolean)
+        ));
+    }
+
+    private async deleteSnapshotProducts(itemsToDelete: unknown[]): Promise<number> {
+        const incoming = Array.isArray(itemsToDelete) ? itemsToDelete : [];
+        if (incoming.length === 0) return 0;
+
+        const localProducts = (await db.get('products')) as Product[];
+        const localById = new Map<string, Product>();
+        const localByBarcode = new Map<string, Product>();
+        const localByCode = new Map<string, Product>();
+
+        for (const product of Array.isArray(localProducts) ? localProducts : []) {
+            const localId = typeof product?.id === 'string' ? product.id.trim() : String(product?.id || '').trim();
+            if (!localId) continue;
+
+            localById.set(localId, product);
+
+            const barcode = typeof product?.barcode === 'string' ? product.barcode.trim() : String(product?.barcode || '').trim();
+            if (barcode && !localByBarcode.has(barcode)) {
+                localByBarcode.set(barcode, product);
+            }
+
+            const codeCandidates = [
+                localId,
+                typeof (product as any)?.sku === 'string' ? (product as any).sku.trim() : String((product as any)?.sku || '').trim(),
+                typeof (product as any)?.item_code === 'string' ? (product as any).item_code.trim() : String((product as any)?.item_code || '').trim(),
+                typeof (product as any)?.code === 'string' ? (product as any).code.trim() : String((product as any)?.code || '').trim(),
+                barcode,
+            ].filter(Boolean);
+
+            for (const code of codeCandidates) {
+                if (!localByCode.has(code)) {
+                    localByCode.set(code, product);
+                }
+            }
+        }
+
+        const idsToDelete = new Set<string>();
+
+        for (const rawItem of incoming) {
+            const candidates = this.catalogDeleteCandidates(rawItem as Record<string, unknown>);
+
+            for (const candidate of candidates) {
+                const byId = localById.get(candidate);
+                if (byId?.id) idsToDelete.add(byId.id);
+
+                const byCode = localByCode.get(candidate);
+                if (byCode?.id) idsToDelete.add(byCode.id);
+
+                const byBarcode = localByBarcode.get(candidate);
+                if (byBarcode?.id) idsToDelete.add(byBarcode.id);
+            }
+        }
+
+        for (const id of idsToDelete) {
+            await db.deleteDocument('products', id);
+        }
+
+        if (idsToDelete.size > 0) {
+            window.dispatchEvent(new CustomEvent('productsUpdated'));
+        }
+
+        return idsToDelete.size;
+    }
+
+    private async applyCatalogDelta(deltaPayload: unknown): Promise<{ upserted: number; deleted: number }> {
+        const delta = deltaPayload && typeof deltaPayload === 'object'
+            ? (deltaPayload as Record<string, unknown>)
+            : {};
+        const itemsUpsert = Array.isArray(delta.items_upsert) ? delta.items_upsert : [];
+        const itemsDelete = Array.isArray(delta.items_delete) ? delta.items_delete : [];
+
+        const upserted = itemsUpsert.length > 0
+            ? await this.applySnapshotProducts({ masters: { items: itemsUpsert } })
+            : 0;
+        const deleted = itemsDelete.length > 0
+            ? await this.deleteSnapshotProducts(itemsDelete)
+            : 0;
+
+        return { upserted, deleted };
+    }
+
     async refreshTerminalResolvedConfig(
         snapshotOverride?: unknown,
         options?: {
@@ -492,6 +611,10 @@ class SyncManager {
 
         const snapshotTerminalId = context.localTerminalId || context.terminalId;
         const cachedSnapshot = baseConfig.terminalSnapshots?.[snapshotTerminalId] || null;
+        const currentCatalogCursor = this.readStoredCatalogCursor(snapshotTerminalId);
+        let payload: Record<string, any> | null = null;
+        let catalogDelta: Record<string, unknown> | null = null;
+        let nextCatalogCursor: string | null = null;
 
         let snapshot = extractTerminalConfigSnapshot(snapshotOverride);
 
@@ -505,6 +628,7 @@ class SyncManager {
             if (context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
             if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
+            if (currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
 
             const endpoint = `/api/sync/terminals/${encodeURIComponent(context.terminalId)}/config${params.toString() ? `?${params.toString()}` : ''}`;
             const response = await fetch(endpoint);
@@ -513,8 +637,15 @@ class SyncManager {
                 throw new Error(detail || `No se pudo refrescar la configuración de terminal (${response.status}).`);
             }
 
-            const payload = await response.json();
+            payload = await response.json();
             snapshot = extractTerminalConfigSnapshot(payload?.terminal_config ?? payload);
+            catalogDelta = payload?.catalog_delta && typeof payload.catalog_delta === 'object'
+                ? payload.catalog_delta
+                : null;
+            nextCatalogCursor =
+                typeof payload?.snapshot_meta?.catalog_cursor === 'string'
+                    ? payload.snapshot_meta.catalog_cursor.trim() || null
+                    : null;
 
             if (!snapshot && payload?.config && !Array.isArray(payload.config)) {
                 const incomingConfig = payload.config as BusinessConfig;
@@ -539,7 +670,11 @@ class SyncManager {
         }
 
         try {
-            await this.applySnapshotProducts(snapshot);
+            if (catalogDelta) {
+                await this.applyCatalogDelta(catalogDelta);
+            } else {
+                await this.applySnapshotProducts(snapshot);
+            }
         } catch (error) {
             console.warn('⚠️ SyncManager: Could not apply snapshot products from terminal config push:', error);
         }
@@ -576,6 +711,9 @@ class SyncManager {
         }
         localStorage.setItem('active_terminal_id', applied.terminalId);
         localStorage.setItem('CLIC_POS_TERMINAL_ID', applied.terminalId);
+        if (nextCatalogCursor) {
+            this.persistCatalogCursor(snapshotTerminalId, nextCatalogCursor);
+        }
 
         if (options?.dispatchEvent !== false && changed) {
             window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfig }));
