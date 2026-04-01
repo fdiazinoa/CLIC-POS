@@ -283,6 +283,9 @@ const stableSerialize = (value: unknown): string => {
   return JSON.stringify(value ?? null);
 };
 
+type SnapshotMasterCollectionKey = 'items' | 'customers' | 'suppliers';
+const SNAPSHOT_MASTER_COLLECTIONS: SnapshotMasterCollectionKey[] = ['items', 'customers', 'suppliers'];
+
 const normalizeCatalogItemSignature = (item: Record<string, any>) => ({
   id: asString(item.id),
   sku: asString(item.sku),
@@ -305,40 +308,149 @@ const normalizeCatalogItemSignature = (item: Record<string, any>) => ({
   updated_at: asString(item.updated_at || item.updatedAt),
 });
 
-const snapshotCatalogItems = (snapshot: TerminalConfigSnapshot | null | undefined): Record<string, any>[] => {
+const normalizeCustomerSignature = (item: Record<string, any>) => ({
+  id: asString(item.id),
+  name: asString(item.name),
+  phone: asString(item.phone),
+  email: asString(item.email).toLowerCase(),
+  taxId: asString(item.taxId || item.tax_id || item.rnc),
+  address: asString(item.address),
+  notes: asString(item.notes),
+  loyaltyPoints: item.loyaltyPoints ?? item.loyalty_points ?? null,
+  creditLimit: item.creditLimit ?? item.credit_limit ?? null,
+  currentDebt: item.currentDebt ?? item.current_debt ?? null,
+  tier: asString(item.tier),
+  tags: Array.isArray(item.tags) ? item.tags : [],
+  addresses: Array.isArray(item.addresses) ? item.addresses : [],
+  requiresFiscalInvoice: item.requiresFiscalInvoice ?? item.requires_fiscal_invoice ?? null,
+  prefersEmail: item.prefersEmail ?? item.prefers_email ?? null,
+  isTaxExempt: item.isTaxExempt ?? item.is_tax_exempt ?? null,
+  applyChainedTax: item.applyChainedTax ?? item.apply_chained_tax ?? null,
+  creditDays: item.creditDays ?? item.credit_days ?? null,
+  defaultNcfType: asString(item.defaultNcfType || item.default_ncf_type),
+  image_url: asString(
+    item.image_url || item.imageUrl || item.photo_url || item.photoUrl || item.avatar_url || item.avatarUrl
+  ),
+  image_version: asString(
+    item.image_version || item.imageVersion || item.photo_version || item.photoVersion || item.avatar_version || item.avatarVersion
+  ),
+  updated_at: asString(item.updated_at || item.updatedAt),
+});
+
+const normalizeSupplierSignature = (item: Record<string, any>) => ({
+  id: asString(item.id),
+  name: asString(item.name),
+  taxId: asString(item.taxId || item.tax_id || item.rnc),
+  email: asString(item.email).toLowerCase(),
+  phone: asString(item.phone),
+  contactPerson: asString(item.contactPerson || item.contact_person),
+  paymentMethod: asString(item.paymentMethod || item.payment_method),
+  paymentTermDays: item.paymentTermDays ?? item.payment_term_days ?? null,
+  creditLimit: item.creditLimit ?? item.credit_limit ?? null,
+  balance: item.balance ?? null,
+  leadTimeDays: item.leadTimeDays ?? item.lead_time_days ?? null,
+  isActive: item.isActive ?? item.is_active ?? null,
+  image_url: asString(item.image_url || item.imageUrl || item.logo_url || item.logoUrl || item.photo_url || item.photoUrl),
+  image_version: asString(item.image_version || item.imageVersion || item.logo_version || item.logoVersion || item.photo_version || item.photoVersion),
+  updated_at: asString(item.updated_at || item.updatedAt),
+});
+
+const snapshotHasMasterCollection = (
+  snapshot: TerminalConfigSnapshot | null | undefined,
+  key: SnapshotMasterCollectionKey
+): boolean => {
+  const masters = asObject(asObject(snapshot).masters);
+  return Object.prototype.hasOwnProperty.call(masters, key);
+};
+
+const snapshotMasterCollection = (
+  snapshot: TerminalConfigSnapshot | null | undefined,
+  key: SnapshotMasterCollectionKey
+): Record<string, any>[] => {
   const masters = asObject(snapshot).masters;
-  return Array.isArray(asObject(masters).items)
-    ? (asObject(masters).items as Record<string, any>[])
+  return Array.isArray(asObject(masters)[key])
+    ? (asObject(masters)[key] as Record<string, any>[])
     : [];
 };
 
-const buildCatalogIdentity = (item: Record<string, any>): string => {
-  const candidates = [
-    asString(item.id),
-    asString(item.sku),
-    asString(item.item_code),
-    asString(item.code),
-    asString(item.barcode),
-  ].filter(Boolean);
-
-  return candidates[0] || stableSerialize(normalizeCatalogItemSignature(item));
+const normalizeMasterSignature = (
+  key: SnapshotMasterCollectionKey,
+  item: Record<string, any>
+): Record<string, unknown> => {
+  switch (key) {
+    case 'customers':
+      return normalizeCustomerSignature(item);
+    case 'suppliers':
+      return normalizeSupplierSignature(item);
+    case 'items':
+    default:
+      return normalizeCatalogItemSignature(item);
+  }
 };
 
-const cloneSnapshotWithoutCatalogItems = (snapshot: TerminalConfigSnapshot): TerminalConfigSnapshot => {
+const buildMasterIdentity = (key: SnapshotMasterCollectionKey, item: Record<string, any>): string => {
+  const candidates = key === 'items'
+    ? [
+      asString(item.id),
+      asString(item.sku),
+      asString(item.item_code),
+      asString(item.code),
+      asString(item.barcode),
+    ]
+    : [
+      asString(item.id),
+      asString(item.taxId || item.tax_id || item.rnc),
+      asString(item.email).toLowerCase(),
+      asString(item.phone),
+      asString(item.name),
+    ];
+
+  return candidates.filter(Boolean)[0] || stableSerialize(normalizeMasterSignature(key, item));
+};
+
+const buildMasterDeletePayload = (key: SnapshotMasterCollectionKey, item: Record<string, any>) => {
+  if (key === 'items') {
+    return {
+      id: asString(item.id),
+      sku: asString(item.sku),
+      item_code: asString(item.item_code),
+      code: asString(item.code),
+      barcode: asString(item.barcode),
+    };
+  }
+
+  return {
+    id: asString(item.id),
+    taxId: asString(item.taxId || item.tax_id || item.rnc),
+    email: asString(item.email).toLowerCase(),
+    phone: asString(item.phone),
+    name: asString(item.name),
+  };
+};
+
+const cloneSnapshotWithoutMasterCollections = (snapshot: TerminalConfigSnapshot): TerminalConfigSnapshot => {
   const masters = asObject(asObject(snapshot).masters);
+  const nextMasters = { ...masters };
+
+  for (const key of SNAPSHOT_MASTER_COLLECTIONS) {
+    if (Object.prototype.hasOwnProperty.call(nextMasters, key)) {
+      nextMasters[key] = [];
+    }
+  }
+
   return {
     ...snapshot,
-    masters: {
-      ...masters,
-      items: [],
-    },
+    masters: nextMasters,
   } as TerminalConfigSnapshot;
 };
 
 const computeCatalogCursor = (snapshot: TerminalConfigSnapshot | null | undefined): string => {
-  const items = snapshotCatalogItems(snapshot)
-    .map((item) => normalizeCatalogItemSignature(asObject(item)))
-    .sort((a, b) => buildCatalogIdentity(a).localeCompare(buildCatalogIdentity(b)));
+  const masterData = SNAPSHOT_MASTER_COLLECTIONS.reduce<Record<string, Record<string, unknown>[]>>((acc, key) => {
+    acc[key] = snapshotMasterCollection(snapshot, key)
+      .map((item) => normalizeMasterSignature(key, asObject(item)))
+      .sort((a, b) => buildMasterIdentity(key, a as Record<string, any>).localeCompare(buildMasterIdentity(key, b as Record<string, any>)));
+    return acc;
+  }, {});
   const resolved = asObject(snapshot?.resolved);
   const relevantResolved = {
     pricing: asObject(resolved.pricing),
@@ -348,7 +460,7 @@ const computeCatalogCursor = (snapshot: TerminalConfigSnapshot | null | undefine
 
   return createHash('sha1')
     .update(stableSerialize({
-      items,
+      masters: masterData,
       resolved: relevantResolved,
     }))
     .digest('hex');
@@ -358,45 +470,46 @@ const buildCatalogDelta = (
   previousSnapshot: TerminalConfigSnapshot | null | undefined,
   nextSnapshot: TerminalConfigSnapshot | null | undefined,
 ) => {
-  const previousItems = snapshotCatalogItems(previousSnapshot);
-  const nextItems = snapshotCatalogItems(nextSnapshot);
-
-  const previousMap = new Map<string, Record<string, any>>();
-  const nextMap = new Map<string, Record<string, any>>();
-
-  for (const item of previousItems) {
-    previousMap.set(buildCatalogIdentity(asObject(item)), asObject(item));
-  }
-  for (const item of nextItems) {
-    nextMap.set(buildCatalogIdentity(asObject(item)), asObject(item));
-  }
-
-  const itemsUpsert: Record<string, any>[] = [];
-  const itemsDelete: Array<Record<string, any>> = [];
-
-  for (const [identity, nextItem] of nextMap.entries()) {
-    const previousItem = previousMap.get(identity);
-    if (!previousItem || stableSerialize(normalizeCatalogItemSignature(previousItem)) !== stableSerialize(normalizeCatalogItemSignature(nextItem))) {
-      itemsUpsert.push(nextItem);
+  return SNAPSHOT_MASTER_COLLECTIONS.reduce<Record<string, any>>((acc, key) => {
+    if (!snapshotHasMasterCollection(previousSnapshot, key) && !snapshotHasMasterCollection(nextSnapshot, key)) {
+      return acc;
     }
-  }
 
-  for (const [identity, previousItem] of previousMap.entries()) {
-    if (!nextMap.has(identity)) {
-      itemsDelete.push({
-        id: asString(previousItem.id),
-        sku: asString(previousItem.sku),
-        item_code: asString(previousItem.item_code),
-        code: asString(previousItem.code),
-        barcode: asString(previousItem.barcode),
-      });
+    const previousItems = snapshotMasterCollection(previousSnapshot, key);
+    const nextItems = snapshotMasterCollection(nextSnapshot, key);
+
+    const previousMap = new Map<string, Record<string, any>>();
+    const nextMap = new Map<string, Record<string, any>>();
+
+    for (const item of previousItems) {
+      previousMap.set(buildMasterIdentity(key, asObject(item)), asObject(item));
     }
-  }
+    for (const item of nextItems) {
+      nextMap.set(buildMasterIdentity(key, asObject(item)), asObject(item));
+    }
 
-  return {
-    items_upsert: itemsUpsert,
-    items_delete: itemsDelete,
-  };
+    const upsertKey = `${key}_upsert`;
+    const deleteKey = `${key}_delete`;
+    const upsertRows: Record<string, any>[] = [];
+    const deleteRows: Array<Record<string, any>> = [];
+
+    for (const [identity, nextItem] of nextMap.entries()) {
+      const previousItem = previousMap.get(identity);
+      if (!previousItem || stableSerialize(normalizeMasterSignature(key, previousItem)) !== stableSerialize(normalizeMasterSignature(key, nextItem))) {
+        upsertRows.push(nextItem);
+      }
+    }
+
+    for (const [identity, previousItem] of previousMap.entries()) {
+      if (!nextMap.has(identity)) {
+        deleteRows.push(buildMasterDeletePayload(key, previousItem));
+      }
+    }
+
+    acc[upsertKey] = upsertRows;
+    acc[deleteKey] = deleteRows;
+    return acc;
+  }, {});
 };
 
 router.get('/:terminalId/config', async (req, res) => {
@@ -473,7 +586,7 @@ router.get('/:terminalId/config', async (req, res) => {
       clientCatalogCursor === previousCatalogCursor;
     const catalogDelta = canUseCatalogDelta ? buildCatalogDelta(cachedSnapshot, snapshot) : null;
     const useCatalogDelta = canUseCatalogDelta;
-    const responseSnapshot = useCatalogDelta ? cloneSnapshotWithoutCatalogItems(snapshot) : snapshot;
+    const responseSnapshot = useCatalogDelta ? cloneSnapshotWithoutMasterCollections(snapshot) : snapshot;
 
     return res.json({
       success: true,
@@ -488,6 +601,18 @@ router.get('/:terminalId/config', async (req, res) => {
         mode: 'DELTA',
         items_upsert: catalogDelta?.items_upsert || [],
         items_delete: catalogDelta?.items_delete || [],
+        ...(Object.prototype.hasOwnProperty.call(catalogDelta || {}, 'customers_upsert')
+          ? {
+              customers_upsert: catalogDelta?.customers_upsert || [],
+              customers_delete: catalogDelta?.customers_delete || [],
+            }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(catalogDelta || {}, 'suppliers_upsert')
+          ? {
+              suppliers_upsert: catalogDelta?.suppliers_upsert || [],
+              suppliers_delete: catalogDelta?.suppliers_delete || [],
+            }
+          : {}),
       } : null,
       snapshot_meta: {
         used_resolved: applied.usedResolved,
@@ -500,6 +625,10 @@ router.get('/:terminalId/config', async (req, res) => {
         previous_catalog_cursor: previousCatalogCursor || null,
         catalog_upsert_count: catalogDelta?.items_upsert.length || 0,
         catalog_delete_count: catalogDelta?.items_delete.length || 0,
+        customer_upsert_count: catalogDelta?.customers_upsert.length || 0,
+        customer_delete_count: catalogDelta?.customers_delete.length || 0,
+        supplier_upsert_count: catalogDelta?.suppliers_upsert.length || 0,
+        supplier_delete_count: catalogDelta?.suppliers_delete.length || 0,
       },
     });
   } catch (error: any) {

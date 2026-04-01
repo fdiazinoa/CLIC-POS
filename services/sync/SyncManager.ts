@@ -664,21 +664,131 @@ class SyncManager {
         return idsToDelete.size;
     }
 
+    private imageBackedDeleteCandidates(
+        collection: ImageBackedCollection,
+        item: Record<string, unknown>
+    ): string[] {
+        const candidates = [
+            typeof item.id === 'string' ? item.id.trim() : String(item.id || '').trim(),
+            typeof item.taxId === 'string' ? item.taxId.trim() : String(item.taxId || '').trim(),
+            typeof item.email === 'string' ? item.email.trim().toLowerCase() : String(item.email || '').trim().toLowerCase(),
+            typeof item.phone === 'string' ? item.phone.trim() : String(item.phone || '').trim(),
+        ].filter(Boolean);
+
+        if (collection === 'customers') {
+            return [
+                ...candidates,
+                typeof item.name === 'string' ? item.name.trim() : String(item.name || '').trim(),
+            ].filter(Boolean);
+        }
+
+        return candidates;
+    }
+
+    private async deleteSnapshotImageBackedCollection(
+        collection: ImageBackedCollection,
+        itemsToDelete: unknown[]
+    ): Promise<number> {
+        const incoming = Array.isArray(itemsToDelete) ? itemsToDelete : [];
+        if (incoming.length === 0) return 0;
+
+        const localItems = (await db.get(collection)) as Record<string, unknown>[];
+        const byId = new Map<string, string>();
+        const byTaxId = new Map<string, string>();
+        const byEmail = new Map<string, string>();
+        const byPhone = new Map<string, string>();
+        const byName = new Map<string, string>();
+
+        for (const localItem of Array.isArray(localItems) ? localItems : []) {
+            const localId = typeof localItem?.id === 'string' ? localItem.id.trim() : String(localItem?.id || '').trim();
+            if (!localId) continue;
+
+            byId.set(localId, localId);
+
+            const taxId = typeof localItem?.taxId === 'string' ? localItem.taxId.trim() : String(localItem?.taxId || '').trim();
+            if (taxId) byTaxId.set(taxId, localId);
+
+            const email = typeof localItem?.email === 'string' ? localItem.email.trim().toLowerCase() : String(localItem?.email || '').trim().toLowerCase();
+            if (email) byEmail.set(email, localId);
+
+            const phone = typeof localItem?.phone === 'string' ? localItem.phone.trim() : String(localItem?.phone || '').trim();
+            if (phone) byPhone.set(phone, localId);
+
+            if (collection === 'customers') {
+                const name = typeof localItem?.name === 'string' ? localItem.name.trim() : String(localItem?.name || '').trim();
+                if (name) byName.set(name, localId);
+            }
+        }
+
+        const idsToDelete = new Set<string>();
+
+        for (const rawItem of incoming) {
+            const item = rawItem && typeof rawItem === 'object' && !Array.isArray(rawItem)
+                ? (rawItem as Record<string, unknown>)
+                : {};
+
+            for (const candidate of this.imageBackedDeleteCandidates(collection, item)) {
+                const normalized = candidate.trim();
+                if (!normalized) continue;
+
+                const match =
+                    byId.get(normalized) ||
+                    byTaxId.get(normalized) ||
+                    byEmail.get(normalized.toLowerCase()) ||
+                    byPhone.get(normalized) ||
+                    (collection === 'customers' ? byName.get(normalized) : undefined);
+
+                if (match) {
+                    idsToDelete.add(match);
+                }
+            }
+        }
+
+        for (const id of idsToDelete) {
+            await db.deleteDocument(collection, id);
+        }
+
+        if (idsToDelete.size > 0) {
+            window.dispatchEvent(new CustomEvent(`${collection}Updated`));
+        }
+
+        return idsToDelete.size;
+    }
+
     private async applyCatalogDelta(deltaPayload: unknown): Promise<{ upserted: number; deleted: number }> {
         const delta = deltaPayload && typeof deltaPayload === 'object'
             ? (deltaPayload as Record<string, unknown>)
             : {};
         const itemsUpsert = Array.isArray(delta.items_upsert) ? delta.items_upsert : [];
         const itemsDelete = Array.isArray(delta.items_delete) ? delta.items_delete : [];
+        const customersUpsert = Array.isArray(delta.customers_upsert) ? delta.customers_upsert : [];
+        const customersDelete = Array.isArray(delta.customers_delete) ? delta.customers_delete : [];
+        const suppliersUpsert = Array.isArray(delta.suppliers_upsert) ? delta.suppliers_upsert : [];
+        const suppliersDelete = Array.isArray(delta.suppliers_delete) ? delta.suppliers_delete : [];
 
-        const upserted = itemsUpsert.length > 0
+        const productUpserted = itemsUpsert.length > 0
             ? await this.applySnapshotProducts({ masters: { items: itemsUpsert } })
             : 0;
-        const deleted = itemsDelete.length > 0
+        const productDeleted = itemsDelete.length > 0
             ? await this.deleteSnapshotProducts(itemsDelete)
             : 0;
+        const customerUpserted = customersUpsert.length > 0
+            ? await this.applySnapshotImageBackedCollection('customers', customersUpsert)
+            : 0;
+        const customerDeleted = customersDelete.length > 0
+            ? await this.deleteSnapshotImageBackedCollection('customers', customersDelete)
+            : 0;
+        const supplierUpserted = suppliersUpsert.length > 0
+            ? await this.applySnapshotImageBackedCollection('suppliers', suppliersUpsert)
+            : 0;
+        const supplierDeleted = suppliersDelete.length > 0
+            ? await this.deleteSnapshotImageBackedCollection('suppliers', suppliersDelete)
+            : 0;
 
-        return { upserted, deleted };
+        return {
+            upserted: productUpserted + customerUpserted + supplierUpserted,
+            deleted: productDeleted + customerDeleted + supplierDeleted,
+        };
     }
 
     async refreshTerminalResolvedConfig(
@@ -950,7 +1060,7 @@ class SyncManager {
         }
 
         try {
-            await this.refreshTerminalSupplementalMasterData(snapshot);
+            await this.refreshTerminalSupplementalMasterData(snapshot, catalogDelta);
         } catch (error) {
             console.warn('⚠️ SyncManager: Supplemental customer/supplier refresh failed after terminal config update:', error);
         }
@@ -1140,7 +1250,10 @@ class SyncManager {
         return normalizedItems.length;
     }
 
-    private async refreshTerminalSupplementalMasterData(snapshot: unknown): Promise<{
+    private async refreshTerminalSupplementalMasterData(
+        snapshot: unknown,
+        catalogDelta?: Record<string, unknown> | null
+    ): Promise<{
         customers: number;
         suppliers: number;
     }> {
@@ -1152,6 +1265,17 @@ class SyncManager {
         };
 
         for (const collection of collections) {
+            const deltaHasCollection =
+                Boolean(catalogDelta) &&
+                (
+                    Array.isArray((catalogDelta as Record<string, unknown>)[`${collection}_upsert`]) ||
+                    Array.isArray((catalogDelta as Record<string, unknown>)[`${collection}_delete`])
+                );
+
+            if (deltaHasCollection) {
+                continue;
+            }
+
             const snapshotRows = this.snapshotMasterRows(snapshot, collection);
 
             if (snapshotRows !== null) {
