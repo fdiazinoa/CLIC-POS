@@ -33,21 +33,41 @@ class ProductImageCacheService {
   }
 
   private resolveRemoteImageUrl(item: IncomingProduct): string | null {
-    const explicitUrl =
+    const rawUrl =
       asString(item.imageUrl) ||
       asString(item.image_url) ||
-      asString(item.metadata?.image_url);
+      asString(item.metadata?.image_url) ||
+      asString(item.image);
 
-    if (explicitUrl && isHttpUrl(explicitUrl)) {
-      return explicitUrl;
+    if (!rawUrl) return null;
+
+    try {
+      const masterUrlStr = localStorage.getItem('CLIC_POS_MASTER_URL');
+      if (!masterUrlStr) return rawUrl;
+
+      const masterUrl = masterUrlStr.endsWith('/') ? masterUrlStr.slice(0, -1) : masterUrlStr;
+
+      // Handle relative paths (e.g. "storage/v1/..." or "/storage/v1/...")
+      if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+        const path = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
+        // Exceptions for blob: or data: URIs shouldn't be overridden like this
+        if (rawUrl.startsWith('blob:') || rawUrl.startsWith('data:')) return rawUrl;
+        return `${masterUrl}${path}`;
+      }
+
+      if (this.isNativeAndroid() && (rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1'))) {
+        const urlObj = new URL(rawUrl);
+        const masterObj = new URL(masterUrl);
+        urlObj.protocol = masterObj.protocol;
+        urlObj.hostname = masterObj.hostname; // Keep target port (e.g., Supabase 54321)
+        return urlObj.toString();
+      }
+
+      return rawUrl;
+    } catch (e) {
+      this.logger.warn(`[ProductImageCacheService] Failed to rewrite remote URL: ${rawUrl}`, e);
+      return rawUrl;
     }
-
-    const rawImage = asString(item.image);
-    if (rawImage && isHttpUrl(rawImage)) {
-      return rawImage;
-    }
-
-    return null;
   }
 
   private resolveRemoteImageVersion(item: IncomingProduct, imageUrl: string | null): string | null {
@@ -187,7 +207,6 @@ class ProductImageCacheService {
   private normalizeSingleIncomingProduct(item: IncomingProduct, localProduct?: Product): IncomingProduct {
     const imageUrl = this.resolveRemoteImageUrl(item);
     const imageVersion = this.resolveRemoteImageVersion(item, imageUrl);
-    const hadRemoteImageLocally = Boolean(asString(localProduct?.imageUrl) || asString(localProduct?.imageLocalPath));
 
     const normalized: IncomingProduct = {
       ...item,
@@ -195,11 +214,14 @@ class ProductImageCacheService {
       price: asNumber(item.price ?? item.precio_venta, localProduct?.price ?? 0),
       cost: asNumber(item.cost ?? item.costo_unitario, localProduct?.cost ?? 0),
       category: asString(item.category) || asString(item.categoria) || localProduct?.category || 'GENERAL',
-      image: item.image,
-      imageUrl: imageUrl || undefined,
-      imageVersion: imageVersion || undefined,
-      imageLocalPath: item.imageLocalPath ?? localProduct?.imageLocalPath ?? null,
-      images: uniqueStrings(Array.isArray(item.images) ? item.images : localProduct?.images || []),
+      image: localProduct?.image || undefined,
+      imageUrl: localProduct?.imageUrl || undefined,
+      imageVersion: localProduct?.imageVersion || undefined,
+      imageLocalPath: localProduct?.imageLocalPath || null,
+      images: uniqueStrings([
+        ...(Array.isArray(localProduct?.images) ? localProduct.images : []),
+        localProduct?.image,
+      ]),
       attributes: Array.isArray(item.attributes) ? item.attributes : localProduct?.attributes || [],
       variants: Array.isArray(item.variants) ? item.variants : localProduct?.variants || [],
       tariffs: Array.isArray(item.tariffs) ? item.tariffs : localProduct?.tariffs || [],
@@ -231,6 +253,8 @@ class ProductImageCacheService {
       if (canReuseLocalImage) {
         normalized.imageLocalPath = localProduct?.imageLocalPath || null;
         normalized.image = localProduct?.image || undefined;
+        normalized.imageUrl = imageUrl;
+        normalized.imageVersion = imageVersion;
         normalized.images = uniqueStrings([
           ...(Array.isArray(localProduct?.images) ? localProduct.images : []),
           localProduct?.image,
@@ -239,21 +263,9 @@ class ProductImageCacheService {
         normalized.imageLocalPath = null;
         normalized.image = this.buildRenderableWebPath(imageUrl);
         normalized.images = uniqueStrings([normalized.image]);
-      } else {
-        normalized.imageLocalPath = null;
-        normalized.image = undefined;
-        normalized.images = [];
+        normalized.imageUrl = imageUrl;
+        normalized.imageVersion = imageVersion;
       }
-
-      return normalized;
-    }
-
-    if (hadRemoteImageLocally) {
-      normalized.imageLocalPath = null;
-      normalized.imageUrl = undefined;
-      normalized.imageVersion = undefined;
-      normalized.image = undefined;
-      normalized.images = [];
       return normalized;
     }
 
@@ -271,6 +283,8 @@ class ProductImageCacheService {
 
   private async saveLocalImage(product: Product, imageUrl: string, imageVersion: string): Promise<boolean> {
     const relativePath = this.buildRelativePath(product.id, imageVersion, imageUrl);
+
+    console.log(`[ProductImageCacheService] 📥 DOWNLOADING NATIVE IMAGE for ${product.id} -> URL: ${imageUrl}`);
 
     await Filesystem.downloadFile({
       url: imageUrl,
@@ -301,6 +315,7 @@ class ProductImageCacheService {
       imageLocalPath: fileUri,
     });
 
+    console.log(`[ProductImageCacheService] ✅ NATIVE IMAGE SAVED for ${product.id}`);
     return true;
   }
 
@@ -403,6 +418,7 @@ class ProductImageCacheService {
         }
       } catch (error) {
         failed += 1;
+        console.error(`[ProductImageCacheService] 🚨 FAILED TO DOWNLOAD/CACHE ${itemId}:`, error);
         this.logger.warn(`[ProductImageCacheService] Failed to cache image for ${itemId}:`, error);
       }
     }
