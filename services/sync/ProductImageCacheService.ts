@@ -198,6 +198,12 @@ class ProductImageCacheService {
     }
 
     for (const code of this.incomingProductCodeCandidates(item)) {
+      if (code && localById.has(code)) {
+        return localById.get(code);
+      }
+    }
+
+    for (const code of this.incomingProductCodeCandidates(item)) {
       if (code && localByBarcode.has(code)) {
         return localByBarcode.get(code);
       }

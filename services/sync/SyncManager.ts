@@ -617,9 +617,25 @@ class SyncManager {
 
         const normalizedItems = await this.enrichPulledProducts(rawItems);
         let updatedCount = 0;
+        const duplicateIdsToRemove = new Set<string>();
 
-        for (const item of normalizedItems) {
+        for (const [index, item] of normalizedItems.entries()) {
             if (!item?.id) continue;
+            const rawItem = rawItems[index] as Record<string, unknown> | undefined;
+            const rawId = typeof rawItem?.id === 'string' ? rawItem.id.trim() : String(rawItem?.id || '').trim();
+            const normalizedId = typeof item.id === 'string' ? item.id.trim() : String(item.id || '').trim();
+
+            if (rawId && normalizedId && rawId !== normalizedId) {
+                duplicateIdsToRemove.add(rawId);
+                if (posImageDebugMatchesRaw(rawItem) || posImageDebugMatchesRaw(item)) {
+                    posImageDebugLog('applySnapshotProducts: remapped snapshot item to canonical local id', {
+                        rawId,
+                        normalizedId,
+                        barcode: (item as any).barcode ?? (rawItem as any)?.barcode ?? null,
+                    });
+                }
+            }
+
             if (posImageDebugMatchesRaw(item)) {
                 posImageDebugLog('applySnapshotProducts: db.saveDocument(products)', {
                     id: item.id,
@@ -631,6 +647,14 @@ class SyncManager {
             }
             await db.saveDocument('products', item);
             updatedCount += 1;
+        }
+
+        for (const duplicateId of duplicateIdsToRemove) {
+            try {
+                await db.deleteDocument('products', duplicateId as any);
+            } catch (error) {
+                console.warn(`⚠️ SyncManager: could not delete remapped duplicate product ${duplicateId}:`, error);
+            }
         }
 
         await posImageDebugLogDbRows('after applySnapshotProducts saveDocument loop');
