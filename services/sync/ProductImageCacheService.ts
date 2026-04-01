@@ -2,6 +2,12 @@ import { Capacitor } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import type { Product } from '../../types';
 import { db } from '../../utils/db';
+import {
+  posImageDebugIncomingCodes,
+  posImageDebugLog,
+  posImageDebugMatchesRaw,
+  POS_IMAGE_DEBUG_TAG,
+} from '../../utils/posImageDebugTrace';
 
 type IncomingProduct = Partial<Product> & Record<string, any>;
 
@@ -132,12 +138,17 @@ class ProductImageCacheService {
       return localById.get(incomingId);
     }
 
-    const barcode = asString(item?.barcode);
-    if (barcode && localByBarcode.has(barcode)) {
-      return localByBarcode.get(barcode);
+    const codeCandidates = posImageDebugIncomingCodes(item as Record<string, unknown>);
+    for (const code of codeCandidates) {
+      if (code && localByBarcode.has(code)) {
+        return localByBarcode.get(code);
+      }
     }
 
     const skuLike = asString(item?.sku) || asString(item?.item_code) || asString(item?.code);
+    if (skuLike && localByBarcode.has(skuLike)) {
+      return localByBarcode.get(skuLike);
+    }
     if (skuLike && localById.has(skuLike)) {
       return localById.get(skuLike);
     }
@@ -258,8 +269,22 @@ class ProductImageCacheService {
 
     const { byId: localById, byBarcode: localByBarcode } = await this.getLocalProductLookups();
     return items.map((item) => {
+      const trace = posImageDebugMatchesRaw(item);
       const localProduct = this.resolveIncomingLocalProduct(item, localById, localByBarcode);
-      return this.normalizeSingleIncomingProduct(item, localProduct);
+      const normalized = this.normalizeSingleIncomingProduct(item, localProduct);
+      if (trace) {
+        posImageDebugLog('normalizeIncomingProducts: row', {
+          incomingId: asString(item?.id),
+          codes: posImageDebugIncomingCodes(item as Record<string, unknown>),
+          matchedLocalId: localProduct?.id ?? null,
+          normalizedId: asString(normalized?.id),
+          imageUrl: normalized?.imageUrl ?? null,
+          imageVersion: normalized?.imageVersion ?? null,
+          imageSet: Boolean(asString(normalized?.image)),
+          nativeAndroid: this.isNativeAndroid(),
+        });
+      }
+      return normalized;
     });
   }
 
@@ -351,13 +376,21 @@ class ProductImageCacheService {
 
     for (const rawItem of incoming) {
       const itemId = asString(rawItem?.id);
+      const trace = posImageDebugMatchesRaw(rawItem);
       if (!itemId) {
+        if (trace) posImageDebugLog('syncSnapshotItems: skip (no item id)', { rawId: rawItem?.id });
         skipped += 1;
         continue;
       }
 
       const localProduct = localById.get(itemId);
       if (!localProduct) {
+        if (trace) {
+          posImageDebugLog('syncSnapshotItems: skip (no local row for normalized id)', {
+            itemId,
+            mapSize: localById.size,
+          });
+        }
         skipped += 1;
         continue;
       }
@@ -366,6 +399,7 @@ class ProductImageCacheService {
       const imageVersion = this.resolveRemoteImageVersion(rawItem, imageUrl);
 
       if (!imageUrl) {
+        if (trace) posImageDebugLog('syncSnapshotItems: no remote imageUrl on payload', { itemId });
         const cleared = await this.clearCachedImage(localProduct);
         if (cleared) touched += 1;
         skipped += 1;
@@ -378,11 +412,19 @@ class ProductImageCacheService {
         (this.isNativeAndroid() ? asString(localProduct.imageLocalPath).length > 0 : asString(localProduct.image).length > 0);
 
       if (sameVersion) {
+        if (trace) posImageDebugLog('syncSnapshotItems: skip (same version already cached)', { itemId, imageVersion });
         skipped += 1;
         continue;
       }
 
       queued += 1;
+      if (trace) {
+        posImageDebugLog('syncSnapshotItems: queue download', {
+          itemId,
+          imageUrl: imageUrl.slice(0, 120),
+          imageVersion,
+        });
+      }
 
       try {
         const persisted = this.isNativeAndroid()
@@ -392,10 +434,12 @@ class ProductImageCacheService {
         if (persisted) {
           downloaded += 1;
           touched += 1;
+          if (trace) posImageDebugLog('syncSnapshotItems: persisted image', { itemId });
         } else {
           skipped += 1;
         }
       } catch (error) {
+        if (trace) this.logger.warn(`${POS_IMAGE_DEBUG_TAG} syncSnapshotItems: native cache failed`, error);
         this.logger.warn(`[ProductImageCacheService] Failed to cache native image for ${itemId}. Falling back to remote URL.`, error);
 
         try {

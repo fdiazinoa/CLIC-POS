@@ -1,4 +1,5 @@
 import { getStoredTenantIdentity } from './cloudMasterRegistry';
+import { posImageDebugLog } from './posImageDebugTrace';
 
 type TenantIdentity = {
     tenantId?: string | null;
@@ -632,6 +633,10 @@ export const processErpSyncOutbox = async (
                     const terminalId = resolveOutboxTerminalId(event);
 
                     console.info('[ERP SYNC] BOOTSTRAP_REQUESTED recibido desde outbox. Descargando snapshot...');
+                    posImageDebugLog('BOOTSTRAP_REQUESTED: outbox → fetchTerminalConfigSnapshot', {
+                        terminalId: terminalId || null,
+                        eventId: event.id ?? null,
+                    });
                     const snapshot = await fetchTerminalConfigSnapshot(terminalId || '');
 
                     try {
