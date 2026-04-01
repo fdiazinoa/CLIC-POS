@@ -33,21 +33,37 @@ class ProductImageCacheService {
   }
 
   private resolveRemoteImageUrl(item: IncomingProduct): string | null {
-    const explicitUrl =
+    const rawUrl =
       asString(item.imageUrl) ||
       asString(item.image_url) ||
-      asString(item.metadata?.image_url);
+      asString(item.metadata?.image_url) ||
+      asString(item.image);
 
-    if (explicitUrl) {
-      return explicitUrl;
+    if (!rawUrl) return null;
+
+    try {
+      const masterUrlStr = localStorage.getItem('CLIC_POS_MASTER_URL');
+      if (!masterUrlStr) return rawUrl;
+
+      const masterUrl = masterUrlStr.endsWith('/') ? masterUrlStr.slice(0, -1) : masterUrlStr;
+
+      if (rawUrl.startsWith('/')) {
+        return `${masterUrl}${rawUrl}`;
+      }
+
+      if (this.isNativeAndroid() && (rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1'))) {
+        const urlObj = new URL(rawUrl);
+        const masterObj = new URL(masterUrl);
+        urlObj.protocol = masterObj.protocol;
+        urlObj.hostname = masterObj.hostname; // Keep target port (e.g., Supabase 54321)
+        return urlObj.toString();
+      }
+
+      return rawUrl;
+    } catch (e) {
+      this.logger.warn(`Failed to rewrite remote URL: ${rawUrl}`, e);
+      return rawUrl;
     }
-
-    const rawImage = asString(item.image);
-    if (rawImage) {
-      return rawImage;
-    }
-
-    return null;
   }
 
   private resolveRemoteImageVersion(item: IncomingProduct, imageUrl: string | null): string | null {
