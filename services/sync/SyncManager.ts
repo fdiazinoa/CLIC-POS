@@ -792,14 +792,9 @@ class SyncManager {
                         catalogCursorSent: !options?.forceFullCatalog ? currentCatalogCursor : null,
                     });
                     const response = await fetch(endpoint, {
-                        headers: context.tenantId
-                            ? {
-                                Accept: 'application/json',
-                                'X-Tenant-Id': context.tenantId,
-                            }
-                            : {
-                                Accept: 'application/json',
-                            },
+                        headers: {
+                            Accept: 'application/json',
+                        },
                     });
                     if (!response.ok) {
                         const detail = await response.text().catch(() => '');
