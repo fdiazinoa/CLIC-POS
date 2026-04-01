@@ -602,6 +602,7 @@ class SyncManager {
             baseConfig?: BusinessConfig | null;
             persist?: boolean;
             dispatchEvent?: boolean;
+            forceRemoteFetch?: boolean;
         }
     ): Promise<BusinessConfig | null> {
         if (this.isDisabled) return null;
@@ -627,12 +628,12 @@ class SyncManager {
         let nextCatalogCursor: string | null = null;
 
         let snapshot = extractTerminalConfigSnapshot(snapshotOverride);
+        const pendingSnapshot = snapshot
+            ? null
+            : this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
+        const canFetchRemote = Boolean(context.terminalId && context.tenantId && context.erpBaseUrl);
 
-        if (!snapshot) {
-            snapshot = this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId);
-        }
-
-        if (!snapshot) {
+        if (!snapshot && canFetchRemote) {
             const params = new URLSearchParams();
             if (context.tenantId) params.set('tenant_id', context.tenantId);
             if (context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
@@ -640,39 +641,50 @@ class SyncManager {
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
             if (currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
 
-            const endpoint = `/api/sync/terminals/${encodeURIComponent(context.terminalId)}/config${params.toString() ? `?${params.toString()}` : ''}`;
-            const response = await fetch(endpoint);
-            if (!response.ok) {
-                const detail = await response.text().catch(() => '');
-                throw new Error(detail || `No se pudo refrescar la configuración de terminal (${response.status}).`);
-            }
+            try {
+                const endpoint = `/api/sync/terminals/${encodeURIComponent(context.terminalId)}/config${params.toString() ? `?${params.toString()}` : ''}`;
+                const response = await fetch(endpoint);
+                if (!response.ok) {
+                    const detail = await response.text().catch(() => '');
+                    throw new Error(detail || `No se pudo refrescar la configuración de terminal (${response.status}).`);
+                }
 
-            payload = await response.json();
-            snapshot = extractTerminalConfigSnapshot(payload?.terminal_config ?? payload);
-            catalogDelta = payload?.catalog_delta && typeof payload.catalog_delta === 'object'
-                ? payload.catalog_delta
-                : null;
-            nextCatalogCursor =
-                typeof payload?.snapshot_meta?.catalog_cursor === 'string'
-                    ? payload.snapshot_meta.catalog_cursor.trim() || null
+                payload = await response.json();
+                snapshot = extractTerminalConfigSnapshot(payload?.terminal_config ?? payload);
+                catalogDelta = payload?.catalog_delta && typeof payload.catalog_delta === 'object'
+                    ? payload.catalog_delta
                     : null;
+                nextCatalogCursor =
+                    typeof payload?.snapshot_meta?.catalog_cursor === 'string'
+                        ? payload.snapshot_meta.catalog_cursor.trim() || null
+                        : null;
 
-            if (!snapshot && payload?.config && !Array.isArray(payload.config)) {
-                const incomingConfig = payload.config as BusinessConfig;
-                const changed =
-                    JSON.stringify(this.sanitizeConfig(baseConfig)) !==
-                    JSON.stringify(this.sanitizeConfig(incomingConfig));
+                if (!snapshot && payload?.config && !Array.isArray(payload.config)) {
+                    const incomingConfig = payload.config as BusinessConfig;
+                    const changed =
+                        JSON.stringify(this.sanitizeConfig(baseConfig)) !==
+                        JSON.stringify(this.sanitizeConfig(incomingConfig));
 
-                if (options?.persist !== false && changed) {
-                    await db.save('config', incomingConfig);
+                    if (options?.persist !== false && changed) {
+                        await db.save('config', incomingConfig);
+                    }
+
+                    if (options?.dispatchEvent !== false && changed) {
+                        window.dispatchEvent(new CustomEvent('configUpdated', { detail: incomingConfig }));
+                    }
+
+                    return incomingConfig;
                 }
-
-                if (options?.dispatchEvent !== false && changed) {
-                    window.dispatchEvent(new CustomEvent('configUpdated', { detail: incomingConfig }));
+            } catch (remoteSnapshotError) {
+                if (!pendingSnapshot) {
+                    throw remoteSnapshotError;
                 }
-
-                return incomingConfig;
+                console.warn('⚠️ SyncManager: Could not fetch remote terminal snapshot. Falling back to pending snapshot.', remoteSnapshotError);
             }
+        }
+
+        if (!snapshot && pendingSnapshot) {
+            snapshot = pendingSnapshot;
         }
 
         if (!snapshot) {

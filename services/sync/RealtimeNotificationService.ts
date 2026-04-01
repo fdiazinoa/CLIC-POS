@@ -105,7 +105,7 @@ class RealtimeNotificationService {
         this.socket.on('CONFIG_PUSH', async (data: { terminal_config?: unknown; terminalId?: string }) => {
             console.log('📡 RealtimeNotificationService: Received CONFIG_PUSH. Refreshing terminal snapshot...');
             try {
-                await syncManager.refreshTerminalResolvedConfig(data?.terminal_config || data);
+                await syncManager.refreshTerminalResolvedConfig(undefined, { forceRemoteFetch: true });
                 persistRestartNotice(data);
             } catch (error) {
                 console.error('❌ RealtimeNotificationService: Error applying CONFIG_PUSH:', error);
