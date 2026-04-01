@@ -985,7 +985,9 @@ export interface Product {
   qty_committed?: number; // Committed for events/bookings
   image?: string;
   imageUrl?: string;
+  image_url?: string;
   imageVersion?: string;
+  image_version?: string;
   imageLocalPath?: string | null;
   barcode?: string;
   cost?: number;

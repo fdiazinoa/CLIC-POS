@@ -121,12 +121,20 @@ const buildCartDigest = (items: CartItem[] = []): string =>
       )
       .join('||');
 
-/** Ruta local (Capacitor) o remota; si no hay `image` pero sí `imageUrl` https, muestra la remota (cache nativo puede fallar). */
-const resolvePosProductImageSrc = (p: Pick<Product, 'image' | 'imageUrl'>): string => {
+/** Ruta local (Capacitor) o remota; tolera payloads ERP en camelCase o snake_case. */
+const resolvePosProductImageSrc = (
+   p: Pick<Product, 'image' | 'imageUrl' | 'image_url'> & { metadata?: { image_url?: string; imageUrl?: string } }
+): string => {
    const a = typeof p.image === 'string' ? p.image.trim() : '';
    if (a) return a;
    const u = typeof p.imageUrl === 'string' ? p.imageUrl.trim() : '';
    if (u && /^https?:\/\//i.test(u)) return u;
+   const us = typeof p.image_url === 'string' ? p.image_url.trim() : '';
+   if (us && /^https?:\/\//i.test(us)) return us;
+   const mu = typeof p.metadata?.imageUrl === 'string' ? p.metadata.imageUrl.trim() : '';
+   if (mu && /^https?:\/\//i.test(mu)) return mu;
+   const mus = typeof p.metadata?.image_url === 'string' ? p.metadata.image_url.trim() : '';
+   if (mus && /^https?:\/\//i.test(mus)) return mus;
    return '';
 };
 
