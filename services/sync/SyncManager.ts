@@ -506,11 +506,11 @@ class SyncManager {
         ));
     }
 
-    private async deleteSnapshotProducts(itemsToDelete: unknown[]): Promise<number> {
-        const incoming = Array.isArray(itemsToDelete) ? itemsToDelete : [];
-        if (incoming.length === 0) return 0;
-
-        const localProducts = (await db.get('products')) as Product[];
+    private buildLocalProductLookupMaps(localProducts: Product[]): {
+        localById: Map<string, Product>;
+        localByBarcode: Map<string, Product>;
+        localByCode: Map<string, Product>;
+    } {
         const localById = new Map<string, Product>();
         const localByBarcode = new Map<string, Product>();
         const localByCode = new Map<string, Product>();
@@ -540,6 +540,16 @@ class SyncManager {
                 }
             }
         }
+
+        return { localById, localByBarcode, localByCode };
+    }
+
+    private async deleteSnapshotProducts(itemsToDelete: unknown[]): Promise<number> {
+        const incoming = Array.isArray(itemsToDelete) ? itemsToDelete : [];
+        if (incoming.length === 0) return 0;
+
+        const localProducts = (await db.get('products')) as Product[];
+        const { localById, localByBarcode, localByCode } = this.buildLocalProductLookupMaps(localProducts);
 
         const idsToDelete = new Set<string>();
 
@@ -732,12 +742,80 @@ class SyncManager {
         }
 
         const normalizedItems = await this.enrichPulledProducts(rawItems);
+        const localProducts = (await db.get('products')) as Product[];
+        const { localById, localByBarcode, localByCode } = this.buildLocalProductLookupMaps(localProducts);
         let updatedCount = 0;
+        const duplicateIdsToRemove = new Set<string>();
 
-        for (const item of normalizedItems) {
+        for (const [index, normalizedItem] of normalizedItems.entries()) {
+            if (!normalizedItem?.id) continue;
+            const rawItem = rawItems[index] as Record<string, unknown> | undefined;
+            let item = normalizedItem;
+
+            const incomingCodes = new Set<string>([
+                ...this.catalogDeleteCandidates(rawItem || null),
+                ...this.catalogDeleteCandidates(normalizedItem as Record<string, unknown>),
+            ]);
+
+            let canonicalLocalProduct: Product | undefined;
+            for (const code of incomingCodes) {
+                if (localById.has(code)) {
+                    canonicalLocalProduct = localById.get(code);
+                    break;
+                }
+            }
+            if (!canonicalLocalProduct) {
+                for (const code of incomingCodes) {
+                    if (localByCode.has(code)) {
+                        canonicalLocalProduct = localByCode.get(code);
+                        break;
+                    }
+                }
+            }
+            if (!canonicalLocalProduct) {
+                for (const code of incomingCodes) {
+                    if (localByBarcode.has(code)) {
+                        canonicalLocalProduct = localByBarcode.get(code);
+                        break;
+                    }
+                }
+            }
+
+            if (canonicalLocalProduct?.id && canonicalLocalProduct.id !== normalizedItem.id) {
+                item = {
+                    ...canonicalLocalProduct,
+                    ...normalizedItem,
+                    id: canonicalLocalProduct.id,
+                };
+
+                const rawId = typeof rawItem?.id === 'string' ? rawItem.id.trim() : String(rawItem?.id || '').trim();
+                if (rawId) {
+                    duplicateIdsToRemove.add(rawId);
+                }
+            }
+
             if (!item?.id) continue;
             await db.saveDocument('products', item);
+            const savedId = typeof item.id === 'string' ? item.id.trim() : String(item.id || '').trim();
+            if (savedId) {
+                localById.set(savedId, item as Product);
+            }
+            const savedBarcode = typeof (item as any)?.barcode === 'string' ? (item as any).barcode.trim() : String((item as any)?.barcode || '').trim();
+            if (savedBarcode) {
+                localByBarcode.set(savedBarcode, item as Product);
+            }
+            for (const code of this.catalogDeleteCandidates(item as Record<string, unknown>)) {
+                localByCode.set(code, item as Product);
+            }
             updatedCount += 1;
+        }
+
+        for (const duplicateId of duplicateIdsToRemove) {
+            try {
+                await db.deleteDocument('products', duplicateId as any);
+            } catch (error) {
+                console.warn(`⚠️ SyncManager: could not delete remapped duplicate product ${duplicateId}:`, error);
+            }
         }
 
         await productImageCacheService.syncSnapshotItems(normalizedItems as Product[]);
