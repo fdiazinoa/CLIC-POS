@@ -371,6 +371,29 @@ class ProductImageCacheService {
       });
     }
 
+    try {
+      await Filesystem.mkdir({
+        path: this.imageFolder,
+        directory: Directory.Data,
+        recursive: true,
+      });
+    } catch (error) {
+      const message = String((error as Error)?.message || error || '');
+      const alreadyExists = /exist/i.test(message);
+      if (!alreadyExists) {
+        if (posImageDebugMatchesRaw(product)) {
+          posImageDebugLog('saveLocalImage: mkdir failed', {
+            product: posCatalogDebugSummarizeItem(product as any),
+            imageUrl,
+            imageVersion,
+            directory: this.imageFolder,
+            error: message,
+          });
+        }
+        throw error;
+      }
+    }
+
     await Filesystem.downloadFile({
       url: imageUrl,
       path: relativePath,
