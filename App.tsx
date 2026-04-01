@@ -564,6 +564,21 @@ const AppContent: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    const handleTerminalConfigSyncRequested = async () => {
+      try {
+        await syncManager.refreshTerminalResolvedConfig(undefined, { forceRemoteFetch: true });
+      } catch (error) {
+        console.warn('⚠️ Failed to apply terminal config refresh requested by ERP outbox:', error);
+      }
+    };
+
+    window.addEventListener('terminalConfigSyncRequested', handleTerminalConfigSyncRequested as EventListener);
+    return () => {
+      window.removeEventListener('terminalConfigSyncRequested', handleTerminalConfigSyncRequested as EventListener);
+    };
+  }, []);
+
   const dismissTerminalConfigRestartNotice = useCallback(() => {
     localStorage.removeItem(TERMINAL_CONFIG_RESTART_NOTICE_KEY);
     setTerminalConfigRestartNotice(null);
