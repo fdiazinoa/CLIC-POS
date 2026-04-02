@@ -15,6 +15,15 @@ const asObject = (value: unknown): Record<string, any> => {
 };
 
 const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+const asStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => asString(entry)).filter(Boolean);
+  }
+
+  const raw = asString(value);
+  if (!raw) return [];
+  return raw.split(',').map((entry) => asString(entry)).filter(Boolean);
+};
 
 const stripTrailingSlashes = (value: string): string => value.replace(/\/+$/, '');
 
@@ -444,6 +453,46 @@ const cloneSnapshotWithoutMasterCollections = (snapshot: TerminalConfigSnapshot)
   } as TerminalConfigSnapshot;
 };
 
+const mergeTerminalConfigSnapshots = (
+  cachedSnapshot: TerminalConfigSnapshot | null | undefined,
+  incomingSnapshot: TerminalConfigSnapshot | null | undefined,
+): TerminalConfigSnapshot | null => {
+  if (!incomingSnapshot) {
+    return cachedSnapshot || null;
+  }
+
+  if (!cachedSnapshot) {
+    return incomingSnapshot;
+  }
+
+  const mergedMasters = {
+    ...asObject(cachedSnapshot.masters),
+  };
+  const incomingMasters = asObject(incomingSnapshot.masters);
+  for (const key of Object.keys(incomingMasters)) {
+    mergedMasters[key] = incomingMasters[key];
+  }
+
+  const mergedResolved = {
+    ...asObject(cachedSnapshot.resolved),
+  };
+  const incomingResolved = asObject(incomingSnapshot.resolved);
+  for (const key of Object.keys(incomingResolved)) {
+    mergedResolved[key] = incomingResolved[key];
+  }
+
+  return {
+    ...cachedSnapshot,
+    ...incomingSnapshot,
+    config: {
+      ...asObject(cachedSnapshot.config),
+      ...asObject(incomingSnapshot.config),
+    },
+    masters: mergedMasters,
+    resolved: mergedResolved,
+  } as TerminalConfigSnapshot;
+};
+
 const computeCatalogCursor = (snapshot: TerminalConfigSnapshot | null | undefined): string => {
   const masterData = SNAPSHOT_MASTER_COLLECTIONS.reduce<Record<string, Record<string, unknown>[]>>((acc, key) => {
     acc[key] = snapshotMasterCollection(snapshot, key)
@@ -522,6 +571,8 @@ router.get('/:terminalId/config', async (req, res) => {
   const erpBaseUrl = resolveErpBaseUrl(req);
   const posDeviceId = asString(req.query.pos_device_id);
   const clientCatalogCursor = asString(req.query.catalog_cursor);
+  const requestedMasterScopes = asStringArray(req.query.master_scopes);
+  const requestedResolvedScopes = asStringArray(req.query.resolved_scopes);
 
   if (!erpTerminalId) {
     return res.status(400).json({ status: 'error', message: 'terminalId es obligatorio.' });
@@ -542,19 +593,33 @@ router.get('/:terminalId/config', async (req, res) => {
       deviceId: posDeviceId,
     });
     const effectiveTenantId = resolvedTenant.tenantId || tenantId;
+    const params = new URLSearchParams();
+    params.set('tenant_id', effectiveTenantId);
+    if (requestedMasterScopes.length > 0) {
+      params.set('master_scopes', requestedMasterScopes.join(','));
+    }
+    if (Array.isArray(req.query.resolved_scopes)) {
+      params.set('resolved_scopes', requestedResolvedScopes.length > 0 ? requestedResolvedScopes.join(',') : 'none');
+    } else if (typeof req.query.resolved_scopes === 'string') {
+      params.set('resolved_scopes', requestedResolvedScopes.length > 0 ? requestedResolvedScopes.join(',') : 'none');
+    }
 
     const snapshotPayload = await fetchErpJson(
       req,
       erpBaseUrl,
-      `/api/sync/terminals/${encodeURIComponent(erpTerminalId)}/config?tenant_id=${encodeURIComponent(effectiveTenantId)}`,
+      `/api/sync/terminals/${encodeURIComponent(erpTerminalId)}/config?${params.toString()}`,
       effectiveTenantId
     );
-    const snapshot = extractTerminalConfigSnapshot(snapshotPayload);
-    if (!snapshot) {
+    const incomingSnapshot = extractTerminalConfigSnapshot(snapshotPayload);
+    if (!incomingSnapshot) {
       throw new Error('El ERP no devolvió terminal_config para el refresco.');
     }
 
     const cachedSnapshot = getCachedTerminalSnapshot(localTerminalId);
+    const snapshot = mergeTerminalConfigSnapshots(cachedSnapshot, incomingSnapshot);
+    if (!snapshot) {
+      throw new Error('No se pudo reconstruir el snapshot efectivo de la terminal.');
+    }
     const previousCatalogCursor = computeCatalogCursor(cachedSnapshot);
     const applied = applyTerminalConfigSnapshot(config, {
       terminalId: localTerminalId,
@@ -564,7 +629,7 @@ router.get('/:terminalId/config', async (req, res) => {
     });
 
     if (applied.snapshot && !applied.hasResolutionError && Object.keys(asObject(applied.snapshot.resolved)).length > 0) {
-      saveCachedTerminalSnapshot(localTerminalId, applied.snapshot);
+      saveCachedTerminalSnapshot(localTerminalId, snapshot);
     }
 
     saveSetting('config', applied.config);
@@ -618,7 +683,7 @@ router.get('/:terminalId/config', async (req, res) => {
         used_resolved: applied.usedResolved,
         used_fallback_config: applied.usedFallbackConfig,
         used_cached_snapshot: applied.usedCachedSnapshot,
-        resolution_error: snapshot.resolution_error ?? null,
+        resolution_error: incomingSnapshot.resolution_error ?? null,
         full_pull_on_pairing: applied.fullPullOnPairing ?? false,
         used_catalog_delta: useCatalogDelta,
         catalog_cursor: currentCatalogCursor,
@@ -673,6 +738,65 @@ router.get('/:terminalId/config', async (req, res) => {
     return res.status(500).json({
       status: 'error',
       message: error?.message || 'No se pudo refrescar la configuración de la terminal.',
+    });
+  }
+});
+
+router.get('/:terminalId/manifest', async (req, res) => {
+  const erpTerminalId = asString(req.params.terminalId);
+  const localTerminalId = asString(req.query.local_terminal_id) || erpTerminalId;
+  const tenantId = resolveTenantId(req);
+  const tenantSlug = resolveTenantSlug(req);
+  const tenantEmail = resolveTenantEmail(req);
+  const erpBaseUrl = resolveErpBaseUrl(req);
+  const posDeviceId = asString(req.query.pos_device_id);
+
+  if (!erpTerminalId) {
+    return res.status(400).json({ status: 'error', message: 'terminalId es obligatorio.' });
+  }
+
+  if (!tenantId || !erpBaseUrl) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'tenant_id y erp_base_url son obligatorios para refrescar la terminal.',
+    });
+  }
+
+  try {
+    const resolvedTenant = await resolveErpTenantId(req, erpBaseUrl, {
+      tenantId,
+      tenantSlug,
+      tenantEmail,
+      deviceId: posDeviceId,
+    });
+    const effectiveTenantId = resolvedTenant.tenantId || tenantId;
+    const params = new URLSearchParams();
+    params.set('tenant_id', effectiveTenantId);
+    if (typeof req.query.terminal_cursor === 'string') params.set('terminal_cursor', asString(req.query.terminal_cursor));
+    if (typeof req.query.items_cursor === 'string') params.set('items_cursor', asString(req.query.items_cursor));
+    if (typeof req.query.customers_cursor === 'string') params.set('customers_cursor', asString(req.query.customers_cursor));
+    if (typeof req.query.suppliers_cursor === 'string') params.set('suppliers_cursor', asString(req.query.suppliers_cursor));
+
+    const payload = await fetchErpJson(
+      req,
+      erpBaseUrl,
+      `/api/sync/terminals/${encodeURIComponent(erpTerminalId)}/manifest?${params.toString()}`,
+      effectiveTenantId,
+    );
+
+    return res.json({
+      success: true,
+      tenant_id: effectiveTenantId,
+      terminal_id: localTerminalId,
+      erp_terminal_id: erpTerminalId,
+      tenant_resolution_source: resolvedTenant.source,
+      manifest: payload?.manifest && typeof payload.manifest === 'object' ? payload.manifest : payload,
+    });
+  } catch (error: any) {
+    console.error('❌ Terminal manifest refresh error:', error?.message || error);
+    return res.status(500).json({
+      status: 'error',
+      message: error?.message || 'No se pudo consultar el manifest de maestros.',
     });
   }
 });

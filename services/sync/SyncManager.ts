@@ -47,6 +47,24 @@ interface SyncStatus {
     error?: string;
 }
 
+type TerminalManifestMasterScope = 'items' | 'customers' | 'suppliers';
+type TerminalManifestResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions';
+type TerminalManifestScope = 'terminal' | TerminalManifestMasterScope;
+
+interface TerminalCursorMap {
+    terminal?: string | null;
+    items?: string | null;
+    customers?: string | null;
+    suppliers?: string | null;
+}
+
+interface TerminalManifestPayload {
+    cursor_map?: TerminalCursorMap;
+    changed?: Partial<Record<TerminalManifestScope, boolean>>;
+    counts?: Partial<Record<TerminalManifestMasterScope, number>>;
+    snapshot_at?: string | null;
+}
+
 class SyncManager {
     private autoSyncInterval: any = null;
     private imageSyncInterval: any = null;
@@ -61,6 +79,7 @@ class SyncManager {
     private imageSyncOnlineHandler: (() => void) | null = null;
     private readonly IMAGE_SYNC_INTERVAL_MS = 180000;
     private readonly IMAGE_SYNC_BATCH_SIZE = 40;
+    private startupManifestSyncInFlight = false;
 
     public isInitialized: boolean = false;
 
@@ -406,6 +425,10 @@ class SyncManager {
             this.purgeSyncedHistoricalData().catch(e => console.error('❌ SyncManager: Initial purge failed:', e));
         }
 
+        this.syncTerminalMastersOnStartup(config).catch((error) => {
+            console.warn('⚠️ SyncManager: startup terminal manifest sync failed:', error);
+        });
+
         console.log('🔄 SyncManager initialized');
 
         // Subscribe to connection loss to trigger auto-discovery
@@ -556,6 +579,14 @@ class SyncManager {
         return `clic_pos_terminal_catalog_cursor:${localTerminalId}`;
     }
 
+    private getTerminalManifestCursorStorageKey(localTerminalId: string): string {
+        return `clic_pos_terminal_manifest_cursor_map:${localTerminalId}`;
+    }
+
+    private getStartupManifestSessionKey(localTerminalId: string): string {
+        return `clic_pos_terminal_startup_manifest_synced:${localTerminalId}`;
+    }
+
     private readStoredCatalogCursor(localTerminalId: string | null): string | null {
         if (!localTerminalId) return null;
         const raw = localStorage.getItem(this.getCatalogCursorStorageKey(localTerminalId));
@@ -572,6 +603,58 @@ class SyncManager {
         } else {
             localStorage.removeItem(key);
         }
+    }
+
+    private readStoredTerminalCursorMap(localTerminalId: string | null): TerminalCursorMap {
+        if (!localTerminalId) return {};
+
+        const raw = localStorage.getItem(this.getTerminalManifestCursorStorageKey(localTerminalId));
+        if (!raw) return {};
+
+        try {
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                return {};
+            }
+
+            return {
+                terminal: typeof parsed.terminal === 'string' ? parsed.terminal.trim() || null : null,
+                items: typeof parsed.items === 'string' ? parsed.items.trim() || null : null,
+                customers: typeof parsed.customers === 'string' ? parsed.customers.trim() || null : null,
+                suppliers: typeof parsed.suppliers === 'string' ? parsed.suppliers.trim() || null : null,
+            };
+        } catch {
+            return {};
+        }
+    }
+
+    private persistTerminalCursorMap(localTerminalId: string | null, cursorMap: TerminalCursorMap | null | undefined): void {
+        if (!localTerminalId || !cursorMap) return;
+
+        const normalizedCursorMap: TerminalCursorMap = {
+            terminal: typeof cursorMap.terminal === 'string' ? cursorMap.terminal.trim() || null : null,
+            items: typeof cursorMap.items === 'string' ? cursorMap.items.trim() || null : null,
+            customers: typeof cursorMap.customers === 'string' ? cursorMap.customers.trim() || null : null,
+            suppliers: typeof cursorMap.suppliers === 'string' ? cursorMap.suppliers.trim() || null : null,
+        };
+
+        const hasValue = Object.values(normalizedCursorMap).some((value) => typeof value === 'string' && value.trim());
+        const key = this.getTerminalManifestCursorStorageKey(localTerminalId);
+        if (hasValue) {
+            localStorage.setItem(key, JSON.stringify(normalizedCursorMap));
+        } else {
+            localStorage.removeItem(key);
+        }
+    }
+
+    private wasStartupManifestSyncCompleted(localTerminalId: string | null): boolean {
+        if (!localTerminalId) return false;
+        return sessionStorage.getItem(this.getStartupManifestSessionKey(localTerminalId)) === 'true';
+    }
+
+    private markStartupManifestSyncCompleted(localTerminalId: string | null): void {
+        if (!localTerminalId) return;
+        sessionStorage.setItem(this.getStartupManifestSessionKey(localTerminalId), 'true');
     }
 
     private catalogDeleteCandidates(item: Record<string, unknown> | null | undefined): string[] {
@@ -627,6 +710,194 @@ class SyncManager {
         }
 
         return { localById, localByBarcode, localByCode };
+    }
+
+    private normalizeTerminalManifestPayload(payload: unknown): TerminalManifestPayload | null {
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+            return null;
+        }
+
+        const record = payload as Record<string, any>;
+        const manifest = record.manifest && typeof record.manifest === 'object' && !Array.isArray(record.manifest)
+            ? record.manifest as Record<string, any>
+            : record;
+        const cursorMap = manifest.cursor_map && typeof manifest.cursor_map === 'object' && !Array.isArray(manifest.cursor_map)
+            ? manifest.cursor_map as Record<string, any>
+            : {};
+        const changed = manifest.changed && typeof manifest.changed === 'object' && !Array.isArray(manifest.changed)
+            ? manifest.changed as Record<string, any>
+            : {};
+        const counts = manifest.counts && typeof manifest.counts === 'object' && !Array.isArray(manifest.counts)
+            ? manifest.counts as Record<string, any>
+            : {};
+
+        return {
+            cursor_map: {
+                terminal: typeof cursorMap.terminal === 'string' ? cursorMap.terminal.trim() || null : null,
+                items: typeof cursorMap.items === 'string' ? cursorMap.items.trim() || null : null,
+                customers: typeof cursorMap.customers === 'string' ? cursorMap.customers.trim() || null : null,
+                suppliers: typeof cursorMap.suppliers === 'string' ? cursorMap.suppliers.trim() || null : null,
+            },
+            changed: {
+                terminal: Boolean(changed.terminal),
+                items: Boolean(changed.items),
+                customers: Boolean(changed.customers),
+                suppliers: Boolean(changed.suppliers),
+            },
+            counts: {
+                items: Number.isFinite(Number(counts.items)) ? Number(counts.items) : 0,
+                customers: Number.isFinite(Number(counts.customers)) ? Number(counts.customers) : 0,
+                suppliers: Number.isFinite(Number(counts.suppliers)) ? Number(counts.suppliers) : 0,
+            },
+            snapshot_at: typeof manifest.snapshot_at === 'string' ? manifest.snapshot_at.trim() || null : null,
+        };
+    }
+
+    private async fetchTerminalManifest(context: {
+        terminalId: string | null;
+        localTerminalId: string | null;
+        tenantId: string | null;
+        erpBaseUrl: string | null;
+        posDeviceId: string | null;
+    }, cursorMap: TerminalCursorMap): Promise<TerminalManifestPayload | null> {
+        if (!context.terminalId || !context.tenantId) {
+            return null;
+        }
+
+        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
+        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
+        const endpointCandidates = useAbsoluteEndpoint
+            ? [
+                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
+                    baseUrl,
+                    mode: 'local-loopback-proxy',
+                    includeErpBaseUrl: true,
+                })),
+                ...(syncApiBase
+                    ? [{
+                        baseUrl: syncApiBase,
+                        mode: 'absolute-sync-api',
+                        includeErpBaseUrl: false,
+                    }]
+                    : []),
+            ]
+            : [{
+                baseUrl: '/api/sync',
+                mode: 'relative-local-proxy',
+                includeErpBaseUrl: true,
+            }];
+
+        let lastError: unknown = null;
+
+        for (const endpointCandidate of endpointCandidates) {
+            const startedAt = posCatalogDebugNow();
+            const params = new URLSearchParams();
+            params.set('tenant_id', context.tenantId);
+            if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
+            if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
+            if (cursorMap.terminal) params.set('terminal_cursor', cursorMap.terminal);
+            if (cursorMap.items) params.set('items_cursor', cursorMap.items);
+            if (cursorMap.customers) params.set('customers_cursor', cursorMap.customers);
+            if (cursorMap.suppliers) params.set('suppliers_cursor', cursorMap.suppliers);
+
+            try {
+                const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/manifest`;
+                const endpoint = `${endpointCandidate.baseUrl}${endpointPath}?${params.toString()}`;
+                posCatalogDebugLog('startup manifest: fetch begin', {
+                    endpoint,
+                    endpointMode: endpointCandidate.mode,
+                });
+
+                const response = await fetch(endpoint, {
+                    headers: {
+                        Accept: 'application/json',
+                    },
+                });
+
+                if (!response.ok) {
+                    const detail = await response.text().catch(() => '');
+                    throw new Error(detail || `No se pudo consultar el manifest de maestros (${response.status}).`);
+                }
+
+                const payload = await response.json();
+                const normalizedManifest = this.normalizeTerminalManifestPayload(payload);
+                posCatalogDebugLog('startup manifest: fetch success', {
+                    endpointMode: endpointCandidate.mode,
+                    elapsedMs: posCatalogDebugElapsedMs(startedAt),
+                    changed: normalizedManifest?.changed || null,
+                    counts: normalizedManifest?.counts || null,
+                });
+                return normalizedManifest;
+            } catch (error) {
+                lastError = error;
+                posCatalogDebugLog('startup manifest: fetch failed', {
+                    endpointMode: endpointCandidate.mode,
+                    endpointBaseUrl: endpointCandidate.baseUrl,
+                    elapsedMs: posCatalogDebugElapsedMs(startedAt),
+                    error: String((error as Error)?.message || error),
+                });
+            }
+        }
+
+        if (lastError) {
+            throw lastError;
+        }
+
+        return null;
+    }
+
+    private async syncTerminalMastersOnStartup(baseConfig: BusinessConfig | null): Promise<void> {
+        if (this.isDisabled || this.startupManifestSyncInFlight || !navigator.onLine) {
+            return;
+        }
+
+        const context = this.getActiveTerminalContext(baseConfig);
+        const localTerminalId = context.localTerminalId || context.terminalId;
+        if (!context.terminalId || !localTerminalId || !context.tenantId || !context.erpBaseUrl) {
+            return;
+        }
+
+        if (this.wasStartupManifestSyncCompleted(localTerminalId)) {
+            return;
+        }
+
+        this.startupManifestSyncInFlight = true;
+
+        try {
+            const storedCursorMap = this.readStoredTerminalCursorMap(localTerminalId);
+            const manifest = await this.fetchTerminalManifest(context, storedCursorMap);
+            if (!manifest?.cursor_map || !manifest.changed) {
+                return;
+            }
+
+            const changedMasterScopes: TerminalManifestMasterScope[] = (['items', 'customers', 'suppliers'] as TerminalManifestMasterScope[])
+                .filter((scope) => manifest.changed?.[scope]);
+            const terminalChanged = Boolean(manifest.changed.terminal);
+
+            if (!terminalChanged && changedMasterScopes.length === 0) {
+                this.persistTerminalCursorMap(localTerminalId, manifest.cursor_map);
+                this.markStartupManifestSyncCompleted(localTerminalId);
+                return;
+            }
+
+            const refreshedConfig = await this.refreshTerminalResolvedConfig(undefined, {
+                forceRemoteFetch: true,
+                masterScopes: changedMasterScopes,
+                resolvedScopes: terminalChanged ? ['pricing', 'inventory', 'documents', 'catalog', 'promotions'] : [],
+            });
+
+            if (!refreshedConfig) {
+                return;
+            }
+
+            this.persistTerminalCursorMap(localTerminalId, manifest.cursor_map);
+            this.markStartupManifestSyncCompleted(localTerminalId);
+        } catch (error) {
+            console.warn('⚠️ SyncManager: startup manifest sync failed:', error);
+        } finally {
+            this.startupManifestSyncInFlight = false;
+        }
     }
 
     private async deleteSnapshotProducts(itemsToDelete: unknown[]): Promise<number> {
@@ -799,6 +1070,8 @@ class SyncManager {
             dispatchEvent?: boolean;
             forceRemoteFetch?: boolean;
             forceFullCatalog?: boolean;
+            masterScopes?: TerminalManifestMasterScope[];
+            resolvedScopes?: TerminalManifestResolvedScope[];
         }
     ): Promise<BusinessConfig | null> {
         if (this.isDisabled) return null;
@@ -820,6 +1093,12 @@ class SyncManager {
         const snapshotTerminalId = context.localTerminalId || context.terminalId;
         const cachedSnapshot = baseConfig.terminalSnapshots?.[snapshotTerminalId] || null;
         const currentCatalogCursor = this.readStoredCatalogCursor(snapshotTerminalId);
+        const requestedMasterScopes = Array.isArray(options?.masterScopes)
+            ? Array.from(new Set(options.masterScopes.filter(Boolean)))
+            : null;
+        const requestedResolvedScopes = Array.isArray(options?.resolvedScopes)
+            ? Array.from(new Set(options.resolvedScopes.filter(Boolean)))
+            : null;
         let payload: Record<string, any> | null = null;
         let catalogDelta: Record<string, unknown> | null = null;
         let nextCatalogCursor: string | null = null;
@@ -872,6 +1151,8 @@ class SyncManager {
             forceFullCatalog: Boolean(options?.forceFullCatalog),
             hasCatalogCursor: Boolean(currentCatalogCursor),
             hasPendingSnapshot: Boolean(pendingSnapshot),
+            requestedMasterScopes,
+            requestedResolvedScopes,
         });
 
         if (!snapshot && options?.forceRemoteFetch && !canFetchRemote) {
@@ -899,6 +1180,12 @@ class SyncManager {
                 if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
                 if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
                 if (!options?.forceFullCatalog && currentCatalogCursor) params.set('catalog_cursor', currentCatalogCursor);
+                if (requestedMasterScopes) {
+                    params.set('master_scopes', requestedMasterScopes.length > 0 ? requestedMasterScopes.join(',') : 'none');
+                }
+                if (requestedResolvedScopes) {
+                    params.set('resolved_scopes', requestedResolvedScopes.length > 0 ? requestedResolvedScopes.join(',') : 'none');
+                }
 
                 try {
                     const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/config`;
@@ -909,6 +1196,8 @@ class SyncManager {
                         forceRemoteFetch: Boolean(options?.forceRemoteFetch),
                         forceFullCatalog: Boolean(options?.forceFullCatalog),
                         catalogCursorSent: !options?.forceFullCatalog ? currentCatalogCursor : null,
+                        requestedMasterScopes,
+                        requestedResolvedScopes,
                     });
                     const response = await fetch(endpoint, {
                         headers: {
