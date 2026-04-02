@@ -127,6 +127,7 @@ import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, persistStoredErpSync
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 import { resolveCustomerImageSrc } from './utils/entityImage';
 import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
+import { buildTerminalConfigRefreshRequest, type TerminalConfigSyncRequestDetail } from './utils/terminalConfigPushScopes';
 import {
   canRetryFiscalTransaction,
   getFiscalComplianceConfig,
@@ -567,12 +568,21 @@ const AppContent: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const handleTerminalConfigSyncRequested = async () => {
+    const handleTerminalConfigSyncRequested = async (event: Event) => {
       try {
-        await syncManager.refreshTerminalResolvedConfig(undefined, {
-          forceRemoteFetch: true,
-          forceFullCatalog: true,
-        });
+        const detail = (event as CustomEvent<TerminalConfigSyncRequestDetail>)?.detail || null;
+        const refreshedConfig = await syncManager.refreshTerminalResolvedConfig(
+          undefined,
+          buildTerminalConfigRefreshRequest(detail),
+        );
+        if (refreshedConfig && !Array.isArray(refreshedConfig) && refreshedConfig.terminals) {
+          setConfig(refreshedConfig);
+        }
+
+        const refreshedProducts = await db.get('products') as Product[];
+        if (Array.isArray(refreshedProducts)) {
+          setProducts(refreshedProducts);
+        }
       } catch (error) {
         console.warn('⚠️ Failed to apply terminal config refresh requested by ERP outbox:', error);
       }
@@ -950,22 +960,7 @@ const AppContent: React.FC = () => {
         }
 
         if (!disposed && (result?.outbox?.applied || 0) > 0) {
-          try {
-            const refreshedConfig = await syncManager.refreshTerminalResolvedConfig(undefined, {
-              forceRemoteFetch: true,
-              forceFullCatalog: true,
-            });
-            if (refreshedConfig && !Array.isArray(refreshedConfig) && refreshedConfig.terminals) {
-              setConfig(refreshedConfig);
-            }
-
-            const refreshedProducts = await db.get('products') as Product[];
-            if (Array.isArray(refreshedProducts)) {
-              setProducts(refreshedProducts);
-            }
-          } catch (refreshError) {
-            console.warn('[ERP SYNC] Outbox applied but runtime refresh failed:', refreshError);
-          }
+          console.log(`[ERP SYNC] ${result.outbox.applied} evento(s) ERP aplicados. El refresh runtime se resuelve por terminalConfigSyncRequested.`);
         }
       } catch (error) {
         console.warn('[ERP SYNC] lifecycle registration skipped:', error);

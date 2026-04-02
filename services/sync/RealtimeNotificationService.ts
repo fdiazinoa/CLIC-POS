@@ -1,5 +1,6 @@
 import { io, Socket } from 'socket.io-client';
 import { syncManager } from './SyncManager';
+import { buildTerminalConfigRefreshRequest } from '../../utils/terminalConfigPushScopes';
 
 const TERMINAL_CONFIG_RESTART_NOTICE_KEY = 'clic_pos_terminal_config_restart_notice';
 
@@ -105,10 +106,7 @@ class RealtimeNotificationService {
         this.socket.on('CONFIG_PUSH', async (data: { terminal_config?: unknown; terminalId?: string }) => {
             console.log('📡 RealtimeNotificationService: Received CONFIG_PUSH. Refreshing terminal snapshot...');
             try {
-                await syncManager.refreshTerminalResolvedConfig(undefined, {
-                    forceRemoteFetch: true,
-                    forceFullCatalog: true,
-                });
+                await syncManager.refreshTerminalResolvedConfig(undefined, buildTerminalConfigRefreshRequest(data));
                 persistRestartNotice(data);
             } catch (error) {
                 console.error('❌ RealtimeNotificationService: Error applying CONFIG_PUSH:', error);
