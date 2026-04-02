@@ -1,5 +1,22 @@
 import { CartItem, BusinessConfig, Promotion, Customer } from '../types';
 
+const productReferenceCandidates = (product: any): string[] => (
+    [
+        typeof product?.id === 'string' ? product.id.trim() : String(product?.id || '').trim(),
+        typeof product?.barcode === 'string' ? product.barcode.trim() : String(product?.barcode || '').trim(),
+        typeof product?.sku === 'string' ? product.sku.trim() : String(product?.sku || '').trim(),
+        typeof product?.item_code === 'string' ? product.item_code.trim() : String(product?.item_code || '').trim(),
+        typeof product?.code === 'string' ? product.code.trim() : String(product?.code || '').trim(),
+    ].filter(Boolean)
+);
+
+const promotionMatchesResolvedRefs = (promotion: Promotion, product: any): boolean => {
+    const refs = Array.isArray(promotion.targetRefs) ? promotion.targetRefs.filter(Boolean) : [];
+    if (refs.length === 0) return false;
+    const refSet = new Set(refs.map((value) => String(value).trim()).filter(Boolean));
+    return productReferenceCandidates(product).some((candidate) => refSet.has(candidate));
+};
+
 export const applyPromotions = (cart: CartItem[], config: BusinessConfig, terminalId: string, customer?: Customer): CartItem[] => {
     const activePromotions = config.promotions?.filter(p => {
         // 1. Check Active Status
@@ -68,18 +85,20 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
         // Find ALL applicable promotions for this item
         const applicablePromos = activePromotions.filter(p => {
             if (p.targetType === 'ALL') return true;
-            if (p.targetType === 'PRODUCT' && p.targetValue === item.id) return true;
+            if (p.targetType === 'PRODUCT' && (p.targetValue === item.id || promotionMatchesResolvedRefs(p, item))) return true;
             if (p.targetType === 'CATEGORY' && p.targetValue === item.category) return true;
 
 
             if (p.targetType === 'GROUP') {
                 const group = config.productGroups?.find(g => g.id === p.targetValue);
                 if (group && group.productIds.includes(item.id)) return true;
+                if (promotionMatchesResolvedRefs(p, item)) return true;
             }
 
             if (p.targetType === 'SEASON') {
                 const season = config.seasons?.find(s => s.id === p.targetValue);
                 if (season && season.productIds.includes(item.id)) return true;
+                if (promotionMatchesResolvedRefs(p, item)) return true;
             }
 
             return false;
@@ -249,17 +268,19 @@ export const hasProductPromotion = (product: any, config: BusinessConfig, termin
     // 2. Check if any active promotion targets this product
     return activePromotions.some(p => {
         if (p.targetType === 'ALL') return true;
-        if (p.targetType === 'PRODUCT' && p.targetValue === product.id) return true;
+        if (p.targetType === 'PRODUCT' && (p.targetValue === product.id || promotionMatchesResolvedRefs(p, product))) return true;
         if (p.targetType === 'CATEGORY' && p.targetValue === product.category) return true;
 
         if (p.targetType === 'GROUP') {
             const group = config.productGroups?.find(g => g.id === p.targetValue);
             if (group && group.productIds.includes(product.id)) return true;
+            if (promotionMatchesResolvedRefs(p, product)) return true;
         }
 
         if (p.targetType === 'SEASON') {
             const season = config.seasons?.find(s => s.id === p.targetValue);
             if (season && season.productIds.includes(product.id)) return true;
+            if (promotionMatchesResolvedRefs(p, product)) return true;
         }
 
         return false;

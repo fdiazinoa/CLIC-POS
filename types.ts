@@ -1394,6 +1394,8 @@ export interface Promotion {
   // Target
   targetType: PromotionTargetType;
   targetValue?: string; // ID of Product, Category, Group, Season
+  targetLabel?: string;
+  targetRefs?: string[];
   targetStrategy?: {
     mode: 'CHEAPEST_ITEM' | 'MOST_EXPENSIVE_ITEM' | 'SLOW_MOVER' | 'CATEGORY_CHEAPEST';
     filterValue?: string | number; // Category ID or Days threshold

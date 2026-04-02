@@ -65,6 +65,38 @@ const DAYS = [
    { key: 'D', label: 'Domingo' }
 ];
 
+const appendSelectedOption = (
+   options: Array<{ value: string; label: string }>,
+   selectedValue?: string,
+   selectedLabel?: string,
+) => {
+   const value = typeof selectedValue === 'string' ? selectedValue.trim() : '';
+   if (!value) return options;
+   if (options.some((option) => option.value === value)) return options;
+   return [{ value, label: selectedLabel || value }, ...options];
+};
+
+const describePromotionTarget = (promotion: Promotion) => {
+   if (promotion.targetType === 'ALL') {
+      return 'Todo el inventario';
+   }
+
+   const label = typeof promotion.targetLabel === 'string' && promotion.targetLabel.trim()
+      ? promotion.targetLabel.trim()
+      : typeof promotion.targetValue === 'string' && promotion.targetValue.trim()
+         ? promotion.targetValue.trim()
+         : promotion.targetType;
+
+   const typeLabelMap: Record<Exclude<Promotion['targetType'], 'ALL'>, string> = {
+      PRODUCT: 'Producto',
+      CATEGORY: 'Categoría',
+      GROUP: 'Grupo',
+      SEASON: 'Temporada',
+   };
+
+   return `${typeLabelMap[promotion.targetType as Exclude<Promotion['targetType'], 'ALL'>]}: ${label}`;
+};
+
 const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, transactions, onClose, onUpdateConfig }) => {
    const [activeTab, setActiveTab] = useState<'PROMOTIONS' | 'COUPONS'>('PROMOTIONS');
    const [viewMode, setViewMode] = useState<'LIST' | 'EDIT'>('LIST');
@@ -96,6 +128,27 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
    const seasons = config.seasons || [];
    const groups = config.productGroups || [];
    const promotions = config.promotions || [];
+   const editingPromotion = editingId ? promotions.find((promo) => promo.id === editingId) : undefined;
+   const productOptions = appendSelectedOption(
+      products.map((p) => ({ value: p.id, label: p.name })),
+      targetValue,
+      editingPromotion?.targetLabel,
+   );
+   const categoryOptions = appendSelectedOption(
+      categories.map((c) => ({ value: c, label: c })),
+      targetValue,
+      editingPromotion?.targetLabel,
+   );
+   const seasonOptions = appendSelectedOption(
+      seasons.map((s) => ({ value: s.id, label: s.name })),
+      targetValue,
+      editingPromotion?.targetLabel,
+   );
+   const groupOptions = appendSelectedOption(
+      groups.map((g) => ({ value: g.id, label: g.name })),
+      targetValue,
+      editingPromotion?.targetLabel,
+   );
 
    // Handlers
    const toggleDay = (day: string) => {
@@ -199,6 +252,12 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
             isActive
          },
          terminalIds: selectedTerminals.length > 0 ? selectedTerminals : undefined,
+         targetLabel: editingPromotion?.targetType === targetType && editingPromotion?.targetValue === targetValue
+            ? editingPromotion.targetLabel
+            : undefined,
+         targetRefs: editingPromotion?.targetType === targetType && editingPromotion?.targetValue === targetValue
+            ? editingPromotion.targetRefs
+            : undefined,
          priority
       };
 
@@ -283,7 +342,7 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                                     </span>
                                  </div>
                                  <p className="text-xs text-gray-500">
-                                    {typeInfo?.label} • {promo.targetType === 'ALL' ? 'Todo el inventario' : promo.targetType} • Prio: {promo.priority || 1}
+                                    {typeInfo?.label} • {describePromotionTarget(promo)} • Prio: {promo.priority || 1}
                                  </p>
                               </div>
 
@@ -444,10 +503,10 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                                     className="flex-1 bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-blue-100 w-full md:w-auto"
                                  >
                                     <option value="">Seleccionar...</option>
-                                    {targetType === 'PRODUCT' && products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                                    {targetType === 'CATEGORY' && categories.map(c => <option key={c} value={c}>{c}</option>)}
-                                    {targetType === 'SEASON' && seasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                                    {targetType === 'GROUP' && groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                                    {targetType === 'PRODUCT' && productOptions.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                                    {targetType === 'CATEGORY' && categoryOptions.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                                    {targetType === 'SEASON' && seasonOptions.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                                    {targetType === 'GROUP' && groupOptions.map((g) => <option key={g.value} value={g.value}>{g.label}</option>)}
                                  </select>
                               )}
                            </div>
@@ -480,8 +539,16 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                               )}
 
                               {selectedType === 'BOGO' && (
-                                 <div className="font-bold text-blue-600 text-lg">
-                                    El 2do artículo GRATIS
+                                 <div className="flex items-center gap-2">
+                                    <span className="text-blue-600">Impacto en precio:</span>
+                                    <input
+                                       type="number"
+                                       value={benefitValue}
+                                       onChange={(e) => setBenefitValue(parseFloat(e.target.value))}
+                                       className="w-24 text-center font-black text-2xl bg-white border border-blue-200 rounded-xl py-1 text-blue-600 outline-none"
+                                       placeholder="0"
+                                    />
+                                    <span className="font-bold text-blue-400">% sobre la mecánica 2x1</span>
                                  </div>
                               )}
 
