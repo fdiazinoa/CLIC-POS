@@ -86,6 +86,42 @@ const getActivationApiBase = (): string => {
     return '/api/activation';
 };
 
+const getCloudAdminUrl = (): string => {
+    const env = (import.meta as any).env || {};
+    return String(env.VITE_CLOUD_ADMIN_URL || '').trim().replace(/\/$/, '');
+};
+
+const getSupabasePublicConfig = () => {
+    const env = (import.meta as any).env || {};
+    const url = String(env.VITE_SUPABASE_URL || '').trim().replace(/\/$/, '');
+    const anonKey = String(env.VITE_SUPABASE_ANON_KEY || '').trim();
+
+    return {
+        url,
+        anonKey,
+        isConfigured: Boolean(url && anonKey),
+    };
+};
+
+const looksLikeFetchFailure = (error: unknown): boolean => {
+    const message = getErrorMessage(error).toLowerCase();
+    return (
+        message.includes('failed to fetch')
+        || message.includes('networkerror')
+        || message.includes('load failed')
+        || message.includes('network request failed')
+    );
+};
+
+const normalizeActivationErrorMessage = (error: unknown): string => {
+    const message = getErrorMessage(error);
+    if (looksLikeFetchFailure(error)) {
+        return 'No se pudo conectar con Clic Cloud. Verifique su internet e intente nuevamente.';
+    }
+
+    return message;
+};
+
 const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplete }) => {
     const [step, setStep] = useState<ActivationStep>('LOGIN');
     const [email, setEmail] = useState('');
@@ -106,6 +142,9 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         tempPassword: string;
     } | null>(null);
     const activationApiBase = getActivationApiBase();
+    const cloudAdminUrl = getCloudAdminUrl();
+    const { url: supabaseUrl, anonKey: supabaseAnonKey, isConfigured: hasSupabaseConfig } = getSupabasePublicConfig();
+    const canProvisionInline = Boolean(String(((import.meta as any).env || {}).VITE_ACTIVATION_API_BASE_URL || '').trim());
 
     useEffect(() => {
         if (!isProvisionModalOpen) return;
@@ -146,6 +185,15 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
     };
 
     const openProvisionModal = () => {
+        if (!canProvisionInline) {
+            if (cloudAdminUrl) {
+                window.open(cloudAdminUrl, '_blank', 'noopener,noreferrer');
+                return;
+            }
+            setError('No hay una URL de Cloud Admin configurada para crear empresas desde esta pantalla.');
+            return;
+        }
+
         setProvisionError(null);
         setIsProvisionModalOpen(true);
     };
@@ -197,10 +245,61 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             setIsProvisionModalOpen(false);
             setError(null);
         } catch (submitError) {
-            setProvisionError(getErrorMessage(submitError));
+            setProvisionError(normalizeActivationErrorMessage(submitError));
         } finally {
             setIsProvisionSubmitting(false);
         }
+    };
+
+    const signInWithDirectSupabase = async () => {
+        if (!hasSupabaseConfig) {
+            throw new Error('La configuración de Supabase no está disponible en este build. Regenera el APK o el entorno con VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY.');
+        }
+
+        const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                apikey: supabaseAnonKey,
+                Authorization: `Bearer ${supabaseAnonKey}`,
+            },
+            body: JSON.stringify({
+                email,
+                password,
+            }),
+        });
+
+        const payload = await response.json().catch(() => ({})) as {
+            access_token?: string;
+            refresh_token?: string;
+            error?: string;
+            msg?: string;
+            error_description?: string;
+            user?: any;
+        };
+
+        if (!response.ok) {
+            throw new Error(payload.msg || payload.error_description || payload.error || 'No se pudo iniciar sesión en Clic Cloud.');
+        }
+
+        if (!payload.access_token || !payload.refresh_token) {
+            throw new Error('Respuesta inválida de autenticación de Clic Cloud.');
+        }
+
+        const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
+            access_token: payload.access_token,
+            refresh_token: payload.refresh_token,
+        });
+
+        if (sessionError) throw sessionError;
+        if (!sessionData.user) {
+            throw new Error('La sesión fue creada pero no se pudo recuperar el usuario.');
+        }
+
+        return {
+            user: sessionData.user,
+            session: sessionData.session,
+        };
     };
 
     const handleInitialLogin = async (e: React.FormEvent) => {
@@ -209,10 +308,17 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
         setError(null);
 
         try {
-            const { data, error: authError } = await supabase.auth.signInWithPassword({
+            let signInResult = await supabase.auth.signInWithPassword({
                 email,
                 password,
             });
+
+            if (signInResult.error && looksLikeFetchFailure(signInResult.error)) {
+                console.warn('[Activation] Supabase client sign-in failed, trying direct REST fallback:', signInResult.error);
+                signInResult = { data: await signInWithDirectSupabase(), error: null } as typeof signInResult;
+            }
+
+            const { data, error: authError } = signInResult;
 
             if (authError) throw authError;
 
@@ -223,8 +329,8 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
             } else {
                 await completeActivation(data.user, email);
             }
-        } catch (err: any) {
-            setError(err.message || 'Error al iniciar sesión. Verifique sus credenciales.');
+        } catch (err: unknown) {
+            setError(normalizeActivationErrorMessage(err) || 'Error al iniciar sesión. Verifique sus credenciales.');
         } finally {
             setLoading(false);
         }
@@ -259,8 +365,8 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
                     setError(err.message || 'No se pudo completar la activacion.');
                 });
             }, 2000);
-        } catch (err: any) {
-            setError(err.message || 'Error al actualizar la contraseña.');
+        } catch (err: unknown) {
+            setError(normalizeActivationErrorMessage(err) || 'Error al actualizar la contraseña.');
         } finally {
             setLoading(false);
         }
@@ -423,7 +529,7 @@ const ActivationScreen: React.FC<ActivationScreenProps> = ({ onActivationComplet
                                     onClick={openProvisionModal}
                                     className="w-full border border-blue-500/40 hover:border-blue-400 text-blue-200 hover:text-white bg-blue-500/10 hover:bg-blue-500/20 font-bold py-3 rounded-2xl transition-colors flex items-center justify-center gap-2"
                                 >
-                                    <Building2 size={18} /> Crear Empresa y Activar
+                                    <Building2 size={18} /> {canProvisionInline ? 'Crear Empresa y Activar' : 'Abrir Cloud Admin'}
                                 </button>
                             </form>
                         </div>
