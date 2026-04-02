@@ -3260,20 +3260,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        </div>
                                        <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                     </div>
-                                    <div className="mt-3 grid grid-cols-2 gap-2 border-t border-gray-100 pt-3">
+                                    <div className="mt-3 flex items-center justify-end gap-2 border-t border-gray-100 pt-3">
                                        <button
                                           onClick={() => setEditingItem(item)}
-                                          className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-[11px] font-black uppercase tracking-[0.18em] text-blue-700 shadow-sm transition-all hover:bg-blue-100"
+                                          className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-blue-200 bg-blue-50 text-blue-700 shadow-sm transition-all hover:bg-blue-100"
+                                          title="Editar artículo"
                                        >
                                           <Edit3 size={13} strokeWidth={2.4} />
-                                          Editar
                                        </button>
                                        <button
                                           onClick={() => updateCartItem(null, item.cartId)}
-                                          className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[11px] font-black uppercase tracking-[0.18em] text-red-700 shadow-sm transition-all hover:bg-red-100"
+                                          className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-red-200 bg-red-50 text-red-700 shadow-sm transition-all hover:bg-red-100"
+                                          title="Eliminar artículo"
                                        >
                                           <Trash2 size={13} strokeWidth={2.4} />
-                                          Eliminar
                                        </button>
                                     </div>
                                  </div>
@@ -3349,19 +3349,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                              onClick={() => {
                                                 setEditingItem(item);
                                              }}
-                                             className="inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2.5 text-[10px] font-black uppercase tracking-[0.16em] text-blue-700 shadow-sm transition-colors hover:bg-blue-100"
+                                             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 shadow-sm transition-colors hover:bg-blue-100"
                                              title="Editar artículo"
                                           >
                                              <Edit3 size={12} />
-                                             Editar
                                           </button>
                                           <button
                                              onClick={() => updateCartItem(null, item.cartId)}
-                                             className="inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 text-[10px] font-black uppercase tracking-[0.16em] text-red-700 shadow-sm transition-colors hover:bg-red-100"
+                                             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 shadow-sm transition-colors hover:bg-red-100"
                                              title="Eliminar artículo"
                                           >
                                              <Trash2 size={12} />
-                                             Eliminar
                                           </button>
                                        </div>
                                     </div>

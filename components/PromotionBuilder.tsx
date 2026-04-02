@@ -76,6 +76,8 @@ const appendSelectedOption = (
    return [{ value, label: selectedLabel || value }, ...options];
 };
 
+const isPromotionActive = (promotion: Promotion) => promotion.schedule?.isActive !== false;
+
 const describePromotionTarget = (promotion: Promotion) => {
    if (promotion.targetType === 'ALL') {
       return 'Todo el inventario';
@@ -191,7 +193,7 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
       setTriggerAmount(promo.trigger?.value || 0);
       setTargetStrategyMode(promo.targetStrategy?.mode || 'CHEAPEST_ITEM');
       setTargetStrategyValue(promo.targetStrategy?.filterValue?.toString() || '');
-      setIsActive(promo.schedule.isActive);
+      setIsActive(isPromotionActive(promo));
       setPriority(promo.priority || 1);
       setSelectedTerminals(promo.terminalIds || []);
       setViewMode('EDIT');
@@ -209,7 +211,7 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
    const handleToggleActive = (promo: Promotion) => {
       const updatedPromotions = promotions.map(p =>
          p.id === promo.id
-            ? { ...p, schedule: { ...p.schedule, isActive: !p.schedule.isActive } }
+            ? { ...p, schedule: { ...p.schedule, isActive: !isPromotionActive(p) } }
             : p
       );
       if (onUpdateConfig) {
@@ -329,6 +331,7 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                   ) : (
                      promotions.map(promo => {
                         const typeInfo = PROMO_TYPES.find(t => t.id === promo.type);
+                        const promoIsActive = isPromotionActive(promo);
                         return (
                            <div key={promo.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all flex items-center gap-4 group">
                               <div className={`p-3 rounded-xl text-white ${typeInfo?.color || 'bg-gray-400'}`}>
@@ -337,8 +340,8 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                               <div className="flex-1">
                                  <div className="flex items-center gap-2 mb-1">
                                     <h3 className="font-bold text-gray-800">{promo.name}</h3>
-                                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${promo.schedule.isActive ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'}`}>
-                                       {promo.schedule.isActive ? 'Activa' : 'Inactiva'}
+                                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${promoIsActive ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'}`}>
+                                       {promoIsActive ? 'Activa' : 'Inactiva'}
                                     </span>
                                  </div>
                                  <p className="text-xs text-gray-500">
@@ -347,7 +350,7 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                               </div>
 
                               {/* Analytics Columns */}
-                              <div className="hidden md:flex items-center gap-6 mr-4">
+                              <div className="hidden md:flex items-center gap-4 mr-4">
                                  {(() => {
                                     // Calculate Stats on the Fly
                                     const usageCount = (transactions || []).filter(t => (t.items || []).some(i => i.appliedPromotionId === promo.id)).length;
@@ -363,30 +366,34 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
 
                                     return (
                                        <>
-                                          <div className="text-right">
-                                             <p className="text-[10px] text-gray-400 font-bold uppercase">Uso</p>
+                                          <div className="text-right min-w-[72px]">
+                                             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.18em]">Uso</p>
                                              <p className="font-bold text-gray-700">{usageCount}</p>
                                           </div>
-                                          <div className="text-right">
-                                             <p className="text-[10px] text-gray-400 font-bold uppercase">Ingresos</p>
+                                          <div className="text-right min-w-[110px]">
+                                             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.18em]">Ingresos</p>
                                              <p className="font-bold text-green-600">${revenueGenerated.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                                           </div>
-                                          <div className="text-right">
-                                             <p className="text-[10px] text-gray-400 font-bold uppercase">Conv.</p>
+                                          <div className="text-right min-w-[82px]">
+                                             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.18em]">Conv.</p>
                                              <p className="font-bold text-blue-600">{(conversionRate * 100).toFixed(1)}%</p>
                                           </div>
                                        </>
                                     );
                                  })()}
                               </div>
-                              <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                 <button onClick={() => handleToggleActive(promo)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600" title={promo.schedule.isActive ? "Desactivar" : "Activar"}>
-                                    {promo.schedule.isActive ? <Check size={18} /> : <X size={18} />}
+                              <div className="flex items-center gap-2">
+                                 <button
+                                    onClick={() => handleToggleActive(promo)}
+                                    className={`p-2 rounded-lg border transition-colors ${promoIsActive ? 'border-amber-200 bg-amber-50 text-amber-600 hover:bg-amber-100' : 'border-green-200 bg-green-50 text-green-600 hover:bg-green-100'}`}
+                                    title={promoIsActive ? "Inactivar" : "Activar"}
+                                 >
+                                    {promoIsActive ? <X size={18} /> : <Check size={18} />}
                                  </button>
-                                 <button onClick={() => handleEdit(promo)} className="p-2 hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600" title="Editar">
+                                 <button onClick={() => handleEdit(promo)} className="p-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors" title="Editar">
                                     <Edit size={18} />
                                  </button>
-                                 <button onClick={() => handleDelete(promo.id)} className="p-2 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-600" title="Eliminar">
+                                 <button onClick={() => handleDelete(promo.id)} className="p-2 rounded-lg border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition-colors" title="Eliminar">
                                     <Trash2 size={18} />
                                  </button>
                               </div>
