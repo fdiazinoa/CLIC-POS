@@ -1,4 +1,5 @@
 import { getStoredTenantIdentity } from './cloudMasterRegistry';
+import { extractTerminalConfigRequestedScopes } from './terminalConfigPushScopes';
 
 type TenantIdentity = {
     tenantId?: string | null;
@@ -365,6 +366,7 @@ const persistTerminalConfigRestartNotice = (event: SyncOutboxEvent) => {
 const persistPendingTerminalConfigSnapshot = (event: SyncOutboxEvent) => {
     const payload = asObject<Record<string, unknown>>(event.payload);
     const terminalConfig = asObject<Record<string, unknown>>(payload.terminal_config);
+    const requestedScopes = extractTerminalConfigRequestedScopes(payload);
 
     if (Object.keys(terminalConfig).length === 0) {
         return;
@@ -383,6 +385,8 @@ const persistPendingTerminalConfigSnapshot = (event: SyncOutboxEvent) => {
             normalizeOptional(String(payload.local_terminal_id || ''))
             || binding.localTerminalId
             || null,
+        masterScopes: requestedScopes.selective ? (requestedScopes.masterScopes || []) : undefined,
+        resolvedScopes: requestedScopes.selective ? (requestedScopes.resolvedScopes || []) : undefined,
         snapshot: terminalConfig,
     };
 
@@ -393,6 +397,11 @@ const persistPendingTerminalConfigSnapshot = (event: SyncOutboxEvent) => {
             eventId: normalizeOptional(event.id || null) || null,
             terminalId: pendingSnapshot.erpTerminalId,
             localTerminalId: pendingSnapshot.localTerminalId,
+            ...(requestedScopes.selective ? {
+                masterScopes: requestedScopes.masterScopes || [],
+                resolvedScopes: requestedScopes.resolvedScopes || [],
+                selective: true,
+            } : {}),
         },
     }));
 };
