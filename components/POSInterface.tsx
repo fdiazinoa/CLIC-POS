@@ -3044,30 +3044,32 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  <div className={`flex items-center shrink-0 w-full ${isRetailMode ? 'max-w-[360px] justify-end gap-3' : 'max-w-[340px] mx-auto gap-3'}`}>
+                  <div className={`flex items-center shrink-0 w-full ${isRetailMode ? 'max-w-[360px] justify-end gap-3 ml-auto' : 'max-w-[340px] mx-auto gap-3'}`}>
                      <button
                         onClick={() => setRightSidebarTab('CART')}
-                        className={`group relative flex min-w-0 flex-1 items-center gap-3 rounded-[1.35rem] border px-4 py-3 transition-all duration-200 ${
+                        className={`group relative flex min-w-0 flex-1 items-center justify-between gap-3 rounded-[1.35rem] border px-4 py-3 transition-all duration-200 ${
                            rightSidebarTab === 'CART'
                               ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_12px_28px_rgba(248,113,113,0.16)]'
                               : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50/70 hover:text-red-600'
                         }`}
                      >
-                        <span
-                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
-                              rightSidebarTab === 'CART'
-                                 ? 'border-red-200/80 bg-white/90 text-red-600 shadow-sm'
-                                 : 'border-slate-200 bg-slate-50 text-slate-400 group-hover:border-red-100 group-hover:bg-white group-hover:text-red-500'
-                           }`}
-                        >
-                           <ShoppingBag size={18} strokeWidth={2.3} />
-                        </span>
-                        <span className="min-w-0 flex-1 text-left">
-                           <span className="block text-[11px] font-black uppercase tracking-[0.24em]">Carrito</span>
-                           <span className={`mt-1 block text-[10px] font-semibold ${rightSidebarTab === 'CART' ? 'text-red-500/80' : 'text-slate-400 group-hover:text-red-400'}`}>
-                              {cart.length > 0 ? `${cart.length} artículos` : 'Sin artículos'}
+                        <div className="flex min-w-0 items-center gap-3">
+                           <span
+                              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                                 rightSidebarTab === 'CART'
+                                    ? 'border-red-200/80 bg-white/90 text-red-600 shadow-sm'
+                                    : 'border-red-100 bg-red-50 text-red-500 group-hover:border-red-200 group-hover:bg-white group-hover:text-red-600'
+                              }`}
+                           >
+                              <ShoppingBag size={18} strokeWidth={2.3} />
                            </span>
-                        </span>
+                           <span className="min-w-0 flex-1 text-left">
+                              <span className="block text-[11px] font-black uppercase tracking-[0.24em]">Carrito</span>
+                              <span className={`mt-1 block text-[10px] font-semibold ${rightSidebarTab === 'CART' ? 'text-red-500/80' : 'text-slate-400 group-hover:text-red-400'}`}>
+                                 {cart.length > 0 ? `${cart.length} artículos` : 'Sin artículos'}
+                              </span>
+                           </span>
+                        </div>
                         {cart.length > 0 && (
                            <span className="inline-flex min-w-7 items-center justify-center self-start rounded-full border border-white/80 bg-white/95 px-2 py-1 text-[10px] font-black leading-none text-red-700 shadow-sm">
                               {cart.length}
@@ -3076,26 +3078,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </button>
                      <button
                         onClick={() => setRightSidebarTab('ACTIONS')}
-                        className={`group flex min-w-0 flex-1 items-center gap-3 rounded-[1.35rem] border px-4 py-3 transition-all duration-200 ${
+                        className={`group flex min-w-0 flex-1 items-center justify-between gap-3 rounded-[1.35rem] border px-4 py-3 text-left transition-all duration-200 ${
                            rightSidebarTab === 'ACTIONS'
                               ? 'border-blue-200 bg-gradient-to-br from-blue-50 via-sky-50 to-blue-100 text-blue-700 shadow-[0_12px_28px_rgba(59,130,246,0.16)]'
                               : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50/70 hover:text-blue-600'
                         }`}
                      >
-                        <span
-                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
-                              rightSidebarTab === 'ACTIONS'
-                                 ? 'border-blue-200/80 bg-white/90 text-blue-600 shadow-sm'
-                                 : 'border-slate-200 bg-slate-50 text-slate-400 group-hover:border-blue-100 group-hover:bg-white group-hover:text-blue-500'
-                           }`}
-                        >
-                           <Layers size={18} strokeWidth={2.3} />
-                        </span>
                         <span className="min-w-0 flex-1 text-left">
                            <span className="block text-[11px] font-black uppercase tracking-[0.24em]">Acciones</span>
                            <span className={`mt-1 block text-[10px] font-semibold ${rightSidebarTab === 'ACTIONS' ? 'text-blue-500/80' : 'text-slate-400 group-hover:text-blue-400'}`}>
                               Atajos y herramientas
                            </span>
+                        </span>
+                        <span
+                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                              rightSidebarTab === 'ACTIONS'
+                                 ? 'border-blue-200/80 bg-white/90 text-blue-600 shadow-sm'
+                                 : 'border-blue-100 bg-blue-50 text-blue-500 group-hover:border-blue-200 group-hover:bg-white group-hover:text-blue-600'
+                           }`}
+                        >
+                           <Layers size={18} strokeWidth={2.3} />
                         </span>
                      </button>
                   </div>
@@ -3231,7 +3233,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                     <div>
                                        <div className="flex justify-between items-start">
                                           <h4 className="font-bold text-gray-800 text-sm leading-tight line-clamp-1">{item.name}</h4>
-                                          <button onClick={() => updateCartItem(null, item.cartId)} className="p-1 text-gray-300 hover:text-red-500"><Trash2 size={16} /></button>
                                        </div>
                                        <div className="flex flex-col mt-0.5">
                                           <div className="flex items-center gap-2">
@@ -3254,6 +3255,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           <button onClick={() => updateCartItem({ ...item, quantity: item.quantity + 1 })} className="w-6 h-6 flex items-center justify-center bg-blue-600 rounded shadow-sm text-white hover:bg-blue-700 font-bold">+</button>
                                        </div>
                                        <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    </div>
+                                    <div className="mt-3 flex items-center justify-end gap-2 border-t border-gray-100 pt-3">
+                                       <button
+                                          onClick={() => setEditingItem(item)}
+                                          className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] font-black uppercase tracking-[0.18em] text-blue-700 shadow-sm transition-all hover:bg-blue-100"
+                                       >
+                                          <Edit3 size={13} strokeWidth={2.4} />
+                                          Editar
+                                       </button>
+                                       <button
+                                          onClick={() => updateCartItem(null, item.cartId)}
+                                          className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-black uppercase tracking-[0.18em] text-red-700 shadow-sm transition-all hover:bg-red-100"
+                                       >
+                                          <Trash2 size={13} strokeWidth={2.4} />
+                                          Eliminar
+                                       </button>
                                     </div>
                                  </div>
                               </div>
