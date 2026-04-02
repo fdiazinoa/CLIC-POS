@@ -291,6 +291,10 @@ const normalizePromotionFromErpPayload = (raw: unknown): Promotion | null => {
     trigger,
     targetType: normalizePromotionTargetType(data.targetType),
     targetValue: data.targetValue != null ? asString(data.targetValue) : undefined,
+    targetLabel: asString(data.targetLabel || data.target_label) || undefined,
+    targetRefs: asArray<string>(data.targetRefs ?? data.target_refs)
+      .map((x) => asString(x))
+      .filter(Boolean),
     targetStrategy,
     benefitValue: asNumber(data.benefitValue ?? data.benefit_value, 0),
     schedule: {
