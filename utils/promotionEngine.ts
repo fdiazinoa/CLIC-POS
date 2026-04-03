@@ -59,10 +59,12 @@ const promotionMatchesResolvedRefs = (promotion: Promotion, product: any): boole
     return productReferenceCandidates(product).some((candidate) => refSet.has(candidate));
 };
 
+const isPromotionActive = (promotion: Promotion): boolean => promotion.schedule?.isActive !== false;
+
 export const applyPromotions = (cart: CartItem[], config: BusinessConfig, terminalId: string, customer?: Customer): CartItem[] => {
     const activePromotions = config.promotions?.filter(p => {
         // 1. Check Active Status
-        if (!p.schedule.isActive) return false;
+        if (!isPromotionActive(p)) return false;
 
         // 2. Check Schedule (Day of Week)
         const today = new Date();
@@ -271,7 +273,7 @@ export const hasProductPromotion = (product: any, config: BusinessConfig, termin
 
     // 1. Filter Active Promotions (Same logic as above)
     const activePromotions = config.promotions.filter(p => {
-        if (!p.schedule.isActive) return false;
+        if (!isPromotionActive(p)) return false;
 
         const today = new Date();
         const daysMap = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
