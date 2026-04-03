@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { BusinessConfig, DocumentSeries, FiscalDocumentCode, FiscalRangeDGII, Transaction } from '../types';
+import { BusinessConfig, DocumentSeries, FiscalAllocation, FiscalDocumentCode, FiscalRangeDGII, LocalFiscalBuffer, Transaction } from '../types';
 import {
    FileText, Receipt, RotateCcw, FileSpreadsheet,
    Edit2, Check, X, AlertTriangle, ShieldAlert,
@@ -200,7 +200,9 @@ const FISCAL_CREDENTIAL_SOURCE_LABELS: Record<'env' | 'sqlite' | 'supabase', str
    supabase: 'Supabase'
 };
 
-const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: configProp }) => {
+const normalizeKey = (value: unknown): string => String(value || '').trim().toUpperCase();
+
+const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: configProp, terminalId }) => {
    const [activeSubTab, setActiveSubTab] = useState<'SERIES' | 'FISCAL_POOL'>('SERIES');
 
    // Data for Series
@@ -222,6 +224,9 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
 
    // Data for Fiscal Pool & Transactions for Audit
    const [fiscalRanges, setFiscalRanges] = useState<FiscalRangeDGII[]>([]);
+   const [fiscalAllocations, setFiscalAllocations] = useState<FiscalAllocation[]>([]);
+   const [localFiscalBuffers, setLocalFiscalBuffers] = useState<LocalFiscalBuffer[]>([]);
+   const [activeTerminalId, setActiveTerminalId] = useState('');
 
    const [transactions, setTransactions] = useState<Transaction[]>([]);
 
@@ -229,11 +234,13 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       const loadData = async () => {
          try {
             console.log('📖 DocumentSettings: Loading series data...');
-            const [rawSequences, rawFiscalRanges, rawTransactions, rawConfig] = await Promise.all([
+            const [rawSequences, rawFiscalRanges, rawTransactions, rawConfig, rawFiscalAllocations, rawLocalFiscalBuffers] = await Promise.all([
                db.get('internalSequences'),
                db.get('fiscalRanges'),
                db.get('transactions'),
-               db.get('config')
+               db.get('config'),
+               db.get('fiscalAllocations'),
+               db.get('localFiscalBuffer'),
             ]);
 
             const transactionsList = (Array.isArray(rawTransactions) ? rawTransactions : []) as Transaction[];
@@ -270,6 +277,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             setBusinessConfig(config);
 
             const ranges = (Array.isArray(rawFiscalRanges) ? rawFiscalRanges : []) as FiscalRangeDGII[];
+            const allocations = (Array.isArray(rawFiscalAllocations) ? rawFiscalAllocations : []) as FiscalAllocation[];
+            const buffers = (Array.isArray(rawLocalFiscalBuffers) ? rawLocalFiscalBuffers : []) as LocalFiscalBuffer[];
+            setFiscalAllocations(allocations);
+            setLocalFiscalBuffers(buffers);
+            setActiveTerminalId(localStorage.getItem('active_terminal_id') || '');
             if (ranges.length > 0) {
                setFiscalRanges(ranges);
             } else {
@@ -282,8 +294,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             console.error('❌ DocumentSettings: Failed to load data:', error);
             setSeriesList([]);
             setFiscalRanges([]);
+            setFiscalAllocations([]);
+            setLocalFiscalBuffers([]);
             setTransactions([]);
             setBusinessConfig(null);
+            setActiveTerminalId('');
          }
       };
       loadData();
@@ -363,6 +378,56 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       loadCredentialMeta();
    }, [businessConfig, fiscalCompliance.defaultProvider, selectedFiscalProviderConfig?.credentialKey]);
 
+   const resolvedTerminalId = useMemo(() => {
+      const direct = String(terminalId || '').trim();
+      if (direct) return direct;
+      const active = String(activeTerminalId || '').trim();
+      if (active) return active;
+      return '';
+   }, [terminalId, activeTerminalId]);
+
+   const terminalAllocations = useMemo(() => (
+      (Array.isArray(fiscalAllocations) ? fiscalAllocations : []).filter((allocation) =>
+         !resolvedTerminalId || normalizeKey(allocation.terminalId) === normalizeKey(resolvedTerminalId)
+      )
+   ), [fiscalAllocations, resolvedTerminalId]);
+
+   const terminalBuffers = useMemo(() => (
+      (Array.isArray(localFiscalBuffers) ? localFiscalBuffers : []).filter((buffer) =>
+         !resolvedTerminalId || !buffer?.terminalId || normalizeKey(buffer.terminalId) === normalizeKey(resolvedTerminalId)
+      )
+   ), [localFiscalBuffers, resolvedTerminalId]);
+
+   const allocationStatsByType = useMemo(() => {
+      const stats = new Map<FiscalDocumentCode, {
+         allocation: FiscalAllocation;
+         buffer: LocalFiscalBuffer | null;
+         currentNumber: number;
+         consumed: number;
+         remaining: number;
+      }>();
+
+      terminalAllocations.forEach((allocation) => {
+         const buffer = terminalBuffers.find((candidate) => candidate.type === allocation.ncfType) || null;
+         const currentNumber = buffer
+            ? Math.max(allocation.reservedStart, Number(buffer.currentNumber || allocation.nextNumber || allocation.reservedStart))
+            : Math.max(allocation.reservedStart, Number(allocation.nextNumber || allocation.reservedStart));
+         const boundedCurrent = Math.min(currentNumber, allocation.reservedEnd + 1);
+         const consumed = Math.max(0, boundedCurrent - allocation.reservedStart);
+         const remaining = Math.max(0, allocation.reservedEnd - boundedCurrent + 1);
+
+         stats.set(allocation.ncfType, {
+            allocation,
+            buffer,
+            currentNumber: boundedCurrent,
+            consumed,
+            remaining,
+         });
+      });
+
+      return stats;
+   }, [terminalAllocations, terminalBuffers]);
+
    // --- FISCAL AUDIT LOGIC ---
    const fiscalConsumption = useMemo(() => {
       const stats: Record<FiscalDocumentCode, number> = {
@@ -384,8 +449,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
          });
       }
 
+      allocationStatsByType.forEach((details, type) => {
+         stats[type] = details.consumed;
+      });
+
       return stats;
-   }, [transactions]);
+   }, [transactions, allocationStatsByType]);
 
    const extraDocumentTypes = useMemo(() => {
       const extras = new Set<string>();
@@ -1179,9 +1248,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
 
                            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
                               {SUPPORTED_FISCAL_CODES.map(type => {
+                                 const allocationDetails = allocationStatsByType.get(type);
                                  const consumed = fiscalConsumption[type] || 0;
                                  const range = fiscalRanges.find(r => r.type === type);
-                                 const totalAuthorized = range ? (range.endNumber - range.startNumber + 1) : 0;
+                                 const totalAuthorized = allocationDetails
+                                    ? (allocationDetails.allocation.reservedEnd - allocationDetails.allocation.reservedStart + 1)
+                                    : range ? (range.endNumber - range.startNumber + 1) : 0;
                                  const color = type === 'B01' || type === 'E31'
                                     ? 'text-blue-400'
                                     : type === 'B02' || type === 'E32'
@@ -1198,8 +1270,14 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                        </div>
                                        <p className="text-3xl font-mono font-black leading-none mb-1">{consumed.toLocaleString()}</p>
                                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">
-                                          Emitidos Totales
+                                          {allocationDetails ? 'Consumidos del Bloque' : 'Emitidos Totales'}
                                        </p>
+                                       {allocationDetails && (
+                                          <div className="mt-3 space-y-1 text-[10px] font-bold text-slate-300">
+                                             <p>Bloque {allocationDetails.allocation.reservedStart.toLocaleString()} - {allocationDetails.allocation.reservedEnd.toLocaleString()}</p>
+                                             <p>Próximo {allocationDetails.currentNumber <= allocationDetails.allocation.reservedEnd ? allocationDetails.currentNumber.toLocaleString() : 'Agotado'}</p>
+                                          </div>
+                                       )}
                                        {totalAuthorized > 0 && (
                                           <div className="mt-4">
                                              <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden">
@@ -1209,7 +1287,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                                 ></div>
                                              </div>
                                              <p className="text-[9px] text-slate-400 mt-1 font-bold">
-                                                {progressPct.toFixed(1)}% del pool
+                                                {progressPct.toFixed(1)}% {allocationDetails ? 'del bloque terminal' : 'del pool'}
                                              </p>
                                           </div>
                                        )}
@@ -1232,6 +1310,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
 
                      <div className="grid grid-cols-1 gap-4 pb-20">
                         {fiscalRanges.map(range => {
+                           const allocationDetails = allocationStatsByType.get(range.type);
                            const usedInCajas = Math.max(0, range.currentGlobal - (range.startNumber - 1));
                            const totalAutorizado = range.endNumber - range.startNumber + 1;
                            const progress = totalAutorizado > 0 ? (usedInCajas / totalAutorizado) * 100 : 0;
@@ -1245,11 +1324,14 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                        <div className={`p-4 rounded-2xl ${range.isActive ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-100 text-gray-400'}`}>
                                           <Landmark size={28} />
                                        </div>
-                                       <div>
-                                          <div className="flex items-center gap-2">
-                                             <span className="px-2 py-0.5 bg-indigo-600 text-white text-[10px] font-black rounded uppercase">{range.type}</span>
-                                             <h3 className="font-black text-gray-800 text-lg">{range.prefix}-XXXXXXX</h3>
-                                          </div>
+                                          <div>
+                                             <div className="flex items-center gap-2">
+                                                 <span className="px-2 py-0.5 bg-indigo-600 text-white text-[10px] font-black rounded uppercase">{range.type}</span>
+                                                {allocationDetails && (
+                                                   <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-black rounded uppercase">Bloque Terminal</span>
+                                                )}
+                                                 <h3 className="font-black text-gray-800 text-lg">{range.prefix}-XXXXXXX</h3>
+                                              </div>
                                           <p className="text-xs text-gray-400 flex items-center gap-1 mt-1"><Calendar size={12} /> Vence: {new Date(range.expiryDate).toLocaleDateString()}</p>
                                        </div>
                                     </div>
@@ -1297,6 +1379,33 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                        </button>
                                     </div>
                                  </div>
+
+                                 {allocationDetails && (
+                                    <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4">
+                                       <div>
+                                          <p className="text-[10px] text-emerald-700 uppercase font-bold">Bloque Terminal</p>
+                                          <p className="font-mono font-bold text-emerald-900">
+                                             {allocationDetails.allocation.reservedStart.toLocaleString()} - {allocationDetails.allocation.reservedEnd.toLocaleString()}
+                                          </p>
+                                       </div>
+                                       <div>
+                                          <p className="text-[10px] text-emerald-700 uppercase font-bold">Próximo</p>
+                                          <p className="font-mono font-bold text-emerald-900">
+                                             {allocationDetails.currentNumber <= allocationDetails.allocation.reservedEnd
+                                                ? `${range.prefix}${allocationDetails.currentNumber.toString().padStart(8, '0')}`
+                                                : 'Agotado'}
+                                          </p>
+                                       </div>
+                                       <div>
+                                          <p className="text-[10px] text-emerald-700 uppercase font-bold">Consumidos Terminal</p>
+                                          <p className="font-black text-emerald-900">{allocationDetails.consumed.toLocaleString()}</p>
+                                       </div>
+                                       <div>
+                                          <p className="text-[10px] text-emerald-700 uppercase font-bold">Restantes Terminal</p>
+                                          <p className="font-black text-emerald-900">{allocationDetails.remaining.toLocaleString()}</p>
+                                       </div>
+                                    </div>
+                                 )}
                               </div>
                            );
                         })}

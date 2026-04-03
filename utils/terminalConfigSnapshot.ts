@@ -237,10 +237,12 @@ const normalizeFiscalAllocation = (raw: unknown, index: number, terminalId: stri
   const data = asObject(raw);
   const id = asString(data.id || data.allocation_id || data.uid || `fiscal-alloc-${index + 1}`);
   if (!id) return null;
+  const sourceTerminalId = asString(data.terminalId ?? data.terminal_id);
+  const metadata = asObject(data.metadata);
 
   return {
     id,
-    terminalId: asString(data.terminalId ?? data.terminal_id) || terminalId,
+    terminalId: terminalId || sourceTerminalId,
     fiscalRangeId: asString(data.fiscalRangeId ?? data.fiscal_range_id),
     ncfType: normalizeNcfType(data.ncfType || data.ncf_type || 'B02'),
     reservedStart: asNumber(data.reservedStart ?? data.reserved_start, 0),
@@ -248,7 +250,10 @@ const normalizeFiscalAllocation = (raw: unknown, index: number, terminalId: stri
     nextNumber: asNumber(data.nextNumber ?? data.next_number, 0),
     status: (asString(data.status) || 'ACTIVE') as FiscalAllocation['status'],
     releasedAt: asString(data.releasedAt ?? data.released_at) || null,
-    metadata: asObject(data.metadata),
+    metadata: {
+      ...metadata,
+      sourceTerminalId: sourceTerminalId || metadata.sourceTerminalId || null,
+    },
   };
 };
 
