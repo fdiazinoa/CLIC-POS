@@ -1333,6 +1333,8 @@ class SyncManager {
         await db.rehydrateOperationalDocumentState(
             operationalDocumentState.documentSeries,
             operationalDocumentState.fiscalRanges,
+            operationalDocumentState.fiscalAllocations,
+            operationalDocumentState.terminalId,
         );
 
         if (snapshot && this.getPendingTerminalSnapshot(context.terminalId, snapshotTerminalId)) {

@@ -661,6 +661,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       hasNCF: boolean;
       localBuffer: any;
       isUsingPool: boolean;
+      isTerminalBlock?: boolean;
    }>({
       type: 'B02', hasNCF: false, localBuffer: null, isUsingPool: false
    });
@@ -1259,14 +1260,29 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const type: NCFType = isOverThreshold
             ? 'B01'
             : (selectedCustomer?.defaultNcfType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02'));
-         const buffers = await db.get('localFiscalBuffer') || [];
-         const localBuffer = (buffers || []).find((b: any) => b.type === type && b.isActive) as FiscalRangeDGII | undefined;
+         const [buffers, allocations, ranges] = await Promise.all([
+            db.get('localFiscalBuffer'),
+            db.get('fiscalAllocations'),
+            db.get('fiscalRanges'),
+         ]);
 
-         if (localBuffer) {
-            const current = localBuffer.currentGlobal || localBuffer.startNumber;
-            const total = localBuffer.endNumber - localBuffer.startNumber + 1;
-            const used = current - localBuffer.startNumber;
-            const remaining = localBuffer.endNumber - current;
+         const localBuffer: any = (Array.isArray(buffers) ? buffers : []).find((buffer: any) =>
+            buffer?.type === type &&
+            (!buffer?.terminalId || buffer?.terminalId === terminalId)
+         );
+         const activeAllocation: any = (Array.isArray(allocations) ? allocations : []).find((allocation: any) =>
+            allocation?.ncfType === type &&
+            allocation?.terminalId === terminalId &&
+            allocation?.status === 'ACTIVE'
+         );
+         const allocationRange: any = (Array.isArray(ranges) ? ranges : []).find((range: any) =>
+            (activeAllocation?.fiscalRangeId && range?.id === activeAllocation.fiscalRangeId)
+            || (!activeAllocation?.fiscalRangeId && range?.type === type && range?.isActive)
+         );
+
+         if (localBuffer && Number(localBuffer.currentNumber) <= Number(localBuffer.endNumber)) {
+            const current = Number(localBuffer.currentNumber);
+            const remaining = Math.max(0, Number(localBuffer.endNumber) - current + 1);
 
             setStatus({
                isConnected: true,
@@ -1275,14 +1291,28 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                expiryDate: localBuffer.expiryDate,
                batteryLevel: 100
             });
+         } else if (activeAllocation && Number(activeAllocation.nextNumber) <= Number(activeAllocation.reservedEnd)) {
+            const current = Number(activeAllocation.nextNumber);
+            const remaining = Math.max(0, Number(activeAllocation.reservedEnd) - current + 1);
+            const prefix = String(allocationRange?.prefix || type);
+
+            setStatus({
+               isConnected: true,
+               currentNCF: `${prefix}${current.toString().padStart(8, '0')}`,
+               remaining,
+               expiryDate: String(allocationRange?.expiryDate || ''),
+               batteryLevel: 100
+            });
          }
-         const hasLocal = localBuffer && localBuffer.currentGlobal <= localBuffer.endNumber;
-         const canRequest = await db.canRequestMoreNCF(type);
+
+         const hasLocal = Boolean(localBuffer && Number(localBuffer.currentNumber) <= Number(localBuffer.endNumber));
+         const canRequest = await db.canRequestMoreNCF(type, terminalId);
          const hasNCF = hasLocal || canRequest;
-         setFiscalStatus({ type, hasNCF, localBuffer, isUsingPool: !hasLocal && canRequest });
+         const isTerminalBlock = Boolean(activeAllocation || localBuffer?.allocationId);
+         setFiscalStatus({ type, hasNCF, localBuffer: localBuffer || activeAllocation || null, isUsingPool: !hasLocal && canRequest, isTerminalBlock });
       };
       checkFiscalStatus();
-   }, [selectedCustomer, cart]);
+   }, [selectedCustomer, cart, terminalId, activeTerminalConfig?.operational?.fiscalThreshold]);
 
 
    const filteredProducts = useMemo(() => {
@@ -3154,7 +3184,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                <div className={`mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${fiscalStatus.hasNCF ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100 animate-pulse'}`}>
                   <Landmark size={12} />
-                  <span>Status Fiscal: {fiscalStatus.type} {fiscalStatus.hasNCF ? (fiscalStatus.isUsingPool ? 'Reservado en Pool' : 'Lote Activo') : 'Agotado'}</span>
+                  <span>Status Fiscal: {fiscalStatus.type} {fiscalStatus.hasNCF ? (fiscalStatus.isTerminalBlock ? 'Bloque Terminal' : (fiscalStatus.isUsingPool ? 'Reservado en Pool' : 'Lote Global Activo')) : 'Agotado'}</span>
                </div>
             </div >
 

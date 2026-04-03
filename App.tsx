@@ -2442,7 +2442,9 @@ const AppContent: React.FC = () => {
       const operationalDocumentState = extractTerminalOperationalDocumentState(updatedConfig, terminalId);
       await db.rehydrateOperationalDocumentState(
         operationalDocumentState.documentSeries,
-        operationalDocumentState.fiscalRanges
+        operationalDocumentState.fiscalRanges,
+        operationalDocumentState.fiscalAllocations,
+        operationalDocumentState.terminalId,
       );
       const storedSetupMode = getStoredTerminalSetupMode();
       const nextSetupMode: TerminalSetupMode = isSlave
@@ -2574,7 +2576,9 @@ const AppContent: React.FC = () => {
       const refreshedOperationalDocumentState = extractTerminalOperationalDocumentState(updatedConfig, terminalId);
       await db.rehydrateOperationalDocumentState(
         refreshedOperationalDocumentState.documentSeries,
-        refreshedOperationalDocumentState.fiscalRanges
+        refreshedOperationalDocumentState.fiscalRanges,
+        refreshedOperationalDocumentState.fiscalAllocations,
+        refreshedOperationalDocumentState.terminalId,
       );
 
       const freshData = await db.init();
