@@ -10,6 +10,48 @@ const productReferenceCandidates = (product: any): string[] => (
     ].filter(Boolean)
 );
 
+const terminalReferenceCandidates = (config: BusinessConfig, terminalId: string): string[] => {
+    const normalizedRequestedId = String(terminalId || '').trim();
+    const terminals = Array.isArray(config.terminals) ? config.terminals : [];
+    const matchedTerminal = terminals.find((terminal) => {
+        const localId = String(terminal?.id || '').trim();
+        const erpTerminalId = String(terminal?.config?.erpTerminalId || terminal?.config?.erpBinding?.terminalId || '').trim();
+        const terminalName = String(terminal?.config?.terminalName || terminal?.config?.erpBinding?.terminalName || '').trim();
+        const stationNumber = String(terminal?.config?.stationNumber || terminal?.config?.erpBinding?.stationNumber || '').trim();
+
+        return [localId, erpTerminalId, terminalName, stationNumber].filter(Boolean).includes(normalizedRequestedId);
+    });
+
+    if (!matchedTerminal) {
+        return normalizedRequestedId ? [normalizedRequestedId] : [];
+    }
+
+    return [
+        normalizedRequestedId,
+        String(matchedTerminal.id || '').trim(),
+        String(matchedTerminal.config?.erpTerminalId || '').trim(),
+        String(matchedTerminal.config?.terminalName || '').trim(),
+        String(matchedTerminal.config?.stationNumber || '').trim(),
+        String(matchedTerminal.config?.erpBinding?.terminalId || '').trim(),
+        String(matchedTerminal.config?.erpBinding?.terminalName || '').trim(),
+        String(matchedTerminal.config?.erpBinding?.stationNumber || '').trim(),
+    ].filter(Boolean);
+};
+
+const promotionMatchesTerminalScope = (promotion: Promotion, config: BusinessConfig, terminalId: string): boolean => {
+    if (!Array.isArray(promotion.terminalIds) || promotion.terminalIds.length === 0 || !terminalId) {
+        return true;
+    }
+
+    const promotionTerminalIds = new Set(
+        promotion.terminalIds
+            .map((value) => String(value).trim())
+            .filter(Boolean)
+    );
+
+    return terminalReferenceCandidates(config, terminalId).some((candidate) => promotionTerminalIds.has(candidate));
+};
+
 const promotionMatchesResolvedRefs = (promotion: Promotion, product: any): boolean => {
     const refs = Array.isArray(promotion.targetRefs) ? promotion.targetRefs.filter(Boolean) : [];
     if (refs.length === 0) return false;
@@ -49,9 +91,7 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
         }
 
         // 4. Check Terminal Scope
-        if (p.terminalIds && p.terminalIds.length > 0 && terminalId) {
-            if (!p.terminalIds.includes(terminalId)) return false;
-        }
+        if (!promotionMatchesTerminalScope(p, config, terminalId)) return false;
 
         // 5. Check Loyalty Conditions (NEW)
         if (p.conditions && p.conditions.length > 0) {
@@ -258,9 +298,7 @@ export const hasProductPromotion = (product: any, config: BusinessConfig, termin
         }
 
         // Terminal scope check
-        if (p.terminalIds && p.terminalIds.length > 0 && terminalId) {
-            if (!p.terminalIds.includes(terminalId)) return false;
-        }
+        if (!promotionMatchesTerminalScope(p, config, terminalId)) return false;
 
         return true;
     });
