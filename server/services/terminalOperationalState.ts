@@ -30,12 +30,18 @@ export const persistOperationalDocumentState = (
       saveSetting('fiscalRanges', operationalState.fiscalRanges);
     }
 
+    saveSetting(
+      'fiscalAllocations',
+      (operationalState.fiscalAllocations || []).filter((allocation) => allocation.terminalId === resolvedTerminalId)
+    );
+
     saveSetting('active_terminal_id', resolvedTerminalId);
 
     return {
       terminalId: resolvedTerminalId,
       savedDocumentSeries: mergedDocumentSeries?.length || 0,
       savedFiscalRanges: operationalState.fiscalRanges?.length || 0,
+      savedFiscalAllocations: operationalState.fiscalAllocations?.length || 0,
     };
   } catch (error) {
     console.warn('⚠️ Could not persist operational document state to local backend:', error);
@@ -43,6 +49,7 @@ export const persistOperationalDocumentState = (
       terminalId: resolvedTerminalId,
       savedDocumentSeries: 0,
       savedFiscalRanges: 0,
+      savedFiscalAllocations: 0,
     };
   }
 };

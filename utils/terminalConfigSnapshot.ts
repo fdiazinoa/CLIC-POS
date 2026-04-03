@@ -3,6 +3,7 @@ import {
   DeviceRole,
   DocumentSeries,
   DocumentType,
+  FiscalAllocation,
   FiscalRangeDGII,
   NCFType,
   Promotion,
@@ -232,6 +233,25 @@ const normalizeFiscalRange = (raw: unknown, index: number): FiscalRangeDGII | nu
   };
 };
 
+const normalizeFiscalAllocation = (raw: unknown, index: number, terminalId: string): FiscalAllocation | null => {
+  const data = asObject(raw);
+  const id = asString(data.id || data.allocation_id || data.uid || `fiscal-alloc-${index + 1}`);
+  if (!id) return null;
+
+  return {
+    id,
+    terminalId: asString(data.terminalId ?? data.terminal_id) || terminalId,
+    fiscalRangeId: asString(data.fiscalRangeId ?? data.fiscal_range_id),
+    ncfType: normalizeNcfType(data.ncfType || data.ncf_type || 'B02'),
+    reservedStart: asNumber(data.reservedStart ?? data.reserved_start, 0),
+    reservedEnd: asNumber(data.reservedEnd ?? data.reserved_end, 0),
+    nextNumber: asNumber(data.nextNumber ?? data.next_number, 0),
+    status: (asString(data.status) || 'ACTIVE') as FiscalAllocation['status'],
+    releasedAt: asString(data.releasedAt ?? data.released_at) || null,
+    metadata: asObject(data.metadata),
+  };
+};
+
 const POS_PROMO_TYPES: PromotionType[] = [
   'DISCOUNT',
   'BOGO',
@@ -395,6 +415,7 @@ export interface TerminalOperationalDocumentState {
   terminalId: string;
   documentSeries: DocumentSeries[];
   fiscalRanges: FiscalRangeDGII[];
+  fiscalAllocations: FiscalAllocation[];
 }
 
 export const applyTerminalConfigSnapshot = (
@@ -434,6 +455,7 @@ export const applyTerminalConfigSnapshot = (
   const resolvedInventory = asObject(effectiveResolved.inventory);
   const resolvedDocuments = asObject(effectiveResolved.documents);
   const resolvedCatalog = asObject(effectiveResolved.catalog);
+  const hasIncomingFiscalAllocations = Object.prototype.hasOwnProperty.call(resolvedDocuments, 'fiscal_allocations');
 
   const fallbackOperational = asObject(effectiveFallbackConfig.operational);
   const fallbackDeviceRole = asObject(effectiveFallbackConfig.deviceRole);
@@ -456,6 +478,9 @@ export const applyTerminalConfigSnapshot = (
   const fiscalRanges = asArray(resolvedDocuments.fiscal_ranges)
     .map((item, index) => normalizeFiscalRange(item, index))
     .filter(Boolean) as FiscalRangeDGII[];
+  const fiscalAllocations = asArray(resolvedDocuments.fiscal_allocations)
+    .map((item, index) => normalizeFiscalAllocation(item, index, terminalId))
+    .filter(Boolean) as FiscalAllocation[];
   const documentAssignments = normalizeAssignments(resolvedDocuments.assignments);
 
   const terminalTemplate = resolveTerminalTemplate(nextConfig, terminalId);
@@ -500,6 +525,9 @@ export const applyTerminalConfigSnapshot = (
     documentSeries.length > 0 ? documentSeries : terminalTemplate.documentSeries || DEFAULT_DOCUMENT_SERIES
   );
   const effectiveFiscalRanges = fiscalRanges.length > 0 ? fiscalRanges : terminalTemplate.fiscal.fiscalRanges || [];
+  const effectiveFiscalAllocations = hasIncomingFiscalAllocations
+    ? fiscalAllocations
+    : terminalTemplate.fiscal.fiscalAllocations || [];
   const fallbackAssignments = terminalTemplate.documentAssignments || {};
   const requestedAssignments =
     Object.keys(documentAssignments).length > 0
@@ -566,6 +594,7 @@ export const applyTerminalConfigSnapshot = (
         asString(resolvedDocuments.default_fiscal_range_id) ||
         terminalTemplate.fiscal.defaultFiscalRangeId,
       fiscalRanges: effectiveFiscalRanges,
+      fiscalAllocations: effectiveFiscalAllocations,
     },
     pricing: {
       ...terminalTemplate.pricing,
@@ -726,5 +755,6 @@ export const extractTerminalOperationalDocumentState = (
     terminalId,
     documentSeries: cloneDeep(terminalTemplate.documentSeries || []),
     fiscalRanges: cloneDeep(terminalTemplate.fiscal?.fiscalRanges || []),
+    fiscalAllocations: cloneDeep(terminalTemplate.fiscal?.fiscalAllocations || []),
   };
 };

@@ -138,11 +138,15 @@ export interface FiscalRangeDGII {
 export interface FiscalAllocation {
   id: string;
   terminalId: string;
-  type: FiscalDocumentCode;
-  rangeStart: number;
-  rangeEnd: number;
-  assignedAt: string;
-  status: 'ACTIVE' | 'EXHAUSTED';
+  fiscalRangeId: string;
+  ncfType: FiscalDocumentCode;
+  reservedStart: number;
+  reservedEnd: number;
+  nextNumber: number;
+  status: 'ACTIVE' | 'PAUSED' | 'EXHAUSTED' | 'RELEASED' | 'CONFLICTED' | 'LEGACY';
+  releasedAt: string | null;
+  prefix?: string;
+  metadata?: Record<string, any>;
 }
 
 export interface LocalFiscalBuffer {
@@ -152,6 +156,10 @@ export interface LocalFiscalBuffer {
   currentNumber: number; // El que se usará en la próxima factura
   endNumber: number;     // Límite de este lote
   expiryDate: string;
+  startNumber?: number;
+  terminalId?: string;
+  fiscalRangeId?: string;
+  allocationId?: string;
 }
 
 // --- KARDEX TYPES ---
@@ -394,6 +402,7 @@ export interface TerminalConfigResolvedDocumentsSnapshot {
   default_fiscal_range_id?: string;
   document_series?: any[];
   fiscal_ranges?: any[];
+  fiscal_allocations?: any[];
 }
 
 export interface TerminalConfigResolvedCatalogSnapshot {
@@ -456,6 +465,7 @@ export interface TerminalConfig {
     typeConfigs?: Partial<Record<FiscalDocumentCode, NCFConfig>>;
     defaultFiscalRangeId?: string;
     fiscalRanges?: FiscalRangeDGII[];
+    fiscalAllocations?: FiscalAllocation[];
   };
 
   tables?: {
