@@ -75,9 +75,20 @@ const DOCUMENT_TYPE_CONFIG: Record<string, { label: string; icon: React.Componen
    PAYMENT_OUT: { label: 'Pagos Realizados', icon: Check, color: 'fuchsia' }
 };
 
+const DOCUMENT_TYPE_ALIASES: Record<string, string> = {
+   FACTURA: 'TICKET',
+   SALES_INVOICE: 'TICKET',
+   NOTA_CREDITO: 'REFUND',
+   NOTA_DE_CREDITO: 'REFUND',
+   DEVOLUCION: 'REFUND',
+   DEVOLUCION_ABONO: 'REFUND',
+   ABONO: 'REFUND',
+};
+
 const normalizeDocumentType = (value: unknown): string => {
    if (typeof value !== 'string') return '';
-   return value.trim().toUpperCase().replace(/[\s-]+/g, '_');
+   const raw = value.trim().toUpperCase().replace(/[\s-]+/g, '_');
+   return DOCUMENT_TYPE_ALIASES[raw] || raw;
 };
 
 const inferDocumentType = (series: any): string => {
@@ -327,6 +338,13 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       };
    }, [configProp]);
 
+   useEffect(() => {
+      if (!navigator.onLine) return;
+      void syncManager.syncTerminalManifestInBackground(configProp).catch((error) => {
+         console.warn('⚠️ DocumentSettings: no se pudo refrescar el manifest fiscal al abrir.', error);
+      });
+   }, [configProp]);
+
    const [isAddingRange, setIsAddingRange] = useState(false);
    const [newRange, setNewRange] = useState<Partial<FiscalRangeDGII>>({ type: 'B01', prefix: 'B01', startNumber: 1, endNumber: 1000, expiryDate: '2026-12-31' });
    const fiscalCompliance = useMemo(() => getFiscalComplianceConfig(businessConfig), [businessConfig]);
@@ -415,9 +433,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
 
       terminalAllocations.forEach((allocation) => {
          const buffer = terminalBuffers.find((candidate) => candidate.type === allocation.ncfType) || null;
-         const currentNumber = buffer
-            ? Math.max(allocation.reservedStart, Number(buffer.currentNumber || allocation.nextNumber || allocation.reservedStart))
-            : Math.max(allocation.reservedStart, Number(allocation.nextNumber || allocation.reservedStart));
+         const currentNumber = Math.max(
+            allocation.reservedStart,
+            Number(allocation.nextNumber || allocation.reservedStart),
+            Number(buffer?.currentNumber || 0),
+         );
          const boundedCurrent = Math.min(currentNumber, allocation.reservedEnd + 1);
          const consumed = Math.max(0, boundedCurrent - allocation.reservedStart);
          const remaining = Math.max(0, allocation.reservedEnd - boundedCurrent + 1);

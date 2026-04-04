@@ -131,8 +131,20 @@ const KNOWN_DOCUMENT_TYPES = new Set<DocumentType>([
   'PAYMENT_OUT',
 ]);
 
+const DOCUMENT_TYPE_ALIASES: Record<string, DocumentType> = {
+  FACTURA: 'TICKET',
+  SALES_INVOICE: 'TICKET',
+  NOTA_CREDITO: 'REFUND',
+  NOTA_DE_CREDITO: 'REFUND',
+  DEVOLUCION: 'REFUND',
+  DEVOLUCION_ABONO: 'REFUND',
+  ABONO: 'REFUND',
+};
+
 const normalizeDocumentType = (value: unknown, fallback: DocumentType = 'TICKET'): DocumentType => {
   const raw = asString(value).replace(/[\s-]+/g, '_').toUpperCase();
+  const alias = DOCUMENT_TYPE_ALIASES[raw];
+  if (alias) return alias;
   if (KNOWN_DOCUMENT_TYPES.has(raw as DocumentType)) return raw as DocumentType;
   return fallback;
 };

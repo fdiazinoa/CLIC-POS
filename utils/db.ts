@@ -1247,9 +1247,38 @@ export const db = {
 
   getNextNCF: async (type: FiscalDocumentCode, terminalId: string, customBatchSize?: number): Promise<string | null> => {
     let buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
+    const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
+    const activeAllocation = getTerminalFiscalAllocation(allocations, terminalId, type as any);
     let buffer = (buffers || []).find((b: LocalFiscalBuffer) =>
       b.type === type && (!terminalId || !b.terminalId || normalizeSequenceKey(b.terminalId) === normalizeSequenceKey(terminalId))
     );
+
+    if (buffer && activeAllocation) {
+      const allocationNextNumber = Math.max(
+        activeAllocation.reservedStart,
+        Number(activeAllocation.nextNumber || activeAllocation.reservedStart)
+      );
+      const mismatchedAllocation =
+        buffer.allocationId &&
+        normalizeSequenceKey(buffer.allocationId) !== normalizeSequenceKey(activeAllocation.id);
+
+      if (mismatchedAllocation) {
+        buffers = buffers.filter((candidate: LocalFiscalBuffer) => candidate !== buffer);
+        buffer = undefined;
+        await dbAdapter.saveCollection('localFiscalBuffer', buffers);
+        emitLocalFiscalBufferUpdated();
+      } else if (Number(buffer.currentNumber || 0) < allocationNextNumber) {
+        buffer.currentNumber = allocationNextNumber;
+        buffers = buffers.map((candidate: LocalFiscalBuffer) =>
+          candidate.type === type &&
+          (!terminalId || !candidate.terminalId || normalizeSequenceKey(candidate.terminalId) === normalizeSequenceKey(terminalId))
+            ? { ...candidate, currentNumber: allocationNextNumber, allocationId: activeAllocation.id, fiscalRangeId: activeAllocation.fiscalRangeId }
+            : candidate
+        );
+        await dbAdapter.saveCollection('localFiscalBuffer', buffers);
+        emitLocalFiscalBufferUpdated();
+      }
+    }
 
     if (!buffer || buffer.currentNumber > buffer.endNumber) {
       buffer = await db.requestFiscalBatch(terminalId, type, customBatchSize || 100) as LocalFiscalBuffer;
