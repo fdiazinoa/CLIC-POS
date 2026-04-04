@@ -335,13 +335,25 @@ const serializeFiscalAllocation = (allocation: FiscalAllocation) => JSON.stringi
   releasedAt: allocation.releasedAt || null,
 });
 
+const fiscalAllocationIdentityKey = (allocation: Partial<FiscalAllocation>) => {
+  const normalized = normalizeFiscalAllocationRecord(allocation);
+  return [
+    normalizeSequenceKey(normalized.id),
+    normalizeSequenceKey(normalized.terminalId),
+    normalizeSequenceKey(normalized.fiscalRangeId),
+    normalizeSequenceKey(normalized.ncfType),
+    String(normalized.reservedStart),
+    String(normalized.reservedEnd),
+  ].join('::');
+};
+
 const mergeFiscalAllocationsState = (
   existingAllocations: FiscalAllocation[],
   incomingAllocations: FiscalAllocation[],
   terminalId: string
 ): { mergedAllocations: FiscalAllocation[]; bufferTypesToReset: Set<FiscalDocumentCode> } => {
   const normalizedTerminalId = normalizeSequenceKey(terminalId);
-  const normalizedIncoming = (incomingAllocations || [])
+  const normalizedIncomingRaw = (incomingAllocations || [])
     .map((allocation) => normalizeFiscalAllocationRecord(allocation, terminalId))
     .filter((allocation) => normalizeSequenceKey(allocation.terminalId) === normalizedTerminalId)
     .sort((left, right) => serializeFiscalAllocation(left).localeCompare(serializeFiscalAllocation(right)));
@@ -350,6 +362,37 @@ const mergeFiscalAllocationsState = (
     .map((allocation) => normalizeFiscalAllocationRecord(allocation))
     .filter((allocation) => normalizeSequenceKey(allocation.terminalId) === normalizedTerminalId)
     .sort((left, right) => serializeFiscalAllocation(left).localeCompare(serializeFiscalAllocation(right)));
+
+  const existingByIdentity = new Map(
+    existingForTerminal.map((allocation) => [fiscalAllocationIdentityKey(allocation), allocation])
+  );
+
+  const normalizedIncoming = normalizedIncomingRaw.map((incoming) => {
+    const existing = existingByIdentity.get(fiscalAllocationIdentityKey(incoming));
+    if (!existing) return incoming;
+
+    const sameOperationalState =
+      isOperationalFiscalAllocationStatus(existing.status) &&
+      isOperationalFiscalAllocationStatus(incoming.status);
+    const mergedNextNumber = sameOperationalState
+      ? Math.max(Number(existing.nextNumber) || incoming.reservedStart, Number(incoming.nextNumber) || incoming.reservedStart)
+      : incoming.nextNumber;
+    const mergedStatus =
+      mergedNextNumber > incoming.reservedEnd
+        ? 'EXHAUSTED'
+        : (!sameOperationalState ? incoming.status : (existing.status === 'EXHAUSTED' ? 'EXHAUSTED' : incoming.status));
+
+    return normalizeFiscalAllocationRecord({
+      ...incoming,
+      nextNumber: mergedNextNumber,
+      status: mergedStatus,
+      prefix: existing.prefix || incoming.prefix,
+      metadata: {
+        ...(existing.metadata || {}),
+        ...(incoming.metadata || {}),
+      },
+    }, terminalId);
+  });
 
   const remainingAllocations = (existingAllocations || []).filter(
     (allocation) => normalizeSequenceKey(allocation.terminalId) !== normalizedTerminalId
