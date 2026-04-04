@@ -654,6 +654,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeTable, transactions, onUpdateCart, cart.length]);
 
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
+   const [activeCartItemId, setActiveCartItemId] = useState<string | null>(null);
    const [selectedProductForVariants, setSelectedProductForVariants] = useState<Product | null>(null);
    const [productForScale, setProductForScale] = useState<Product | null>(null);
    const [showLoyaltyModal, setShowLoyaltyModal] = useState(false);
@@ -1407,6 +1408,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const processedCart = useMemo(() => {
       return applyPromotions(cart, config, activeTerminalId, selectedCustomer || undefined);
    }, [cart, config, activeTerminalId, selectedCustomer]);
+
+   useEffect(() => {
+      if (!activeCartItemId) return;
+      const stillExists = processedCart.some((item) => item.cartId === activeCartItemId);
+      if (!stillExists) {
+         setActiveCartItemId(null);
+      }
+   }, [processedCart, activeCartItemId]);
+
+   const toggleCartItemFocus = useCallback((cartId?: string | null) => {
+      if (!cartId) return;
+      setActiveCartItemId((current) => (current === cartId ? null : cartId));
+   }, []);
+
+   const renderTicketBrand = useCallback((compact = false) => (
+      <div className={`inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-950 shadow-sm ${compact ? 'px-2.5 py-1.5' : 'px-3.5 py-2'}`}>
+         <span className={`font-black uppercase tracking-[0.22em] text-slate-100 ${compact ? 'text-[0.72rem]' : 'text-[0.78rem]'}`}>CLIC</span>
+         <span className={`font-black uppercase tracking-[0.22em] text-sky-400 ${compact ? 'text-[0.72rem]' : 'text-[0.78rem]'}`}>POS</span>
+      </div>
+   ), []);
    const cartQuantity = useMemo(
       () => processedCart.reduce((sum, item) => sum + Math.abs(Number(item.quantity || 0)), 0),
       [processedCart]
@@ -2923,6 +2944,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             < div className="md:hidden p-4 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
                <div className="flex justify-between items-center">
                   <div className="flex items-center gap-3">
+                     {renderTicketBrand(true)}
                      <button onClick={() => setMobileView('PRODUCTS')} className="p-2 -ml-2 text-gray-400 hover:text-blue-600 transition-colors">
                         <ArrowLeft size={24} />
                      </button>
@@ -2998,6 +3020,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             {/* DESKTOP HEADER (HIDDEN ON MOBILE) */}
             <div className="hidden md:flex p-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none" >
                <div className={`flex items-center gap-4 ${isRetailMode ? 'justify-between' : 'justify-center'}`}>
+                  <div className="shrink-0">
+                     {renderTicketBrand()}
+                  </div>
 
                   {/* RETAIL MODE SEARCH BAR */}
                   {isRetailMode && (
@@ -3259,11 +3284,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         const discountPct = hasDiscount ? Math.round((1 - item.price / item.originalPrice!) * 100) : 0;
                         const lineNet = item.price * item.quantity;
                         const lineTaxSummary = getCartItemTaxSummary(item);
+                        const isActiveCartItem = activeCartItemId === item.cartId;
 
                         // MOBILE CARD DESIGN
                         if (isMobile) {
                            return (
-                              <div key={item.cartId || `cart-m-${idx}`} className="bg-white rounded-2xl p-3 shadow-sm border border-gray-100 flex gap-3 animate-in slide-in-from-right-2">
+                              <div
+                                 key={item.cartId || `cart-m-${idx}`}
+                                 onClick={() => toggleCartItemFocus(item.cartId)}
+                                 className={`bg-white rounded-2xl p-3 shadow-sm border flex gap-3 animate-in slide-in-from-right-2 transition-all cursor-pointer ${isActiveCartItem ? 'border-blue-200 ring-2 ring-blue-100 shadow-md' : 'border-gray-100 hover:border-slate-200'}`}
+                              >
                                  <div className="w-16 h-16 rounded-xl bg-gray-50 overflow-hidden shrink-0 border border-gray-100">
                                     {item.image ? <img src={item.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Grid size={24} /></div>}
                                  </div>
@@ -3286,40 +3316,64 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           </div>
                                        )}
                                     </div>
-                                    <div className="flex items-center justify-between mt-2">
-                                       <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1">
-                                          <button
-                                             onClick={() => updateCartItem({ ...item, quantity: item.quantity - 1 })}
-                                             className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:border-red-200 hover:bg-red-50 hover:text-red-600"
-                                          >
-                                             <Minus size={13} strokeWidth={3} />
-                                          </button>
-                                          <span className="min-w-[20px] text-center text-xs font-black text-slate-800">{item.quantity}</span>
-                                          <button
-                                             onClick={() => updateCartItem({ ...item, quantity: item.quantity + 1 })}
-                                             className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-all hover:bg-blue-700"
-                                          >
-                                             <Plus size={13} strokeWidth={3} />
-                                          </button>
+                                    {!isActiveCartItem ? (
+                                       <div className="mt-2 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                                          <div className="flex items-center gap-2">
+                                             <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-slate-600 shadow-sm">{item.quantity} ud</span>
+                                             <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Tocar para acciones</span>
+                                          </div>
+                                          <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                        </div>
-                                       <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                                    </div>
-                                    <div className="mt-3 grid grid-cols-2 gap-2 border-t border-gray-100 pt-3">
-                                       <button
-                                          onClick={() => setEditingItem(item)}
-                                          className="inline-flex items-center justify-center rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-blue-700 shadow-sm transition-all hover:bg-blue-100"
-                                          title="Editar artículo"
-                                       >
-                                          <Edit3 size={13} strokeWidth={2.4} />
-                                       </button>
-                                       <button
-                                          onClick={() => updateCartItem(null, item.cartId)}
-                                          className="inline-flex items-center justify-center rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-red-700 shadow-sm transition-all hover:bg-red-100"
-                                          title="Eliminar artículo"
-                                       >
-                                          <Trash2 size={13} strokeWidth={2.4} />
-                                       </button>
-                                    </div>
+                                    ) : (
+                                       <>
+                                          <div className="flex items-center justify-between mt-2">
+                                             <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1">
+                                                <button
+                                                   onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      updateCartItem({ ...item, quantity: item.quantity - 1 });
+                                                   }}
+                                                   className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-all hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                                                >
+                                                   <Minus size={13} strokeWidth={3} />
+                                                </button>
+                                                <span className="min-w-[20px] text-center text-xs font-black text-slate-800">{item.quantity}</span>
+                                                <button
+                                                   onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      updateCartItem({ ...item, quantity: item.quantity + 1 });
+                                                   }}
+                                                   className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-all hover:bg-blue-700"
+                                                >
+                                                   <Plus size={13} strokeWidth={3} />
+                                                </button>
+                                             </div>
+                                             <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                          </div>
+                                          <div className="mt-3 grid grid-cols-2 gap-2 border-t border-gray-100 pt-3">
+                                             <button
+                                                onClick={(e) => {
+                                                   e.stopPropagation();
+                                                   setEditingItem(item);
+                                                }}
+                                                className="inline-flex items-center justify-center rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-blue-700 shadow-sm transition-all hover:bg-blue-100"
+                                                title="Editar artículo"
+                                             >
+                                                <Edit3 size={13} strokeWidth={2.4} />
+                                             </button>
+                                             <button
+                                                onClick={(e) => {
+                                                   e.stopPropagation();
+                                                   updateCartItem(null, item.cartId);
+                                                }}
+                                                className="inline-flex items-center justify-center rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-red-700 shadow-sm transition-all hover:bg-red-100"
+                                                title="Eliminar artículo"
+                                             >
+                                                <Trash2 size={13} strokeWidth={2.4} />
+                                             </button>
+                                          </div>
+                                       </>
+                                    )}
                                  </div>
                               </div>
                            );
@@ -3327,7 +3381,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                         // DESKTOP CARD DESIGN (Restaurant/Retail)
                         return (
-                           <div key={item.cartId || `cart-${idx}`} className={`bg-white rounded-xl p-3 shadow-sm border border-gray-100 group relative overflow-hidden transition-all hover:shadow-md ${editingItem?.cartId === item.cartId ? 'ring-2 ring-blue-500 bg-blue-50' : ''}`}>
+                           <div
+                              key={item.cartId || `cart-${idx}`}
+                              onClick={() => toggleCartItemFocus(item.cartId)}
+                              className={`bg-white rounded-xl p-3 shadow-sm border group relative overflow-hidden transition-all hover:shadow-md cursor-pointer ${editingItem?.cartId === item.cartId || isActiveCartItem ? 'ring-2 ring-blue-100 border-blue-200 bg-blue-50/40' : 'border-gray-100 hover:border-slate-200'}`}
+                           >
                               {/* Discount Badge */}
                               {hasDiscount && (
                                  <div className="absolute top-0 right-0 bg-red-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-bl-lg">
@@ -3373,39 +3431,55 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           )}
                                        </div>
 
-                                       {/* Actions */}
-                                       <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-1">
-                                          <button
-                                             onClick={() => updateCartItem({ ...item, quantity: item.quantity - 1 }, item.cartId)}
-                                             className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600"
-                                             title="Restar cantidad"
-                                          >
-                                             <Minus size={13} strokeWidth={3} />
-                                          </button>
-                                          <button
-                                             onClick={() => updateCartItem({ ...item, quantity: item.quantity + 1 }, item.cartId)}
-                                             className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-colors hover:bg-blue-700"
-                                             title="Sumar cantidad"
-                                          >
-                                             <Plus size={13} strokeWidth={3} />
-                                          </button>
-                                          <button
-                                             onClick={() => {
-                                                setEditingItem(item);
-                                             }}
-                                             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 shadow-sm transition-colors hover:bg-blue-100"
-                                             title="Editar artículo"
-                                          >
-                                             <Edit3 size={12} />
-                                          </button>
-                                          <button
-                                             onClick={() => updateCartItem(null, item.cartId)}
-                                             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 shadow-sm transition-colors hover:bg-red-100"
-                                             title="Eliminar artículo"
-                                          >
-                                             <Trash2 size={12} />
-                                          </button>
-                                       </div>
+                                       {!isActiveCartItem ? (
+                                          <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+                                             <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-slate-600 shadow-sm normal-case tracking-normal">{item.quantity} ud</span>
+                                             <span>Click para acciones</span>
+                                          </div>
+                                       ) : (
+                                          <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-1">
+                                             <button
+                                                onClick={(e) => {
+                                                   e.stopPropagation();
+                                                   updateCartItem({ ...item, quantity: item.quantity - 1 }, item.cartId);
+                                                }}
+                                                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                                                title="Restar cantidad"
+                                             >
+                                                <Minus size={13} strokeWidth={3} />
+                                             </button>
+                                             <button
+                                                onClick={(e) => {
+                                                   e.stopPropagation();
+                                                   updateCartItem({ ...item, quantity: item.quantity + 1 }, item.cartId);
+                                                }}
+                                                className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-colors hover:bg-blue-700"
+                                                title="Sumar cantidad"
+                                             >
+                                                <Plus size={13} strokeWidth={3} />
+                                             </button>
+                                             <button
+                                                onClick={(e) => {
+                                                   e.stopPropagation();
+                                                   setEditingItem(item);
+                                                }}
+                                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 shadow-sm transition-colors hover:bg-blue-100"
+                                                title="Editar artículo"
+                                             >
+                                                <Edit3 size={12} />
+                                             </button>
+                                             <button
+                                                onClick={(e) => {
+                                                   e.stopPropagation();
+                                                   updateCartItem(null, item.cartId);
+                                                }}
+                                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 shadow-sm transition-colors hover:bg-red-100"
+                                                title="Eliminar artículo"
+                                             >
+                                                <Trash2 size={12} />
+                                             </button>
+                                          </div>
+                                       )}
                                     </div>
                                  </div>
                               </div>
