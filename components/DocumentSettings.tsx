@@ -433,11 +433,17 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
 
       terminalAllocations.forEach((allocation) => {
          const buffer = terminalBuffers.find((candidate) => candidate.type === allocation.ncfType) || null;
-         const currentNumber = Math.max(
-            allocation.reservedStart,
-            Number(allocation.nextNumber || allocation.reservedStart),
-            Number(buffer?.currentNumber || 0),
+         const hasActiveBuffer = Boolean(
+            buffer
+            && Number(buffer.currentNumber) <= Number(buffer.endNumber)
+            && Number(buffer.currentNumber) >= allocation.reservedStart
          );
+         const currentNumber = hasActiveBuffer
+            ? Number(buffer?.currentNumber || allocation.reservedStart)
+            : Math.max(
+               allocation.reservedStart,
+               Number(allocation.nextNumber || allocation.reservedStart),
+            );
          const boundedCurrent = Math.min(currentNumber, allocation.reservedEnd + 1);
          const consumed = Math.max(0, boundedCurrent - allocation.reservedStart);
          const remaining = Math.max(0, allocation.reservedEnd - boundedCurrent + 1);
