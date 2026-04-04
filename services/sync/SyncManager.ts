@@ -79,7 +79,7 @@ class SyncManager {
     private imageSyncOnlineHandler: (() => void) | null = null;
     private readonly IMAGE_SYNC_INTERVAL_MS = 180000;
     private readonly IMAGE_SYNC_BATCH_SIZE = 40;
-    private startupManifestSyncInFlight = false;
+    private terminalManifestSyncInFlight = false;
 
     public isInitialized: boolean = false;
 
@@ -847,28 +847,34 @@ class SyncManager {
         return null;
     }
 
-    private async syncTerminalMastersOnStartup(baseConfig: BusinessConfig | null): Promise<void> {
-        if (this.isDisabled || this.startupManifestSyncInFlight || !navigator.onLine) {
-            return;
+    private async reconcileTerminalManifest(
+        baseConfig: BusinessConfig | null,
+        options?: {
+            skipIfStartupCompleted?: boolean;
+            markStartupCompleted?: boolean;
+        }
+    ): Promise<BusinessConfig | null> {
+        if (this.isDisabled || this.terminalManifestSyncInFlight || !navigator.onLine) {
+            return null;
         }
 
         const context = this.getActiveTerminalContext(baseConfig);
         const localTerminalId = context.localTerminalId || context.terminalId;
         if (!context.terminalId || !localTerminalId || !context.tenantId || !context.erpBaseUrl) {
-            return;
+            return null;
         }
 
-        if (this.wasStartupManifestSyncCompleted(localTerminalId)) {
-            return;
+        if (options?.skipIfStartupCompleted && this.wasStartupManifestSyncCompleted(localTerminalId)) {
+            return null;
         }
 
-        this.startupManifestSyncInFlight = true;
+        this.terminalManifestSyncInFlight = true;
 
         try {
             const storedCursorMap = this.readStoredTerminalCursorMap(localTerminalId);
             const manifest = await this.fetchTerminalManifest(context, storedCursorMap);
             if (!manifest?.cursor_map || !manifest.changed) {
-                return;
+                return null;
             }
 
             const changedMasterScopes: TerminalManifestMasterScope[] = (['items', 'customers', 'suppliers'] as TerminalManifestMasterScope[])
@@ -877,8 +883,10 @@ class SyncManager {
 
             if (!terminalChanged && changedMasterScopes.length === 0) {
                 this.persistTerminalCursorMap(localTerminalId, manifest.cursor_map);
-                this.markStartupManifestSyncCompleted(localTerminalId);
-                return;
+                if (options?.markStartupCompleted) {
+                    this.markStartupManifestSyncCompleted(localTerminalId);
+                }
+                return null;
             }
 
             const refreshedConfig = await this.refreshTerminalResolvedConfig(undefined, {
@@ -888,15 +896,40 @@ class SyncManager {
             });
 
             if (!refreshedConfig) {
-                return;
+                return null;
             }
 
             this.persistTerminalCursorMap(localTerminalId, manifest.cursor_map);
-            this.markStartupManifestSyncCompleted(localTerminalId);
+            if (options?.markStartupCompleted) {
+                this.markStartupManifestSyncCompleted(localTerminalId);
+            }
+
+            return refreshedConfig;
+        } finally {
+            this.terminalManifestSyncInFlight = false;
+        }
+    }
+
+    private async syncTerminalMastersOnStartup(baseConfig: BusinessConfig | null): Promise<void> {
+        try {
+            await this.reconcileTerminalManifest(baseConfig, {
+                skipIfStartupCompleted: true,
+                markStartupCompleted: true,
+            });
         } catch (error) {
             console.warn('⚠️ SyncManager: startup manifest sync failed:', error);
-        } finally {
-            this.startupManifestSyncInFlight = false;
+        }
+    }
+
+    async syncTerminalManifestInBackground(baseConfig?: BusinessConfig | null): Promise<BusinessConfig | null> {
+        try {
+            return await this.reconcileTerminalManifest(baseConfig ?? null, {
+                skipIfStartupCompleted: false,
+                markStartupCompleted: false,
+            });
+        } catch (error) {
+            console.warn('⚠️ SyncManager: background manifest sync failed:', error);
+            return null;
         }
     }
 

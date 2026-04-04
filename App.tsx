@@ -962,6 +962,11 @@ const AppContent: React.FC = () => {
         if (!disposed && (result?.outbox?.applied || 0) > 0) {
           console.log(`[ERP SYNC] ${result.outbox.applied} evento(s) ERP aplicados. El refresh runtime se resuelve por terminalConfigSyncRequested.`);
         }
+
+        const refreshedFromManifest = await syncManager.syncTerminalManifestInBackground();
+        if (!disposed && refreshedFromManifest && !Array.isArray(refreshedFromManifest) && refreshedFromManifest.terminals) {
+          console.log(`[ERP SYNC] ${terminalName} actualizó su estado runtime desde el manifest del ERP.`);
+        }
       } catch (error) {
         console.warn('[ERP SYNC] lifecycle registration skipped:', error);
       }
