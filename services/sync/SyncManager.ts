@@ -933,6 +933,18 @@ class SyncManager {
         }
     }
 
+    async refreshTerminalFiscalStateFromServer(baseConfig?: BusinessConfig | null): Promise<BusinessConfig | null> {
+        try {
+            return await this.refreshTerminalResolvedConfig(baseConfig ?? null, {
+                forceRemoteFetch: true,
+                resolvedScopes: ['documents'],
+            });
+        } catch (error) {
+            console.warn('⚠️ SyncManager: fiscal state refresh failed:', error);
+            return null;
+        }
+    }
+
     private async deleteSnapshotProducts(itemsToDelete: unknown[]): Promise<number> {
         const incoming = Array.isArray(itemsToDelete) ? itemsToDelete : [];
         if (incoming.length === 0) return 0;

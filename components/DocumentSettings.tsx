@@ -312,7 +312,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             setActiveTerminalId('');
          }
       };
-      loadData();
+      void loadData();
 
       // Listen for series updates from other terminals
       const handleSeriesUpdate = () => {
@@ -340,9 +340,17 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
 
    useEffect(() => {
       if (!navigator.onLine) return;
-      void syncManager.syncTerminalManifestInBackground(configProp).catch((error) => {
-         console.warn('⚠️ DocumentSettings: no se pudo refrescar el manifest fiscal al abrir.', error);
-      });
+      void (async () => {
+         try {
+            const refreshed = await syncManager.refreshTerminalFiscalStateFromServer(configProp);
+            if (refreshed) {
+               window.dispatchEvent(new CustomEvent('fiscalAllocationsUpdated'));
+               window.dispatchEvent(new CustomEvent('localFiscalBufferUpdated'));
+            }
+         } catch (error) {
+            console.warn('⚠️ DocumentSettings: no se pudo refrescar el estado fiscal al abrir.', error);
+         }
+      })();
    }, [configProp]);
 
    const [isAddingRange, setIsAddingRange] = useState(false);

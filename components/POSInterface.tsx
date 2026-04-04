@@ -211,7 +211,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const ensureFreshFiscalCounters = useCallback(async () => {
       if (!navigator.onLine) return;
       try {
-         await syncManager.syncTerminalManifestInBackground(config);
+         await syncManager.refreshTerminalFiscalStateFromServer(config);
       } catch (error) {
          console.warn('⚠️ POSInterface: No se pudo refrescar el estado fiscal antes de emitir NCF:', error);
       }

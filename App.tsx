@@ -3962,7 +3962,7 @@ const AppContent: React.FC = () => {
     let creditNoteNcf: string | undefined;
     try {
       if (navigator.onLine) {
-        await syncManager.syncTerminalManifestInBackground(config);
+        await syncManager.refreshTerminalFiscalStateFromServer(config);
       }
       creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, currentTerminalId) || undefined;
     } catch (e) {
