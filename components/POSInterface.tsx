@@ -2942,9 +2942,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* MOBILE HEADER */}
             < div className="md:hidden p-4 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
+               <div className="flex items-center justify-start">
+                  {renderTicketBrand(true)}
+               </div>
                <div className="flex justify-between items-center">
                   <div className="flex items-center gap-3">
-                     {renderTicketBrand(true)}
                      <button onClick={() => setMobileView('PRODUCTS')} className="p-2 -ml-2 text-gray-400 hover:text-blue-600 transition-colors">
                         <ArrowLeft size={24} />
                      </button>
@@ -3019,11 +3021,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* DESKTOP HEADER (HIDDEN ON MOBILE) */}
             <div className="hidden md:flex p-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none" >
+               <div className="flex items-center justify-start">
+                  {renderTicketBrand()}
+               </div>
                <div className={`flex items-center gap-4 ${isRetailMode ? 'justify-between' : 'justify-center'}`}>
-                  <div className="shrink-0">
-                     {renderTicketBrand()}
-                  </div>
-
                   {/* RETAIL MODE SEARCH BAR */}
                   {isRetailMode && (
                      <div className="flex-1 max-w-xl relative group">
@@ -3317,10 +3318,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        )}
                                     </div>
                                     {!isActiveCartItem ? (
-                                       <div className="mt-2 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-                                          <div className="flex items-center gap-2">
-                                             <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-slate-600 shadow-sm">{item.quantity} ud</span>
-                                             <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Tocar para acciones</span>
+                                       <div className="mt-2 flex items-center justify-between">
+                                          <div className="rounded-full bg-slate-50 px-2.5 py-1 text-[10px] font-black text-slate-600 shadow-sm">
+                                             {item.quantity} ud
                                           </div>
                                           <span className="font-black text-gray-900 text-sm">{baseCurrency.symbol}{lineNet.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                        </div>
@@ -3432,9 +3432,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        </div>
 
                                        {!isActiveCartItem ? (
-                                          <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
-                                             <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-slate-600 shadow-sm normal-case tracking-normal">{item.quantity} ud</span>
-                                             <span>Click para acciones</span>
+                                          <div className="flex items-center rounded-full bg-slate-50 px-2.5 py-1 text-[10px] font-black text-slate-600 shadow-sm">
+                                             {item.quantity} ud
                                           </div>
                                        ) : (
                                           <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-1">
