@@ -19,6 +19,8 @@ let initPromise: Promise<any> | null = null;
 const INVENTORY_CLOSE_LOCK_MESSAGE = 'Acción denegada: El inventario a esta fecha ya ha sido cerrado y auditado.';
 const getFiscalSequencePadding = (type: FiscalDocumentCode): number =>
   type.startsWith('E') ? 10 : 8;
+const emitFiscalAllocationsUpdated = () => window.dispatchEvent(new CustomEvent('fiscalAllocationsUpdated'));
+const emitLocalFiscalBufferUpdated = () => window.dispatchEvent(new CustomEvent('localFiscalBufferUpdated'));
 
 const getSnapshotLockDate = (snapshot: any): number => {
   const lockRef = snapshot?.lockDate || snapshot?.cutoffDate || snapshot?.closedAt || snapshot?.createdAt;
@@ -913,11 +915,13 @@ export const db = {
 
       // 2. Clear Local Fiscal Buffer (NCFs)
       await dbAdapter.saveCollection('localFiscalBuffer', []);
+      emitLocalFiscalBufferUpdated();
 
       // 3. Clear Fiscal Allocations for this terminal
       const allocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
       const remainingAllocations = allocations.filter(a => a.terminalId !== terminalId);
       await dbAdapter.saveCollection('fiscalAllocations', remainingAllocations);
+      emitFiscalAllocationsUpdated();
 
       // 4. Reset Sync Center Counters on Master Server
       try {
@@ -1168,6 +1172,7 @@ export const db = {
           status: 'EXHAUSTED',
         };
         await dbAdapter.saveCollection('fiscalAllocations', allocations);
+        emitFiscalAllocationsUpdated();
         return null;
       }
 
@@ -1196,6 +1201,7 @@ export const db = {
       };
 
       await dbAdapter.saveCollection('fiscalAllocations', allocations);
+      emitFiscalAllocationsUpdated();
       const buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
       const newBuffers = buffers
         .filter((buffer: LocalFiscalBuffer) =>
@@ -1203,6 +1209,7 @@ export const db = {
         )
         .concat(localBuffer);
       await dbAdapter.saveCollection('localFiscalBuffer', newBuffers);
+      emitLocalFiscalBufferUpdated();
       return localBuffer;
     }
 
@@ -1233,6 +1240,7 @@ export const db = {
       )
       .concat(localBuffer);
     await dbAdapter.saveCollection('localFiscalBuffer', newBuffers);
+    emitLocalFiscalBufferUpdated();
 
     return localBuffer;
   },
@@ -1264,6 +1272,7 @@ export const db = {
 
     buffer.currentNumber += 1;
     await dbAdapter.saveCollection('localFiscalBuffer', buffers);
+    emitLocalFiscalBufferUpdated();
     return ncf;
   },
 
@@ -1301,6 +1310,7 @@ export const db = {
       const existingAllocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
       const allocationMerge = mergeFiscalAllocationsState(existingAllocations, fiscalAllocations, terminalId);
       await dbAdapter.saveCollection('fiscalAllocations', allocationMerge.mergedAllocations);
+      emitFiscalAllocationsUpdated();
       allocationMerge.bufferTypesToReset.forEach((type) => bufferTypesToReset.add(type));
     }
 
@@ -1313,6 +1323,7 @@ export const db = {
       });
       if (filteredBuffers.length !== existingBuffers.length) {
         await dbAdapter.saveCollection('localFiscalBuffer', filteredBuffers);
+        emitLocalFiscalBufferUpdated();
       }
     }
   },

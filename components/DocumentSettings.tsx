@@ -313,11 +313,17 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       window.addEventListener('seriesUpdated', handleSeriesUpdate);
       window.addEventListener('internalSequencesUpdated', handleSeriesUpdate);
       window.addEventListener('fiscalRangesUpdated', handleSeriesUpdate);
+      window.addEventListener('configUpdated', handleSeriesUpdate as EventListener);
+      window.addEventListener('fiscalAllocationsUpdated', handleSeriesUpdate as EventListener);
+      window.addEventListener('localFiscalBufferUpdated', handleSeriesUpdate as EventListener);
 
       return () => {
          window.removeEventListener('seriesUpdated', handleSeriesUpdate);
          window.removeEventListener('internalSequencesUpdated', handleSeriesUpdate);
          window.removeEventListener('fiscalRangesUpdated', handleSeriesUpdate);
+         window.removeEventListener('configUpdated', handleSeriesUpdate as EventListener);
+         window.removeEventListener('fiscalAllocationsUpdated', handleSeriesUpdate as EventListener);
+         window.removeEventListener('localFiscalBufferUpdated', handleSeriesUpdate as EventListener);
       };
    }, [configProp]);
 
