@@ -352,7 +352,8 @@ const fiscalAllocationIdentityKey = (allocation: Partial<FiscalAllocation>) => {
 const mergeFiscalAllocationsState = (
   existingAllocations: FiscalAllocation[],
   incomingAllocations: FiscalAllocation[],
-  terminalId: string
+  terminalId: string,
+  existingBuffers: LocalFiscalBuffer[] = [],
 ): { mergedAllocations: FiscalAllocation[]; bufferTypesToReset: Set<FiscalDocumentCode> } => {
   const normalizedTerminalId = normalizeSequenceKey(terminalId);
   const normalizedIncomingRaw = (incomingAllocations || [])
@@ -368,17 +369,55 @@ const mergeFiscalAllocationsState = (
   const existingByIdentity = new Map(
     existingForTerminal.map((allocation) => [fiscalAllocationIdentityKey(allocation), allocation])
   );
+  const activeBuffersForTerminal = (existingBuffers || []).filter((buffer) =>
+    (!buffer?.terminalId || normalizeSequenceKey(buffer.terminalId) === normalizedTerminalId) &&
+    Number(buffer?.currentNumber) <= Number(buffer?.endNumber)
+  );
+
+  const bufferTypesToReset = new Set<FiscalDocumentCode>();
 
   const normalizedIncoming = normalizedIncomingRaw.map((incoming) => {
     const existing = existingByIdentity.get(fiscalAllocationIdentityKey(incoming));
-    if (!existing) return incoming;
+    const activeBuffer = activeBuffersForTerminal.find((buffer) =>
+      normalizeSequenceKey(buffer.type) === normalizeSequenceKey(incoming.ncfType) &&
+      (!buffer.allocationId || normalizeSequenceKey(buffer.allocationId) === normalizeSequenceKey(incoming.id))
+    );
+    const incomingNextNumber = Math.max(
+      incoming.reservedStart,
+      Math.min(incoming.reservedEnd + 1, Number(incoming.nextNumber) || incoming.reservedStart)
+    );
+    const bufferCurrentNumber = activeBuffer
+      ? Math.max(incoming.reservedStart, Number(activeBuffer.currentNumber) || incoming.reservedStart)
+      : null;
+    const bufferHasReservedTail = Boolean(
+      activeBuffer &&
+      Number(activeBuffer.endNumber) > Number(activeBuffer.currentNumber)
+    );
+
+    if (!existing) {
+      if (bufferHasReservedTail && incoming.ncfType) {
+        bufferTypesToReset.add(incoming.ncfType);
+      }
+
+      return normalizeFiscalAllocationRecord({
+        ...incoming,
+        nextNumber: bufferHasReservedTail ? incomingNextNumber : Math.max(incomingNextNumber, bufferCurrentNumber || 0),
+      }, terminalId);
+    }
 
     const sameOperationalState =
       isOperationalFiscalAllocationStatus(existing.status) &&
       isOperationalFiscalAllocationStatus(incoming.status);
-    const mergedNextNumber = sameOperationalState
-      ? Math.max(Number(existing.nextNumber) || incoming.reservedStart, Number(incoming.nextNumber) || incoming.reservedStart)
-      : incoming.nextNumber;
+    let mergedNextNumber = incomingNextNumber;
+    if (sameOperationalState && bufferCurrentNumber !== null && bufferCurrentNumber > incomingNextNumber) {
+      mergedNextNumber = bufferCurrentNumber;
+    }
+    if (bufferHasReservedTail || (bufferCurrentNumber !== null && bufferCurrentNumber < incomingNextNumber)) {
+      if (incoming.ncfType) {
+        bufferTypesToReset.add(incoming.ncfType);
+      }
+      mergedNextNumber = incomingNextNumber;
+    }
     const mergedStatus =
       mergedNextNumber > incoming.reservedEnd
         ? 'EXHAUSTED'
@@ -404,7 +443,6 @@ const mergeFiscalAllocationsState = (
     JSON.stringify(existingForTerminal.map(serializeFiscalAllocation)) !==
     JSON.stringify(normalizedIncoming.map(serializeFiscalAllocation));
 
-  const bufferTypesToReset = new Set<FiscalDocumentCode>();
   if (changed) {
     [...existingForTerminal, ...normalizedIncoming].forEach((allocation) => {
       if (allocation?.ncfType) {
@@ -1176,8 +1214,9 @@ export const db = {
         return null;
       }
 
+      // For terminal-owned fiscal blocks we advance one number at a time so ERP/POS stay aligned.
       const start = Math.max(allocation.reservedStart, allocation.nextNumber);
-      const end = Math.min(allocation.reservedEnd, start + batchSize - 1);
+      const end = start;
       const nextNumber = end + 1;
 
       allocations[allocationIndex] = {
@@ -1337,7 +1376,8 @@ export const db = {
 
     if (terminalId) {
       const existingAllocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
-      const allocationMerge = mergeFiscalAllocationsState(existingAllocations, fiscalAllocations, terminalId);
+      const existingBuffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
+      const allocationMerge = mergeFiscalAllocationsState(existingAllocations, fiscalAllocations, terminalId, existingBuffers);
       await dbAdapter.saveCollection('fiscalAllocations', allocationMerge.mergedAllocations);
       emitFiscalAllocationsUpdated();
       allocationMerge.bufferTypesToReset.forEach((type) => bufferTypesToReset.add(type));
