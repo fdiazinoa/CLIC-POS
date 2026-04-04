@@ -1,10 +1,13 @@
 import {
   BusinessConfig,
+  Campaign,
+  Coupon,
   DeviceRole,
   DocumentSeries,
   DocumentType,
   FiscalAllocation,
   FiscalRangeDGII,
+  LoyaltyConfig,
   NCFType,
   Promotion,
   PromotionTargetType,
@@ -257,6 +260,80 @@ const normalizeFiscalAllocation = (raw: unknown, index: number, terminalId: stri
   };
 };
 
+const normalizeLoyaltyConfig = (raw: unknown): LoyaltyConfig | null => {
+  const data = asObject(raw);
+  if (Object.keys(data).length === 0) return null;
+
+  return {
+    isEnabled: asBoolean(data.isEnabled ?? data.is_enabled, false),
+    earnRate: asNumber(data.earnRate ?? data.earn_rate, 0),
+    redeemRate: asNumber(data.redeemRate ?? data.redeem_rate, 1),
+    minRedemptionPoints: asNumber(data.minRedemptionPoints ?? data.min_redemption_points, 0),
+    expirationMonths: asNumber(data.expirationMonths ?? data.expiration_months, 0),
+    excludedCategories: asArray<string>(data.excludedCategories ?? data.excluded_categories)
+      .map((entry) => asString(entry))
+      .filter(Boolean),
+    tiers: asArray(data.tiers).map((tier, index) => {
+      const record = asObject(tier);
+      return {
+        id: asString(record.id) || `tier-${index + 1}`,
+        name: asString(record.name) || `Tier ${index + 1}`,
+        minPoints: asNumber(record.minPoints ?? record.min_points, 0),
+        color: asString(record.color) || 'blue',
+        icon: asString(record.icon) || undefined,
+      };
+    }),
+  };
+};
+
+const normalizeCampaign = (raw: unknown, index: number): Campaign | null => {
+  const data = asObject(raw);
+  const id = asString(data.id || data.campaignId || data.campaign_id || `campaign-${index + 1}`);
+  if (!id) return null;
+
+  const activeHours = asObject(data.activeHours ?? data.active_hours);
+
+  return {
+    id,
+    name: asString(data.name || data.label || id) || id,
+    description: asString(data.description) || undefined,
+    benefitType: (asString(data.benefitType ?? data.benefit_type).toUpperCase() || 'PERCENT') as Campaign['benefitType'],
+    benefitValue: asNumber(data.benefitValue ?? data.benefit_value, 0),
+    minPurchaseAmount: data.minPurchaseAmount ?? data.min_purchase_amount ?? undefined,
+    maxDiscountAmount: data.maxDiscountAmount ?? data.max_discount_amount ?? undefined,
+    activeDays: asArray<string>(data.activeDays ?? data.active_days).map((entry) => asString(entry)).filter(Boolean),
+    activeHours: Object.keys(activeHours).length > 0
+      ? {
+          start: asString(activeHours.start),
+          end: asString(activeHours.end),
+        }
+      : undefined,
+    startDate: asString(data.startDate ?? data.start_date) || new Date().toISOString(),
+    endDate: asString(data.endDate ?? data.end_date) || new Date().toISOString(),
+    totalGenerated: asNumber(data.totalGenerated ?? data.total_generated, 0),
+    createdAt: asString(data.createdAt ?? data.created_at) || new Date().toISOString(),
+  };
+};
+
+const normalizeCoupon = (raw: unknown, index: number): Coupon | null => {
+  const data = asObject(raw);
+  const id = asString(data.id || data.couponId || data.coupon_id || `coupon-${index + 1}`);
+  const code = asString(data.code || data.couponCode || data.coupon_code);
+  if (!id || !code) return null;
+
+  return {
+    id,
+    campaignId: asString(data.campaignId ?? data.campaign_id),
+    code,
+    status: (asString(data.status).toUpperCase() || 'GENERATED') as Coupon['status'],
+    assignedTo: asString(data.assignedTo ?? data.assigned_to) || undefined,
+    redeemedAt: asString(data.redeemedAt ?? data.redeemed_at) || undefined,
+    ticketRef: asString(data.ticketRef ?? data.ticket_ref) || undefined,
+    terminalId: asString(data.terminalId ?? data.terminal_id) || undefined,
+    createdAt: asString(data.createdAt ?? data.created_at) || new Date().toISOString(),
+  };
+};
+
 const POS_PROMO_TYPES: PromotionType[] = [
   'DISCOUNT',
   'BOGO',
@@ -460,6 +537,7 @@ export const applyTerminalConfigSnapshot = (
   const resolvedInventory = asObject(effectiveResolved.inventory);
   const resolvedDocuments = asObject(effectiveResolved.documents);
   const resolvedCatalog = asObject(effectiveResolved.catalog);
+  const resolvedLoyalty = asObject(effectiveResolved.loyalty);
   const hasIncomingFiscalAllocations = Object.prototype.hasOwnProperty.call(resolvedDocuments, 'fiscal_allocations');
 
   const fallbackOperational = asObject(effectiveFallbackConfig.operational);
@@ -470,6 +548,7 @@ export const applyTerminalConfigSnapshot = (
   const fallbackOffline = asObject(effectiveFallbackConfig.offline);
   const fallbackLan = asObject(effectiveFallbackConfig.lan);
   const fallbackMetadata = asObject(effectiveFallbackConfig.metadata);
+  const fallbackLoyalty = asObject(effectiveFallbackConfig.loyalty);
 
   const tariffs = asArray(resolvedPricing.tariffs)
     .map((item, index) => normalizeTariff(item, index))
@@ -486,6 +565,32 @@ export const applyTerminalConfigSnapshot = (
   const fiscalAllocations = asArray(resolvedDocuments.fiscal_allocations)
     .map((item, index) => normalizeFiscalAllocation(item, index, terminalId))
     .filter(Boolean) as FiscalAllocation[];
+  const hasIncomingLoyaltyConfig =
+    Object.prototype.hasOwnProperty.call(resolvedLoyalty, 'config') ||
+    Object.keys(fallbackLoyalty).length > 0;
+  const loyaltyConfig = normalizeLoyaltyConfig(
+    Object.prototype.hasOwnProperty.call(resolvedLoyalty, 'config')
+      ? resolvedLoyalty.config
+      : fallbackLoyalty
+  );
+  const hasIncomingCampaigns =
+    Object.prototype.hasOwnProperty.call(resolvedLoyalty, 'campaigns') ||
+    Object.prototype.hasOwnProperty.call(effectiveFallbackConfig, 'campaigns');
+  const campaignsSource = Object.prototype.hasOwnProperty.call(resolvedLoyalty, 'campaigns')
+    ? resolvedLoyalty.campaigns
+    : effectiveFallbackConfig.campaigns;
+  const campaigns = asArray(campaignsSource)
+    .map((item, index) => normalizeCampaign(item, index))
+    .filter(Boolean) as Campaign[];
+  const hasIncomingCoupons =
+    Object.prototype.hasOwnProperty.call(resolvedLoyalty, 'coupons') ||
+    Object.prototype.hasOwnProperty.call(effectiveFallbackConfig, 'coupons');
+  const couponsSource = Object.prototype.hasOwnProperty.call(resolvedLoyalty, 'coupons')
+    ? resolvedLoyalty.coupons
+    : effectiveFallbackConfig.coupons;
+  const coupons = asArray(couponsSource)
+    .map((item, index) => normalizeCoupon(item, index))
+    .filter(Boolean) as Coupon[];
   const documentAssignments = normalizeAssignments(resolvedDocuments.assignments);
 
   const terminalTemplate = resolveTerminalTemplate(nextConfig, terminalId);
@@ -722,6 +827,18 @@ export const applyTerminalConfigSnapshot = (
     defaultSalesWarehouseId: effectiveDefaultWarehouseId,
     visibleWarehouseIds: effectiveAllowedWarehouseIds,
   };
+
+  if (hasIncomingLoyaltyConfig) {
+    nextConfig.loyalty = loyaltyConfig || nextConfig.loyalty;
+  }
+
+  if (hasIncomingCampaigns) {
+    nextConfig.campaigns = campaigns;
+  }
+
+  if (hasIncomingCoupons) {
+    nextConfig.coupons = coupons;
+  }
 
   if (!hasResolutionError && Object.prototype.hasOwnProperty.call(effectiveResolved, 'promotions')) {
     nextConfig.promotions = asArray(effectiveResolved.promotions)
