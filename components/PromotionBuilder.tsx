@@ -76,6 +76,8 @@ const appendSelectedOption = (
    return [{ value, label: selectedLabel || value }, ...options];
 };
 
+const isPromotionActive = (promotion: Promotion) => promotion.schedule?.isActive !== false;
+
 const describePromotionTarget = (promotion: Promotion) => {
    if (promotion.targetType === 'ALL') {
       return 'Todo el inventario';
@@ -191,7 +193,7 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
       setTriggerAmount(promo.trigger?.value || 0);
       setTargetStrategyMode(promo.targetStrategy?.mode || 'CHEAPEST_ITEM');
       setTargetStrategyValue(promo.targetStrategy?.filterValue?.toString() || '');
-      setIsActive(promo.schedule.isActive);
+      setIsActive(isPromotionActive(promo));
       setPriority(promo.priority || 1);
       setSelectedTerminals(promo.terminalIds || []);
       setViewMode('EDIT');
@@ -209,7 +211,7 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
    const handleToggleActive = (promo: Promotion) => {
       const updatedPromotions = promotions.map(p =>
          p.id === promo.id
-            ? { ...p, schedule: { ...p.schedule, isActive: !p.schedule.isActive } }
+            ? { ...p, schedule: { ...p.schedule, isActive: !isPromotionActive(p) } }
             : p
       );
       if (onUpdateConfig) {
@@ -337,8 +339,8 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                               <div className="flex-1">
                                  <div className="flex items-center gap-2 mb-1">
                                     <h3 className="font-bold text-gray-800">{promo.name}</h3>
-                                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${promo.schedule.isActive ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'}`}>
-                                       {promo.schedule.isActive ? 'Activa' : 'Inactiva'}
+                                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${isPromotionActive(promo) ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'}`}>
+                                       {isPromotionActive(promo) ? 'Activa' : 'Inactiva'}
                                     </span>
                                  </div>
                                  <p className="text-xs text-gray-500">
@@ -380,8 +382,8 @@ const PromotionBuilder: React.FC<PromotionBuilderProps> = ({ products, config, t
                                  })()}
                               </div>
                               <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                 <button onClick={() => handleToggleActive(promo)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600" title={promo.schedule.isActive ? "Desactivar" : "Activar"}>
-                                    {promo.schedule.isActive ? <Check size={18} /> : <X size={18} />}
+                                 <button onClick={() => handleToggleActive(promo)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600" title={isPromotionActive(promo) ? "Desactivar" : "Activar"}>
+                                    {isPromotionActive(promo) ? <Check size={18} /> : <X size={18} />}
                                  </button>
                                  <button onClick={() => handleEdit(promo)} className="p-2 hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600" title="Editar">
                                     <Edit size={18} />

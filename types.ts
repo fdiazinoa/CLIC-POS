@@ -410,6 +410,12 @@ export interface TerminalConfigResolvedCatalogSnapshot {
   full_pull_on_pairing?: boolean;
 }
 
+export interface TerminalConfigResolvedLoyaltySnapshot {
+  config?: any;
+  campaigns?: any[];
+  coupons?: any[];
+}
+
 export interface TerminalConfigResolvedSnapshot {
   pricing?: TerminalConfigResolvedPricingSnapshot;
   inventory?: TerminalConfigResolvedInventorySnapshot;
@@ -417,6 +423,7 @@ export interface TerminalConfigResolvedSnapshot {
   catalog?: TerminalConfigResolvedCatalogSnapshot;
   /** Promociones ERP → POS (forma camelCase, ver `posPromotionsSnapshot.js`). */
   promotions?: any[];
+  loyalty?: TerminalConfigResolvedLoyaltySnapshot;
 }
 
 export interface TerminalConfigSnapshot {

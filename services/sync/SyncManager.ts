@@ -48,7 +48,7 @@ interface SyncStatus {
 }
 
 type TerminalManifestMasterScope = 'items' | 'customers' | 'suppliers';
-type TerminalManifestResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions';
+type TerminalManifestResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions' | 'loyalty';
 type TerminalManifestScope = 'terminal' | TerminalManifestMasterScope;
 
 interface TerminalCursorMap {
@@ -884,7 +884,7 @@ class SyncManager {
             const refreshedConfig = await this.refreshTerminalResolvedConfig(undefined, {
                 forceRemoteFetch: true,
                 masterScopes: changedMasterScopes,
-                resolvedScopes: terminalChanged ? ['pricing', 'inventory', 'documents', 'catalog', 'promotions'] : [],
+                resolvedScopes: terminalChanged ? ['pricing', 'inventory', 'documents', 'catalog', 'promotions', 'loyalty'] : [],
             });
 
             if (!refreshedConfig) {
