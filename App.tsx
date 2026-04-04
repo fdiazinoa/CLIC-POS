@@ -3961,6 +3961,9 @@ const AppContent: React.FC = () => {
     const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
     let creditNoteNcf: string | undefined;
     try {
+      if (navigator.onLine) {
+        await syncManager.syncTerminalManifestInBackground(config);
+      }
       creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, currentTerminalId) || undefined;
     } catch (e) {
       console.warn(`No se pudo generar NCF ${creditNoteFiscalType}:`, e);

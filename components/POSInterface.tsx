@@ -56,6 +56,7 @@ import MobileConfigModal from './MobileConfigModal';
 import ReturnModal from './ReturnModal';
 import PromoBottomSheet from './PromoBottomSheet';
 import { backgroundSyncManager, SyncState } from '../services/sync/BackgroundSyncManager';
+import { syncManager } from '../services/sync/SyncManager';
 import ProductTableSupermarket from './ProductTableSupermarket';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { visorSync } from '../utils/visorSync';
@@ -206,6 +207,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const terminalId = activeTerminal?.id || 'T1';
    const defaultSalesWarehouseId = activeTerminalConfig?.inventoryScope?.defaultSalesWarehouseId;
    const uxConfig = activeTerminalConfig?.ux || { showProductImages: true, gridDensity: 'COMFORTABLE', theme: 'LIGHT', quickKeysLayout: 'A' };
+
+   const ensureFreshFiscalCounters = useCallback(async () => {
+      if (!navigator.onLine) return;
+      try {
+         await syncManager.syncTerminalManifestInBackground(config);
+      } catch (error) {
+         console.warn('⚠️ POSInterface: No se pudo refrescar el estado fiscal antes de emitir NCF:', error);
+      }
+   }, [config]);
    const normalizeScopeKey = useCallback((value: unknown) => {
       return typeof value === 'string' ? value.trim().toLowerCase() : '';
    }, []);
@@ -1767,6 +1777,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
          if (isRefundOnly) {
             try {
+               await ensureFreshFiscalCounters();
                finalNcf = await withTimeout(
                   db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50),
                   8000,
@@ -1777,6 +1788,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                console.warn('No se pudo generar NCF B04 para devolución:', refundNcfError);
             }
          } else {
+            await ensureFreshFiscalCounters();
             finalNcf = await withTimeout(
                db.getNextNCF(fiscalStatus.type, terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.[fiscalStatus.type]?.batchSize || 100),
                8000,
@@ -1858,6 +1870,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
                   try {
+                     await ensureFreshFiscalCounters();
                      refundNcf = await withTimeout(
                         db.getNextNCF('B04', terminalId, activeTerminalConfig?.fiscal?.typeConfigs?.['B04']?.batchSize || 50),
                         8000,
@@ -2382,6 +2395,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const fiscalCompliance = getFiscalComplianceConfig(config);
       const creditNoteFiscalType = resolveCreditNoteFiscalCode(fiscalCompliance.mode);
+      await ensureFreshFiscalCounters();
       const creditNoteNcf = await db.getNextNCF(creditNoteFiscalType, terminalId, 50);
 
       // 2. Create Refund Transaction
