@@ -1348,7 +1348,10 @@ export const db = {
     documentSeries: DocumentSeries[] = [],
     fiscalRanges: FiscalRangeDGII[] = [],
     fiscalAllocations: FiscalAllocation[] = [],
-    terminalId?: string
+    terminalId?: string,
+    options?: {
+      replaceTerminalFiscalState?: boolean;
+    }
   ): Promise<void> => {
     if (
       (!documentSeries || documentSeries.length === 0) &&
@@ -1375,12 +1378,42 @@ export const db = {
     }
 
     if (terminalId) {
-      const existingAllocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
-      const existingBuffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
-      const allocationMerge = mergeFiscalAllocationsState(existingAllocations, fiscalAllocations, terminalId, existingBuffers);
-      await dbAdapter.saveCollection('fiscalAllocations', allocationMerge.mergedAllocations);
-      emitFiscalAllocationsUpdated();
-      allocationMerge.bufferTypesToReset.forEach((type) => bufferTypesToReset.add(type));
+      const normalizedTerminalId = normalizeSequenceKey(terminalId);
+
+      if (options?.replaceTerminalFiscalState) {
+        const existingAllocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
+        const remainingAllocations = existingAllocations.filter(
+          (allocation) => normalizeSequenceKey(allocation?.terminalId) !== normalizedTerminalId
+        );
+        const normalizedIncomingAllocations = (fiscalAllocations || [])
+          .map((allocation) => normalizeFiscalAllocationRecord(allocation, terminalId))
+          .filter((allocation) => normalizeSequenceKey(allocation.terminalId) === normalizedTerminalId);
+
+        await dbAdapter.saveCollection('fiscalAllocations', [...remainingAllocations, ...normalizedIncomingAllocations]);
+        emitFiscalAllocationsUpdated();
+
+        const typesToReset = new Set<FiscalDocumentCode>(
+          normalizedIncomingAllocations.map((allocation) => allocation.ncfType)
+        );
+        const existingBuffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
+        const filteredBuffers = existingBuffers.filter((buffer) => {
+          const sameTerminal = !buffer?.terminalId || normalizeSequenceKey(buffer.terminalId) === normalizedTerminalId;
+          const shouldReset = typesToReset.has(buffer.type);
+          return !(sameTerminal && shouldReset);
+        });
+
+        if (filteredBuffers.length !== existingBuffers.length) {
+          await dbAdapter.saveCollection('localFiscalBuffer', filteredBuffers);
+          emitLocalFiscalBufferUpdated();
+        }
+      } else {
+        const existingAllocations = await dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations') || [];
+        const existingBuffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
+        const allocationMerge = mergeFiscalAllocationsState(existingAllocations, fiscalAllocations, terminalId, existingBuffers);
+        await dbAdapter.saveCollection('fiscalAllocations', allocationMerge.mergedAllocations);
+        emitFiscalAllocationsUpdated();
+        allocationMerge.bufferTypesToReset.forEach((type) => bufferTypesToReset.add(type));
+      }
     }
 
     if (bufferTypesToReset.size > 0) {

@@ -935,10 +935,25 @@ class SyncManager {
 
     async refreshTerminalFiscalStateFromServer(baseConfig?: BusinessConfig | null): Promise<BusinessConfig | null> {
         try {
-            return await this.refreshTerminalResolvedConfig(baseConfig ?? null, {
+            const refreshedConfig = await this.refreshTerminalResolvedConfig(baseConfig ?? null, {
                 forceRemoteFetch: true,
                 resolvedScopes: ['documents'],
             });
+            if (refreshedConfig) {
+                const context = this.getActiveTerminalContext(refreshedConfig);
+                const operationalTerminalId = context.localTerminalId || context.terminalId;
+                if (operationalTerminalId) {
+                    const operationalDocumentState = extractTerminalOperationalDocumentState(refreshedConfig, operationalTerminalId);
+                    await db.rehydrateOperationalDocumentState(
+                        operationalDocumentState.documentSeries,
+                        operationalDocumentState.fiscalRanges,
+                        operationalDocumentState.fiscalAllocations,
+                        operationalDocumentState.terminalId,
+                        { replaceTerminalFiscalState: true },
+                    );
+                }
+            }
+            return refreshedConfig;
         } catch (error) {
             console.warn('⚠️ SyncManager: fiscal state refresh failed:', error);
             return null;
