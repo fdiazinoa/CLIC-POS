@@ -6,6 +6,9 @@ import { db } from '../../utils/db';
 type IncomingProduct = Partial<Product> & Record<string, any>;
 
 const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+const asObject = (value: unknown): Record<string, any> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, any>) : {};
+const asArray = <T = any>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
 const asNumber = (value: unknown, fallback = 0): number => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -248,6 +251,14 @@ class ProductImageCacheService {
   private normalizeSingleIncomingProduct(item: IncomingProduct, localProduct?: Product): IncomingProduct {
     const imageUrl = this.resolveRemoteImageUrl(item);
     const imageVersion = this.resolveRemoteImageVersion(item, imageUrl);
+    const incomingOperationalFlags = asObject(item.operationalFlags ?? item.operational_flags);
+    const localOperationalFlags = asObject(localProduct?.operationalFlags);
+    const recipeDetails = asArray(item.recipeDetails ?? item.recipe_details);
+    const rawKitInventoryMode = asString(item.kitInventoryMode ?? item.kit_inventory_mode).toUpperCase();
+    const kitInventoryMode =
+      rawKitInventoryMode === 'FINISHED_GOOD' || rawKitInventoryMode === 'COMPONENT_CONSUMPTION'
+        ? rawKitInventoryMode
+        : localProduct?.kitInventoryMode;
 
     const normalized: IncomingProduct = {
       ...item,
@@ -266,6 +277,7 @@ class ProductImageCacheService {
       attributes: Array.isArray(item.attributes) ? item.attributes : localProduct?.attributes || [],
       variants: Array.isArray(item.variants) ? item.variants : localProduct?.variants || [],
       tariffs: Array.isArray(item.tariffs) ? item.tariffs : localProduct?.tariffs || [],
+      recipeDetails: recipeDetails.length > 0 ? recipeDetails : localProduct?.recipeDetails || [],
       appliedTaxIds: uniqueStrings(
         Array.isArray(item.appliedTaxIds)
           ? item.appliedTaxIds
@@ -280,6 +292,24 @@ class ProductImageCacheService {
         item.isInventoriable ?? item.is_inventoriable,
         localProduct?.isInventoriable ?? true,
       ),
+      kitInventoryMode,
+      batchYield: asNumber(item.batchYield ?? item.batch_yield, localProduct?.batchYield ?? 1),
+      measurementUnit: asString(item.measurementUnit ?? item.measurement_unit) || localProduct?.measurementUnit || 'Unidad',
+      purchaseUnit: asString(item.purchaseUnit ?? item.purchase_unit) || localProduct?.purchaseUnit || 'Unidad',
+      conversionFactor: asNumber(item.conversionFactor ?? item.conversion_factor, localProduct?.conversionFactor ?? 1),
+      operationalFlags: {
+        isWeighted: asBoolean(incomingOperationalFlags.isWeighted, asBoolean(localOperationalFlags.isWeighted, false)),
+        trackInventory: asBoolean(incomingOperationalFlags.trackInventory, asBoolean(localOperationalFlags.trackInventory, true)),
+        autoPrintLabel: asBoolean(incomingOperationalFlags.autoPrintLabel, asBoolean(localOperationalFlags.autoPrintLabel, false)),
+        promptPrice: asBoolean(incomingOperationalFlags.promptPrice, asBoolean(localOperationalFlags.promptPrice, false)),
+        integersOnly: asBoolean(incomingOperationalFlags.integersOnly, asBoolean(localOperationalFlags.integersOnly, false)),
+        ageRestricted: asBoolean(incomingOperationalFlags.ageRestricted, asBoolean(localOperationalFlags.ageRestricted, false)),
+        allowNegativeStock: asBoolean(incomingOperationalFlags.allowNegativeStock, asBoolean(localOperationalFlags.allowNegativeStock, false)),
+        excludeFromPromotions: asBoolean(incomingOperationalFlags.excludeFromPromotions, asBoolean(localOperationalFlags.excludeFromPromotions, false)),
+        excludeFromLoyalty: asBoolean(incomingOperationalFlags.excludeFromLoyalty, asBoolean(localOperationalFlags.excludeFromLoyalty, false)),
+        usesLots: asBoolean(incomingOperationalFlags.usesLots, asBoolean(localOperationalFlags.usesLots, false)),
+        usesSerial: asBoolean(incomingOperationalFlags.usesSerial, asBoolean(localOperationalFlags.usesSerial, false)),
+      },
     };
 
     delete normalized.image_url;
