@@ -14,13 +14,21 @@ export interface SyncState {
 class BackgroundSyncManager {
     private isProcessing = false;
     private interval: any = null;
+    private retryTimeout: any = null;
+    private initialized = false;
     private listeners: Set<(state: SyncState) => void> = new Set();
+    private onlineHandler: (() => void) | null = null;
+    private offlineHandler: (() => void) | null = null;
+    private focusHandler: (() => void) | null = null;
+    private visibilityHandler: (() => void) | null = null;
     private state: SyncState = {
         pendingCount: 0,
         isSyncing: false,
         hasError: false,
         lastSyncTime: null
     };
+    private readonly WORKER_INTERVAL_MS = 30000;
+    private readonly FAST_RETRY_DELAY_MS = 5000;
 
     /**
      * Initialize the background sync manager
@@ -31,7 +39,14 @@ class BackgroundSyncManager {
             return;
         }
 
+        if (this.initialized) {
+            await this.updatePendingCount();
+            this.startWorker();
+            return;
+        }
+
         console.log('🔄 BackgroundSyncManager: Initializing...');
+        this.initialized = true;
 
         // Recover interrupted sync states from previous crashes/reloads.
         await this.recoverStuckSyncItems();
@@ -43,22 +58,62 @@ class BackgroundSyncManager {
         // Start background worker
         this.startWorker();
 
-        // Listen for online events
-        window.addEventListener('online', () => {
+        this.onlineHandler = () => {
             console.log('🌐 Network is back online. Triggering immediate sync...');
-            this.sync();
-        });
+            apiSyncAdapter.resetCircuit();
+            this.scheduleSync(0);
+        };
 
-        // Listen for offline events to update UI
-        window.addEventListener('offline', () => {
+        this.offlineHandler = () => {
+            this.clearRetryTimeout();
             this.updateState({ hasError: true });
-        });
+        };
+
+        this.focusHandler = () => {
+            if (!navigator.onLine) return;
+            apiSyncAdapter.resetCircuit();
+            this.scheduleSync(0);
+        };
+
+        this.visibilityHandler = () => {
+            if (document.hidden || !navigator.onLine) return;
+            apiSyncAdapter.resetCircuit();
+            this.scheduleSync(0);
+        };
+
+        window.addEventListener('online', this.onlineHandler);
+        window.addEventListener('offline', this.offlineHandler);
+        window.addEventListener('focus', this.focusHandler);
+        document.addEventListener('visibilitychange', this.visibilityHandler);
     }
 
     private startWorker() {
         if (this.interval) clearInterval(this.interval);
-        this.interval = setInterval(() => this.sync(), 30000); // Every 30 seconds
-        console.log('⚙️ BackgroundSyncManager: Worker started (30s interval)');
+        this.interval = setInterval(() => this.sync(), this.WORKER_INTERVAL_MS);
+        console.log(`⚙️ BackgroundSyncManager: Worker started (${this.WORKER_INTERVAL_MS / 1000}s interval)`);
+    }
+
+    private clearRetryTimeout() {
+        if (!this.retryTimeout) return;
+        clearTimeout(this.retryTimeout);
+        this.retryTimeout = null;
+    }
+
+    private scheduleSync(delayMs = this.FAST_RETRY_DELAY_MS) {
+        if (!navigator.onLine) return;
+
+        if (delayMs <= 0) {
+            this.clearRetryTimeout();
+            void this.sync();
+            return;
+        }
+
+        if (this.retryTimeout) return;
+
+        this.retryTimeout = setTimeout(() => {
+            this.retryTimeout = null;
+            void this.sync();
+        }, delayMs);
     }
 
     private isErpOperationalPushConfigured(): boolean {
@@ -133,9 +188,11 @@ class BackgroundSyncManager {
         // (In this architecture, Master also pushes to its own server to keep db.json as source of truth)
 
         this.isProcessing = true;
+        this.clearRetryTimeout();
         this.updateState({ isSyncing: true, hasError: false });
 
         const collectionErrors: string[] = [];
+        let shouldRetrySoon = false;
 
         try {
             // 1) Transactions first to prioritize sales visibility at central terminal.
@@ -190,13 +247,18 @@ class BackgroundSyncManager {
             await this.pruneSyncedItems();
             if (collectionErrors.length > 0) {
                 console.warn('⚠️ BackgroundSyncManager: Partial sync with errors:', collectionErrors);
+                shouldRetrySoon = true;
             }
         } catch (error) {
             console.error('❌ BackgroundSyncManager: Sync failed:', error);
             this.updateState({ isSyncing: false, hasError: true });
+            shouldRetrySoon = true;
         } finally {
             this.isProcessing = false;
             await this.updatePendingCount();
+            if (navigator.onLine && (shouldRetrySoon || this.state.pendingCount > 0)) {
+                this.scheduleSync(this.FAST_RETRY_DELAY_MS);
+            }
         }
     }
 
@@ -330,8 +392,10 @@ class BackgroundSyncManager {
      */
     async triggerSync() {
         await this.updatePendingCount();
-        // Don't await the sync itself to avoid blocking UI
-        this.sync();
+        if (navigator.onLine) {
+            apiSyncAdapter.resetCircuit();
+        }
+        this.scheduleSync(0);
     }
 
     /**
