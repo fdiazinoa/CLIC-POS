@@ -273,30 +273,38 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
                             <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-bold text-gray-700 flex items-center gap-2">
                                 <Banknote size={18} /> Detalle de Efectivo
                             </div>
-                            <div className="p-4">
-                                <div className="grid grid-cols-4 gap-4 text-sm font-bold text-gray-500 mb-2 px-2">
-                                    <div>Moneda</div>
-                                    <div className="text-right">Esperado</div>
-                                    <div className="text-right">Contado</div>
-                                    <div className="text-right">Diferencia</div>
-                                </div>
-                                {Object.keys(r.cashExpected || {}).map(currency => {
-                                    const expected = (r.cashExpected || {})[currency] || 0;
-                                    const counted = (r.cashCounted || {})[currency] || 0;
-                                    const diff = (r.cashDiscrepancy || {})[currency] || 0;
-                                    const isDiff = Math.abs(diff) > 0.01;
+                            <div className="p-2 sm:p-4">
+                                <div className="overflow-x-auto rounded-lg border border-gray-100">
+                                    <table className="w-full min-w-[360px] text-sm border-collapse">
+                                        <thead>
+                                            <tr className="bg-gray-50 border-b border-gray-200">
+                                                <th className="py-2.5 px-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wide">Moneda</th>
+                                                <th className="py-2.5 px-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wide whitespace-nowrap">Esperado</th>
+                                                <th className="py-2.5 px-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wide whitespace-nowrap">Contado</th>
+                                                <th className="py-2.5 px-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wide whitespace-nowrap">Diferencia</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {Object.keys(r.cashExpected || {}).map(currency => {
+                                                const expected = (r.cashExpected || {})[currency] || 0;
+                                                const counted = (r.cashCounted || {})[currency] || 0;
+                                                const diff = (r.cashDiscrepancy || {})[currency] || 0;
+                                                const isDiff = Math.abs(diff) > 0.01;
 
-                                    return (
-                                        <div key={currency} className="grid grid-cols-4 gap-4 py-3 border-t border-gray-100 items-center px-2">
-                                            <div className="font-bold text-gray-800">{currency}</div>
-                                            <div className="text-right text-gray-600">{expected.toFixed(2)}</div>
-                                            <div className="text-right text-gray-800 font-bold">{counted.toFixed(2)}</div>
-                                            <div className={`text-right font-bold ${isDiff ? 'text-red-600' : 'text-emerald-600'}`}>
-                                                {diff > 0 ? '+' : ''}{diff.toFixed(2)}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
+                                                return (
+                                                    <tr key={currency}>
+                                                        <td className="py-3 px-3 font-bold text-gray-800">{currency}</td>
+                                                        <td className="py-3 px-3 text-right text-gray-600 tabular-nums whitespace-nowrap">{expected.toFixed(2)}</td>
+                                                        <td className="py-3 px-3 text-right text-gray-800 font-bold tabular-nums whitespace-nowrap">{counted.toFixed(2)}</td>
+                                                        <td className={`py-3 px-3 text-right font-bold tabular-nums whitespace-nowrap ${isDiff ? 'text-red-600' : 'text-emerald-600'}`}>
+                                                            {diff > 0 ? '+' : ''}{diff.toFixed(2)}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         </div>
 
