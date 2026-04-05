@@ -3695,6 +3695,26 @@ const AppContent: React.FC = () => {
 
       const stats = calculateZReportStats(terminalTransactions, terminalCollections);
       const transactionCount = terminalTransactions.length;
+      const declaredCashByCurrency = (reportData?.cashCountedByCurrency || {}) as Record<string, unknown>;
+      const expectedCashByCurrencySnapshot = (reportData?.expectedCashByCurrency || {}) as Record<string, unknown>;
+
+      const cashDeclaredTotal: number = Object.values(declaredCashByCurrency).reduce<number>((sum, value) => {
+        const parsed = Number(value);
+        return sum + (Number.isFinite(parsed) ? parsed : 0);
+      }, 0);
+      const expectedCashTotal: number = Object.values(expectedCashByCurrencySnapshot).reduce<number>((sum, value) => {
+        const parsed = Number(value);
+        return sum + (Number.isFinite(parsed) ? parsed : 0);
+      }, 0);
+      const declaredCardTotal: number = Number(reportData?.declaredCardTotal) || 0;
+      const declaredOtherTotal: number = Number(reportData?.declaredOtherTotal) || 0;
+      const expectedCardTotal: number = Number(reportData?.expectedCardTotal) || 0;
+      const expectedOtherTotal: number = Number(reportData?.expectedOtherTotal) || 0;
+      const orderedTicketRefs = terminalTransactions
+        .map((transaction) => transaction.displayId || transaction.id)
+        .filter(Boolean);
+      const firstTicketId = orderedTicketRefs[0] || null;
+      const lastTicketId = orderedTicketRefs[orderedTicketRefs.length - 1] || null;
       const openedAtCandidates = [
         ...terminalTransactions.map(t => new Date(t.date).getTime()),
         ...terminalCashMovements.map(m => new Date(m.timestamp).getTime())
@@ -3788,6 +3808,27 @@ const AppContent: React.FC = () => {
         cashOut: reportData?.cashOut || 0,
         transactionCount,
         notes,
+        declared_totals: {
+          cash: cashDeclaredTotal,
+          card: declaredCardTotal,
+          other: declaredOtherTotal,
+          total_declared: cashDeclaredTotal + declaredCardTotal + declaredOtherTotal,
+        },
+        system_totals: {
+          expected_cash: expectedCashTotal,
+          expected_card: expectedCardTotal,
+          expected_other: expectedOtherTotal,
+          total_expected: expectedCashTotal + expectedCardTotal + expectedOtherTotal,
+          cash_difference: cashDeclaredTotal - expectedCashTotal,
+          total_difference:
+            (cashDeclaredTotal + declaredCardTotal + declaredOtherTotal)
+            - (expectedCashTotal + expectedCardTotal + expectedOtherTotal),
+        },
+        sync_audit: {
+          total_tickets_issued: transactionCount,
+          first_ticket_id: firstTicketId,
+          last_ticket_id: lastTicketId,
+        },
         stats,
         syncStatus: 'PENDING' as const
       };

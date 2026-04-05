@@ -1886,6 +1886,28 @@ export interface ZReportStats {
 
 export type ZReportModule = 'FINANCIAL' | 'PAYMENTS' | 'CASH_DETAILS' | 'KPIS' | 'AUDIT';
 
+export interface ZReportDeclaredTotals {
+  cash: number;
+  card: number;
+  other: number;
+  total_declared: number;
+}
+
+export interface ZReportSystemTotals {
+  expected_cash: number;
+  expected_card: number;
+  expected_other: number;
+  total_expected: number;
+  cash_difference: number;
+  total_difference: number;
+}
+
+export interface ZReportSyncAudit {
+  total_tickets_issued: number;
+  first_ticket_id: string | null;
+  last_ticket_id: string | null;
+}
+
 export interface ZReport {
   id: string;
   terminalId: string;
@@ -1916,6 +1938,9 @@ export interface ZReport {
   // Metadata
   transactionCount: number;
   notes: string;
+  declared_totals?: ZReportDeclaredTotals;
+  system_totals?: ZReportSystemTotals;
+  sync_audit?: ZReportSyncAudit;
 
   // Analytics
   stats?: ZReportStats;
