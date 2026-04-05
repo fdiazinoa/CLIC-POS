@@ -1468,13 +1468,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, []);
 
    const renderTicketBrand = useCallback((compact = false, terminalLabel?: string) => (
-      <div className={`inline-flex flex-col items-center ${compact ? 'gap-1' : 'gap-1.5'}`}>
-         <div className={`inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-950 shadow-sm ${compact ? 'px-2.5 py-1.5' : 'px-3.5 py-2'}`}>
-            <span className={`font-black uppercase tracking-[0.22em] text-slate-100 ${compact ? 'text-[0.72rem]' : 'text-[0.78rem]'}`}>CLIC</span>
-            <span className={`font-black uppercase tracking-[0.22em] text-sky-400 ${compact ? 'text-[0.72rem]' : 'text-[0.78rem]'}`}>POS</span>
+      <div className={`inline-flex flex-col items-center ${compact ? 'gap-1.5' : 'gap-2.5'}`}>
+         <div className={`inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-950 shadow-sm ${compact ? 'px-2.5 py-1.5' : 'px-4 py-2.5'}`}>
+            <span className={`font-black uppercase tracking-[0.22em] text-slate-100 ${compact ? 'text-[0.72rem]' : 'text-[0.8rem]'}`}>CLIC</span>
+            <span className={`font-black uppercase tracking-[0.22em] text-sky-400 ${compact ? 'text-[0.72rem]' : 'text-[0.8rem]'}`}>POS</span>
          </div>
          {terminalLabel && (
-            <span className={`font-black uppercase tracking-[0.18em] text-red-500 ${compact ? 'text-[0.58rem]' : 'text-[0.68rem]'}`}>
+            <span className={`font-extrabold uppercase tracking-[0.16em] text-red-500 leading-none ${compact ? 'text-[0.66rem]' : 'text-[0.84rem]'}`}>
                {terminalLabel}
             </span>
          )}
@@ -2982,7 +2982,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* MOBILE HEADER */}
             < div className="md:hidden p-4 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
-               <div className="flex justify-between items-center">
+               <div className="flex justify-between items-start">
                   <div className="flex items-center gap-3">
                      {renderTicketBrand(true, terminalDisplayLabel)}
                      <button onClick={() => setMobileView('PRODUCTS')} className="p-2 -ml-2 text-gray-400 hover:text-blue-600 transition-colors">
@@ -3058,9 +3058,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             {/* DESKTOP HEADER (HIDDEN ON MOBILE) */}
-            <div className="hidden md:flex p-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none" >
+            <div className="hidden md:flex px-5 pt-3 pb-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-4 shrink-0 flex-none" >
                <div className={`flex items-center gap-4 ${isRetailMode ? 'justify-between' : 'justify-center'}`}>
-                  <div className="shrink-0">
+                  <div className="shrink-0 self-start pt-1">
                      {renderTicketBrand(false, terminalDisplayLabel)}
                   </div>
                   {/* RETAIL MODE SEARCH BAR */}
