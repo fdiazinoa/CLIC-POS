@@ -9,7 +9,7 @@ import {
    Smartphone, Wallet, ShieldCheck, Database, HardDrive, Loader2, Wifi,
    Cpu, Keyboard, Activity, Layers, Activity as Wave, Barcode, Fingerprint
 } from 'lucide-react';
-import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech, PrinterDevice, ConnectionType, ScaleLabelConfig } from '../types';
+import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech, PrinterDevice, ConnectionType, ScaleLabelConfig, FingerprintReaderConfig, FingerprintDriver } from '../types';
 import { parseScaleBarcode } from '../utils/barcodeParser';
 import { nativePrintBridge } from '../services/printer/NativePrintBridge';
 import { biometricService } from '../services/BiometricAuthService';
@@ -42,6 +42,31 @@ const MOCK_DISCOVERY: Record<string, Partial<PrinterDevice>[]> = {
    'USB': [{ name: 'Epson TM-T88VI (USB)', address: 'USB_PORT_001' }],
    'NETWORK': [{ name: 'Impresora Cocina 1', address: '192.168.1.50' }]
 };
+
+const DEFAULT_FINGERPRINT_READER_CONFIG: FingerprintReaderConfig = {
+   isEnabled: false,
+   connectionType: 'USB',
+   port: 'USB_AUTO',
+   driver: 'AUTO',
+   notes: ''
+};
+
+const FINGERPRINT_DRIVER_OPTIONS: { id: FingerprintDriver; label: string; helper: string }[] = [
+   { id: 'AUTO', label: 'Auto detectar', helper: 'Recomendado para la mayoría de cajas POS.' },
+   { id: 'WEBAUTHN', label: 'Biometría integrada / WebAuthn', helper: 'Para huella integrada del equipo o navegador compatible.' },
+   { id: 'DIGITAL_PERSONA', label: 'DigitalPersona / HID', helper: 'Muy común en lectores USB de mostrador.' },
+   { id: 'SECUGEN', label: 'SecuGen', helper: 'Lectores USB y SDK de retail.' },
+   { id: 'ZKTECO', label: 'ZKTeco', helper: 'Usado en terminales POS y control de acceso.' },
+   { id: 'SUPREMA', label: 'Suprema', helper: 'Dispositivos BioMini y lectores corporativos.' },
+   { id: 'FUTRONIC', label: 'Futronic', helper: 'Lectores FS80/FS88 en Windows y Android integrados.' },
+   { id: 'NITGEN', label: 'Nitgen', helper: 'Lectores HAMSTER y líneas compatibles.' }
+];
+
+const FINGERPRINT_CONNECTION_OPTIONS: { id: FingerprintReaderConfig['connectionType']; label: string; icon: React.ElementType; helper: string }[] = [
+   { id: 'USB', label: 'USB', icon: Usb, helper: 'La más común en POS Android y Windows.' },
+   { id: 'SERIAL', label: 'Serie / COM', icon: Cable, helper: 'Para lectores industriales RS-232.' },
+   { id: 'NETWORK', label: 'Red IP', icon: Wifi, helper: 'Solo si el lector expone servicio por red.' }
+];
 
 
 interface HardwareSettingsProps {
@@ -88,6 +113,9 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    const [allowBiometrics, setAllowBiometrics] = useState<boolean>(
       currentTerminalConfig?.config?.security?.allowBiometrics || false
    );
+   const [fingerprintReader, setFingerprintReader] = useState<FingerprintReaderConfig>(
+      currentTerminalConfig?.config?.hardware?.fingerprintReader || DEFAULT_FINGERPRINT_READER_CONFIG
+   );
    const [biometricAvailable, setBiometricAvailable] = useState(false);
    const [biometricChecking, setBiometricChecking] = useState(true);
    const [previewMode, setPreviewMode] = useState<'IDLE' | 'CHECKOUT'>('CHECKOUT');
@@ -108,6 +136,10 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    useEffect(() => {
       setAllowBiometrics(currentTerminalConfig?.config?.security?.allowBiometrics || false);
    }, [currentTerminalConfig?.config?.security?.allowBiometrics]);
+
+   useEffect(() => {
+      setFingerprintReader(currentTerminalConfig?.config?.hardware?.fingerprintReader || DEFAULT_FINGERPRINT_READER_CONFIG);
+   }, [currentTerminalConfig?.config?.hardware?.fingerprintReader]);
 
    useEffect(() => {
       let mounted = true;
@@ -230,7 +262,8 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                      ...t.config,
                      hardware: {
                         ...t.config.hardware,
-                        customerDisplay: displayConfig
+                        customerDisplay: displayConfig,
+                        fingerprintReader
                      },
                      security: {
                         ...t.config.security,
@@ -249,6 +282,9 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    const renderFingerprintSettings = () => {
       const biometricRuntime = nativePrintBridge.getRuntime();
       const secureContextReady = window.isSecureContext || window.location.hostname === 'localhost';
+      const driverMeta = FINGERPRINT_DRIVER_OPTIONS.find(option => option.id === fingerprintReader.driver);
+      const connectionMeta = FINGERPRINT_CONNECTION_OPTIONS.find(option => option.id === fingerprintReader.connectionType);
+      const hardwareReady = allowBiometrics && fingerprintReader.isEnabled;
 
       return (
          <div className="bg-white p-8 rounded-[2.5rem] border border-gray-200 shadow-sm animate-in slide-in-from-right-4">
@@ -301,6 +337,124 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                      {secureContextReady ? 'Listo' : 'Requerido'}
                   </p>
                   <p className="text-xs text-slate-500 mt-1">WebAuthn necesita HTTPS o localhost para funcionar correctamente.</p>
+               </div>
+            </div>
+
+            <div className="mt-6 rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm">
+               <div className="flex flex-col gap-6">
+                  <div className="flex items-start justify-between gap-4">
+                     <div>
+                        <p className="text-sm font-black text-slate-900">Lector de huella externo</p>
+                        <p className="text-xs text-slate-500 mt-1">
+                           Configura cómo se conectará el lector en la terminal. En la mayoría de POS Android el puerto recomendado es USB.
+                        </p>
+                     </div>
+                     <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                        <input
+                           type="checkbox"
+                           checked={fingerprintReader.isEnabled}
+                           onChange={(e) => setFingerprintReader(prev => ({ ...prev, isEnabled: e.target.checked }))}
+                           className="sr-only peer"
+                        />
+                        <div className="w-14 h-7 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-blue-600"></div>
+                     </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                     {FINGERPRINT_CONNECTION_OPTIONS.map(option => (
+                        <button
+                           key={option.id}
+                           type="button"
+                           onClick={() => setFingerprintReader(prev => ({
+                              ...prev,
+                              connectionType: option.id,
+                              port: prev.connectionType === option.id
+                                 ? prev.port
+                                 : option.id === 'USB'
+                                    ? 'USB_AUTO'
+                                    : option.id === 'SERIAL'
+                                       ? 'COM1'
+                                       : '192.168.1.120:5000'
+                           }))}
+                           className={`rounded-3xl border-2 p-5 text-left transition-all ${
+                              fingerprintReader.connectionType === option.id
+                                 ? 'border-blue-500 bg-blue-50 shadow-sm'
+                                 : 'border-slate-200 bg-white hover:border-slate-300'
+                           }`}
+                        >
+                           <div className="flex items-center gap-3">
+                              <div className={`w-11 h-11 rounded-2xl flex items-center justify-center ${
+                                 fingerprintReader.connectionType === option.id ? 'bg-white text-blue-600' : 'bg-slate-100 text-slate-500'
+                              }`}>
+                                 <option.icon size={20} />
+                              </div>
+                              <div>
+                                 <p className="text-sm font-black text-slate-800">{option.label}</p>
+                                 <p className="text-[11px] text-slate-500 leading-relaxed">{option.helper}</p>
+                              </div>
+                           </div>
+                        </button>
+                     ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                     <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Puerto / Dirección</label>
+                        <div className="relative">
+                           <input
+                              type="text"
+                              value={fingerprintReader.port}
+                              onChange={(e) => setFingerprintReader(prev => ({ ...prev, port: e.target.value }))}
+                              placeholder={fingerprintReader.connectionType === 'NETWORK' ? '192.168.1.120:5000' : fingerprintReader.connectionType === 'SERIAL' ? 'COM1 o /dev/ttyS1' : 'USB_AUTO o /dev/bus/usb/001/002'}
+                              className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl font-mono font-bold text-slate-800 focus:bg-white focus:border-blue-400 outline-none transition-all"
+                           />
+                           <div className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300">
+                              {fingerprintReader.connectionType === 'NETWORK' ? <Wifi size={18} /> : fingerprintReader.connectionType === 'SERIAL' ? <Cable size={18} /> : <Usb size={18} />}
+                           </div>
+                        </div>
+                     </div>
+                     <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Driver / SDK</label>
+                        <select
+                           value={fingerprintReader.driver}
+                           onChange={(e) => setFingerprintReader(prev => ({ ...prev, driver: e.target.value as FingerprintDriver }))}
+                           className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl font-bold text-slate-800 outline-none focus:bg-white focus:border-blue-400"
+                        >
+                           {FINGERPRINT_DRIVER_OPTIONS.map(option => (
+                              <option key={option.id} value={option.id}>{option.label}</option>
+                           ))}
+                        </select>
+                        <p className="mt-2 text-[11px] text-slate-500 leading-relaxed">{driverMeta?.helper}</p>
+                     </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                     <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50">
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-2">Configuración activa</p>
+                        <p className={`text-sm font-black ${hardwareReady ? 'text-emerald-600' : 'text-slate-600'}`}>
+                           {hardwareReady ? 'Lista para la terminal' : 'Pendiente de habilitar'}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-1">
+                           {connectionMeta?.label} • {fingerprintReader.port || 'Sin puerto'} • {driverMeta?.label}
+                        </p>
+                     </div>
+                     <div className="p-4 rounded-2xl border border-amber-200 bg-amber-50">
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-600 mb-2">Nota operativa</p>
+                        <p className="text-xs text-amber-800 leading-relaxed">
+                           Esta configuración deja preparado el lector externo. La autenticación del navegador sigue dependiendo de WebAuthn o del bridge nativo/SDK instalado en el equipo.
+                        </p>
+                     </div>
+                  </div>
+
+                  <div>
+                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Observaciones técnicas</label>
+                     <textarea
+                        value={fingerprintReader.notes || ''}
+                        onChange={(e) => setFingerprintReader(prev => ({ ...prev, notes: e.target.value }))}
+                        placeholder="Ej. Lector DigitalPersona USB frontal. Requiere OTG y servicio nativo activo."
+                        className="w-full min-h-[96px] p-4 bg-slate-50 border-2 border-transparent rounded-2xl font-medium text-slate-700 focus:bg-white focus:border-blue-400 outline-none transition-all resize-none"
+                     />
+                  </div>
                </div>
             </div>
 
@@ -820,7 +974,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          </div>
 
          <div className="flex-1 overflow-hidden p-8 flex flex-col">
-            <div className="flex space-x-1 bg-gray-200 p-1 rounded-xl mb-6 self-start">
+            <div className="flex flex-wrap gap-2 mb-6 self-start">
                {[
                   { id: 'PERIPHERALS', label: 'Impresoras y Escáneres', icon: Printer },
                   { id: 'SCALES', label: 'Balanzas', icon: Scale },
@@ -831,7 +985,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                   <button
                      key={tab.id}
                      onClick={() => setActiveTab(tab.id as HardwareTab)}
-                     className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${activeTab === tab.id ? 'bg-white text-blue-600 shadow-md' : 'text-gray-500 hover:text-gray-700'
+                     className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all border ${activeTab === tab.id ? 'bg-white text-blue-600 shadow-md border-blue-200' : 'bg-white text-gray-500 border-gray-200 hover:text-gray-700 hover:border-gray-300'
                         }`}
                   >
                      <tab.icon size={16} /> {tab.label}
