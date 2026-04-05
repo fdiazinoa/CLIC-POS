@@ -2977,11 +2977,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* MOBILE HEADER */}
             < div className="md:hidden p-4 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
-               <div className="flex items-center justify-start">
-                  {renderTicketBrand(true)}
-               </div>
                <div className="flex justify-between items-center">
                   <div className="flex items-center gap-3">
+                     {renderTicketBrand(true)}
                      <button onClick={() => setMobileView('PRODUCTS')} className="p-2 -ml-2 text-gray-400 hover:text-blue-600 transition-colors">
                         <ArrowLeft size={24} />
                      </button>
@@ -3056,10 +3054,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* DESKTOP HEADER (HIDDEN ON MOBILE) */}
             <div className="hidden md:flex p-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none" >
-               <div className="flex items-center justify-start">
-                  {renderTicketBrand()}
-               </div>
                <div className={`flex items-center gap-4 ${isRetailMode ? 'justify-between' : 'justify-center'}`}>
+                  <div className="shrink-0">
+                     {renderTicketBrand()}
+                  </div>
                   {/* RETAIL MODE SEARCH BAR */}
                   {isRetailMode && (
                      <div className="flex-1 max-w-xl relative group">
