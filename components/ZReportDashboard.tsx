@@ -294,6 +294,11 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    // --- STATS CALCS (MULTI-CURRENCY) ---
    const payments = filteredTransactions.flatMap(t => t?.payments || []).filter(Boolean);
 
+   const totalsByMethod = payments.reduce((acc: Record<string, number>, p: any) => {
+      if (p?.method) acc[p.method] = (acc[p.method] || 0) + p.amount;
+      return acc;
+   }, {});
+
    // Group cash sales by currency
    const cashSalesByCurrency: Record<string, number> = {};
    payments.forEach(p => {
@@ -353,6 +358,22 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    // Calculate Stats for Preview
    const stats = calculateZReportStats(filteredTransactions, filteredCollections);
 
+   // --- Arqueo financiero (por método, moneda base) ---
+   const baseSym = baseCurrency?.symbol || '$';
+   const fmtAuditMoney = (n: number) =>
+      `${baseSym}${n.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+   const cardSalesTotal = totalsByMethod['CARD'] || 0;
+   const otherMethodsTotal = Object.entries(totalsByMethod).reduce((sum, [k, v]) => {
+      if (k !== 'CASH' && k !== 'CARD') return sum + v;
+      return sum;
+   }, 0);
+   const cashDeclaredRaw = cashCountedByCurrency[baseCurrencyCode] ?? '';
+   const hasCashDeclared =
+      cashDeclaredRaw.trim() !== '' && !Number.isNaN(parseFloat(cashDeclaredRaw));
+   const cashDeclaredNum = hasCashDeclared ? parseFloat(cashDeclaredRaw) : 0;
+   const cashExpectedBase = expectedCashInDrawer;
+   const cashRowDiff = hasCashDeclared ? cashDeclaredNum - cashExpectedBase : null;
+   const totalShortOver = cashRowDiff;
 
    if (showHistory) {
       return <ZReportHistory config={config} onClose={() => setShowHistory(false)} />;
@@ -470,6 +491,99 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                         <p className="text-[10px] text-indigo-400 uppercase font-bold mb-1 tracking-wider">Cobros CxC (Recibos)</p>
                         <p className="text-lg font-black text-indigo-700">{baseCurrency?.symbol}{stats.collectionsTotal.toFixed(2)}</p>
                      </div>
+                  </div>
+               </div>
+
+               {/* Arqueo financiero: tabla con columnas fijas + scroll en pantallas estrechas */}
+               <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 md:col-span-2">
+                  <h3 className="font-black text-blue-600 uppercase text-xs tracking-wider mb-4 flex items-center gap-2">
+                     <Banknote size={18} className="text-blue-600 shrink-0" /> Arqueo financiero
+                  </h3>
+                  <div className="overflow-x-auto rounded-xl border border-gray-100">
+                     <table className="w-full min-w-[520px] text-sm border-collapse">
+                        <thead>
+                           <tr className="bg-gray-50 border-b border-gray-200">
+                              <th className="py-3 px-3 text-left text-[10px] font-black text-gray-500 uppercase tracking-wider w-[30%]">
+                                 Método
+                              </th>
+                              <th className="py-3 px-3 text-right text-[10px] font-black text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                                 Esperado
+                              </th>
+                              <th className="py-3 px-3 text-right text-[10px] font-black text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                                 Declarado
+                              </th>
+                              <th className="py-3 px-3 text-right text-[10px] font-black text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                                 Diferencia
+                              </th>
+                           </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                           <tr>
+                              <td className="py-3 px-3 font-bold text-gray-800">Efectivo</td>
+                              <td className="py-3 px-3 text-right font-bold text-gray-700 tabular-nums whitespace-nowrap">
+                                 {fmtAuditMoney(cashExpectedBase)}
+                              </td>
+                              <td className="py-3 px-3 text-right font-bold text-gray-800 tabular-nums whitespace-nowrap">
+                                 {hasCashDeclared ? fmtAuditMoney(cashDeclaredNum) : '—'}
+                              </td>
+                              <td
+                                 className={`py-3 px-3 text-right font-black tabular-nums whitespace-nowrap ${cashRowDiff === null
+                                    ? 'text-gray-400'
+                                    : Math.abs(cashRowDiff) <= 0.01
+                                       ? 'text-emerald-600'
+                                       : 'text-red-600'
+                                    }`}
+                              >
+                                 {cashRowDiff === null
+                                    ? '—'
+                                    : `${cashRowDiff > 0 ? '+' : cashRowDiff < 0 ? '-' : ''}${fmtAuditMoney(Math.abs(cashRowDiff))}`}
+                              </td>
+                           </tr>
+                           <tr>
+                              <td className="py-3 px-3 font-bold text-gray-800">Tarjeta</td>
+                              <td className="py-3 px-3 text-right font-bold text-gray-700 tabular-nums whitespace-nowrap">
+                                 {fmtAuditMoney(cardSalesTotal)}
+                              </td>
+                              <td className="py-3 px-3 text-right font-bold text-gray-700 tabular-nums whitespace-nowrap">
+                                 {fmtAuditMoney(cardSalesTotal)}
+                              </td>
+                              <td className="py-3 px-3 text-right font-black text-emerald-600 tabular-nums whitespace-nowrap">
+                                 {fmtAuditMoney(0)}
+                              </td>
+                           </tr>
+                           <tr>
+                              <td className="py-3 px-3 font-bold text-gray-800">Otros medios</td>
+                              <td className="py-3 px-3 text-right font-bold text-gray-700 tabular-nums whitespace-nowrap">
+                                 {fmtAuditMoney(otherMethodsTotal)}
+                              </td>
+                              <td className="py-3 px-3 text-right font-bold text-gray-700 tabular-nums whitespace-nowrap">
+                                 {fmtAuditMoney(otherMethodsTotal)}
+                              </td>
+                              <td className="py-3 px-3 text-right font-black text-emerald-600 tabular-nums whitespace-nowrap">
+                                 {fmtAuditMoney(0)}
+                              </td>
+                           </tr>
+                        </tbody>
+                     </table>
+                  </div>
+                  <div className="mt-4 rounded-2xl bg-gray-50 border border-gray-100 px-4 py-4">
+                     <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">
+                        Total faltante / sobrante
+                     </p>
+                     <p
+                        className={`text-2xl font-black tabular-nums ${totalShortOver === null
+                           ? 'text-gray-400'
+                           : Math.abs(totalShortOver) <= 0.01
+                              ? 'text-emerald-600'
+                              : 'text-blue-900'
+                           }`}
+                     >
+                        {totalShortOver === null
+                           ? '—'
+                           : Math.abs(totalShortOver) <= 0.01
+                              ? fmtAuditMoney(0)
+                              : `${totalShortOver > 0 ? '+' : '-'}${fmtAuditMoney(Math.abs(totalShortOver))}`}
+                     </p>
                   </div>
                </div>
 
