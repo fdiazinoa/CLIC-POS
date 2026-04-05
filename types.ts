@@ -97,6 +97,24 @@ export interface PrinterDevice {
   type: 'TICKET' | 'LABEL' | 'KITCHEN' | 'LOGISTICS';
 }
 
+export type FingerprintDriver =
+  | 'AUTO'
+  | 'WEBAUTHN'
+  | 'DIGITAL_PERSONA'
+  | 'SECUGEN'
+  | 'ZKTECO'
+  | 'SUPREMA'
+  | 'FUTRONIC'
+  | 'NITGEN';
+
+export interface FingerprintReaderConfig {
+  isEnabled: boolean;
+  connectionType: Extract<ConnectionType, 'USB' | 'SERIAL' | 'NETWORK'>;
+  port: string;
+  driver: FingerprintDriver;
+  notes?: string;
+}
+
 // --- FISCAL NCF TYPES ---
 export type NCFType = 'B01' | 'B02' | 'B04' | 'B14' | 'B15';
 export type ElectronicNCFType = 'E31' | 'E32' | 'E34';
@@ -543,6 +561,7 @@ export interface TerminalConfig {
     printerAssignments?: Record<string, string>; // Roles: TICKET, LABEL, KITCHEN, LOGISTICS
     customerDisplay?: CustomerDisplayConfig;
     scales?: ScaleDevice[];
+    fingerprintReader?: FingerprintReaderConfig;
   };
   operational: {
     vertical_negocio: VerticalType;
