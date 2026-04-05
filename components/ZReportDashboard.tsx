@@ -70,6 +70,8 @@ const SlideButton: React.FC<{ onComplete: () => void; label: string; colorClass:
 
 const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashMovements, config, userName, currentUser, roles, onClose, onConfirmClose, terminalId, collections }) => {
    const [cashCountedByCurrency, setCashCountedByCurrency] = useState<Record<string, string>>({});
+   const [declaredCard, setDeclaredCard] = useState('');
+   const [declaredOther, setDeclaredOther] = useState('');
    const [notes, setNotes] = useState('');
 
    // Closing workflow states
@@ -259,6 +261,10 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                cashIn,
                cashOut,
                expectedCash: expectedCashInDrawer,
+               declaredCardTotal: parseFloat(declaredCard) || 0,
+               declaredOtherTotal: parseFloat(declaredOther) || 0,
+               expectedCardTotal,
+               expectedOtherTotal,
                totalsByMethod: finalTotalsByMethod,
                stats: finalStats,
                transactionCount: finalTxCount,
@@ -349,9 +355,23 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const cashOut = cashOutByCurrency[baseCurrencyCode] || 0;
    const expectedCashInDrawer = expectedCashByCurrency[baseCurrencyCode] || 0;
    const cashDiscrepancy = cashDiscrepancyByCurrency[baseCurrencyCode] || 0;
+   const expectedCardTotal = payments
+      .filter(p => p.method === 'CARD')
+      .reduce((sum, p) => sum + p.amount, 0);
+   const expectedOtherTotal = payments
+      .filter(p => p.method !== 'CARD' && p.method !== 'CASH')
+      .reduce((sum, p) => sum + p.amount, 0);
 
    // Calculate Stats for Preview
    const stats = calculateZReportStats(filteredTransactions, filteredCollections);
+
+   useEffect(() => {
+      setDeclaredCard(prev => (prev === '' ? expectedCardTotal.toFixed(2) : prev));
+   }, [expectedCardTotal]);
+
+   useEffect(() => {
+      setDeclaredOther(prev => (prev === '' ? expectedOtherTotal.toFixed(2) : prev));
+   }, [expectedOtherTotal]);
 
 
    if (showHistory) {
@@ -574,6 +594,45 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                   ) : (
                      <p className="text-sm text-gray-400 text-center py-4">No hay efectivo pendiente por contar. Puedes cerrar la caja directamente.</p>
                   )}
+               </div>
+
+               <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+                  <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                     <Receipt size={18} className="text-gray-400" /> Declaración de medios no efectivos
+                  </h3>
+                  <div className="space-y-5">
+                     <label className="block space-y-2">
+                        <span className="text-sm font-semibold text-gray-600">Tarjeta / vouchers declarados</span>
+                        <div className="relative">
+                           <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">{baseCurrency?.symbol || baseCurrencyCode}</span>
+                           <input
+                              type="number"
+                              step="0.01"
+                              value={declaredCard}
+                              onChange={(e) => setDeclaredCard(e.target.value)}
+                              placeholder="0.00"
+                              className="w-full pl-16 pr-4 py-3 text-xl font-bold border-2 border-gray-200 rounded-2xl focus:border-blue-500 outline-none transition-colors"
+                           />
+                        </div>
+                        <p className="text-xs text-gray-400">Referencia del sistema: {(baseCurrency?.symbol || baseCurrencyCode)}{expectedCardTotal.toFixed(2)}</p>
+                     </label>
+
+                     <label className="block space-y-2">
+                        <span className="text-sm font-semibold text-gray-600">Otros medios declarados</span>
+                        <div className="relative">
+                           <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">{baseCurrency?.symbol || baseCurrencyCode}</span>
+                           <input
+                              type="number"
+                              step="0.01"
+                              value={declaredOther}
+                              onChange={(e) => setDeclaredOther(e.target.value)}
+                              placeholder="0.00"
+                              className="w-full pl-16 pr-4 py-3 text-xl font-bold border-2 border-gray-200 rounded-2xl focus:border-blue-500 outline-none transition-colors"
+                           />
+                        </div>
+                        <p className="text-xs text-gray-400">Incluye transferencias, cheques u otros medios. Referencia del sistema: {(baseCurrency?.symbol || baseCurrencyCode)}{expectedOtherTotal.toFixed(2)}</p>
+                     </label>
+                  </div>
                </div>
             </div>
 
