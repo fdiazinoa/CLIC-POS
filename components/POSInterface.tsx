@@ -204,6 +204,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTerminal = (config.terminals || []).find(t => t.id === activeTerminalId) || (config.terminals || [])[0];
    const activeTerminalConfig = activeTerminal?.config;
    const terminalId = activeTerminal?.id || 'T1';
+   const terminalDisplaySource = activeTerminalConfig?.terminalName || activeTerminalConfig?.stationNumber || terminalId;
+   const terminalDisplayLabel = useMemo(() => {
+      const normalized = String(terminalDisplaySource || terminalId).trim();
+      if (!normalized) return `T-${terminalId}`;
+      return /^t-/i.test(normalized) ? normalized.toUpperCase() : `T-${normalized.toUpperCase()}`;
+   }, [terminalDisplaySource, terminalId]);
    const defaultSalesWarehouseId = activeTerminalConfig?.inventoryScope?.defaultSalesWarehouseId;
    const uxConfig = activeTerminalConfig?.ux || { showProductImages: true, gridDensity: 'COMFORTABLE', theme: 'LIGHT', quickKeysLayout: 'A' };
    const normalizeScopeKey = useCallback((value: unknown) => {
@@ -1461,10 +1467,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       setActiveCartItemId((current) => (current === cartId ? null : cartId));
    }, []);
 
-   const renderTicketBrand = useCallback((compact = false) => (
-      <div className={`inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-950 shadow-sm ${compact ? 'px-2.5 py-1.5' : 'px-3.5 py-2'}`}>
-         <span className={`font-black uppercase tracking-[0.22em] text-slate-100 ${compact ? 'text-[0.72rem]' : 'text-[0.78rem]'}`}>CLIC</span>
-         <span className={`font-black uppercase tracking-[0.22em] text-sky-400 ${compact ? 'text-[0.72rem]' : 'text-[0.78rem]'}`}>POS</span>
+   const renderTicketBrand = useCallback((compact = false, terminalLabel?: string) => (
+      <div className={`inline-flex flex-col items-center ${compact ? 'gap-1.5' : 'gap-2.5'}`}>
+         <div className={`inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-950 shadow-sm ${compact ? 'px-2.5 py-1.5' : 'px-4 py-2.5'}`}>
+            <span className={`font-black uppercase tracking-[0.22em] text-slate-100 ${compact ? 'text-[0.72rem]' : 'text-[0.8rem]'}`}>CLIC</span>
+            <span className={`font-black uppercase tracking-[0.22em] text-sky-400 ${compact ? 'text-[0.72rem]' : 'text-[0.8rem]'}`}>POS</span>
+         </div>
+         {terminalLabel && (
+            <span className={`font-extrabold uppercase tracking-[0.16em] text-red-500 leading-none ${compact ? 'text-[0.66rem]' : 'text-[0.84rem]'}`}>
+               {terminalLabel}
+            </span>
+         )}
       </div>
    ), []);
    const cartQuantity = useMemo(
@@ -2675,18 +2688,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <div className="flex flex-col leading-tight md:hidden min-w-0">
                      <p className="text-[11px] font-black text-slate-800 truncate max-w-[96px]">{currentUser.name.split(' ')[0]}</p>
                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.24em] mt-1">Cajero</p>
-                     <div className="mt-1 inline-flex items-center gap-1 rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-blue-700 shadow-sm w-fit">
-                        <span className="text-[9px] font-black uppercase tracking-[0.2em]">Caja</span>
-                        <span className="text-[10px] font-black">{terminalId}</span>
-                     </div>
                   </div>
                   <div className="hidden lg:block leading-tight">
                      <p className="text-sm font-black text-gray-800 truncate max-w-[120px]">{currentUser.name}</p>
-                     <div className="flex items-center gap-2">
-                        <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">Cajero</p>
-                        <span className="text-gray-300">•</span>
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">T-{terminalId}</p>
-                     </div>
+                     <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">Cajero</p>
                   </div>
                </div>
 
@@ -2977,9 +2982,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
             {/* MOBILE HEADER */}
             < div className="md:hidden p-4 border-b border-gray-100 bg-white flex flex-col gap-3 shrink-0" >
-               <div className="flex justify-between items-center">
+               <div className="flex justify-between items-start">
                   <div className="flex items-center gap-3">
-                     {renderTicketBrand(true)}
+                     {renderTicketBrand(true, terminalDisplayLabel)}
                      <button onClick={() => setMobileView('PRODUCTS')} className="p-2 -ml-2 text-gray-400 hover:text-blue-600 transition-colors">
                         <ArrowLeft size={24} />
                      </button>
@@ -3053,10 +3058,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             {/* DESKTOP HEADER (HIDDEN ON MOBILE) */}
-            <div className="hidden md:flex p-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-3 shrink-0 flex-none" >
+            <div className="hidden md:flex px-5 pt-3 pb-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-4 shrink-0 flex-none" >
                <div className={`flex items-center gap-4 ${isRetailMode ? 'justify-between' : 'justify-center'}`}>
-                  <div className="shrink-0">
-                     {renderTicketBrand()}
+                  <div className="shrink-0 self-start pt-1">
+                     {renderTicketBrand(false, terminalDisplayLabel)}
                   </div>
                   {/* RETAIL MODE SEARCH BAR */}
                   {isRetailMode && (
