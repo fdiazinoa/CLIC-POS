@@ -2467,10 +2467,12 @@ const AppContent: React.FC = () => {
           ? 'SERVER_ERP'
           : 'SERVER_LOCAL';
       localStorage.setItem(TERMINAL_SETUP_MODE_KEY, nextSetupMode);
-      localStorage.setItem(
-        'active_tenant_id',
-        setupResult?.tenantId || localStorage.getItem('active_tenant_id') || 'default-tenant'
-      );
+      const resolvedTenantId =
+        setupResult?.tenantId || localStorage.getItem('active_tenant_id') || 'default-tenant';
+      localStorage.setItem('active_tenant_id', resolvedTenantId);
+      if (resolvedTenantId && resolvedTenantId !== 'default-tenant') {
+        localStorage.setItem('clic_tenant_id', resolvedTenantId);
+      }
 
       if (Array.isArray(setupResult?.boundUsers)) {
         setUsers(setupResult.boundUsers);
