@@ -25,6 +25,7 @@ import {
   resolveDocumentAssignmentId,
   resolveDocumentSeriesDisplayPrefix,
 } from './documentSeriesIdentity';
+import { resolveTariffId, resolveWarehouseId } from './masterIdentity';
 
 const asObject = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -621,8 +622,8 @@ export const applyTerminalConfigSnapshot = (
 
   const terminalTemplate = resolveTerminalTemplate(nextConfig, terminalId);
   const terminalTerminalId = asString(resolvedIdentity.terminal_id) || terminalId;
-  const allowedTariffIds = asArray<string>(resolvedPricing.allowed_tariff_ids).filter(Boolean);
-  const allowedWarehouseIds = asArray<string>(resolvedInventory.allowed_warehouse_ids).filter(Boolean);
+  const rawAllowedTariffIds = asArray<string>(resolvedPricing.allowed_tariff_ids).filter(Boolean);
+  const rawAllowedWarehouseIds = asArray<string>(resolvedInventory.allowed_warehouse_ids).filter(Boolean);
   const allowedCategories = asArray<any>(resolvedCatalog.allowed_categories)
     .map((item) => {
       const data = asObject(item);
@@ -632,29 +633,39 @@ export const applyTerminalConfigSnapshot = (
 
   const effectiveTariffs = tariffs.length > 0 ? tariffs : nextConfig.tariffs || INITIAL_TARIFFS;
   const effectiveTaxes = taxes.length > 0 ? taxes : nextConfig.taxes || INITIAL_TAXES;
+  const allowedTariffIds = rawAllowedTariffIds
+    .map((value) => resolveTariffId(value, effectiveTariffs))
+    .filter(Boolean);
   const effectiveAllowedTariffIds =
     allowedTariffIds.length > 0
       ? allowedTariffIds
       : terminalTemplate.pricing?.allowedTariffIds?.length
         ? terminalTemplate.pricing.allowedTariffIds
+            .map((value) => resolveTariffId(value, effectiveTariffs))
+            .filter(Boolean)
         : effectiveTariffs.map((tariff) => tariff.id);
   const effectiveDefaultTariffId =
-    asString(resolvedPricing.default_tariff_id) ||
-    terminalTemplate.pricing?.defaultTariffId ||
+    resolveTariffId(asString(resolvedPricing.default_tariff_id), effectiveTariffs) ||
+    resolveTariffId(terminalTemplate.pricing?.defaultTariffId, effectiveTariffs) ||
     effectiveAllowedTariffIds[0] ||
     effectiveTariffs[0]?.id ||
     '';
 
   const effectiveWarehouses = warehouses.length > 0 ? warehouses : terminalTemplate.inventoryScope?.warehouses || [];
+  const allowedWarehouseIds = rawAllowedWarehouseIds
+    .map((value) => resolveWarehouseId(value, effectiveWarehouses))
+    .filter(Boolean);
   const effectiveAllowedWarehouseIds =
     allowedWarehouseIds.length > 0
       ? allowedWarehouseIds
       : terminalTemplate.inventoryScope?.visibleWarehouseIds?.length
         ? terminalTemplate.inventoryScope.visibleWarehouseIds
+            .map((value) => resolveWarehouseId(value, effectiveWarehouses))
+            .filter(Boolean)
         : effectiveWarehouses.map((warehouse) => warehouse.id);
   const effectiveDefaultWarehouseId =
-    asString(resolvedInventory.default_warehouse_id) ||
-    terminalTemplate.inventoryScope?.defaultSalesWarehouseId ||
+    resolveWarehouseId(asString(resolvedInventory.default_warehouse_id), effectiveWarehouses) ||
+    resolveWarehouseId(terminalTemplate.inventoryScope?.defaultSalesWarehouseId, effectiveWarehouses) ||
     effectiveAllowedWarehouseIds[0] ||
     '';
 
