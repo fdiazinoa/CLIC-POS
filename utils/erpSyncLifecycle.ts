@@ -75,6 +75,12 @@ type RuntimeDeviceInfo = {
     localIps?: string[] | null;
 };
 
+type SyncRequestError = Error & {
+    status?: number;
+    code?: string | null;
+    payload?: any;
+};
+
 type EnsureLifecycleParams = {
     deviceId: string;
     terminalId: string;
@@ -178,10 +184,48 @@ const readJson = async <T>(response: Response): Promise<T> => {
         const message = typeof payload?.message === 'string'
             ? payload.message
             : 'ERP sync lifecycle request failed';
-        throw new Error(message);
+        const error = new Error(message) as SyncRequestError;
+        error.status = response.status;
+        error.code = typeof payload?.code === 'string' ? payload.code : null;
+        error.payload = payload;
+        throw error;
     }
 
     return payload as T;
+};
+
+const shouldRecoverErpBinding = (error: unknown) => {
+    const requestError = error as SyncRequestError | null;
+    const code = normalizeOptional(requestError?.code || null).toUpperCase();
+    const message = normalizeOptional(requestError?.message || null).toLowerCase();
+
+    return (
+        code === 'DEVICE_SUPERSEDED'
+        || requestError?.status === 404
+        || message.includes('terminal no encontrada')
+        || message.includes('ya no es la terminal autorizada')
+        || message.includes('dispositivo ya no está autorizado')
+    );
+};
+
+const recoverErpSyncBinding = async (params: EnsureLifecycleParams) => {
+    clearStoredErpSyncBinding();
+
+    const bootstrap = await bootstrapErpSyncLifecycle(params.deviceId);
+    const recoveredBinding = getStoredErpSyncBinding();
+
+    let registered: SyncRegisterResponse | null = null;
+
+    if (!recoveredBinding.terminalId) {
+        registered = await registerErpSyncTerminal({
+            ...params,
+            companyId: params.companyId || recoveredBinding.companyId,
+            storeId: params.storeId || recoveredBinding.storeId,
+        });
+    }
+
+    const heartbeat = await heartbeatErpSyncTerminal(params, params.deviceId);
+    return { bootstrap, registered, heartbeat };
 };
 
 const persistBinding = (
@@ -634,7 +678,26 @@ export const ensureErpSyncLifecycle = async (params: EnsureLifecycleParams): Pro
         });
     }
 
-    const heartbeat = await heartbeatErpSyncTerminal(params, params.deviceId);
+    let heartbeat: SyncHeartbeatResponse | null = null;
+
+    try {
+        heartbeat = await heartbeatErpSyncTerminal(params, params.deviceId);
+    } catch (error) {
+        if (!shouldRecoverErpBinding(error)) {
+            throw error;
+        }
+
+        console.warn('[ERP SYNC] binding obsoleto detectado, reintentando registro de terminal.', error);
+        const rebound = await recoverErpSyncBinding({
+            ...params,
+            companyId: params.companyId || storedBinding.companyId,
+            storeId: params.storeId || storedBinding.storeId,
+        });
+
+        heartbeat = rebound.heartbeat;
+        registered = rebound.registered || registered;
+    }
+
     const outbox = await processErpSyncOutbox(params);
 
     return { bootstrap, registered, heartbeat, outbox };
