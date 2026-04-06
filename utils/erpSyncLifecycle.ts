@@ -121,11 +121,11 @@ const normalizeSyncApiBase = (value?: string | null): string => {
 const getSyncApiBase = () => {
     const env = (import.meta as any).env || {};
     const candidates = [
-        env.VITE_SYNC_API_URL,
-        env.VITE_ERP_SYNC_API_URL,
         localStorage.getItem(SYNC_API_URL_STORAGE_KEY),
         localStorage.getItem('CLIC_ERP_BASE_URL'),
         localStorage.getItem('erp_base_url'),
+        env.VITE_SYNC_API_URL,
+        env.VITE_ERP_SYNC_API_URL,
         env.VITE_ERP_BASE_URL,
     ];
 
