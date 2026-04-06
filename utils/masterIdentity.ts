@@ -30,6 +30,21 @@ const buildWarehouseTokens = (warehouse?: Partial<Warehouse> | null): Set<string
   return tokens;
 };
 
+const readEntryIdentifier = (entry: unknown, keys: string[]): string => {
+  if (typeof entry === 'string') return entry.trim();
+  if (!entry || typeof entry !== 'object') return '';
+
+  const record = entry as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return '';
+};
+
 export const tariffMatchesIdentifier = (tariff: Partial<Tariff> | TariffPrice | null | undefined, identifier: unknown): boolean => {
   const token = normalizeToken(identifier);
   if (!token) return false;
@@ -61,7 +76,10 @@ export const canonicalizeTariffEntries = (entries: TariffPrice[] = [], tariffs: 
   const normalized: TariffPrice[] = [];
 
   for (const entry of entries) {
-    const tariffId = resolveTariffId(entry?.tariffId, tariffs);
+    const tariffId = resolveTariffId(
+      readEntryIdentifier(entry, ['tariffId', 'tariff_id', 'id', 'code', 'tariffCode', 'tariff_code', 'name']),
+      tariffs
+    );
     if (!tariffId || seen.has(tariffId)) continue;
     seen.add(tariffId);
     normalized.push({
@@ -78,7 +96,10 @@ export const canonicalizeWarehouseIds = (warehouseIds: unknown[] = [], warehouse
   const normalized: string[] = [];
 
   for (const rawId of warehouseIds) {
-    const warehouseId = resolveWarehouseId(rawId, warehouses);
+    const warehouseId = resolveWarehouseId(
+      readEntryIdentifier(rawId, ['id', 'warehouseId', 'warehouse_id', 'code', 'name']) || rawId,
+      warehouses
+    );
     if (!warehouseId || seen.has(warehouseId)) continue;
     seen.add(warehouseId);
     normalized.push(warehouseId);

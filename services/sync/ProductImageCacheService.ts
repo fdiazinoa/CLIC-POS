@@ -26,20 +26,65 @@ const asBoolean = (value: unknown, fallback = false): boolean => {
 const uniqueStrings = (values: unknown[]): string[] =>
   Array.from(new Set(values.map((value) => asString(value)).filter(Boolean)));
 
-const normalizeTariffEntries = (value: unknown): TariffPrice[] =>
-  asArray(value)
-    .map((entry) => asObject(entry))
-    .filter((entry) => Object.keys(entry).length > 0)
-    .map((entry) => {
-      const tariffId = asString(entry.tariffId ?? entry.tariff_id ?? entry.id ?? entry.code ?? entry.tariffCode ?? entry.tariff_code);
+const normalizeTariffEntries = (value: unknown): TariffPrice[] => {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => asObject(entry))
+      .filter((entry) => Object.keys(entry).length > 0)
+      .map((entry) => {
+        const tariffId = asString(entry.tariffId ?? entry.tariff_id ?? entry.id ?? entry.code ?? entry.tariffCode ?? entry.tariff_code ?? entry.name);
+        if (!tariffId) return null;
+
+        return {
+          ...entry,
+          tariffId,
+          price: asNumber(entry.price),
+        };
+      })
+      .filter((entry): entry is TariffPrice => Boolean(entry));
+  }
+
+  const objectEntries = asObject(value);
+  if (Object.keys(objectEntries).length === 0) return [];
+
+  return Object.entries(objectEntries)
+    .map(([key, rawValue]) => {
+      if (typeof rawValue === 'number' || typeof rawValue === 'string') {
+        return {
+          tariffId: asString(key),
+          price: asNumber(rawValue),
+        };
+      }
+
+      const entry = asObject(rawValue);
+      const tariffId = asString(entry.tariffId ?? entry.tariff_id ?? entry.id ?? entry.code ?? entry.tariffCode ?? entry.tariff_code ?? key);
       if (!tariffId) return null;
 
       return {
+        ...entry,
         tariffId,
         price: asNumber(entry.price),
       };
     })
     .filter((entry): entry is TariffPrice => Boolean(entry));
+};
+
+const deriveWarehouseIdsFromSettings = (value: unknown): string[] => {
+  const settings = asObject(value);
+  if (Object.keys(settings).length === 0) return [];
+
+  return Object.entries(settings)
+    .filter(([, rawValue]) => {
+      if (rawValue === false) return false;
+      const entry = asObject(rawValue);
+      if (Object.keys(entry).length === 0) return true;
+      if (entry.active === false) return false;
+      if (entry.enabled === false) return false;
+      return true;
+    })
+    .map(([key]) => asString(key))
+    .filter(Boolean);
+};
 
 const normalizeTaxIdList = (value: unknown): string[] => {
   if (Array.isArray(value)) {
@@ -361,7 +406,15 @@ class ProductImageCacheService {
           ? item.activeInWarehouses
           : (Array.isArray(item.warehouse_ids)
               ? item.warehouse_ids
-              : (Array.isArray(metadata.activeInWarehouses) ? metadata.activeInWarehouses : localProduct?.activeInWarehouses || [])),
+              : (Array.isArray(metadata.activeInWarehouses)
+                  ? metadata.activeInWarehouses
+                  : (Array.isArray(metadata.warehouse_ids)
+                      ? metadata.warehouse_ids
+                      : (deriveWarehouseIdsFromSettings(item.warehouseSettings).length > 0
+                          ? deriveWarehouseIdsFromSettings(item.warehouseSettings)
+                          : (deriveWarehouseIdsFromSettings(metadata.warehouseSettings).length > 0
+                              ? deriveWarehouseIdsFromSettings(metadata.warehouseSettings)
+                              : localProduct?.activeInWarehouses || []))))),
         context.warehouses || []
       ),
       isInventoriable: asBoolean(
