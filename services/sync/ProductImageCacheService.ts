@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
-import type { Product } from '../../types';
+import type { Product, TariffPrice } from '../../types';
 import { db } from '../../utils/db';
 
 type IncomingProduct = Partial<Product> & Record<string, any>;
@@ -24,6 +24,21 @@ const asBoolean = (value: unknown, fallback = false): boolean => {
 
 const uniqueStrings = (values: unknown[]): string[] =>
   Array.from(new Set(values.map((value) => asString(value)).filter(Boolean)));
+
+const normalizeTariffEntries = (value: unknown): TariffPrice[] =>
+  asArray(value)
+    .map((entry) => asObject(entry))
+    .filter((entry) => Object.keys(entry).length > 0)
+    .map((entry) => {
+      const tariffId = asString(entry.tariffId ?? entry.tariff_id ?? entry.id ?? entry.code ?? entry.tariffCode ?? entry.tariff_code);
+      if (!tariffId) return null;
+
+      return {
+        tariffId,
+        price: asNumber(entry.price),
+      };
+    })
+    .filter((entry): entry is TariffPrice => Boolean(entry));
 
 const normalizeTaxIdList = (value: unknown): string[] => {
   if (Array.isArray(value)) {
@@ -297,6 +312,7 @@ class ProductImageCacheService {
   private normalizeSingleIncomingProduct(item: IncomingProduct, localProduct?: Product): IncomingProduct {
     const imageUrl = this.resolveRemoteImageUrl(item);
     const imageVersion = this.resolveRemoteImageVersion(item, imageUrl);
+    const metadata = asObject(item.metadata);
     const incomingOperationalFlags = asObject(item.operationalFlags ?? item.operational_flags);
     const localOperationalFlags = asObject(localProduct?.operationalFlags);
     const recipeDetails = asArray(item.recipeDetails ?? item.recipe_details);
@@ -322,13 +338,17 @@ class ProductImageCacheService {
       ]),
       attributes: Array.isArray(item.attributes) ? item.attributes : localProduct?.attributes || [],
       variants: Array.isArray(item.variants) ? item.variants : localProduct?.variants || [],
-      tariffs: Array.isArray(item.tariffs) ? item.tariffs : localProduct?.tariffs || [],
+      tariffs: normalizeTariffEntries(item.tariffs).length > 0
+        ? normalizeTariffEntries(item.tariffs)
+        : (normalizeTariffEntries(metadata.tariffs).length > 0 ? normalizeTariffEntries(metadata.tariffs) : localProduct?.tariffs || []),
       recipeDetails: recipeDetails.length > 0 ? recipeDetails : localProduct?.recipeDetails || [],
       appliedTaxIds: resolveIncomingTaxIds(item, localProduct),
       activeInWarehouses: uniqueStrings(
         Array.isArray(item.activeInWarehouses)
           ? item.activeInWarehouses
-          : (Array.isArray(item.warehouse_ids) ? item.warehouse_ids : localProduct?.activeInWarehouses || [])
+          : (Array.isArray(item.warehouse_ids)
+              ? item.warehouse_ids
+              : (Array.isArray(metadata.activeInWarehouses) ? metadata.activeInWarehouses : localProduct?.activeInWarehouses || []))
       ),
       isInventoriable: asBoolean(
         item.isInventoriable ?? item.is_inventoriable,

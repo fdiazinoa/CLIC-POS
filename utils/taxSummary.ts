@@ -1,4 +1,5 @@
 import { CartItem, TaxDefinition } from '../types';
+import { findTaxByIdentifier } from './taxIdentity';
 
 const round2 = (value: number): number =>
   Math.round((value + Number.EPSILON) * 100) / 100;
@@ -31,7 +32,7 @@ export const calculateTransactionTaxSummary = (
     const lineGross = round2(unitPrice * quantity);
     const itemTaxRate = hasExplicitItemTaxes
       ? (item.appliedTaxIds || []).reduce((sum, taxId) => {
-          const tax = safeTaxes.find(entry => entry.id === taxId);
+          const tax = findTaxByIdentifier(safeTaxes, taxId);
           return sum + (tax?.rate || 0);
         }, 0)
       : normalizedDefaultTaxRate;

@@ -205,6 +205,25 @@ const persistSetupErpBaseUrls = (value?: string | null) => {
   localStorage.setItem('CLIC_ERP_SYNC_URL', `${normalized}/api/sync`);
 };
 
+const resolvePersistedBusinessConfig = (rawConfig: unknown): BusinessConfig | null => {
+  if (!rawConfig) return null;
+
+  if (Array.isArray(rawConfig)) {
+    const candidate =
+      rawConfig.find((entry: any) => entry?.id === 'current')
+      || rawConfig.find((entry: any) => entry?.id !== '_db_initialized' && entry?.id !== 'config_metadata')
+      || rawConfig[0];
+
+    return candidate && !Array.isArray(candidate) && Array.isArray(candidate.terminals)
+      ? candidate as BusinessConfig
+      : null;
+  }
+
+  return !Array.isArray(rawConfig) && Array.isArray((rawConfig as BusinessConfig).terminals)
+    ? rawConfig as BusinessConfig
+    : null;
+};
+
 const normalizeTerminalDocumentAssignments = (
   sourceConfig: BusinessConfig | null | undefined
 ): { config: BusinessConfig | null | undefined; changed: boolean } => {
@@ -2589,7 +2608,10 @@ const AppContent: React.FC = () => {
         await syncManager.refreshTerminalResolvedConfig();
       }
 
-      const refreshedOperationalDocumentState = extractTerminalOperationalDocumentState(updatedConfig, terminalId);
+      const persistedConfigAfterSync = resolvePersistedBusinessConfig(await db.get('config') as unknown);
+      const postSyncConfig = persistedConfigAfterSync || updatedConfig;
+
+      const refreshedOperationalDocumentState = extractTerminalOperationalDocumentState(postSyncConfig, terminalId);
       await db.rehydrateOperationalDocumentState(
         refreshedOperationalDocumentState.documentSeries,
         refreshedOperationalDocumentState.fiscalRanges,
@@ -2598,8 +2620,9 @@ const AppContent: React.FC = () => {
       );
 
       const freshData = await db.init();
+      const hydratedConfig = resolvePersistedBusinessConfig(await db.get('config') as unknown) || postSyncConfig;
       flushSync(() => {
-        setConfig(updatedConfig);
+        setConfig(hydratedConfig);
         if (Array.isArray(freshData.users)) {
           setUsers(freshData.users);
         }
@@ -2627,7 +2650,7 @@ const AppContent: React.FC = () => {
       localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
       localStorage.setItem('active_terminal_id', terminalId);
       localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
-      localStorage.setItem('initial_terminal_config', JSON.stringify(updatedConfig));
+      localStorage.setItem('initial_terminal_config', JSON.stringify(hydratedConfig));
       if (resolvedErpBaseUrl) {
         persistSetupErpBaseUrls(resolvedErpBaseUrl);
       }

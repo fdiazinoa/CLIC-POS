@@ -13,11 +13,12 @@ import {
   PromotionTargetType,
   PromotionType,
   Tariff,
+  TaxDefinition,
   TerminalConfig,
   TerminalConfigSnapshot,
   Warehouse,
 } from '../types';
-import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG, INITIAL_TARIFFS } from '../constants';
+import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG, INITIAL_TARIFFS, INITIAL_TAXES } from '../constants';
 import {
   canonicalizeDocumentSeries,
   mergeDocumentSeriesCollection,
@@ -195,6 +196,26 @@ const normalizeWarehouse = (raw: unknown, index: number): Warehouse | null => {
     allowNegativeStock: asBoolean(data.allowNegativeStock ?? data.allow_negative_stock, false),
     isMain: asBoolean(data.isMain ?? data.is_main, index === 0),
     storeId: asString(data.storeId || data.store_id) || undefined,
+  };
+};
+
+const normalizeTax = (raw: unknown, index: number): TaxDefinition | null => {
+  const data = asObject(raw);
+  const id = asString(data.id || data.code || data.tax_id || data.taxCode || `tax-${index + 1}`);
+  if (!id) return null;
+
+  const rawType = asString(data.type || data.tax_type || 'OTHER').toUpperCase();
+  const type: TaxDefinition['type'] =
+    rawType === 'VAT' || rawType === 'SERVICE_CHARGE' || rawType === 'EXEMPT'
+      ? rawType
+      : 'OTHER';
+
+  return {
+    id,
+    code: asString(data.code || data.tax_code) || undefined,
+    name: asString(data.name || data.label || id) || id,
+    rate: asNumber(data.rate),
+    type,
   };
 };
 
@@ -537,6 +558,7 @@ export const applyTerminalConfigSnapshot = (
   const resolvedInventory = asObject(effectiveResolved.inventory);
   const resolvedDocuments = asObject(effectiveResolved.documents);
   const resolvedCatalog = asObject(effectiveResolved.catalog);
+  const resolvedTaxes = asArray(effectiveResolved.taxes);
   const resolvedLoyalty = asObject(effectiveResolved.loyalty);
   const hasIncomingFiscalAllocations = Object.prototype.hasOwnProperty.call(resolvedDocuments, 'fiscal_allocations');
 
@@ -556,6 +578,9 @@ export const applyTerminalConfigSnapshot = (
   const warehouses = asArray(resolvedInventory.warehouses)
     .map((item, index) => normalizeWarehouse(item, index))
     .filter(Boolean) as Warehouse[];
+  const taxes = resolvedTaxes
+    .map((item, index) => normalizeTax(item, index))
+    .filter(Boolean) as TaxDefinition[];
   const documentSeries = asArray(resolvedDocuments.document_series)
     .map((item, index) => normalizeDocumentSeries(item, index))
     .filter(Boolean) as DocumentSeries[];
@@ -605,6 +630,7 @@ export const applyTerminalConfigSnapshot = (
     .filter(Boolean);
 
   const effectiveTariffs = tariffs.length > 0 ? tariffs : nextConfig.tariffs || INITIAL_TARIFFS;
+  const effectiveTaxes = taxes.length > 0 ? taxes : nextConfig.taxes || INITIAL_TAXES;
   const effectiveAllowedTariffIds =
     allowedTariffIds.length > 0
       ? allowedTariffIds
@@ -822,6 +848,7 @@ export const applyTerminalConfigSnapshot = (
   }
 
   nextConfig.tariffs = effectiveTariffs;
+  nextConfig.taxes = effectiveTaxes;
   nextConfig.inventoryScope = {
     ...(nextConfig.inventoryScope || {}),
     defaultSalesWarehouseId: effectiveDefaultWarehouseId,

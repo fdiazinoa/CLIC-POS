@@ -1,4 +1,5 @@
 import { BusinessConfig, Reservation, Transaction, ZReport } from '../../types';
+import { findTaxByIdentifier } from '../../utils/taxIdentity';
 
 export interface EscPosLabelRecord {
   productId: string;
@@ -178,7 +179,7 @@ const shouldOpenDrawerForTransaction = (transaction: Transaction, config: Busine
 const getItemTaxRate = (item: Transaction['items'][number], config: BusinessConfig): number => {
   if (item.appliedTaxIds && item.appliedTaxIds.length > 0) {
     return item.appliedTaxIds.reduce((sum, id) => {
-      const tax = (config.taxes || []).find(candidate => candidate.id === id);
+      const tax = findTaxByIdentifier(config.taxes || [], id);
       return sum + (tax?.rate || 0);
     }, 0);
   }
