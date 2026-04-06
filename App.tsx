@@ -331,6 +331,17 @@ const getTerminalBindingMode = (setupMode: TerminalSetupMode | null): 'MASTER' |
   return setupMode === 'CLIENT' ? 'SLAVE' : 'MASTER';
 };
 
+const resolveEffectiveTerminalSetupMode = (): TerminalSetupMode | null => {
+  const storedMode = getStoredTerminalSetupMode();
+  if (storedMode) return storedMode;
+
+  const hasErpContext =
+    resolveSetupTenantId() !== 'default-tenant'
+    && Boolean(resolveSetupErpBaseUrl());
+
+  return hasErpContext ? 'SERVER_ERP' : null;
+};
+
 const hasPendingTerminalSetup = (): boolean => localStorage.getItem(TERMINAL_SETUP_PENDING_KEY) === '1';
 
 const buildConfigSyncUrl = (): string | null => {
@@ -4263,6 +4274,7 @@ const AppContent: React.FC = () => {
 
       case 'TERMINAL_PAIRING':
       case 'DEVICE_UNAUTHORIZED':
+        const effectiveSetupMode = resolveEffectiveTerminalSetupMode();
         return (
           <TerminalBindingScreen
             config={config}
@@ -4270,8 +4282,8 @@ const AppContent: React.FC = () => {
             adminUsers={users}
             tenantId={resolveSetupTenantId()}
             erpBaseUrl={resolveSetupErpBaseUrl() || undefined}
-            initialBindingMode={getTerminalBindingMode(getStoredTerminalSetupMode())}
-            integrationMode={getTerminalSetupIntegrationMode(getStoredTerminalSetupMode())}
+            initialBindingMode={getTerminalBindingMode(effectiveSetupMode)}
+            integrationMode={getTerminalSetupIntegrationMode(effectiveSetupMode)}
             onPair={handlePairTerminal}
             onConfigUpdate={handleConfigUpdate}
             onUsersUpdate={async (newUsers) => {
