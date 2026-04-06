@@ -158,6 +158,7 @@ const normalizeTariff = (raw: unknown, index: number): Tariff | null => {
 
   return {
     id,
+    code: asString(data.code || data.tariff_code || data.id || id) || id,
     name: asString(data.name || data.label || id) || id,
     active: asBoolean(data.active, true),
     currency: asString(data.currency || data.currency_code || 'DOP') || 'DOP',

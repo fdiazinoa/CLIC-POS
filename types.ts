@@ -1344,6 +1344,7 @@ export interface TariffPriceOverride {
 
 export interface Tariff {
   id: string;
+  code?: string;
   name: string;
   active: boolean;
   currency: string;
