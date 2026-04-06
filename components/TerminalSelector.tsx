@@ -306,6 +306,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
         if (data.tenant_id) {
           localStorage.setItem('active_tenant_id', data.tenant_id);
+          localStorage.setItem('clic_tenant_id', data.tenant_id);
         }
 
         if (resolvedBase) {
@@ -334,6 +335,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
         if (data.tenant_id) {
           localStorage.setItem('active_tenant_id', data.tenant_id);
+          localStorage.setItem('clic_tenant_id', data.tenant_id);
         }
 
         if (resolvedBase) {
@@ -492,6 +494,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
         if (data.tenant_id) {
           localStorage.setItem('active_tenant_id', data.tenant_id);
+          localStorage.setItem('clic_tenant_id', data.tenant_id);
         }
         if (erpBaseUrl) {
           persistErpBaseUrls(erpBaseUrl);
