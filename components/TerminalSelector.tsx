@@ -33,11 +33,13 @@ interface TerminalCard {
 interface TerminalSelectorResponse {
   tenant_id: string;
   erp_base_url?: string | null;
+  source?: string | null;
   terminals: TerminalCard[];
 }
 
 interface BindTerminalResponse {
   success: boolean;
+  source?: string | null;
   tenant_id: string;
   terminal_id: string;
   erp_terminal_id?: string | null;
@@ -52,10 +54,10 @@ interface BindTerminalResponse {
 
 interface InitialConfigResponse {
   success: boolean;
-  tenant_id: string;
-  terminal_id: string;
+  tenant_id?: string;
+  terminal_id?: string;
   erp_terminal_id?: string;
-  config: BusinessConfig;
+  config?: BusinessConfig;
   items?: Product[];
   terminal_config?: Record<string, any>;
   snapshot_meta?: {
@@ -146,6 +148,8 @@ const resolveTenantEmail = (): string | null => {
   return (localStorage.getItem('clic_tenant_email') || '').trim().toLowerCase() || null;
 };
 
+const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.vercel.app';
+
 const resolveErpBaseUrl = (): string | null => {
   const current = new URL(window.location.origin);
   const localErpOrigin = `${current.protocol}//${current.hostname}:4001`;
@@ -158,6 +162,7 @@ const resolveErpBaseUrl = (): string | null => {
     (import.meta as any)?.env?.VITE_ERP_BASE_URL,
     (import.meta as any)?.env?.VITE_ERP_SYNC_API_URL,
     (import.meta as any)?.env?.VITE_SYNC_API_URL,
+    DEFAULT_PUBLIC_ERP_BASE_URL,
     localErpOrigin,
   ];
 
@@ -208,6 +213,45 @@ const resolveReachableMasterBinding = async (masterIp?: string) => {
   };
 };
 
+const buildAndroidEmbeddedSetupBase = (): string =>
+  `${buildMasterUrlFromHost(window.location.hostname)}/api/setup`;
+
+const describeTerminalListFailure = (
+  err: unknown,
+  ctx: { bindingMode: 'MASTER' | 'SLAVE'; erpDirectAndroid: boolean }
+): string => {
+  const raw = err instanceof Error ? err.message : String(err);
+  const lower = raw.toLowerCase();
+  const isNetwork =
+    lower.includes('failed to fetch') ||
+    lower.includes('networkerror') ||
+    lower.includes('load failed') ||
+    (err instanceof Error && err.name === 'TypeError');
+
+  if (ctx.erpDirectAndroid && ctx.bindingMode === 'MASTER') {
+    if (raw.includes('ERP') || lower.includes('/api/sync')) {
+      return `Error al cargar terminales desde el ERP. ${raw}`;
+    }
+    if (isNetwork) {
+      return 'No hubo respuesta del proxy local (/api/setup) ni del ERP. Revisa la URL del ERP y la conectividad.';
+    }
+    return `No se pudieron cargar las terminales. ${raw}`;
+  }
+
+  if (ctx.bindingMode === 'SLAVE') {
+    if (isNetwork) {
+      return 'No se pudo alcanzar la caja maestra en la IP indicada (red, firewall o puerto).';
+    }
+    return `No se pudieron listar terminales en la maestra local. ${raw}`;
+  }
+
+  if (isNetwork) {
+    return 'Error de red al consultar terminales. Revisa la conexión.';
+  }
+
+  return raw || 'No pudimos cargar las terminales.';
+};
+
 export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   currentConfig,
   deviceId,
@@ -232,10 +276,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
   const [erpBaseUrl, setErpBaseUrl] = useState<string | null>(() => normalizeBaseUrl(initialErpBaseUrl) || resolveErpBaseUrl());
   const isNativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
   const expectsErpDirect = bindingMode === 'MASTER' && integrationMode === 'ERP_DIRECT';
-  // On Android, prefer the local setup API as a proxy to ERP so the WebView
-  // doesn't need to talk directly to the ERP host during pairing.
-  const usesErpProxy = expectsErpDirect && isNativeAndroid;
-  const usesErpDirect = expectsErpDirect && Boolean(erpBaseUrl) && !usesErpProxy;
+  const useErpDirectMasterAndroid = Boolean(isNativeAndroid && erpBaseUrl && bindingMode === 'MASTER' && expectsErpDirect);
+  const usesErpDirect = expectsErpDirect && Boolean(erpBaseUrl) && !isNativeAndroid;
   const isSetupPending = localStorage.getItem('clic_pos_terminal_setup_pending') === '1';
   const shouldBlockAlreadyBound = isAlreadyBound && !isSetupPending;
 
@@ -265,7 +307,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     }
 
     if (isNativeAndroid) {
-      return `${buildMasterUrlFromHost(window.location.hostname)}/api/setup`;
+      return buildAndroidEmbeddedSetupBase();
     }
     return getSetupApiBase(masterIpInput);
   }, [bindingMode, isNativeAndroid, masterIpInput]);
@@ -280,6 +322,21 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     setIsLoading(true);
     setError(null);
 
+    const persistListMeta = (data: TerminalSelectorResponse) => {
+      setTerminals(Array.isArray(data.terminals) ? data.terminals : []);
+      setTenantId(data.tenant_id || 'default-tenant');
+      const resolvedBase = normalizeBaseUrl(data.erp_base_url || erpBaseUrl) || erpBaseUrl;
+      setErpBaseUrl(resolvedBase);
+
+      if (data.tenant_id) {
+        localStorage.setItem('active_tenant_id', data.tenant_id);
+      }
+
+      if (resolvedBase) {
+        persistErpBaseUrls(resolvedBase);
+      }
+    };
+
     try {
       const resolvedTenantId = (initialTenantId || '').trim() || resolveTenantId();
       const resolvedTenantSlug = resolveTenantSlug();
@@ -289,7 +346,47 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         throw new Error('No encontramos la URL base del ERP para esta instalación.');
       }
 
-      if (usesErpDirect) {
+      const params = new URLSearchParams({
+        pos_device_id: deviceId,
+      });
+
+      if (resolvedTenantId) params.set('tenant_id', resolvedTenantId);
+      if (resolvedTenantSlug) params.set('tenant_slug', resolvedTenantSlug);
+      if (resolvedTenantEmail) params.set('tenant_email', resolvedTenantEmail);
+      if (erpBaseUrl) params.set('erp_base_url', erpBaseUrl);
+
+      if (useErpDirectMasterAndroid) {
+        const proxyBase = buildAndroidEmbeddedSetupBase();
+        try {
+          const response = await fetch(`${proxyBase}/terminals?${params.toString()}`);
+          if (response.ok) {
+            const proxyData = (await response.json()) as TerminalSelectorResponse;
+            const list = Array.isArray(proxyData.terminals) ? proxyData.terminals : [];
+            if (list.length > 0) {
+              persistListMeta(proxyData);
+              return;
+            }
+          }
+        } catch (proxyErr) {
+          console.warn('setup proxy /terminals failed, falling back to ERP direct', proxyErr);
+        }
+
+        const erpData = await listTerminalsFromErp({
+          currentConfig,
+          posDeviceId: deviceId,
+          tenantId: resolvedTenantId,
+          tenantSlug: resolvedTenantSlug,
+          tenantEmail: resolvedTenantEmail,
+          erpBaseUrl: erpBaseUrl!,
+        });
+
+        persistListMeta({
+          tenant_id: erpData.tenant_id,
+          erp_base_url: erpData.erp_base_url || erpBaseUrl!,
+          terminals: erpData.terminals as TerminalCard[],
+          source: 'ERP',
+        });
+      } else if (usesErpDirect) {
         const data = await listTerminalsFromErp({
           currentConfig,
           posDeviceId: deviceId,
@@ -298,64 +395,29 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           tenantEmail: resolvedTenantEmail,
           erpBaseUrl,
         });
-
-        setTerminals(Array.isArray(data.terminals) ? data.terminals : []);
-        setTenantId(data.tenant_id || 'default-tenant');
-        const resolvedBase = normalizeBaseUrl(data.erp_base_url || erpBaseUrl) || erpBaseUrl;
-        setErpBaseUrl(resolvedBase);
-
-        if (data.tenant_id) {
-          localStorage.setItem('active_tenant_id', data.tenant_id);
-          localStorage.setItem('clic_tenant_id', data.tenant_id);
-        }
-
-        if (resolvedBase) {
-          persistErpBaseUrls(resolvedBase);
-        }
+        persistListMeta(data);
       } else {
-        const params = new URLSearchParams({
-          pos_device_id: deviceId,
-        });
-
-        if (resolvedTenantId) params.set('tenant_id', resolvedTenantId);
-        if (resolvedTenantSlug) params.set('tenant_slug', resolvedTenantSlug);
-        if (resolvedTenantEmail) params.set('tenant_email', resolvedTenantEmail);
-        if (erpBaseUrl) params.set('erp_base_url', erpBaseUrl);
-
         const response = await fetch(`${apiBase}/terminals?${params.toString()}`);
         if (!response.ok) {
           throw new Error(`No se pudieron cargar las terminales (${response.status}).`);
         }
 
         const data = (await response.json()) as TerminalSelectorResponse;
-        setTerminals(Array.isArray(data.terminals) ? data.terminals : []);
-        setTenantId(data.tenant_id || 'default-tenant');
-        const resolvedBase = normalizeBaseUrl(data.erp_base_url || erpBaseUrl) || erpBaseUrl;
-        setErpBaseUrl(resolvedBase);
-
-        if (data.tenant_id) {
-          localStorage.setItem('active_tenant_id', data.tenant_id);
-          localStorage.setItem('clic_tenant_id', data.tenant_id);
-        }
-
-        if (resolvedBase) {
-          persistErpBaseUrls(resolvedBase);
-        }
+        persistListMeta(data);
       }
     } catch (err) {
       console.error('Failed to fetch terminals for setup:', err);
-      if (expectsErpDirect) {
-        setError('No pudimos cargar las terminales del ERP. Verifica la conexión, el tenant activo o la configuración del ERP.');
-      } else if (bindingMode === 'SLAVE') {
-        setError('No pudimos cargar las terminales. Verifica la conexión o valida la IP del Master local.');
-      } else {
-        setError('No pudimos cargar las terminales locales. Verifica la configuración operativa de esta caja.');
-      }
+      setError(
+        describeTerminalListFailure(err, {
+          bindingMode,
+          erpDirectAndroid: useErpDirectMasterAndroid,
+        })
+      );
       setTerminals([]);
     } finally {
       setIsLoading(false);
     }
-  }, [apiBase, bindingMode, currentConfig, deviceId, erpBaseUrl, expectsErpDirect, initialTenantId, shouldBlockAlreadyBound, usesErpDirect]);
+  }, [apiBase, bindingMode, currentConfig, deviceId, erpBaseUrl, expectsErpDirect, initialTenantId, shouldBlockAlreadyBound, useErpDirectMasterAndroid, usesErpDirect]);
 
   useEffect(() => {
     void fetchTerminals();
@@ -367,13 +429,58 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
       setError(null);
 
     try {
-      let data: BindTerminalResponse;
+      let data: BindTerminalResponse | null = null;
 
       if (expectsErpDirect && !erpBaseUrl) {
         throw new Error('No encontramos la URL base del ERP para completar la vinculación.');
       }
 
-      if (usesErpDirect) {
+      if (useErpDirectMasterAndroid) {
+        try {
+          const response = await fetch(`${buildAndroidEmbeddedSetupBase()}/bind-terminal`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tenant_id: tenantId,
+              tenant_slug: resolveTenantSlug(),
+              tenant_email: resolveTenantEmail(),
+              erp_base_url: erpBaseUrl,
+              terminal_id: terminal.id,
+              erp_terminal_id: terminal.erpTerminalId,
+              pos_device_id: deviceId,
+              binding_mode: bindingMode,
+              force_transfer: forceTransfer,
+            }),
+          });
+
+          if (response.status === 409) {
+            setPendingTerminal(terminal);
+            setShowTransferModal(true);
+            return;
+          }
+
+          if (response.ok) {
+            data = (await response.json()) as BindTerminalResponse;
+          }
+        } catch (proxyBindErr) {
+          console.warn('proxy bind-terminal failed, falling back to ERP direct', proxyBindErr);
+        }
+
+        if (!data) {
+          data = await bindTerminalFromErp({
+            currentConfig,
+            posDeviceId: deviceId,
+            terminalId: terminal.id,
+            erpTerminalId: terminal.erpTerminalId,
+            bindingMode,
+            forceTransfer,
+            tenantId,
+            tenantSlug: resolveTenantSlug(),
+            tenantEmail: resolveTenantEmail(),
+            erpBaseUrl: erpBaseUrl!,
+          });
+        }
+      } else if (usesErpDirect) {
         data = await bindTerminalFromErp({
           currentConfig,
           posDeviceId: deviceId,
@@ -384,7 +491,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           tenantId,
           tenantSlug: resolveTenantSlug(),
           tenantEmail: resolveTenantEmail(),
-          erpBaseUrl,
+          erpBaseUrl: erpBaseUrl!,
         });
       } else {
         const response = await fetch(`${apiBase}/bind-terminal`, {
@@ -417,6 +524,10 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         data = (await response.json()) as BindTerminalResponse;
       }
 
+        if (!data) {
+          throw new Error('No se pudo vincular la terminal.');
+        }
+
         const initialConfigParams = new URLSearchParams({
           tenant_id: data.tenant_id || tenantId,
           pos_device_id: deviceId,
@@ -436,9 +547,73 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           config: data.config,
         };
 
-        if (usesErpDirect) {
+        if (useErpDirectMasterAndroid) {
+          const erpTerminalIdForConfig =
+            data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id;
+          let erpInitialConfigData: InitialConfigResponse | null = null;
+
+          try {
+            const proxyBase = buildAndroidEmbeddedSetupBase();
+            const response = await fetch(
+              `${proxyBase}/initial-config/${encodeURIComponent(String(erpTerminalIdForConfig))}?${initialConfigParams.toString()}`,
+              {
+                headers: {
+                  'X-Device-Id': deviceId,
+                },
+              }
+            );
+            if (response.ok) {
+              const parsed = (await response.json()) as InitialConfigResponse;
+              if (extractTerminalConfigSnapshot(parsed)) {
+                erpInitialConfigData = parsed;
+              }
+            }
+          } catch (proxyInitialConfigErr) {
+            console.warn('proxy initial-config failed, falling back to ERP direct', proxyInitialConfigErr);
+          }
+
+          if (!erpInitialConfigData) {
+            erpInitialConfigData = await fetchInitialConfigFromErp({
+              erpBaseUrl: erpBaseUrl!,
+              tenantId: data.tenant_id || tenantId,
+              erpTerminalId: erpTerminalIdForConfig,
+              posDeviceId: deviceId,
+            });
+          }
+
+          const snapshot = extractTerminalConfigSnapshot(erpInitialConfigData);
+          if (!snapshot) {
+            throw new Error('El ERP no devolvió terminal_config en la configuración inicial.');
+          }
+
+          const applied = applyTerminalConfigSnapshot(
+            erpInitialConfigData.config || data.config || currentConfig,
+            {
+              terminalId: data.terminal_id || terminal.id,
+              posDeviceId: deviceId,
+              bindingMode,
+              incomingSnapshot: snapshot,
+            }
+          );
+
+          initialConfigData = {
+            ...erpInitialConfigData,
+            tenant_id: erpInitialConfigData.tenant_id || data.tenant_id || tenantId,
+            terminal_id: data.terminal_id || terminal.id,
+            erp_terminal_id: data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id,
+            config: applied.config,
+            snapshot_meta: {
+              ...(erpInitialConfigData.snapshot_meta || {}),
+              used_resolved: applied.usedResolved,
+              used_fallback_config: applied.usedFallbackConfig,
+              used_cached_snapshot: applied.usedCachedSnapshot,
+              resolution_error: snapshot.resolution_error ?? null,
+              full_pull_on_pairing: applied.fullPullOnPairing ?? false,
+            },
+          };
+        } else if (usesErpDirect) {
           const erpInitialConfigData = await fetchInitialConfigFromErp({
-            erpBaseUrl,
+            erpBaseUrl: erpBaseUrl!,
             tenantId: data.tenant_id || tenantId,
             erpTerminalId: data.erp_terminal_id || terminal.erpTerminalId || data.terminal_id || terminal.id,
             posDeviceId: deviceId,
@@ -494,7 +669,6 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
 
         if (data.tenant_id) {
           localStorage.setItem('active_tenant_id', data.tenant_id);
-          localStorage.setItem('clic_tenant_id', data.tenant_id);
         }
         if (erpBaseUrl) {
           persistErpBaseUrls(erpBaseUrl);
@@ -543,7 +717,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         setPendingTerminal(null);
       }
     },
-    [apiBase, bindingMode, currentConfig, deviceId, erpBaseUrl, expectsErpDirect, masterIpInput, onBound, tenantId, usesErpDirect]
+    [apiBase, bindingMode, currentConfig, deviceId, erpBaseUrl, expectsErpDirect, masterIpInput, onBound, tenantId, useErpDirectMasterAndroid, usesErpDirect]
   );
 
   const handleCardClick = useCallback(
