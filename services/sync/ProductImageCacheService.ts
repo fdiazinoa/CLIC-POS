@@ -1,7 +1,8 @@
 import { Capacitor } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
-import type { Product, TariffPrice } from '../../types';
+import type { BusinessConfig, Product, TariffPrice, Warehouse } from '../../types';
 import { db } from '../../utils/db';
+import { canonicalizeTariffEntries, canonicalizeWarehouseIds } from '../../utils/masterIdentity';
 
 type IncomingProduct = Partial<Product> & Record<string, any>;
 
@@ -59,6 +60,11 @@ const normalizeTaxIdList = (value: unknown): string[] => {
   }
 
   return [];
+};
+
+type NormalizationContext = {
+  tariffs: BusinessConfig['tariffs'];
+  warehouses: Warehouse[];
 };
 
 const resolveIncomingTaxIds = (item: IncomingProduct, localProduct?: Product): string[] => {
@@ -309,7 +315,11 @@ class ProductImageCacheService {
     return undefined;
   }
 
-  private normalizeSingleIncomingProduct(item: IncomingProduct, localProduct?: Product): IncomingProduct {
+  private normalizeSingleIncomingProduct(
+    item: IncomingProduct,
+    localProduct?: Product,
+    context: NormalizationContext = { tariffs: [], warehouses: [] }
+  ): IncomingProduct {
     const imageUrl = this.resolveRemoteImageUrl(item);
     const imageVersion = this.resolveRemoteImageVersion(item, imageUrl);
     const metadata = asObject(item.metadata);
@@ -338,17 +348,21 @@ class ProductImageCacheService {
       ]),
       attributes: Array.isArray(item.attributes) ? item.attributes : localProduct?.attributes || [],
       variants: Array.isArray(item.variants) ? item.variants : localProduct?.variants || [],
-      tariffs: normalizeTariffEntries(item.tariffs).length > 0
-        ? normalizeTariffEntries(item.tariffs)
-        : (normalizeTariffEntries(metadata.tariffs).length > 0 ? normalizeTariffEntries(metadata.tariffs) : localProduct?.tariffs || []),
+      tariffs: canonicalizeTariffEntries(
+        normalizeTariffEntries(item.tariffs).length > 0
+          ? normalizeTariffEntries(item.tariffs)
+          : (normalizeTariffEntries(metadata.tariffs).length > 0 ? normalizeTariffEntries(metadata.tariffs) : localProduct?.tariffs || []),
+        context.tariffs || []
+      ),
       recipeDetails: recipeDetails.length > 0 ? recipeDetails : localProduct?.recipeDetails || [],
       appliedTaxIds: resolveIncomingTaxIds(item, localProduct),
-      activeInWarehouses: uniqueStrings(
+      activeInWarehouses: canonicalizeWarehouseIds(
         Array.isArray(item.activeInWarehouses)
           ? item.activeInWarehouses
           : (Array.isArray(item.warehouse_ids)
               ? item.warehouse_ids
-              : (Array.isArray(metadata.activeInWarehouses) ? metadata.activeInWarehouses : localProduct?.activeInWarehouses || []))
+              : (Array.isArray(metadata.activeInWarehouses) ? metadata.activeInWarehouses : localProduct?.activeInWarehouses || [])),
+        context.warehouses || []
       ),
       isInventoriable: asBoolean(
         item.isInventoriable ?? item.is_inventoriable,
@@ -405,13 +419,31 @@ class ProductImageCacheService {
     return normalized;
   }
 
+  private async getNormalizationContext(): Promise<NormalizationContext> {
+    const [configRaw, warehousesRaw] = await Promise.all([
+      db.get('config'),
+      db.get('warehouses'),
+    ]);
+
+    const config = configRaw as unknown as BusinessConfig | null;
+    const warehouses = warehousesRaw as unknown as Warehouse[] | null;
+
+    return {
+      tariffs: Array.isArray(config?.tariffs) ? config.tariffs : [],
+      warehouses: Array.isArray(warehouses) ? warehouses : [],
+    };
+  }
+
   async normalizeIncomingProducts(items: IncomingProduct[]): Promise<IncomingProduct[]> {
     if (!Array.isArray(items) || items.length === 0) {
       return [];
     }
 
-    const lookups = await this.getLocalProductLookups();
-    return items.map((item) => this.normalizeSingleIncomingProduct(item, this.findLocalProductMatch(item, lookups)));
+    const [lookups, context] = await Promise.all([
+      this.getLocalProductLookups(),
+      this.getNormalizationContext(),
+    ]);
+    return items.map((item) => this.normalizeSingleIncomingProduct(item, this.findLocalProductMatch(item, lookups), context));
   }
 
   private async saveLocalImage(product: Product, imageUrl: string, imageVersion: string): Promise<boolean> {
