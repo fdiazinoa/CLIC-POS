@@ -25,6 +25,52 @@ const asBoolean = (value: unknown, fallback = false): boolean => {
 const uniqueStrings = (values: unknown[]): string[] =>
   Array.from(new Set(values.map((value) => asString(value)).filter(Boolean)));
 
+const normalizeTaxIdList = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return uniqueStrings(
+      value.map((entry) =>
+        typeof entry === 'string'
+          ? entry
+          : asString((entry as Record<string, unknown>)?.id)
+            || asString((entry as Record<string, unknown>)?.code)
+            || asString((entry as Record<string, unknown>)?.tax_id)
+            || asString((entry as Record<string, unknown>)?.taxCode)
+      )
+    );
+  }
+
+  if (typeof value === 'string') {
+    return uniqueStrings(value.split(',').map((entry) => entry.trim()));
+  }
+
+  return [];
+};
+
+const resolveIncomingTaxIds = (item: IncomingProduct, localProduct?: Product): string[] => {
+  const metadata = asObject(item.metadata);
+  const candidates: unknown[] = [
+    item.appliedTaxIds,
+    item.tax_ids,
+    item.taxIds,
+    item.tax_codes,
+    metadata.appliedTaxIds,
+    metadata.tax_ids,
+    metadata.taxIds,
+    metadata.tax_codes,
+    metadata.taxes,
+    localProduct?.appliedTaxIds,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeTaxIdList(candidate);
+    if (normalized.length > 0) {
+      return normalized;
+    }
+  }
+
+  return [];
+};
+
 class ProductImageCacheService {
   private readonly imageFolder = 'product-images';
   private readonly logger = console;
@@ -278,11 +324,7 @@ class ProductImageCacheService {
       variants: Array.isArray(item.variants) ? item.variants : localProduct?.variants || [],
       tariffs: Array.isArray(item.tariffs) ? item.tariffs : localProduct?.tariffs || [],
       recipeDetails: recipeDetails.length > 0 ? recipeDetails : localProduct?.recipeDetails || [],
-      appliedTaxIds: uniqueStrings(
-        Array.isArray(item.appliedTaxIds)
-          ? item.appliedTaxIds
-          : (Array.isArray(item.tax_ids) ? item.tax_ids : localProduct?.appliedTaxIds || [])
-      ),
+      appliedTaxIds: resolveIncomingTaxIds(item, localProduct),
       activeInWarehouses: uniqueStrings(
         Array.isArray(item.activeInWarehouses)
           ? item.activeInWarehouses
