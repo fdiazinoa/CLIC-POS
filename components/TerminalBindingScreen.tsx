@@ -7,6 +7,7 @@ import { buildMasterUrlCandidates, buildMasterUrlFromHost, normalizeMasterHost }
 interface PairingResult {
   tenantId?: string;
   erpTerminalId?: string;
+  erpBaseUrl?: string;
   terminalName?: string;
   companyId?: string | null;
   storeId?: string | null;
@@ -382,6 +383,7 @@ const TerminalBindingScreen: React.FC<TerminalBindingScreenProps> = ({
                 await onPair(terminalId, {
                   tenantId,
                   erpTerminalId,
+                  erpBaseUrl,
                   terminalName,
                   companyId,
                   storeId,

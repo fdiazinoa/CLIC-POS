@@ -925,6 +925,11 @@ const AppContent: React.FC = () => {
     if (!tenantIdentity.tenantId && !tenantIdentity.tenantSlug && !tenantIdentity.tenantEmail) return;
 
     let disposed = false;
+    const recoveredErpBaseUrl = resolveSetupErpBaseUrl();
+
+    if (recoveredErpBaseUrl) {
+      persistSetupErpBaseUrls(recoveredErpBaseUrl);
+    }
 
     const publishEndpoint = async () => {
       const operationalTerminalId = currentTerminal.config?.stationNumber || currentTerminal.id;
@@ -2388,6 +2393,7 @@ const AppContent: React.FC = () => {
     pairingContext?: string | {
       tenantId?: string;
       erpTerminalId?: string;
+      erpBaseUrl?: string;
       terminalName?: string;
       companyId?: string;
       storeId?: string;
@@ -2418,6 +2424,9 @@ const AppContent: React.FC = () => {
         : null;
       const finalResolvedMasterIp = reachableMasterBinding?.host || normalizedResolvedMasterIp;
       const finalResolvedMasterUrl = reachableMasterBinding?.baseUrl || (finalResolvedMasterIp ? buildMasterUrlFromHost(finalResolvedMasterIp) : '');
+      const resolvedErpBaseUrl =
+        normalizeSetupBaseUrl(setupResult?.erpBaseUrl || null)
+        || resolveSetupErpBaseUrl();
       if (!setupResult?.boundConfig) {
         throw new Error('La vinculación debe provenir del backend central de setup. No se recibió configuración enlazada.');
       }
@@ -2617,6 +2626,9 @@ const AppContent: React.FC = () => {
       localStorage.setItem('active_terminal_id', terminalId);
       localStorage.setItem('CLIC_POS_TERMINAL_ID', terminalId);
       localStorage.setItem('initial_terminal_config', JSON.stringify(updatedConfig));
+      if (resolvedErpBaseUrl) {
+        persistSetupErpBaseUrls(resolvedErpBaseUrl);
+      }
       persistStoredErpSyncBinding({
         tenantId: setupResult?.tenantId || localStorage.getItem('active_tenant_id') || null,
         terminalId: resolvedErpTerminalId,
