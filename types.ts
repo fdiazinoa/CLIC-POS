@@ -333,6 +333,7 @@ export type ScaleTech = 'DIRECT' | 'LABEL';
 
 export interface TaxDefinition {
   id: string;
+  code?: string;
   name: string;
   rate: number;
   type: 'VAT' | 'SERVICE_CHARGE' | 'EXEMPT' | 'OTHER';
@@ -439,6 +440,7 @@ export interface TerminalConfigResolvedSnapshot {
   inventory?: TerminalConfigResolvedInventorySnapshot;
   documents?: TerminalConfigResolvedDocumentsSnapshot;
   catalog?: TerminalConfigResolvedCatalogSnapshot;
+  taxes?: TaxDefinition[];
   /** Promociones ERP → POS (forma camelCase, ver `posPromotionsSnapshot.js`). */
   promotions?: any[];
   loyalty?: TerminalConfigResolvedLoyaltySnapshot;

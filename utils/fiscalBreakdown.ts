@@ -1,4 +1,5 @@
 import { BusinessConfig, TaxDefinition, TerminalConfig, Transaction } from '../types';
+import { findTaxByIdentifier } from './taxIdentity';
 
 const EPSILON = 0.0001;
 
@@ -69,7 +70,7 @@ export const resolveEffectiveTaxes = (
   fallbackTaxName = 'Impuesto'
 ): TaxDefinition[] => {
   const resolvedTaxes = resolveEffectiveTaxIds(item.appliedTaxIds, terminalConfig)
-    .map((taxId) => (config.taxes || []).find((tax) => tax.id === taxId))
+    .map((taxId) => findTaxByIdentifier(config.taxes || [], taxId))
     .filter(Boolean) as TaxDefinition[];
 
   if (resolvedTaxes.length > 0) {

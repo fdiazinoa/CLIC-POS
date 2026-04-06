@@ -25,6 +25,7 @@ import { UnitSelector } from './UnitSelector';
 import { ConversionHelper } from './ConversionHelper';
 import { calculateCost, UNITS } from '../utils/units';
 import LabelPrintModal from './LabelPrintModal';
+import { normalizeTaxIdentifiersForSelection, taxIdentifierSetMatches } from '../utils/taxIdentity';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -2021,13 +2022,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   <h3 className="text-xl font-bold text-gray-800 mb-6">Impuestos Aplicables</h3>
                   <div className="space-y-3">
                     {config.taxes.map(tax => {
-                      const isSelected = formData.appliedTaxIds?.includes(tax.id);
+                      const isSelected = taxIdentifierSetMatches(formData.appliedTaxIds, tax);
                       return (
                         <div
                           key={tax.id}
                           onClick={() => {
                             const current = formData.appliedTaxIds || [];
-                            setFormData({ ...formData, appliedTaxIds: isSelected ? current.filter(id => id !== tax.id) : [...current, tax.id] });
+                            const normalizedCurrent = normalizeTaxIdentifiersForSelection(current, tax);
+                            setFormData({
+                              ...formData,
+                              appliedTaxIds: isSelected ? normalizedCurrent : [...normalizedCurrent, tax.id]
+                            });
                           }}
                           className={`flex items-center justify-between p-4 rounded-xl border-2 cursor-pointer transition-all ${isSelected ? 'bg-blue-50 border-blue-500' : 'bg-gray-50 border-gray-100'}`}
                         >

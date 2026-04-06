@@ -960,9 +960,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const getTariffPrice = useCallback((p: Product) => {
-      const tariffPrice = (p.tariffs || []).find(t => t.tariffId === activeTariffId)?.price;
+      const selectedTariff = (config.tariffs || []).find((tariff) => tariff.id === activeTariffId);
+      const activeTokens = new Set(
+         [activeTariffId, selectedTariff?.id, (selectedTariff as any)?.code]
+            .map((value) => (typeof value === 'string' ? value.trim().toLowerCase() : ''))
+            .filter(Boolean)
+      );
+
+      const matchedEntry = (p.tariffs || []).find((entry: any) => {
+         const entryTokens = [
+            entry?.tariffId,
+            entry?.tariff_id,
+            entry?.id,
+            entry?.code,
+            entry?.tariffCode,
+            entry?.tariff_code,
+         ]
+            .map((value) => (typeof value === 'string' ? value.trim().toLowerCase() : ''))
+            .filter(Boolean);
+
+         return entryTokens.some((token) => activeTokens.has(token));
+      });
+
+      const tariffPrice = matchedEntry?.price;
       return typeof tariffPrice === 'number' && Number.isFinite(tariffPrice) ? tariffPrice : null;
-   }, [activeTariffId]);
+   }, [activeTariffId, config.tariffs]);
 
    const productHasActiveTariff = useCallback((p: Product) => getTariffPrice(p) !== null, [getTariffPrice]);
 
