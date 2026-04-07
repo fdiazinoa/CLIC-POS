@@ -26,6 +26,7 @@ import { ConversionHelper } from './ConversionHelper';
 import { calculateCost, UNITS } from '../utils/units';
 import LabelPrintModal from './LabelPrintModal';
 import { normalizeTaxIdentifiersForSelection, taxIdentifierSetMatches } from '../utils/taxIdentity';
+import { canonicalizeTariffEntries, canonicalizeWarehouseIds, tariffMatchesIdentifier, warehouseMatchesIdentifier } from '../utils/masterIdentity';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -94,6 +95,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [isCalculating, setIsCalculating] = useState<string | null>(null); // whId or null
   const [calcResult, setCalcResult] = useState<(InventoryCalculation & { warehouseId: string }) | null>(null);
 
+  function normalizeProductActivationState(product: Product): Product {
+    return {
+      ...product,
+      tariffs: canonicalizeTariffEntries(product.tariffs || [], availableTariffs),
+      activeInWarehouses: canonicalizeWarehouseIds(product.activeInWarehouses || [], warehouses),
+    };
+  }
+
   const [formData, setFormData] = useState<Product>(() => {
     const base = initialData || {
       id: `PRD_${Date.now()}`,
@@ -120,10 +129,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     if (!base.images) base.images = [];
     if (!base.appliedTaxIds) base.appliedTaxIds = config.taxes?.[0] ? [config.taxes[0].id] : [];
     if (!base.stockBalances) base.stockBalances = {};
-    return base;
+    return normalizeProductActivationState(base);
   });
 
   const [warehouseSettings, setWarehouseSettings] = useState<Record<string, { min: number, max: number }>>(initialData?.warehouseSettings || {});
+
+  const normalizedFormTariffs = useMemo(() => canonicalizeTariffEntries(formData.tariffs || [], availableTariffs), [formData.tariffs, availableTariffs]);
+  const normalizedActiveWarehouseIds = useMemo(() => canonicalizeWarehouseIds(formData.activeInWarehouses || [], warehouses), [formData.activeInWarehouses, warehouses]);
+
 
   // Kardex Ledger Data (Fetched from DB)
   const [productLedger, setProductLedger] = useState<InventoryLedgerEntry[]>([]);
@@ -155,7 +168,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   useEffect(() => {
     if (initialData) {
       console.log(`🔄 ProductForm: Syncing internal state with updated initialData for ${initialData.id}`);
-      setFormData(prev => ({
+      setFormData(prev => normalizeProductActivationState({
         ...initialData,
         // Preserve some local UI state if needed, but for stock we want the prop value
         tariffs: initialData.tariffs || [],
@@ -165,7 +178,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       }));
       setWarehouseSettings(initialData.warehouseSettings || {});
     }
-  }, [initialData]);
+  }, [initialData, availableTariffs, warehouses]);
 
   useEffect(() => {
     const loadLedger = async () => {
@@ -673,9 +686,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   };
 
   const handleToggleTariff = (tariffId: string) => {
-    const isPresent = formData.tariffs.some(t => t.tariffId === tariffId);
+    const isPresent = normalizedFormTariffs.some(t => tariffMatchesIdentifier(t, tariffId));
     if (isPresent) {
-      setFormData(prev => ({ ...prev, tariffs: prev.tariffs.filter(t => t.tariffId !== tariffId) }));
+      setFormData(prev => ({ ...prev, tariffs: prev.tariffs.filter(t => !tariffMatchesIdentifier(t, tariffId)) }));
     } else {
       const tariff = availableTariffs.find(t => t.id === tariffId);
       setFormData(prev => ({
@@ -699,7 +712,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       return;
     }
 
-    const activeWarehouses = (formData.activeInWarehouses || []).filter(Boolean);
+    const activeWarehouses = canonicalizeWarehouseIds((formData.activeInWarehouses || []).filter(Boolean), warehouses);
     const requiresWarehouseAssignment = formData.is_sellable !== false || formData.operationalFlags?.trackInventory;
     if (requiresWarehouseAssignment && activeWarehouses.length === 0) {
       alert("Debe asignar al menos un almacén al artículo antes de guardarlo.");
@@ -709,6 +722,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     // Ensure updatedAt is set for Delta Sync
     const updatedProduct = {
       ...formData,
+      tariffs: canonicalizeTariffEntries(formData.tariffs || [], availableTariffs),
       activeInWarehouses: activeWarehouses,
       warehouseSettings,
       updatedAt: new Date().toISOString()
@@ -1415,7 +1429,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     });
 
                     const stock = detailedStock ? detailedStock.quantity : (formData.stockBalances?.[wh.id] || 0);
-                    const isActive = formData.activeInWarehouses?.includes(wh.id);
+                    const isActive = normalizedActiveWarehouseIds.includes(wh.id);
 
                     return (
                       <div key={wh.id} className={`p-6 rounded-2xl border-2 flex items-center justify-between transition-all ${isActive ? 'bg-white border-gray-100' : 'bg-gray-50 border-transparent opacity-50 grayscale'}`}>
@@ -1483,7 +1497,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
                 <div className="space-y-4">
                   {availableTariffs.length > 0 ? availableTariffs.map(tariff => {
-                    const tariffData = formData.tariffs.find(t => t.tariffId === tariff.id);
+                    const tariffData = normalizedFormTariffs.find(t => tariffMatchesIdentifier(t, tariff.id) || tariffMatchesIdentifier(t, (tariff as any).code));
                     const isEnabled = !!tariffData;
 
                     return (
@@ -1823,7 +1837,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {warehouses.map(wh => {
-                        const isActive = formData.activeInWarehouses?.includes(wh.id);
+                        const isActive = normalizedActiveWarehouseIds.includes(wh.id);
                         const settings = warehouseSettings[wh.id] || { min: 0, max: 0 };
 
                         // Calculate In Transit quantity for this warehouse
@@ -1870,9 +1884,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                             </td>
                             <td className="p-4 text-center">
                               <button onClick={() => {
-                                const current = formData.activeInWarehouses || [];
-                                const isAct = current.includes(wh.id);
-                                setFormData({ ...formData, activeInWarehouses: isAct ? current.filter(id => id !== wh.id) : [...current, wh.id] });
+                                const current = canonicalizeWarehouseIds(formData.activeInWarehouses || [], warehouses);
+                                const isAct = current.some(id => warehouseMatchesIdentifier({ id, code: id, name: id }, wh.id) || id === wh.id);
+                                setFormData({ ...formData, activeInWarehouses: isAct ? current.filter(id => !warehouseMatchesIdentifier({ id, code: id, name: id }, wh.id)) : [...current, wh.id] });
                               }} className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${isActive ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-500'}`}>
                                 {isActive ? 'Activo' : 'Inactivo'}
                               </button>
