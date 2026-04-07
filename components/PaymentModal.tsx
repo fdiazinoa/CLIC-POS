@@ -28,7 +28,11 @@ import {
 import { isLoyaltyRedeemMethod } from '../utils/loyaltyEngine';
 import { printIntegratedPaymentArtifacts, printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
-import { azulMcmService } from '../services/payments/AzulMcmService';
+import { AzulGatewayError, azulMcmService } from '../services/payments/AzulMcmService';
+import {
+   createPaymentIntegrationAuditEvent,
+   dispatchAuditEventConfigUpdate,
+} from '../services/payments/paymentIntegrationAudit';
 
 interface PaymentModalProps {
    total: number;
@@ -358,6 +362,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       const proportionalTax = absTotal > 0
          ? roundToTwo(Math.min(amountInBase, absTotal) / absTotal * Math.max(0, taxAmount))
          : 0;
+      const orderNumber = createAzulOrderNumber();
 
       setIsProcessingGateway(true);
       setFinalizeError(null);
@@ -370,9 +375,42 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          const azulResponse = await azulMcmService.sale(activeAzulIntegration, {
             amount: amountInBase,
             itbis: proportionalTax,
-            orderNumber: createAzulOrderNumber(),
+            orderNumber,
             installment: '0',
          });
+
+         if (config) {
+            dispatchAuditEventConfigUpdate(
+               config,
+               activeAzulIntegration.id,
+               createPaymentIntegrationAuditEvent(activeAzulIntegration, {
+                  action: 'SALE',
+                  status: 'SUCCESS',
+                  message: azulResponse.responseMessage || 'Pago aprobado por el procesador.',
+                  requestDetails: {
+                     Amount: amountInBase.toFixed(2),
+                     Itbis: proportionalTax.toFixed(2),
+                     OrderNumber: orderNumber,
+                  },
+                  responseDetails: {
+                     MerchantId: azulResponse.merchantId || activeAzulIntegration.merchantId || '',
+                     TerminalId: azulResponse.terminalId || activeAzulIntegration.terminalId || '',
+                     EntryMode: azulResponse.entryMode || '',
+                     CardBrand: azulResponse.cardBrand || '',
+                  },
+                  responseCode: azulResponse.responseCode,
+                  responseMessage: azulResponse.responseMessage,
+                  authorizationCode: azulResponse.authorizationCode,
+                  referenceNumber: azulResponse.referenceNumber,
+                  invoiceNumber: azulResponse.invoiceNumber,
+                  sequenceNumber: azulResponse.sequenceNumber,
+                  maskedPan: azulResponse.maskedPan,
+                  entryMode: azulResponse.entryMode,
+                  merchantId: azulResponse.merchantId,
+                  terminalId: azulResponse.terminalId,
+               })
+            );
+         }
 
          return {
             ...buildLocalPaymentEntry(valInSelectedCurrency, amountInBase),
@@ -398,6 +436,41 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             gatewayRequireSignature: azulResponse.requireSignature || !!activePaymentMethod.definition?.requiresSignature,
             gatewayRawResponse: azulResponse.rawResponse,
          };
+      } catch (error) {
+         if (config) {
+            const gatewayError = error instanceof AzulGatewayError ? error : null;
+            dispatchAuditEventConfigUpdate(
+               config,
+               activeAzulIntegration.id,
+               createPaymentIntegrationAuditEvent(activeAzulIntegration, {
+                  action: 'SALE',
+                  status: 'FAILED',
+                  message: error instanceof Error ? error.message : 'No se pudo completar la venta integrada.',
+                  requestDetails: {
+                     Amount: amountInBase.toFixed(2),
+                     Itbis: proportionalTax.toFixed(2),
+                     OrderNumber: orderNumber,
+                  },
+                  responseDetails: {
+                     MerchantId: gatewayError?.normalized?.merchantId || activeAzulIntegration.merchantId || '',
+                     TerminalId: gatewayError?.normalized?.terminalId || activeAzulIntegration.terminalId || '',
+                     EntryMode: gatewayError?.normalized?.entryMode || '',
+                     CardBrand: gatewayError?.normalized?.cardBrand || '',
+                  },
+                  responseCode: gatewayError?.normalized?.responseCode || gatewayError?.response?.ResponseCode,
+                  responseMessage: gatewayError?.normalized?.responseMessage || gatewayError?.response?.ResponseMessage,
+                  authorizationCode: gatewayError?.normalized?.authorizationCode,
+                  referenceNumber: gatewayError?.normalized?.referenceNumber,
+                  invoiceNumber: gatewayError?.normalized?.invoiceNumber,
+                  sequenceNumber: gatewayError?.normalized?.sequenceNumber,
+                  maskedPan: gatewayError?.normalized?.maskedPan,
+                  entryMode: gatewayError?.normalized?.entryMode,
+                  merchantId: gatewayError?.normalized?.merchantId,
+                  terminalId: gatewayError?.normalized?.terminalId,
+               })
+            );
+         }
+         throw error;
       } finally {
          setIsProcessingGateway(false);
          setGatewayProgress(null);

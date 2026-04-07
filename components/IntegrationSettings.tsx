@@ -3,6 +3,7 @@ import {
   AlertCircle,
   CheckCircle2,
   CreditCard,
+  History,
   Key,
   Plus,
   RefreshCw,
@@ -18,9 +19,16 @@ import {
   BusinessConfig,
   PaymentIntegrationDefinition,
   PaymentIntegrationEnvironment,
+  PaymentIntegrationAuditEvent,
   PaymentIntegrationProvider,
 } from '../types';
-import { azulMcmService } from '../services/payments/AzulMcmService';
+import IntegrationAuditModal from './IntegrationAuditModal';
+import { AzulGatewayError, azulMcmService } from '../services/payments/AzulMcmService';
+import {
+  appendAuditEventToIntegration,
+  appendAuditEventToIntegrations,
+  createPaymentIntegrationAuditEvent,
+} from '../services/payments/paymentIntegrationAudit';
 
 interface IntegrationSettingsProps {
   config: BusinessConfig;
@@ -69,6 +77,7 @@ const createDefaultIntegration = (
     pinpadInit: true,
   },
   metadata: {},
+  auditEvents: [],
 });
 
 const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpdateConfig, onClose }) => {
@@ -77,8 +86,13 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult>(null);
+  const [auditIntegrationId, setAuditIntegrationId] = useState<string | null>(null);
 
   const enabledCount = useMemo(() => integrations.filter(integration => integration.isEnabled).length, [integrations]);
+  const selectedAuditIntegration = useMemo(
+    () => integrations.find(integration => integration.id === auditIntegrationId) || null,
+    [auditIntegrationId, integrations]
+  );
 
   const handleCreate = () => {
     setEditingIntegration(createDefaultIntegration());
@@ -87,7 +101,11 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
   };
 
   const handleEdit = (integration: PaymentIntegrationDefinition) => {
-    setEditingIntegration({ ...integration, metadata: { ...(integration.metadata || {}) } });
+    setEditingIntegration({
+      ...integration,
+      metadata: { ...(integration.metadata || {}) },
+      auditEvents: [...(integration.auditEvents || [])],
+    });
     setTestResult(null);
     setIsEditorOpen(true);
   };
@@ -110,6 +128,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
       auth1: editingIntegration.auth1?.trim() || '',
       auth2: editingIntegration.auth2?.trim() || '',
       timeoutMs: Math.max(1000, Number(editingIntegration.timeoutMs) || 160000),
+      auditEvents: editingIntegration.auditEvents || [],
     };
 
     setIntegrations(prev => {
@@ -158,23 +177,82 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
   const handleTestConnection = async () => {
     if (!editingIntegration) return;
 
+    const updateAuditState = (event: PaymentIntegrationAuditEvent) => {
+      setEditingIntegration(prev => (
+        prev && prev.id === event.integrationId
+          ? appendAuditEventToIntegration(prev, event)
+          : prev
+      ));
+      setIntegrations(prev => appendAuditEventToIntegrations(prev, event.integrationId, event));
+    };
+
     setIsTesting(true);
     setTestResult(null);
     try {
       if (editingIntegration.provider !== 'AZUL') {
-        setTestResult({
+        const unsupportedResult = {
           success: false,
           message: 'La prueba en vivo todavía solo está disponible para AZUL.',
-        });
+        };
+        updateAuditState(createPaymentIntegrationAuditEvent(editingIntegration, {
+          action: 'GET_LAST_TRX',
+          status: 'FAILED',
+          message: unsupportedResult.message,
+          requestDetails: {
+            Origen: 'Prueba de conexión',
+          },
+          responseDetails: {
+            Motivo: 'Proveedor todavía no soportado en caja',
+          },
+        }));
+        setTestResult(unsupportedResult);
         return;
       }
 
       const result = await azulMcmService.testConnection(editingIntegration);
+      updateAuditState(createPaymentIntegrationAuditEvent(editingIntegration, {
+        action: 'GET_LAST_TRX',
+        status: result.success ? 'SUCCESS' : 'FAILED',
+        message: result.message,
+        requestDetails: {
+          Origen: 'Prueba de conexión',
+          TrxType: 'Sale',
+        },
+        responseDetails: {
+          MerchantId: result.merchantId || editingIntegration.merchantId || '',
+          TerminalId: result.terminalId || editingIntegration.terminalId || '',
+          Estado: result.success ? 'Conectado' : 'Fallido',
+        },
+        responseCode: result.responseCode,
+        responseMessage: result.responseMessage,
+        merchantId: result.merchantId,
+        terminalId: result.terminalId,
+      }));
       setTestResult(result);
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo probar la conexión.';
+      const gatewayError = error instanceof AzulGatewayError ? error : null;
+      updateAuditState(createPaymentIntegrationAuditEvent(editingIntegration, {
+        action: 'GET_LAST_TRX',
+        status: 'FAILED',
+        message,
+        requestDetails: {
+          Origen: 'Prueba de conexión',
+          TrxType: 'Sale',
+        },
+        responseDetails: {
+          MerchantId: gatewayError?.normalized?.merchantId || editingIntegration.merchantId || '',
+          TerminalId: gatewayError?.normalized?.terminalId || editingIntegration.terminalId || '',
+          Estado: 'Error',
+        },
+        responseCode: gatewayError?.normalized?.responseCode || gatewayError?.response?.ResponseCode,
+        responseMessage: gatewayError?.normalized?.responseMessage || gatewayError?.response?.ResponseMessage,
+        merchantId: gatewayError?.normalized?.merchantId,
+        terminalId: gatewayError?.normalized?.terminalId,
+      }));
       setTestResult({
         success: false,
-        message: error instanceof Error ? error.message : 'No se pudo probar la conexión.',
+        message,
       });
     } finally {
       setIsTesting(false);
@@ -278,10 +356,19 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
                         {integration.merchantId && <span>Merchant: {integration.merchantId}</span>}
                         {integration.terminalId && <span>Terminal: {integration.terminalId}</span>}
                         <span>Timeout: {Math.round((integration.timeoutMs || 160000) / 1000)}s</span>
+                        <span>Eventos: {(integration.auditEvents || []).length}</span>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setAuditIntegrationId(integration.id)}
+                        className="rounded-lg bg-gray-50 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-sky-50 hover:text-sky-700"
+                      >
+                        <span className="flex items-center gap-2">
+                          <History size={16} /> Auditoría
+                        </span>
+                      </button>
                       <button
                         onClick={() => handleEdit(integration)}
                         className="rounded-lg bg-gray-50 p-2 text-gray-500 transition-colors hover:bg-blue-50 hover:text-blue-600"
@@ -524,6 +611,13 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
             </div>
           </div>
         </div>
+      )}
+
+      {selectedAuditIntegration && (
+        <IntegrationAuditModal
+          integration={selectedAuditIntegration}
+          onClose={() => setAuditIntegrationId(null)}
+        />
       )}
     </div>
   );
