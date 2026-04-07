@@ -82,6 +82,32 @@ const splitLines = (textValue: string, width: number): string[] => {
   return lines;
 };
 
+const sanitizeRawText = (value = ''): string => {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\x20-\x7E\n]/g, '');
+};
+
+const splitRawLines = (textValue: string, width: number): string[] => {
+  const normalized = sanitizeRawText(textValue).replace(/\r/g, '');
+  const sourceLines = normalized.split('\n');
+  const wrappedLines: string[] = [];
+
+  sourceLines.forEach((line) => {
+    if (line.length === 0) {
+      wrappedLines.push('');
+      return;
+    }
+
+    for (let index = 0; index < line.length; index += width) {
+      wrappedLines.push(line.slice(index, index + width));
+    }
+  });
+
+  return wrappedLines;
+};
+
 const padRight = (value: string, length: number): string => {
   if (value.length >= length) return value.slice(0, length);
   return `${value}${' '.repeat(length - value.length)}`;
@@ -450,6 +476,34 @@ export const buildEscPosTicketPayload = (
     openCashDrawer: shouldOpenDrawerForTransaction(transaction, config)
   });
 
+  return toBase64(concat(chunks));
+};
+
+export const buildEscPosVoucherPayload = (
+  providerLabel: string,
+  copyLabel: string,
+  receiptText: string
+): string | null => {
+  const normalizedText = String(receiptText || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trimEnd();
+  if (!normalizedText.trim()) return null;
+
+  const width = RECEIPT_LINE_WIDTH;
+  const chunks: Uint8Array[] = [];
+
+  chunks.push(initPrinter());
+  chunks.push(align(1));
+  chunks.push(bold(true));
+  pushTextLines(chunks, splitLines(providerLabel || 'VOUCHER', width));
+  pushTextLines(chunks, splitLines(copyLabel, width));
+  chunks.push(bold(false));
+  chunks.push(divider(width));
+  chunks.push(align(0));
+
+  splitRawLines(normalizedText, width).forEach((line) => {
+    chunks.push(text(line));
+  });
+
+  finalizeReceipt(chunks);
   return toBase64(concat(chunks));
 };
 

@@ -1,11 +1,153 @@
 import { Transaction, BusinessConfig, Reservation } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
-import { buildEscPosReservationPayload, buildEscPosTicketPayload } from '../services/printer/EscPosFormatter';
+import { buildEscPosReservationPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload } from '../services/printer/EscPosFormatter';
 import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 import { dbAdapter } from '../services/db';
 import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, formatTaxLineLabel } from './fiscalBreakdown';
 
-export const printTicket = async (transaction: Transaction, config: BusinessConfig) => {
+const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const escapeHtml = (value: string): string => {
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+};
+
+const normalizeVoucherText = (value?: string): string => {
+    return String(value || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .trimEnd();
+};
+
+const buildGatewayVoucherHtml = (providerLabel: string, copyLabel: string, voucherText: string): string => `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>${escapeHtml(providerLabel)} - ${escapeHtml(copyLabel)}</title>
+        <style>
+            @page { size: 80mm auto; margin: 0; }
+            body {
+                font-family: 'Courier New', Courier, monospace;
+                width: 72mm;
+                margin: 0 auto;
+                padding: 4mm;
+                font-size: 12px;
+                line-height: 1.25;
+                color: #000;
+                background: #fff;
+            }
+            .header {
+                text-align: center;
+                margin-bottom: 8px;
+            }
+            .title {
+                font-size: 16px;
+                font-weight: 900;
+                text-transform: uppercase;
+            }
+            .subtitle {
+                font-size: 11px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                margin-top: 4px;
+            }
+            .divider {
+                border-top: 1px dashed #000;
+                margin: 8px 0;
+            }
+            pre {
+                white-space: pre-wrap;
+                word-break: break-word;
+                margin: 0;
+                font-family: inherit;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div class="title">${escapeHtml(providerLabel)}</div>
+            <div class="subtitle">${escapeHtml(copyLabel)}</div>
+        </div>
+        <div class="divider"></div>
+        <pre>${escapeHtml(voucherText)}</pre>
+        <script>
+            window.onload = function () {
+                setTimeout(() => window.print(), 300);
+            };
+        </script>
+    </body>
+    </html>
+`;
+
+const printGatewayVoucher = async (
+    config: BusinessConfig,
+    params: {
+        transaction: Transaction;
+        providerLabel: string;
+        copyLabel: string;
+        voucherText: string;
+        referenceSuffix: string;
+    }
+): Promise<boolean> => {
+    const normalizedText = normalizeVoucherText(params.voucherText);
+    if (!normalizedText) return false;
+
+    const silentHtml = buildGatewayVoucherHtml(params.providerLabel, params.copyLabel, normalizedText).replace(
+        /<script>[\s\S]*?window\.onload[\s\S]*?<\/script>/,
+        ''
+    );
+    const escPosBase64 = buildEscPosVoucherPayload(params.providerLabel, params.copyLabel, normalizedText);
+
+    let printedSilently = false;
+
+    if (escPosBase64) {
+        printedSilently = await PrintRouterService.routeAndPrintEscPos({
+            config,
+            escPosBase64,
+            role: 'TICKET',
+            terminalId: params.transaction.terminalId,
+            jobType: 'PAYMENT_VOUCHER',
+            referenceId: `${params.transaction.id}-${params.referenceSuffix}`,
+        });
+    }
+
+    if (printedSilently) return true;
+
+    if (!shouldSuppressBrowserPrintFallback()) {
+        printedSilently = await PrintRouterService.routeAndPrintHtml({
+            config,
+            html: silentHtml,
+            role: 'TICKET',
+            terminalId: params.transaction.terminalId,
+            jobType: 'PAYMENT_VOUCHER',
+            referenceId: `${params.transaction.id}-${params.referenceSuffix}`,
+        });
+    }
+
+    if (printedSilently) return true;
+
+    if (shouldSuppressBrowserPrintFallback()) {
+        console.warn('Silent native voucher print failed; browser print fallback suppressed.');
+        return false;
+    }
+
+    const printWindow = window.open('', '_blank', 'width=400,height=600');
+    if (printWindow) {
+        printWindow.document.write(buildGatewayVoucherHtml(params.providerLabel, params.copyLabel, normalizedText));
+        printWindow.document.close();
+        return true;
+    }
+
+    alert('Por favor, permita las ventanas emergentes para imprimir el voucher.');
+    return false;
+};
+
+export const printTicket = async (transaction: Transaction, config: BusinessConfig): Promise<boolean> => {
     const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
     const users = ((await dbAdapter.getCollection('users')) || []) as any[];
     const dateStr = new Date(transaction.date).toLocaleDateString();
@@ -393,7 +535,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
         });
     }
 
-    if (printedSilently) return;
+    if (printedSilently) return true;
 
     if (!shouldSuppressBrowserPrintFallback()) {
         printedSilently = await PrintRouterService.routeAndPrintHtml({
@@ -406,20 +548,83 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
         });
     }
 
-    if (printedSilently) return;
+    if (printedSilently) return true;
 
     if (shouldSuppressBrowserPrintFallback()) {
         console.warn('Silent native ticket print failed; browser print fallback suppressed.');
-        return;
+        return false;
     }
 
     const printWindow = window.open('', '_blank', 'width=400,height=600');
     if (printWindow) {
         printWindow.document.write(receiptHtml);
         printWindow.document.close();
+        return true;
     } else {
         alert('Por favor, permita las ventanas emergentes para imprimir el ticket.');
     }
+    return false;
+};
+
+export const printIntegratedPaymentArtifacts = async (
+    transaction: Transaction,
+    config: BusinessConfig
+): Promise<{ ticketPrinted: boolean; voucherCopiesPrinted: number; voucherCopiesFailed: string[] }> => {
+    const payments = (transaction.payments || []) as Array<Record<string, any>>;
+    const gatewayPayments = payments.filter(payment =>
+        payment?.gatewayProvider && (payment?.gatewayReceiptMerchant || payment?.gatewayReceiptClient)
+    );
+
+    let voucherCopiesPrinted = 0;
+    const voucherCopiesFailed: string[] = [];
+
+    for (let index = 0; index < gatewayPayments.length; index += 1) {
+        const payment = gatewayPayments[index];
+        const providerLabel = String(payment.gatewayProvider || 'Procesador');
+
+        if (payment.gatewayReceiptMerchant) {
+            const printed = await printGatewayVoucher(config, {
+                transaction,
+                providerLabel,
+                copyLabel: 'Copia Comercio',
+                voucherText: payment.gatewayReceiptMerchant,
+                referenceSuffix: `merchant-voucher-${index + 1}`,
+            });
+            if (printed) {
+                voucherCopiesPrinted += 1;
+            } else {
+                voucherCopiesFailed.push(`${providerLabel} comercio`);
+            }
+            await delay(150);
+        }
+
+        if (payment.gatewayReceiptClient) {
+            const printed = await printGatewayVoucher(config, {
+                transaction,
+                providerLabel,
+                copyLabel: 'Copia Cliente',
+                voucherText: payment.gatewayReceiptClient,
+                referenceSuffix: `client-voucher-${index + 1}`,
+            });
+            if (printed) {
+                voucherCopiesPrinted += 1;
+            } else {
+                voucherCopiesFailed.push(`${providerLabel} cliente`);
+            }
+            await delay(150);
+        }
+    }
+
+    const ticketPrinted = await printTicket(transaction, config);
+    if (!ticketPrinted) {
+        voucherCopiesFailed.push('ticket');
+    }
+
+    return {
+        ticketPrinted,
+        voucherCopiesPrinted,
+        voucherCopiesFailed,
+    };
 };
 
 export const printReservation = async (
