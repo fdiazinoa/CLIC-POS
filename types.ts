@@ -687,6 +687,32 @@ export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTH
 export type PaymentIntegrationProvider = 'AZUL' | 'CARDNET' | 'CARNET' | 'VISANET' | 'STRIPE';
 export type PaymentIntegrationEnvironment = 'TEST' | 'PRODUCTION';
 export type PaymentIntegrationMode = 'MANUAL' | 'INTEGRATED';
+export type PaymentIntegrationAuditAction = 'SALE' | 'SALE_CANCELLATION' | 'REFUND' | 'GET_LAST_TRX' | 'PINPAD_INIT';
+export type PaymentIntegrationAuditStatus = 'SUCCESS' | 'FAILED';
+
+export interface PaymentIntegrationAuditEvent {
+  id: string;
+  timestamp: string;
+  integrationId: string;
+  integrationName: string;
+  provider: PaymentIntegrationProvider;
+  environment: PaymentIntegrationEnvironment;
+  action: PaymentIntegrationAuditAction;
+  status: PaymentIntegrationAuditStatus;
+  message: string;
+  requestDetails?: Record<string, string>;
+  responseDetails?: Record<string, string>;
+  responseCode?: string;
+  responseMessage?: string;
+  authorizationCode?: string;
+  referenceNumber?: string;
+  invoiceNumber?: string;
+  sequenceNumber?: string;
+  maskedPan?: string;
+  entryMode?: string;
+  merchantId?: string;
+  terminalId?: string;
+}
 
 export interface PaymentIntegrationCapabilities {
   sale?: boolean;
@@ -711,6 +737,7 @@ export interface PaymentIntegrationDefinition {
   timeoutMs?: number;
   capabilities?: PaymentIntegrationCapabilities;
   metadata?: Record<string, string>;
+  auditEvents?: PaymentIntegrationAuditEvent[];
 }
 
 export interface PaymentMethodDefinition {

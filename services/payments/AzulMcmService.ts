@@ -2,7 +2,7 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
 
 import { PaymentIntegrationDefinition } from '../../types';
 
-type AzulAction = 'Sale' | 'SaleCancellation' | 'Refund' | 'GetLastTrx' | 'PinpadInit';
+export type AzulAction = 'Sale' | 'SaleCancellation' | 'Refund' | 'GetLastTrx' | 'PinpadInit';
 
 export interface AzulResponseField {
   Name: string;
@@ -62,6 +62,26 @@ export interface AzulNormalizedResult {
   quickPayment?: boolean;
   responseFields: Record<string, string>;
   rawResponse: AzulGatewayResponse;
+}
+
+export class AzulGatewayError extends Error {
+  action: AzulAction;
+  response?: AzulGatewayResponse;
+  normalized?: AzulNormalizedResult;
+
+  constructor(input: {
+    action: AzulAction;
+    message: string;
+    response?: AzulGatewayResponse;
+    normalized?: AzulNormalizedResult;
+  }) {
+    super(input.message);
+    this.name = 'AzulGatewayError';
+    this.action = input.action;
+    this.response = input.response;
+    this.normalized = input.normalized;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
 }
 
 const DEFAULT_AZUL_TEST_BASE_URL = 'https://pruebas.azul.com.do/POSWebServices/JSON/default.aspx';
@@ -183,7 +203,11 @@ const postJson = async (
       const parsed = parseResponseBody(response.data);
 
       if (response.status < 200 || response.status >= 300) {
-        throw new Error(extractErrorMessage(parsed));
+        throw new AzulGatewayError({
+          action,
+          message: extractErrorMessage(parsed),
+          response: parsed,
+        });
       }
 
       return parsed;
@@ -204,7 +228,11 @@ const postJson = async (
       const parsed = parseResponseBody(rawBody);
 
       if (!response.ok) {
-        throw new Error(extractErrorMessage(parsed));
+        throw new AzulGatewayError({
+          action,
+          message: extractErrorMessage(parsed),
+          response: parsed,
+        });
       }
 
       return parsed;
@@ -256,7 +284,14 @@ const normalizeResult = (integration: PaymentIntegrationDefinition, response: Az
 };
 
 export const azulMcmService = {
-  async testConnection(integration: PaymentIntegrationDefinition): Promise<{ success: boolean; message: string }> {
+  async testConnection(integration: PaymentIntegrationDefinition): Promise<{
+    success: boolean;
+    message: string;
+    responseCode?: string;
+    responseMessage?: string;
+    merchantId?: string;
+    terminalId?: string;
+  }> {
     const response = await postJson(integration, 'GetLastTrx', {
       MerchantId: integration.merchantId?.trim(),
       TerminalId: integration.terminalId?.trim(),
@@ -268,12 +303,23 @@ export const azulMcmService = {
       const message = normalized.responseMessage === 'TRX_NOT_FOUND'
         ? 'Conectado a AZUL. Credenciales válidas y terminal accesible.'
         : `Conectado a AZUL. Último estado: ${normalized.responseMessage || normalized.responseCode}.`;
-      return { success: true, message };
+      return {
+        success: true,
+        message,
+        responseCode: normalized.responseCode,
+        responseMessage: normalized.responseMessage,
+        merchantId: normalized.merchantId,
+        terminalId: normalized.terminalId,
+      };
     }
 
     return {
       success: false,
       message: extractErrorMessage(response),
+      responseCode: normalized.responseCode,
+      responseMessage: normalized.responseMessage,
+      merchantId: normalized.merchantId,
+      terminalId: normalized.terminalId,
     };
   },
 
@@ -290,7 +336,12 @@ export const azulMcmService = {
 
     const normalized = normalizeResult(integration, response);
     if (!normalized.approved) {
-      throw new Error(extractErrorMessage(response));
+      throw new AzulGatewayError({
+        action: 'Sale',
+        message: extractErrorMessage(response),
+        response,
+        normalized,
+      });
     }
 
     return normalized;
