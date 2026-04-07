@@ -26,7 +26,7 @@ import {
    sumCreditPaymentsBase
 } from '../utils/creditRules';
 import { isLoyaltyRedeemMethod } from '../utils/loyaltyEngine';
-import { printTicket } from '../utils/printer';
+import { printIntegratedPaymentArtifacts, printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
 import { azulMcmService } from '../services/payments/AzulMcmService';
 
@@ -120,6 +120,12 @@ const createAzulOrderNumber = (): string => {
    return base.slice(-8);
 };
 
+type GatewayProgressOverlayState = {
+   title: string;
+   providerLabel: string;
+   detail: string;
+};
+
 import SupervisorAuthModal from './SupervisorAuthModal';
 
 const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles }) => {
@@ -137,6 +143,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    const [showSupervisorModal, setShowSupervisorModal] = useState(false);
    const [isOverrideActive, setIsOverrideActive] = useState(false);
    const [isProcessingGateway, setIsProcessingGateway] = useState(false);
+   const [gatewayProgress, setGatewayProgress] = useState<GatewayProgressOverlayState | null>(null);
+   const [successNotice, setSuccessNotice] = useState<string | null>(null);
 
    const userPermissions = useMemo(() => {
       if (!currentUser) return [];
@@ -313,6 +321,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       return false;
    };
 
+   const resolveGatewayDisplayName = (
+      integration?: PaymentIntegrationDefinition,
+      fallbackProvider?: string
+   ): string => {
+      return integration?.name?.trim() || integration?.provider || fallbackProvider || 'Procesador de pago';
+   };
+
    const buildLocalPaymentEntry = (valInSelectedCurrency: number, amountInBase: number): PaymentEntry => ({
       id: createPaymentId(),
       method: activeRuntimeMethod,
@@ -345,7 +360,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          : 0;
 
       setIsProcessingGateway(true);
-      setFinalizeError('Procesando cobro con AZUL...');
+      setFinalizeError(null);
+      setGatewayProgress({
+         title: 'Procesando pago',
+         providerLabel: resolveGatewayDisplayName(activeAzulIntegration, 'AZUL'),
+         detail: 'Espere la confirmación del procesador.',
+      });
       try {
          const azulResponse = await azulMcmService.sale(activeAzulIntegration, {
             amount: amountInBase,
@@ -380,6 +400,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          };
       } finally {
          setIsProcessingGateway(false);
+         setGatewayProgress(null);
       }
    };
 
@@ -447,6 +468,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       }
 
       setFinalizeError(null);
+      setSuccessNotice(null);
       setIsFinalizing(true);
       try {
          let paymentsToConfirm = payments;
@@ -532,7 +554,42 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             const txn = await onConfirm(paymentsToConfirm);
 
             if (txn) {
-               setCompletedTransaction(txn);
+               const finalizedTransaction = txn.payments?.length
+                  ? txn
+                  : { ...txn, payments: paymentsToConfirm };
+               const gatewayPayments = (finalizedTransaction.payments || []).filter((payment: any) => payment?.gatewayProvider);
+               let autoPrintNotice: string | null = null;
+
+               if (config && gatewayPayments.length > 0) {
+                  const matchedIntegration = config.integrations?.find(
+                     (integration) => integration.id === gatewayPayments[0]?.gatewayIntegrationId
+                  );
+                  const providerLabel = resolveGatewayDisplayName(
+                     matchedIntegration,
+                     String(gatewayPayments[0]?.gatewayProvider || 'Procesador de pago')
+                  );
+
+                  setGatewayProgress({
+                     title: 'Imprimiendo comprobantes',
+                     providerLabel,
+                     detail: 'Imprimiendo voucher y ticket automáticamente.',
+                  });
+
+                  try {
+                     const printResult = await printIntegratedPaymentArtifacts(finalizedTransaction, config);
+                     if (printResult.voucherCopiesFailed.length > 0) {
+                        autoPrintNotice = `Venta aprobada. No se pudo imprimir automáticamente: ${printResult.voucherCopiesFailed.join(', ')}.`;
+                     }
+                  } catch (printError) {
+                     console.error('❌ Auto print after integrated approval failed:', printError);
+                     autoPrintNotice = 'Venta aprobada, pero ocurrió un problema al imprimir automáticamente.';
+                  } finally {
+                     setGatewayProgress(null);
+                  }
+               }
+
+               setSuccessNotice(autoPrintNotice);
+               setCompletedTransaction(finalizedTransaction);
                setIsSuccessScreen(true);
             } else {
                setFinalizeError('No se pudo completar la venta. Verifique secuencia fiscal y configuración de terminal.');
@@ -544,6 +601,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          console.error('❌ Payment finalization failed:', error);
          const message = error instanceof Error ? error.message : '';
          setFinalizeError(message ? `Error al finalizar: ${message}` : 'Ocurrió un error al finalizar. Intente nuevamente.');
+         setGatewayProgress(null);
       } finally {
          setIsFinalizing(false);
       }
@@ -566,6 +624,19 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    const [showEmailInput, setShowEmailInput] = useState(false);
    const [emailInput, setEmailInput] = useState('');
    const [isSendingEmail, setIsSendingEmail] = useState(false);
+
+   const gatewayProgressOverlay = gatewayProgress ? (
+      <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4">
+         <div className="w-full max-w-sm rounded-[2rem] bg-white px-8 py-10 text-center shadow-2xl border border-slate-100">
+            <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-indigo-50">
+               <div className="h-10 w-10 animate-spin rounded-full border-4 border-indigo-200 border-t-indigo-600" />
+            </div>
+            <p className="text-xs font-black uppercase tracking-[0.24em] text-indigo-500">{gatewayProgress.providerLabel}</p>
+            <h3 className="mt-3 text-2xl font-black text-slate-900">{gatewayProgress.title}</h3>
+            <p className="mt-3 text-sm font-semibold text-slate-500">{gatewayProgress.detail}</p>
+         </div>
+      </div>
+   ) : null;
 
    const handleSendEmail = async () => {
       if (!completedTransaction) return;
@@ -626,8 +697,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
 
    if (isSuccessScreen) {
       return (
-         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/90 backdrop-blur-md p-4">
-            <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl flex flex-col items-center text-center relative">
+         <>
+            {gatewayProgressOverlay}
+            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/90 backdrop-blur-md p-4">
+               <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl flex flex-col items-center text-center relative">
 
                {/* Email Input Modal Overlay */}
                {showEmailInput && (
@@ -673,6 +746,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   {change > 0 && <div className="flex justify-between items-center pt-2 border-t border-gray-200 mt-2"><span className="text-green-600 font-bold">Cambio</span><span className="font-black text-green-600 text-2xl">{currencySymbol}{change.toFixed(2)}</span></div>}
                </div>
                <div className="w-full space-y-3">
+                  {successNotice && (
+                     <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-xs font-bold text-amber-700">
+                        {successNotice}
+                     </div>
+                  )}
                   <div className="flex gap-3">
                      <button
                         onClick={async () => {
@@ -699,13 +777,16 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   )}
                </div>
             </div>
-         </div>
+            </div>
+         </>
       );
    }
 
    return (
-      <div className="fixed inset-0 z-[60] flex items-end lg:items-center justify-center bg-black/60 backdrop-blur-sm">
-         <div className="bg-white w-full max-w-6xl h-[100dvh] lg:h-[85vh] lg:rounded-[2.5rem] shadow-2xl flex flex-col lg:flex-row overflow-hidden">
+      <>
+         {gatewayProgressOverlay}
+         <div className="fixed inset-0 z-[60] flex items-end lg:items-center justify-center bg-black/60 backdrop-blur-sm">
+            <div className="bg-white w-full max-w-6xl h-[100dvh] lg:h-[85vh] lg:rounded-[2.5rem] shadow-2xl flex flex-col lg:flex-row overflow-hidden">
 
             {/* SUMMARY SECTION (Collapsible/Header on mobile, Sidebar on desktop) */}
             <div className="flex lg:w-[35%] w-full bg-gray-50 border-b lg:border-b-0 lg:border-r border-gray-200 flex-col p-4 md:p-6 lg:p-8 shrink-0">
@@ -950,7 +1031,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                requiredPermission="POS_CREDIT_OVERRIDE"
             />
          )}
-      </div>
+         </div>
+      </>
    );
 };
 
