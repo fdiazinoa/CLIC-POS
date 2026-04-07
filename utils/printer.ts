@@ -285,12 +285,23 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 <div class="divider"></div>
                 <div class="totals-section">
                     <div style="font-weight: bold; margin-bottom: 4px; font-size: 10px;">FORMAS DE PAGO</div>
-                    ${payments.map((p: any) => `
+                    ${payments.map((p: any) => {
+            const methodLabel = p.method === 'CASH' ? 'EFECTIVO' : p.method === 'CARD' ? 'TARJETA' : p.method === 'STORE_CREDIT' ? 'NOTA DE CRÉDITO' : p.method;
+            const showAzulRefs = p.gatewayProvider === 'AZUL' || p.gatewayAuthorizationCode || p.gatewayReference;
+            const azulLines = showAzulRefs
+               ? [
+                  p.gatewayAuthorizationCode ? `<div class="meta-row" style="font-size: 11px;">AUT No.: ${p.gatewayAuthorizationCode}</div>` : '',
+                  p.gatewayReference ? `<div class="meta-row" style="font-size: 11px;">Ref No.: ${p.gatewayReference}</div>` : '',
+               ].join('')
+               : '';
+            return `
                     <div class="total-row">
-                        <span>${p.method === 'CASH' ? 'EFECTIVO' : p.method === 'CARD' ? 'TARJETA' : p.method === 'STORE_CREDIT' ? 'NOTA DE CRÉDITO' : p.method}</span>
+                        <span>${methodLabel}</span>
                         <span>${currencySymbol}${(p.amount || 0).toFixed(2)}</span>
                     </div>
-                    `).join('')}
+                    ${azulLines}
+                    `;
+         }).join('')}
                     
                     ${change > 0 ? `
                     <div class="total-row" style="margin-top: 4px; font-weight: bold;">
