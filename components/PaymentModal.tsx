@@ -5,7 +5,20 @@ import {
    Trash2, Plus, Wallet, Printer, Mail, ShieldAlert,
    Repeat, ArrowRightLeft, DollarSign, Zap, Smartphone
 } from 'lucide-react';
-import { PaymentEntry, PaymentMethod, BusinessConfig, CurrencyConfig, CartItem, Transaction, Customer, User, Permission, RoleDefinition } from '../types';
+import {
+   PaymentEntry,
+   PaymentMethod,
+   BusinessConfig,
+   CurrencyConfig,
+   CartItem,
+   Transaction,
+   Customer,
+   User,
+   Permission,
+   RoleDefinition,
+   PaymentIntegrationDefinition,
+   PaymentMethodDefinition
+} from '../types';
 import {
    evaluateCreditSupervisorGate,
    paymentEntryIsCxCCredit,
@@ -15,10 +28,12 @@ import {
 import { isLoyaltyRedeemMethod } from '../utils/loyaltyEngine';
 import { printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
+import { azulMcmService } from '../services/payments/AzulMcmService';
 
 interface PaymentModalProps {
    total: number;
    items: CartItem[]; // Added items prop
+   taxAmount?: number;
    currencySymbol: string;
    config?: BusinessConfig;
    onClose: () => void;
@@ -39,6 +54,8 @@ type ResolvedPaymentMethod = {
    label: string;
    iconName?: string;
    Icon: React.ElementType;
+   definition?: PaymentMethodDefinition;
+   integration?: PaymentIntegrationDefinition;
 };
 
 const PAYMENT_ICON_BY_NAME: Record<string, React.ElementType> = {
@@ -96,9 +113,16 @@ const createPaymentId = (): string => {
    return `PAY-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 };
 
+const roundToTwo = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const createAzulOrderNumber = (): string => {
+   const base = `${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+   return base.slice(-8);
+};
+
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles }) => {
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');
@@ -112,6 +136,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
    const [verifiedBalance, setVerifiedBalance] = useState<number | null>(null);
    const [showSupervisorModal, setShowSupervisorModal] = useState(false);
    const [isOverrideActive, setIsOverrideActive] = useState(false);
+   const [isProcessingGateway, setIsProcessingGateway] = useState(false);
 
    const userPermissions = useMemo(() => {
       if (!currentUser) return [];
@@ -153,20 +178,26 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
    const configuredMethods = useMemo<ResolvedPaymentMethod[]>(() => {
       const enabledConfigMethods = (config?.paymentMethods || []).filter(m => m.isEnabled);
+      const integrations = config?.integrations || [];
 
-      const fromConfig = enabledConfigMethods.map((method, index) => {
+      const fromConfig: ResolvedPaymentMethod[] = enabledConfigMethods.map((method, index) => {
          const IconFromName = method.icon ? PAYMENT_ICON_BY_NAME[method.icon] : undefined;
+         const assignedIntegration = method.integrationId
+            ? integrations.find((integration) => integration.id === method.integrationId)
+            : undefined;
          return {
             key: `${method.id}-${index}`,
             id: method.id,
             type: method.type,
             label: method.name || getDefaultLabelByType(method.type),
             iconName: method.icon,
-            Icon: IconFromName || getDefaultIconByType(method.type)
+            Icon: IconFromName || getDefaultIconByType(method.type),
+            definition: method,
+            integration: assignedIntegration,
          };
       });
 
-      const methods = fromConfig.length > 0 ? fromConfig : [
+      const methods: ResolvedPaymentMethod[] = fromConfig.length > 0 ? fromConfig : [
          { key: 'CASH', id: 'CASH', type: 'CASH' as PaymentMethod, label: 'Efectivo', iconName: 'Banknote', Icon: Banknote },
          { key: 'CARD', id: 'CARD', type: 'CARD' as PaymentMethod, label: 'Tarjeta', iconName: 'CreditCard', Icon: CreditCard },
          { key: 'QR', id: 'QR', type: 'QR' as PaymentMethod, label: 'Digital', iconName: 'QrCode', Icon: QrCode }
@@ -180,12 +211,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
             type: 'WALLET',
             label: 'Saldo a Favor',
             iconName: 'Wallet',
-            Icon: Wallet
+            Icon: Wallet,
          });
       }
 
       return methods;
-   }, [config?.paymentMethods, customer?.wallet]);
+   }, [config?.paymentMethods, config?.integrations, customer?.wallet]);
 
    const activePaymentMethod = useMemo(
       () => configuredMethods.find(method => method.key === activeMethodKey) || configuredMethods[0] || null,
@@ -197,11 +228,18 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       ? resolvePaymentMethodTypeForRuntime(activePaymentMethod.type, activePaymentMethod.label, activePaymentMethod.id)
       : 'CASH';
    const activeIsCxCCredit = activeRuntimeMethod === 'CREDIT';
+   const activeIsIntegratedCard = activePaymentMethod?.definition?.type === 'CARD'
+      && activePaymentMethod.definition.integrationMode === 'INTEGRATED';
+   const activeGatewayIntegration = activeIsIntegratedCard ? activePaymentMethod?.integration : undefined;
+   const activeAzulIntegration = activeGatewayIntegration?.provider === 'AZUL'
+      ? activeGatewayIntegration
+      : undefined;
    const activeIsLoyaltyRedeem = activePaymentMethod
       ? isLoyaltyRedeemMethod(activePaymentMethod.type, activePaymentMethod.label, activePaymentMethod.id)
       : false;
    const activeRequiresOnline =
       activeIsCxCCredit ||
+      activeIsIntegratedCard ||
       activePaymentMethod?.type === 'WALLET' ||
       activeIsLoyaltyRedeem;
 
@@ -275,9 +313,91 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
       return false;
    };
 
-   const handleAddPayment = (amountOverride?: number) => {
+   const buildLocalPaymentEntry = (valInSelectedCurrency: number, amountInBase: number): PaymentEntry => ({
+      id: createPaymentId(),
+      method: activeRuntimeMethod,
+      methodId: activePaymentMethod?.id,
+      methodLabel: activePaymentMethod?.label,
+      methodIcon: activePaymentMethod?.iconName,
+      creditOverrideApproved: activeIsCxCCredit && canBypassCreditLimit ? true : undefined,
+      amount: roundToTwo(amountInBase),
+      timestamp: new Date(),
+      currencyCode: selectedCurrency.code,
+      amountOriginal: valInSelectedCurrency,
+      exchangeRate: selectedCurrency.rate,
+   });
+
+   const authorizeIntegratedCardPayment = async (valInSelectedCurrency: number, amountInBase: number): Promise<PaymentEntry> => {
+      if (!activePaymentMethod || !activeGatewayIntegration) {
+         throw new Error('La tarjeta integrada no tiene una integración asignada.');
+      }
+
+      if (!activeAzulIntegration) {
+         throw new Error(`La integración ${activeGatewayIntegration.provider} todavía no está soportada en caja.`);
+      }
+
+      if (amountInBase > remaining + 0.01) {
+         throw new Error('La tarjeta integrada no puede cobrar más que el restante del ticket.');
+      }
+
+      const proportionalTax = absTotal > 0
+         ? roundToTwo(Math.min(amountInBase, absTotal) / absTotal * Math.max(0, taxAmount))
+         : 0;
+
+      setIsProcessingGateway(true);
+      setFinalizeError('Procesando cobro con AZUL...');
+      try {
+         const azulResponse = await azulMcmService.sale(activeAzulIntegration, {
+            amount: amountInBase,
+            itbis: proportionalTax,
+            orderNumber: createAzulOrderNumber(),
+            installment: '0',
+         });
+
+         return {
+            ...buildLocalPaymentEntry(valInSelectedCurrency, amountInBase),
+            gatewayProvider: 'AZUL',
+            gatewayIntegrationId: activeAzulIntegration.id,
+            gatewayTransactionType: 'SALE',
+            gatewayStatus: azulResponse.approved ? 'APPROVED' : 'DECLINED',
+            gatewayResponseCode: azulResponse.responseCode,
+            gatewayResponseMessage: azulResponse.responseMessage,
+            gatewayAuthorizationCode: azulResponse.authorizationCode,
+            gatewayReference: azulResponse.referenceNumber,
+            gatewaySequenceNumber: azulResponse.sequenceNumber,
+            gatewayInvoiceNumber: azulResponse.invoiceNumber,
+            gatewayBatchNumber: azulResponse.batchNumber,
+            gatewayMerchantId: azulResponse.merchantId,
+            gatewayTerminalId: azulResponse.terminalId,
+            gatewayMaskedPan: azulResponse.maskedPan,
+            gatewayCardBrand: azulResponse.cardBrand,
+            gatewayEntryMode: azulResponse.entryMode,
+            gatewayReceiptMerchant: azulResponse.receiptMerchant,
+            gatewayReceiptClient: azulResponse.receiptClient,
+            gatewaySignatureData: azulResponse.signatureData,
+            gatewayRequireSignature: azulResponse.requireSignature || !!activePaymentMethod.definition?.requiresSignature,
+            gatewayRawResponse: azulResponse.rawResponse,
+         };
+      } finally {
+         setIsProcessingGateway(false);
+      }
+   };
+
+   const buildPaymentEntry = async (valInSelectedCurrency: number): Promise<PaymentEntry> => {
+      const amountInBase = roundToTwo(valInSelectedCurrency * selectedCurrency.rate);
+      if (activeIsIntegratedCard) {
+         return authorizeIntegratedCardPayment(valInSelectedCurrency, amountInBase);
+      }
+      return buildLocalPaymentEntry(valInSelectedCurrency, amountInBase);
+   };
+
+   const handleAddPayment = async (amountOverride?: number) => {
       const valInSelectedCurrency = amountOverride !== undefined ? amountOverride : parseFloat(inputAmount);
       if (!valInSelectedCurrency || valInSelectedCurrency <= 0) return;
+      if (!activePaymentMethod) {
+         setFinalizeError('Seleccione un método de pago.');
+         return;
+      }
 
       // Permission Check: Credit requires POS_PAY_CREDIT
       if (activeIsCxCCredit && !hasPermission('POS_PAY_CREDIT')) {
@@ -291,7 +411,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
          return;
       }
 
-      const amountInBase = valInSelectedCurrency * selectedCurrency.rate;
+      const amountInBase = roundToTwo(valInSelectedCurrency * selectedCurrency.rate);
 
       if (activeIsCxCCredit) {
          const projectedCreditTotal = sumCreditPaymentsBase(payments) + amountInBase;
@@ -300,28 +420,21 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
          }
       }
 
-      const newPayment: PaymentEntry = {
-         id: createPaymentId(),
-         method: activeRuntimeMethod,
-         methodId: activePaymentMethod.id,
-         methodLabel: activePaymentMethod.label,
-         methodIcon: activePaymentMethod.iconName,
-         creditOverrideApproved: activeIsCxCCredit && canBypassCreditLimit ? true : undefined,
-         amount: parseFloat(amountInBase.toFixed(2)),
-         timestamp: new Date(),
-         currencyCode: selectedCurrency.code,
-         amountOriginal: valInSelectedCurrency,
-         exchangeRate: selectedCurrency.rate
-      };
-
-      setPayments(prev => [...prev, newPayment]);
-      setShouldClearInput(true);
+      try {
+         setFinalizeError(null);
+         const newPayment = await buildPaymentEntry(valInSelectedCurrency);
+         setPayments((prev) => [...prev, newPayment]);
+         setShouldClearInput(true);
+         setFinalizeError(null);
+      } catch (error) {
+         setFinalizeError(error instanceof Error ? error.message : 'No se pudo agregar el pago.');
+      }
    };
 
    const handleRemovePayment = (id: string) => { setPayments(prev => prev.filter(p => p.id !== id)); };
 
    const handleFinalize = async () => {
-      if (isFinalizing) return;
+      if (isFinalizing || isProcessingGateway) return;
       if (!canFinalize) {
          alert("Monto insuficiente");
          return;
@@ -368,19 +481,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                }
             }
 
-            const autoPayment: PaymentEntry = {
-               id: createPaymentId(),
-               method: activeRuntimeMethod,
-               methodId: activePaymentMethod.id,
-               methodLabel: activePaymentMethod.label,
-               methodIcon: activePaymentMethod.iconName,
-               creditOverrideApproved: activeIsCxCCredit && canBypassCreditLimit ? true : undefined,
-               amount: typedAmountInBase,
-               timestamp: new Date(),
-               currencyCode: selectedCurrency.code,
-               amountOriginal: typedAmount,
-               exchangeRate: selectedCurrency.rate
-            };
+            const autoPayment = await buildPaymentEntry(typedAmount);
             paymentsToConfirm = [...payments, autoPayment];
             setPayments(paymentsToConfirm);
          }
@@ -659,6 +760,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                                  {p.currencyCode !== baseCurrency.code && (
                                     <span className="text-[9px] md:text-[10px] text-gray-400 font-bold">{p.amountOriginal} {p.currencyCode}</span>
                                  )}
+                                 {p.gatewayProvider === 'AZUL' && (
+                                    <span className="text-[9px] md:text-[10px] text-indigo-500 font-bold block">
+                                       AUT {p.gatewayAuthorizationCode || '-'} · REF {p.gatewayReference || '-'}
+                                    </span>
+                                 )}
                               </div>
                            </div>
                            <div className="flex items-center gap-2 md:gap-4">
@@ -697,10 +803,12 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                   </div>
                   <button
                      onClick={handleFinalize}
-                     disabled={!canFinalize || isFinalizing}
-                     className={`w-full py-3 md:py-4 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${!canFinalize || isFinalizing ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : `${themeBgClass} hover:brightness-110`}`}`}
+                     disabled={!canFinalize || isFinalizing || isProcessingGateway}
+                     className={`w-full py-3 md:py-4 rounded-xl md:rounded-2xl font-black text-sm md:text-base text-white transition-all shadow-lg ${!canFinalize || isFinalizing || isProcessingGateway ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${isRefund ? 'bg-rose-600 hover:bg-rose-700' : `${themeBgClass} hover:brightness-110`}`}`}
                   >
-                     {isFinalizing
+                     {isProcessingGateway
+                        ? 'PROCESANDO TARJETA...'
+                        : isFinalizing
                         ? 'PROCESANDO...'
                         : !canFinalize
                            ? 'PAGO INCOMPLETO'
@@ -719,7 +827,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                      const methodRuntimeType = resolvePaymentMethodTypeForRuntime(method.type, method.label, method.id);
                      const methodIsCredit = methodRuntimeType === 'CREDIT';
                      const methodIsLoyaltyRedeem = isLoyaltyRedeemMethod(method.type, method.label, method.id);
-                     const methodRequiresOnline = method.type === 'WALLET' || methodIsCredit || methodIsLoyaltyRedeem;
+                     const methodIsIntegratedCard = method.definition?.type === 'CARD' && method.definition.integrationMode === 'INTEGRATED';
+                     const methodRequiresOnline = method.type === 'WALLET' || methodIsCredit || methodIsLoyaltyRedeem || methodIsIntegratedCard;
                      const methodDisabledOffline = !isOnline && !isMaster && methodRequiresOnline;
                      const isExceeded = methodIsCredit && isDelinquent && !isOverrideActive;
                      return (
@@ -731,6 +840,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                         >
                            <method.Icon size={24} className="md:w-8 md:h-8" strokeWidth={2.4} />
                            <span className="font-black text-[9px] md:text-[10px] uppercase tracking-widest">{method.label}</span>
+                           {methodIsIntegratedCard && method.integration && (
+                              <span className="text-[7px] text-indigo-600 font-bold">{method.integration.provider}</span>
+                           )}
                            {isExceeded && (
                               <span className="text-[7px] text-red-600 font-bold">LÍMITE EXCEDIDO</span>
                            )}
@@ -776,6 +888,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
                            <button
                               key={d}
                               onClick={() => handleAddPayment(d)}
+                              disabled={isProcessingGateway || isFinalizing}
                               className="py-2 bg-white border border-gray-200 rounded-lg md:rounded-xl text-[10px] md:text-xs font-black text-gray-600 hover:border-blue-500 hover:text-blue-600 transition-all shadow-sm"
                            >
                               {selectedCurrency.symbol}{d}
@@ -805,11 +918,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, curren
 
                   <button
                      onClick={() => handleAddPayment()}
-                     disabled={!isOnline && !isMaster && activeRequiresOnline}
-                     className={`row-span-2 rounded-2xl md:rounded-[2rem] font-black shadow-xl flex flex-col items-center justify-center gap-1 md:gap-2 ${!isOnline && !isMaster && activeRequiresOnline ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} text-white active:scale-95 hover:brightness-110`}`}
+                     disabled={(!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing}
+                     className={`row-span-2 rounded-2xl md:rounded-[2rem] font-black shadow-xl flex flex-col items-center justify-center gap-1 md:gap-2 ${(!isOnline && !isMaster && activeRequiresOnline) || isProcessingGateway || isFinalizing ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : `${themeBgClass} text-white active:scale-95 hover:brightness-110`}`}
                   >
                      <Plus size={28} className="md:w-8 md:h-8" />
-                     <span className="text-[10px] tracking-widest uppercase">Agregar</span>
+                     <span className="text-[10px] tracking-widest uppercase">
+                        {isProcessingGateway ? 'Procesando' : activeIsIntegratedCard ? 'Cobrar' : 'Agregar'}
+                     </span>
                   </button>
 
                   {[4, 5, 6].map(n => <button key={n} onClick={() => handleNumPad(n.toString())} className="bg-white border border-gray-100 rounded-xl md:rounded-2xl text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">{n}</button>)}

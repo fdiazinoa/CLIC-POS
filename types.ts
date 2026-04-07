@@ -684,6 +684,34 @@ export interface CurrencyAuditLog {
 }
 
 export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTHER' | 'CREDIT';
+export type PaymentIntegrationProvider = 'AZUL' | 'CARDNET' | 'CARNET' | 'VISANET' | 'STRIPE';
+export type PaymentIntegrationEnvironment = 'TEST' | 'PRODUCTION';
+export type PaymentIntegrationMode = 'MANUAL' | 'INTEGRATED';
+
+export interface PaymentIntegrationCapabilities {
+  sale?: boolean;
+  void?: boolean;
+  refund?: boolean;
+  getLastTrx?: boolean;
+  pinpadInit?: boolean;
+}
+
+export interface PaymentIntegrationDefinition {
+  id: string;
+  name: string;
+  provider: PaymentIntegrationProvider;
+  isEnabled: boolean;
+  environment: PaymentIntegrationEnvironment;
+  baseUrl: string;
+  secondaryBaseUrl?: string;
+  merchantId?: string;
+  terminalId?: string;
+  auth1?: string;
+  auth2?: string;
+  timeoutMs?: number;
+  capabilities?: PaymentIntegrationCapabilities;
+  metadata?: Record<string, string>;
+}
 
 export interface PaymentMethodDefinition {
   id: string;
@@ -694,7 +722,9 @@ export interface PaymentMethodDefinition {
   color: string;
   opensDrawer: boolean;
   requiresSignature: boolean;
-  integration: 'NONE' | 'CARNET' | 'VISANET' | 'STRIPE';
+  integration: 'NONE' | PaymentIntegrationProvider;
+  integrationMode?: PaymentIntegrationMode;
+  integrationId?: string;
   integrationConfig?: Record<string, string>;
   paymentTermDays?: number; // Solo aplica para tipo CREDIT
 }
@@ -829,6 +859,7 @@ export interface BusinessConfig {
   companyInfo: CompanyInfo;
   currencies: CurrencyConfig[];
   paymentMethods: PaymentMethodDefinition[];
+  integrations?: PaymentIntegrationDefinition[];
   terminals: { id: string; config: TerminalConfig }[];
   tariffs: Tariff[];
   productGroups?: ProductGroup[];
@@ -1627,6 +1658,27 @@ export interface PaymentEntry {
   source_display_id?: string;
   source_terminal_id?: string;
   device_id?: string;
+  gatewayProvider?: PaymentIntegrationProvider;
+  gatewayIntegrationId?: string;
+  gatewayTransactionType?: 'SALE' | 'VOID' | 'REFUND' | 'GET_LAST_TRX';
+  gatewayStatus?: string;
+  gatewayResponseCode?: string;
+  gatewayResponseMessage?: string;
+  gatewayAuthorizationCode?: string;
+  gatewayReference?: string;
+  gatewaySequenceNumber?: string;
+  gatewayInvoiceNumber?: string;
+  gatewayBatchNumber?: string;
+  gatewayMerchantId?: string;
+  gatewayTerminalId?: string;
+  gatewayMaskedPan?: string;
+  gatewayCardBrand?: string;
+  gatewayEntryMode?: string;
+  gatewayReceiptMerchant?: string;
+  gatewayReceiptClient?: string;
+  gatewaySignatureData?: string;
+  gatewayRequireSignature?: boolean;
+  gatewayRawResponse?: Record<string, any>;
 }
 
 export interface CustomerTransaction {

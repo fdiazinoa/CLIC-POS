@@ -5,7 +5,7 @@ import {
   Monitor, Users, Truck, ShieldCheck, FileText,
   Globe, Database, Activity, Mail, Coins, Grid,
   Cpu, HardDrive, Smartphone, Cloud, Lock, Package, Building2,
-  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw, Layers, ChefHat, UserCircle, BarChart3, Calendar, MessageCircle, Map as MapIcon, MapPin
+  Printer, ArrowRightLeft, ShieldAlert, ListChecks, History, Tag, Percent, Award, Wallet, RefreshCw, Layers, ChefHat, UserCircle, BarChart3, Calendar, MessageCircle, Map as MapIcon, MapPin, PlugZap
 } from 'lucide-react';
 import {
   BusinessConfig,
@@ -45,6 +45,7 @@ import DataSecurityHub from './DataSecurityHub';
 import AuditLogViewer from './AuditLogViewer';
 import TeamHub from './TeamHub';
 import PaymentSettings from './PaymentSettings';
+import IntegrationSettings from './IntegrationSettings';
 import DocumentSettings from './DocumentSettings';
 import TaxSettings from './TaxSettings';
 import PromotionBuilder from './PromotionBuilder';
@@ -114,7 +115,7 @@ interface SettingsProps {
   onUpdateRooms?: (rooms: Room[]) => void;
 }
 
-type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
+type SettingsView = 'HOME' | 'CATALOG' | 'WAREHOUSES' | 'PAYMENTS' | 'INTEGRATIONS' | 'COMPANY' | 'RECEIPT' | 'TERMINALS' | 'TEAM' | 'HARDWARE' | 'SECURITY' | 'LOGS' | 'EXCHANGE' | 'EMAIL' | 'TIPS' | 'DOCUMENTS' | 'TAXES' | 'PROMOTIONS' | 'IMPORT_EXPORT' | 'LOYALTY' | 'WALLET_KEYS' | 'SYNC' | 'LAYOUT' | 'PRODUCTION_AREAS' | 'LABELS' | 'CUSTOMERS' | 'REPORTS' | 'AGENDA' | 'SPACES';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -321,6 +322,15 @@ const Settings: React.FC<SettingsProps> = (props) => {
       case 'PAYMENTS':
         return (
           <PaymentSettings
+            config={props.config}
+            onUpdateConfig={props.onUpdateConfig}
+            onClose={() => setCurrentView('HOME')}
+          />
+        );
+
+      case 'INTEGRATIONS':
+        return (
+          <IntegrationSettings
             config={props.config}
             onUpdateConfig={props.onUpdateConfig}
             onClose={() => setCurrentView('HOME')}
@@ -815,6 +825,7 @@ const Settings: React.FC<SettingsProps> = (props) => {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                   <SettingsCard icon={Building2} label="Empresa" description="RNC, Nombre y Contacto Legal" color="bg-blue-700" onClick={() => setCurrentView('COMPANY')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={CreditCard} label="Métodos de Pago" description="Pasarelas, Tarjetas, QR" color="bg-indigo-500" onClick={() => setCurrentView('PAYMENTS')} locked={!hasPermission('SETTINGS_ACCESS')} />
+                  <SettingsCard icon={PlugZap} label="Integraciones" description="AZUL, CardNet y adquirentes" color="bg-sky-600" onClick={() => setCurrentView('INTEGRATIONS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={ArrowRightLeft} label="Divisas y Cambio" description="Multi-moneda y Tasas" color="bg-teal-500" onClick={() => setCurrentView('EXCHANGE')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard icon={Percent} label="Impuestos" description="ITBIS, Exentos y Cargos" color="bg-emerald-500" onClick={() => setCurrentView('TAXES')} locked={!hasPermission('SETTINGS_TAXES')} />
                   <SettingsCard icon={Lock} label="Cierre de Caja" description="Corte Z y Auditoría Fiscal" color="bg-slate-900" onClick={props.onOpenZReport} locked={!hasPermission('POS_CLOSE_Z')} />
