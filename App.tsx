@@ -965,7 +965,11 @@ const AppContent: React.FC = () => {
       }
     };
 
-    const syncLifecycle = async () => {
+    const HEARTBEAT_INTERVAL_MS = 120000;
+    const MANIFEST_REFRESH_INTERVAL_MS = 300000;
+    let lastManifestRefreshAt = 0;
+
+    const syncLifecycle = async (options?: { forceManifestRefresh?: boolean }) => {
       try {
         const operationalTerminalId = currentTerminal.config?.stationNumber || currentTerminal.id;
         const erpTerminalId = currentTerminal.config?.erpTerminalId || operationalTerminalId;
@@ -987,9 +991,17 @@ const AppContent: React.FC = () => {
           console.log(`[ERP SYNC] ${result.outbox.applied} evento(s) ERP aplicados. El refresh runtime se resuelve por terminalConfigSyncRequested.`);
         }
 
-        const refreshedFromManifest = await syncManager.syncTerminalManifestInBackground();
-        if (!disposed && refreshedFromManifest && !Array.isArray(refreshedFromManifest) && refreshedFromManifest.terminals) {
-          console.log(`[ERP SYNC] ${terminalName} actualizó su estado runtime desde el manifest del ERP.`);
+        const now = Date.now();
+        const shouldRefreshManifest = Boolean(options?.forceManifestRefresh)
+          || (result?.outbox?.applied || 0) > 0
+          || now - lastManifestRefreshAt >= MANIFEST_REFRESH_INTERVAL_MS;
+
+        if (shouldRefreshManifest) {
+          const refreshedFromManifest = await syncManager.syncTerminalManifestInBackground();
+          if (!disposed && refreshedFromManifest && !Array.isArray(refreshedFromManifest) && refreshedFromManifest.terminals) {
+            console.log(`[ERP SYNC] ${terminalName} actualizó su estado runtime desde el manifest del ERP.`);
+          }
+          lastManifestRefreshAt = now;
         }
       } catch (error) {
         console.warn('[ERP SYNC] lifecycle registration skipped:', error);
@@ -997,19 +1009,19 @@ const AppContent: React.FC = () => {
     };
 
     void publishEndpoint();
-    void syncLifecycle();
+    void syncLifecycle({ forceManifestRefresh: true });
 
     const heartbeatId = window.setInterval(() => {
       if (navigator.onLine) {
         void publishEndpoint();
         void syncLifecycle();
       }
-    }, 60000);
+    }, HEARTBEAT_INTERVAL_MS);
 
     const republish = () => {
       if (navigator.onLine) {
         void publishEndpoint();
-        void syncLifecycle();
+        void syncLifecycle({ forceManifestRefresh: true });
       }
     };
 
