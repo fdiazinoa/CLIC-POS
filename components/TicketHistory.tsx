@@ -572,17 +572,44 @@ const TicketDetailDrawer: React.FC<{
                         {payments.length === 0 ? (
                            <p className="text-xs text-gray-400 italic">Sin información de pagos</p>
                         ) : (
-                           payments.map((payment: any, index: number) => (
-                              <div key={`${tx.id}-payment-${index}`} className="flex items-center justify-between rounded-lg bg-white border border-gray-100 px-3 py-2">
-                                 <div className="flex items-center gap-2">
-                                    {getPaymentMethodIcon(payment?.method)}
-                                    <span className="text-xs font-bold text-gray-700">{getPaymentMethodLabel(payment)}</span>
+                           payments.map((payment: any, index: number) => {
+                              const showAzulRefs =
+                                 payment?.gatewayProvider === 'AZUL' ||
+                                 payment?.gatewayAuthorizationCode ||
+                                 payment?.gatewayReference;
+                              return (
+                                 <div
+                                    key={`${tx.id}-payment-${index}`}
+                                    className="rounded-lg bg-white border border-gray-100 overflow-hidden"
+                                 >
+                                    <div className="flex items-center justify-between px-3 py-2">
+                                       <div className="flex items-center gap-2">
+                                          {getPaymentMethodIcon(payment?.method)}
+                                          <span className="text-xs font-bold text-gray-700">{getPaymentMethodLabel(payment)}</span>
+                                       </div>
+                                       <span className="text-xs font-black text-gray-900">
+                                          {config.currencySymbol}{Number(payment?.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                       </span>
+                                    </div>
+                                    {showAzulRefs ? (
+                                       <div className="px-3 pb-2 pt-0 space-y-0.5 border-t border-gray-50 bg-gray-50/50">
+                                          {payment?.gatewayAuthorizationCode ? (
+                                             <p className="text-[11px] text-gray-700">
+                                                <span className="font-semibold text-gray-500">AUT No.:</span>{' '}
+                                                <span className="font-mono">{payment.gatewayAuthorizationCode}</span>
+                                             </p>
+                                          ) : null}
+                                          {payment?.gatewayReference ? (
+                                             <p className="text-[11px] text-gray-700">
+                                                <span className="font-semibold text-gray-500">Ref No.:</span>{' '}
+                                                <span className="font-mono">{payment.gatewayReference}</span>
+                                             </p>
+                                          ) : null}
+                                       </div>
+                                    ) : null}
                                  </div>
-                                 <span className="text-xs font-black text-gray-900">
-                                    {config.currencySymbol}{Number(payment?.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                 </span>
-                              </div>
-                           ))
+                              );
+                           })
                         )}
                         <div className="flex items-center justify-between pt-2 border-t border-gray-100">
                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Total Recibido</span>

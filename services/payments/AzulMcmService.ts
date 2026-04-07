@@ -1,3 +1,5 @@
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
+
 import { PaymentIntegrationDefinition } from '../../types';
 
 type AzulAction = 'Sale' | 'SaleCancellation' | 'Refund' | 'GetLastTrx' | 'PinpadInit';
@@ -80,6 +82,14 @@ const buildActionUrl = (integration: PaymentIntegrationDefinition, action: AzulA
   return `${normalizeBaseUrl(integration.baseUrl)}?${action}`;
 };
 
+const isNativeCapacitorRuntime = (): boolean => {
+  try {
+    return Capacitor.isNativePlatform();
+  } catch {
+    return false;
+  }
+};
+
 const readResponseFields = (fields?: AzulResponseField[]): Record<string, string> => {
   return (fields || []).reduce<Record<string, string>>((acc, field) => {
     if (field?.Name) {
@@ -135,36 +145,72 @@ const postJson = async (
 ): Promise<AzulGatewayResponse> => {
   ensureAzulIntegration(integration);
 
-  const controller = new AbortController();
   const timeoutMs = integration.timeoutMs || DEFAULT_TIMEOUT_MS;
-  const timeoutHandle = window.setTimeout(() => controller.abort(), timeoutMs);
+  const url = buildActionUrl(integration, action);
+  const headers = {
+    'Content-Type': 'application/json',
+    Auth1: integration.auth1!.trim(),
+    Auth2: integration.auth2!.trim(),
+  };
+
+  const parseResponseBody = (rawBody: unknown): AzulGatewayResponse => {
+    if (typeof rawBody === 'string') {
+      try {
+        return JSON.parse(rawBody) as AzulGatewayResponse;
+      } catch {
+        throw new Error(`AZUL devolvió una respuesta inválida para ${action}.`);
+      }
+    }
+
+    if (rawBody && typeof rawBody === 'object') {
+      return rawBody as AzulGatewayResponse;
+    }
+
+    throw new Error(`AZUL devolvió una respuesta vacía para ${action}.`);
+  };
 
   try {
-    const response = await fetch(buildActionUrl(integration, action), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Auth1: integration.auth1!.trim(),
-        Auth2: integration.auth2!.trim(),
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
+    if (isNativeCapacitorRuntime()) {
+      const response = await CapacitorHttp.post({
+        url,
+        headers,
+        data: payload,
+        connectTimeout: timeoutMs,
+        readTimeout: timeoutMs,
+        responseType: 'json',
+      });
 
-    const rawBody = await response.text();
-    let parsed: AzulGatewayResponse;
+      const parsed = parseResponseBody(response.data);
+
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(extractErrorMessage(parsed));
+      }
+
+      return parsed;
+    }
+
+    const controller = new AbortController();
+    const timeoutHandle = window.setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      parsed = JSON.parse(rawBody) as AzulGatewayResponse;
-    } catch {
-      throw new Error(`AZUL devolvió una respuesta inválida para ${action}.`);
-    }
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      throw new Error(extractErrorMessage(parsed));
-    }
+      const rawBody = await response.text();
+      const parsed = parseResponseBody(rawBody);
 
-    return parsed;
+      if (!response.ok) {
+        throw new Error(extractErrorMessage(parsed));
+      }
+
+      return parsed;
+    } finally {
+      window.clearTimeout(timeoutHandle);
+    }
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error(`AZUL agotó el tiempo de espera (${Math.round(timeoutMs / 1000)}s).`);
@@ -175,8 +221,6 @@ const postJson = async (
     }
 
     throw new Error('No se pudo completar la comunicación con AZUL.');
-  } finally {
-    window.clearTimeout(timeoutHandle);
   }
 };
 
