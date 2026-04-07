@@ -2,14 +2,20 @@ import { getStoredTenantIdentity } from './cloudMasterRegistry';
 import { DEFAULT_ERP_SYNC_API_URL, normalizeCloudUrl } from './cloudDefaults';
 import { v5 as uuidv5 } from 'uuid';
 import { db } from './db';
+import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
+import { getDefaultRoleConfig } from './deviceRoleHelpers';
 import {
+    AuthLevel,
     BusinessConfig,
     Customer,
+    DeviceRole,
+    DeviceRoleConfig,
     DocumentSeries,
     FiscalRangeDGII,
     PaymentMethodDefinition,
     Product,
     Supplier,
+    TerminalConfig,
     Warehouse,
 } from '../types';
 
@@ -169,6 +175,15 @@ type BootstrapEventPayload = {
     required_entities?: string[];
 };
 
+type SyncTerminalSnapshot = {
+    terminal_id?: string | null;
+    terminal_name?: string | null;
+    device_id?: string | null;
+    role?: string | null;
+    config?: Record<string, unknown> | null;
+    resolved?: Record<string, unknown> | null;
+};
+
 type ProcessErpOutboxParams = {
     deviceId: string;
     terminalId: string;
@@ -210,6 +225,284 @@ const uniqueStrings = (values: unknown) => Array.from(
 const asObject = <T>(value: unknown): T =>
     (value && typeof value === 'object' && !Array.isArray(value) ? value as T : {} as T);
 const asArray = <T>(value: unknown): T[] => Array.isArray(value) ? value as T[] : [];
+const asStringList = (value: unknown) => (
+    Array.isArray(value)
+        ? value.map((entry) => normalizeOptional(String(entry || ''))).filter(Boolean)
+        : []
+);
+const normalizeAllowedModules = (value: unknown): string[] => (
+    asStringList(value).map((moduleName) => (
+        moduleName === '*'
+            ? '*'
+            : moduleName.toLowerCase()
+    ))
+);
+const toFiniteNumber = (value: unknown): number | null => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+const pickBoolean = (...values: unknown[]): boolean | undefined => {
+    for (const value of values) {
+        if (typeof value === 'boolean') {
+            return value;
+        }
+    }
+    return undefined;
+};
+const resolveDeviceRole = (value: unknown): DeviceRole => {
+    const normalized = normalizeOptional(String(value || '')).toUpperCase();
+
+    switch (normalized) {
+        case DeviceRole.SELF_CHECKOUT:
+            return DeviceRole.SELF_CHECKOUT;
+        case DeviceRole.PRICE_CHECKER:
+            return DeviceRole.PRICE_CHECKER;
+        case DeviceRole.HANDHELD_INVENTORY:
+            return DeviceRole.HANDHELD_INVENTORY;
+        case DeviceRole.KITCHEN_DISPLAY:
+            return DeviceRole.KITCHEN_DISPLAY;
+        case DeviceRole.STANDARD_POS:
+        default:
+            return DeviceRole.STANDARD_POS;
+    }
+};
+const resolveAuthLevel = (value: unknown): AuthLevel | null => {
+    const normalized = normalizeOptional(String(value || '')).toUpperCase();
+    if (normalized === AuthLevel.HEADLESS) {
+        return AuthLevel.HEADLESS;
+    }
+    if (normalized === AuthLevel.USER_REQUIRED) {
+        return AuthLevel.USER_REQUIRED;
+    }
+    return null;
+};
+
+const buildCompatibleDeviceRoleConfig = (
+    currentRoleConfig: DeviceRoleConfig | null | undefined,
+    incomingRoleConfig: unknown
+): DeviceRoleConfig => {
+    const current = currentRoleConfig && typeof currentRoleConfig === 'object'
+        ? currentRoleConfig
+        : null;
+    const incoming = asObject<Record<string, unknown>>(incomingRoleConfig);
+    const incomingUi = asObject<Record<string, unknown>>(incoming.uiSettings);
+    const incomingHardware = asObject<Record<string, unknown>>(incoming.hardwareConfig);
+    const role = resolveDeviceRole(incoming.role || current?.role || DeviceRole.STANDARD_POS);
+    const defaults = getDefaultRoleConfig(role);
+    const roleChanged = Boolean(current?.role) && current?.role !== role;
+    const currentUi = !roleChanged ? asObject<Record<string, unknown>>(current?.uiSettings) : {};
+    const currentHardware = !roleChanged ? asObject<Record<string, unknown>>(current?.hardwareConfig) : {};
+    const currentEscapeHatch = !roleChanged
+        ? asObject<Record<string, unknown>>(currentUi.escapeHatch)
+        : {};
+    const incomingEscapeHatch = asObject<Record<string, unknown>>(incomingUi.escapeHatch);
+    const currentAdminPin = normalizeOptional(String(current?.uiSettings?.escapeHatch?.adminPin || ''));
+    const allowedModules = normalizeAllowedModules(incoming.allowedModules);
+    const currentAllowedModules = Array.isArray(current?.allowedModules)
+        ? normalizeAllowedModules(current.allowedModules)
+        : [];
+    const defaultAllowedModules = normalizeAllowedModules(defaults.allowedModules);
+    const resolvedAllowedModules = allowedModules.length > 0
+        ? allowedModules
+        : currentAllowedModules.length > 0 && !roleChanged
+            ? currentAllowedModules
+            : defaultAllowedModules;
+    const touchTargetSize = toFiniteNumber(
+        incoming.touchTargetSize
+        ?? incomingUi.touchTargetSize
+        ?? currentUi.touchTargetSize
+        ?? defaults.uiSettings.touchTargetSize
+    ) ?? defaults.uiSettings.touchTargetSize;
+    const fullscreenForced = pickBoolean(
+        incoming.fullscreenForced,
+        incomingUi.fullscreenForced,
+        currentUi.fullscreenForced,
+        defaults.uiSettings.fullscreenForced
+    ) ?? defaults.uiSettings.fullscreenForced;
+    const navigationLocked = pickBoolean(
+        incoming.navigationLocked,
+        incomingUi.navigationLocked,
+        currentUi.navigationLocked,
+        defaults.uiSettings.navigationLocked
+    ) ?? defaults.uiSettings.navigationLocked;
+    const authLevel = resolveAuthLevel(incoming.authLevel)
+        || (!roleChanged ? resolveAuthLevel(current?.authLevel) : null)
+        || defaults.authLevel;
+    const defaultRoute = normalizeOptional(String(incoming.defaultRoute || ''))
+        || (!roleChanged ? normalizeOptional(String(current?.defaultRoute || '')) : '')
+        || defaults.defaultRoute;
+    const apiToken = normalizeOptional(String(incoming.apiToken || ''))
+        || normalizeOptional(String(current?.apiToken || ''))
+        || undefined;
+
+    return {
+        ...defaults,
+        ...(roleChanged ? {} : current || {}),
+        ...incoming,
+        role,
+        authLevel,
+        defaultRoute,
+        apiToken,
+        allowedModules: resolvedAllowedModules,
+        uiSettings: {
+            ...defaults.uiSettings,
+            ...currentUi,
+            ...incomingUi,
+            fullscreenForced,
+            touchTargetSize,
+            navigationLocked,
+            escapeHatch: {
+                ...defaults.uiSettings.escapeHatch,
+                ...currentEscapeHatch,
+                ...incomingEscapeHatch,
+                ...(currentAdminPin && !normalizeOptional(String(incomingEscapeHatch.adminPin || ''))
+                    ? { adminPin: currentAdminPin }
+                    : {}),
+            },
+        },
+        hardwareConfig: {
+            ...defaults.hardwareConfig,
+            ...currentHardware,
+            ...incomingHardware,
+        },
+    };
+};
+
+const buildCompatibleInventoryScope = (
+    currentInventoryScope: TerminalConfig['inventoryScope'],
+    resolvedInventory: Record<string, unknown>
+): TerminalConfig['inventoryScope'] => {
+    const warehouses = asArray<Record<string, unknown>>(resolvedInventory.warehouses);
+    const visibleWarehouseIds = uniqueStrings(warehouses.map((warehouse) => warehouse?.id));
+    const defaultSalesWarehouseId = normalizeOptional(
+        String(
+            resolvedInventory.default_warehouse_id
+            || asObject<Record<string, unknown>>(resolvedInventory.default_warehouse).id
+            || currentInventoryScope?.defaultSalesWarehouseId
+            || ''
+        )
+    );
+
+    if (!defaultSalesWarehouseId && visibleWarehouseIds.length === 0) {
+        return currentInventoryScope;
+    }
+
+    return {
+        defaultSalesWarehouseId: defaultSalesWarehouseId || currentInventoryScope?.defaultSalesWarehouseId || '',
+        visibleWarehouseIds: visibleWarehouseIds.length > 0
+            ? visibleWarehouseIds
+            : currentInventoryScope?.visibleWarehouseIds || [],
+    };
+};
+
+const applyErpConfigPushToLocalTerminal = async ({
+    deviceId,
+    fallbackTerminalId,
+    payload,
+}: {
+    deviceId: string;
+    fallbackTerminalId?: string | null;
+    payload: Record<string, unknown>;
+}): Promise<boolean> => {
+    const snapshot = asObject<SyncTerminalSnapshot>(payload.terminal_config);
+    const incomingConfig = asObject<Record<string, unknown>>(snapshot.config);
+
+    if (!snapshot.terminal_id && Object.keys(incomingConfig).length === 0) {
+        return false;
+    }
+
+    const localConfigRaw = await db.get('config');
+    if (!localConfigRaw || Array.isArray(localConfigRaw)) {
+        return false;
+    }
+
+    const localConfig = localConfigRaw as BusinessConfig;
+    if (!Array.isArray(localConfig.terminals)) {
+        return false;
+    }
+
+    const resolvedTerminalId = normalizeOptional(snapshot.terminal_id || fallbackTerminalId || null);
+    const targetIndex = localConfig.terminals.findIndex((terminal) =>
+        (resolvedTerminalId && terminal.id === resolvedTerminalId)
+        || terminal.config?.currentDeviceId === deviceId
+    );
+
+    if (targetIndex === -1) {
+        return false;
+    }
+
+    const targetTerminal = localConfig.terminals[targetIndex];
+    const currentConfig: TerminalConfig = targetTerminal.config || ({} as TerminalConfig);
+    const incomingOperational = asObject<Record<string, unknown>>(incomingConfig.operational);
+    const incomingCatalog = asObject<Record<string, unknown>>(incomingConfig.catalog);
+    const incomingPricing = asObject<Record<string, unknown>>(incomingConfig.pricing);
+    const incomingDocuments = asObject<Record<string, unknown>>(incomingConfig.documents);
+    const resolvedSnapshot = asObject<Record<string, unknown>>(snapshot.resolved);
+    const resolvedInventory = asObject<Record<string, unknown>>(resolvedSnapshot.inventory);
+    const allowedCategories = asStringList(
+        incomingCatalog.allowedCategories
+        ?? currentConfig.catalog?.allowedCategories
+    );
+    const allowedTariffIds = asStringList(
+        incomingPricing.allowedTariffIds
+        ?? currentConfig.pricing?.allowedTariffIds
+    );
+    const defaultTariffId = normalizeOptional(
+        String(incomingPricing.defaultTariffId || currentConfig.pricing?.defaultTariffId || '')
+    );
+    const incomingAssignments = asObject<Record<string, string>>(incomingDocuments.assignments);
+    const nextOperational = {
+        ...(currentConfig.operational || {}),
+        ...incomingOperational,
+    } as TerminalConfig['operational'];
+    const nextCatalog = {
+        ...(currentConfig.catalog || {}),
+        ...incomingCatalog,
+        allowedCategories,
+    } as NonNullable<TerminalConfig['catalog']>;
+    const nextPricing = {
+        ...(currentConfig.pricing || {}),
+        ...incomingPricing,
+        allowedTariffIds,
+        defaultTariffId: defaultTariffId || currentConfig.pricing?.defaultTariffId || '',
+    } as TerminalConfig['pricing'];
+    const nextDocumentAssignments = {
+        ...DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS,
+        ...(currentConfig.documentAssignments || {}),
+        ...incomingAssignments,
+    } as NonNullable<TerminalConfig['documentAssignments']>;
+    const nextTerminalConfig: TerminalConfig = {
+        ...currentConfig,
+        deviceRole: buildCompatibleDeviceRoleConfig(currentConfig.deviceRole, incomingConfig.deviceRole),
+        operational: nextOperational,
+        catalog: nextCatalog,
+        pricing: nextPricing,
+        documentAssignments: nextDocumentAssignments,
+        inventoryScope: buildCompatibleInventoryScope(currentConfig.inventoryScope, resolvedInventory),
+    };
+
+    const nextTerminals = localConfig.terminals.map((terminal, index) => {
+        if (index !== targetIndex) {
+            return terminal;
+        }
+
+        return {
+            ...terminal,
+            id: resolvedTerminalId || terminal.id,
+            config: nextTerminalConfig,
+        };
+    });
+
+    const nextConfig: BusinessConfig = {
+        ...localConfig,
+        terminals: nextTerminals,
+    };
+
+    await db.save('config', nextConfig);
+    window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfig }));
+
+    return true;
+};
 
 const getSyncApiBase = () => {
     const env = (import.meta as any).env || {};
@@ -803,18 +1096,20 @@ export const processErpSyncOutbox = async (
 
         for (const event of events) {
             const eventType = normalizeEntityCode(event.event_type || null).toUpperCase();
-            const payload = asObject<BootstrapEventPayload>(event.payload);
+            const payload = asObject<Record<string, unknown>>(event.payload);
 
             try {
                 if (eventType === 'BOOTSTRAP_REQUESTED') {
                     const snapshotResponse = await postBootstrapSnapshotToErp({
                         deviceId: params.deviceId,
                         terminalId: params.terminalId,
-                        requiredEntities: payload.required_entities,
-                        payload,
+                        requiredEntities: asArray<string>(payload.required_entities),
+                        payload: payload as BootstrapEventPayload,
                     });
 
-                    const tenantId = normalizeEntityCode(payload.tenant_id || getStoredTenantIdentity().tenantId || binding.tenantId || null);
+                    const tenantId = normalizeEntityCode(
+                        String(payload.tenant_id || getStoredTenantIdentity().tenantId || binding.tenantId || '')
+                    );
                     let readyForDocuments = Boolean(snapshotResponse?.validation?.ready_for_documents);
 
                     if (tenantId) {
@@ -836,7 +1131,17 @@ export const processErpSyncOutbox = async (
                 }
 
                 if (eventType === 'CONFIG_PUSH') {
-                    console.info('[ERP SYNC] CONFIG_PUSH recibido. Se marca aplicado mientras llega el fetch declarativo de configuracion.');
+                    const appliedLocally = await applyErpConfigPushToLocalTerminal({
+                        deviceId: params.deviceId,
+                        fallbackTerminalId: binding.terminalId || params.terminalId,
+                        payload,
+                    });
+
+                    console.info(
+                        appliedLocally
+                            ? '[ERP SYNC] CONFIG_PUSH aplicado sobre la configuracion local de la terminal.'
+                            : '[ERP SYNC] CONFIG_PUSH recibido sin cambios aplicables en la configuracion local.'
+                    );
                     await ackErpOutboxEvent(event.id, 'APPLIED');
                     applied += 1;
                     continue;
