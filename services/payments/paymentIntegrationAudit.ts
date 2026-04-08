@@ -5,6 +5,7 @@ import {
   PaymentIntegrationAuditStatus,
   PaymentIntegrationDefinition,
 } from '../../types';
+import { db } from '../../utils/db';
 
 const MAX_AUDIT_EVENTS_PER_INTEGRATION = 200;
 
@@ -108,19 +109,37 @@ export const appendAuditEventToConfig = (
   };
 };
 
-export const dispatchAuditEventConfigUpdate = (
-  config: BusinessConfig | undefined,
-  integrationId: string,
-  event: PaymentIntegrationAuditEvent
-): BusinessConfig | null => {
-  if (!config) return null;
-
-  const nextConfig = appendAuditEventToConfig(config, integrationId, event);
-  if (nextConfig === config) return null;
-
+const emitConfigUpdated = (nextConfig: BusinessConfig): void => {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfig }));
   }
+};
 
+export const persistConfigUpdate = async (nextConfig: BusinessConfig): Promise<void> => {
+  await db.save('config', nextConfig);
+  emitConfigUpdated(nextConfig);
+};
+
+export const dispatchAuditEventConfigUpdate = async (
+  config: BusinessConfig | undefined,
+  integrationId: string,
+  event: PaymentIntegrationAuditEvent
+) : Promise<BusinessConfig | null> => {
+  if (!config) return null;
+
+  const persistedConfig = await db.get('config');
+  const baseConfig = (
+    persistedConfig &&
+    !Array.isArray(persistedConfig) &&
+    typeof persistedConfig === 'object' &&
+    Array.isArray((persistedConfig as BusinessConfig).terminals)
+  )
+    ? persistedConfig as BusinessConfig
+    : config;
+
+  const nextConfig = appendAuditEventToConfig(baseConfig, integrationId, event);
+  if (nextConfig === baseConfig) return null;
+
+  await persistConfigUpdate(nextConfig);
   return nextConfig;
 };
