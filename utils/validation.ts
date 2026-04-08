@@ -1,4 +1,5 @@
-import { BusinessConfig, Product } from '../types';
+import { BusinessConfig, Product, Warehouse } from '../types';
+import { isProductWarehouseActive } from './masterIdentity';
 
 export const validateTerminalDocument = (
     config: BusinessConfig,
@@ -34,11 +35,12 @@ export const validateTerminalDocument = (
  */
 export const validateWarehouseAccess = (
     product: Product,
-    warehouseId: string
+    warehouseId: string,
+    warehouses: Warehouse[] = []
 ): { isValid: boolean; error?: string } => {
     if (!warehouseId) return { isValid: true }; // Skip if no warehouse context provided
 
-    const isEnabled = product.activeInWarehouses?.includes(warehouseId);
+    const isEnabled = isProductWarehouseActive(product, warehouseId, warehouses);
 
     if (!isEnabled) {
         return {

@@ -86,6 +86,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     config.inventoryScope?.visibleWarehouseIds?.[0] || 'ALL'
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastInitialSyncRef = useRef<string>('');
 
   // --- STATE ---
   const [showProfitCalc, setShowProfitCalc] = useState<string | null>(null);
@@ -198,19 +199,30 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
   // --- SYNC STATE WITH PROPS (For Real-time Sync Updates) ---
   useEffect(() => {
-    if (initialData) {
-      console.log(`🔄 ProductForm: Syncing internal state with updated initialData for ${initialData.id}`);
-      setFormData(prev => normalizeProductActivationState({
-        ...initialData,
-        // Preserve some local UI state if needed, but for stock we want the prop value
-        tariffs: initialData.tariffs || [],
-        attributes: initialData.attributes || [],
-        variants: initialData.variants || [],
-        stockBalances: initialData.stockBalances || {}
-      }));
-      setWarehouseSettings(canonicalizeWarehouseRecord(initialData.warehouseSettings || {}, warehouses));
+    if (!initialData) return;
+
+    const initialTimestamp = initialData.updatedAt || (initialData as any).createdAt || (initialData as any).created_at || 'NO_TS';
+    const syncMarker = `${initialData.id || 'NO_ID'}::${initialTimestamp}`;
+    if (lastInitialSyncRef.current === syncMarker) {
+      return;
     }
-  }, [initialData, availableTariffs, warehouses]);
+
+    console.log(`🔄 ProductForm: Syncing internal state with updated initialData for ${initialData.id}`);
+    setFormData(normalizeProductActivationState({
+      ...initialData,
+      tariffs: initialData.tariffs || [],
+      attributes: initialData.attributes || [],
+      variants: initialData.variants || [],
+      stockBalances: initialData.stockBalances || {}
+    }));
+    setWarehouseSettings(canonicalizeWarehouseRecord(initialData.warehouseSettings || {}, warehouses));
+    lastInitialSyncRef.current = syncMarker;
+  }, [initialData?.id, initialData?.updatedAt, (initialData as any)?.createdAt, (initialData as any)?.created_at]);
+
+  useEffect(() => {
+    setFormData(prev => normalizeProductActivationState(prev));
+    setWarehouseSettings(prev => canonicalizeWarehouseRecord(prev, warehouses));
+  }, [availableTariffs, warehouses]);
 
   useEffect(() => {
     const loadLedger = async () => {
