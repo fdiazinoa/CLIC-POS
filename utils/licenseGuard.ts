@@ -242,7 +242,7 @@ const fetchSubscriptionRecords = async (
     tenantId: string
 ): Promise<SubscriptionRecord[] | null> => {
     const res = await fetchWithTimeout(
-        `${supabaseUrl}/rest/v1/subscriptions?tenant_id=eq.${encodeURIComponent(tenantId)}&select=is_active,status`,
+        `${supabaseUrl}/rest/v1/subscriptions?tenant_id=eq.${encodeURIComponent(tenantId)}&select=is_active`,
         {
             headers: buildLandlordHeaders(supabaseKey),
         }
