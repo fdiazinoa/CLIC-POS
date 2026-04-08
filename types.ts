@@ -1868,6 +1868,7 @@ export interface Coupon {
 export type Permission =
   | 'ALL'
   | 'CAN_REFUND'
+  | 'POS_GATEWAY_REFUND'
   | 'POS_CREDIT_OVERRIDE'
   | 'POS_PAY_CREDIT'
   | 'POS_ALLOW_ZERO_PRICE'

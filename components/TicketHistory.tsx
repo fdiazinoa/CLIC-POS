@@ -1724,8 +1724,8 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
       // Supervisor Check for Voiding Paid Ticket
       const authorized = await requestApproval({
-         permission: 'POS_VOID_PAID_TICKET',
-         actionDescription: 'Anular/Devolver Factura Pagada',
+         permission: refundRequestMode === 'AZUL_GATEWAY_REFUND' ? 'POS_GATEWAY_REFUND' : 'POS_VOID_PAID_TICKET',
+         actionDescription: refundRequestMode === 'AZUL_GATEWAY_REFUND' ? 'Procesar Refund Integrado' : 'Anular/Devolver Factura Pagada',
          context: {
             ticketId: transaction.id,
             originalValue: currentRefundTotal
@@ -1792,8 +1792,8 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          : refundSummary.total;
 
       const authorized = await requestApproval({
-         permission: 'POS_VOID_PAID_TICKET',
-         actionDescription: 'Anular/Devolver Factura Pagada',
+         permission: refundRequestMode === 'AZUL_GATEWAY_REFUND' ? 'POS_GATEWAY_REFUND' : 'POS_VOID_PAID_TICKET',
+         actionDescription: refundRequestMode === 'AZUL_GATEWAY_REFUND' ? 'Procesar Refund Integrado' : 'Anular/Devolver Factura Pagada',
          context: {
             ticketId: originalTx.id,
             originalValue: refundTotal
