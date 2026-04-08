@@ -26,7 +26,15 @@ import { ConversionHelper } from './ConversionHelper';
 import { calculateCost, UNITS } from '../utils/units';
 import LabelPrintModal from './LabelPrintModal';
 import { normalizeTaxIdentifiersForSelection, taxIdentifierSetMatches } from '../utils/taxIdentity';
-import { canonicalizeTariffEntries, canonicalizeWarehouseIds, tariffMatchesIdentifier, warehouseMatchesIdentifier } from '../utils/masterIdentity';
+import {
+  canonicalizeTariffEntries,
+  canonicalizeWarehouseIds,
+  canonicalizeWarehouseRecord,
+  getWarehouseScopedNumber,
+  resolveProductActiveWarehouseIds,
+  resolveWarehouseId,
+  tariffMatchesIdentifier,
+} from '../utils/masterIdentity';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -96,10 +104,22 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [calcResult, setCalcResult] = useState<(InventoryCalculation & { warehouseId: string }) | null>(null);
 
   function normalizeProductActivationState(product: Product): Product {
+    const normalizedWarehouseSettings = canonicalizeWarehouseRecord(product.warehouseSettings || {}, warehouses);
+    const normalizedStockBalances = canonicalizeWarehouseRecord(product.stockBalances || {}, warehouses);
+
     return {
       ...product,
       tariffs: canonicalizeTariffEntries(product.tariffs || [], availableTariffs),
-      activeInWarehouses: canonicalizeWarehouseIds(product.activeInWarehouses || [], warehouses),
+      stockBalances: normalizedStockBalances,
+      warehouseSettings: normalizedWarehouseSettings,
+      activeInWarehouses: resolveProductActiveWarehouseIds(
+        {
+          ...product,
+          warehouseSettings: normalizedWarehouseSettings,
+          stockBalances: normalizedStockBalances,
+        },
+        warehouses
+      ),
     };
   }
 
@@ -132,10 +152,22 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     return normalizeProductActivationState(base);
   });
 
-  const [warehouseSettings, setWarehouseSettings] = useState<Record<string, { min: number, max: number }>>(initialData?.warehouseSettings || {});
+  const [warehouseSettings, setWarehouseSettings] = useState<Record<string, { min: number, max: number }>>(
+    () => canonicalizeWarehouseRecord(initialData?.warehouseSettings || {}, warehouses)
+  );
 
   const normalizedFormTariffs = useMemo(() => canonicalizeTariffEntries(formData.tariffs || [], availableTariffs), [formData.tariffs, availableTariffs]);
-  const normalizedActiveWarehouseIds = useMemo(() => canonicalizeWarehouseIds(formData.activeInWarehouses || [], warehouses), [formData.activeInWarehouses, warehouses]);
+  const normalizedWarehouseSettings = useMemo(
+    () => canonicalizeWarehouseRecord(warehouseSettings, warehouses),
+    [warehouseSettings, warehouses]
+  );
+  const normalizedActiveWarehouseIds = useMemo(
+    () => resolveProductActiveWarehouseIds({
+      activeInWarehouses: formData.activeInWarehouses,
+      warehouseSettings: normalizedWarehouseSettings,
+    }, warehouses),
+    [formData.activeInWarehouses, normalizedWarehouseSettings, warehouses]
+  );
 
 
   // Kardex Ledger Data (Fetched from DB)
@@ -176,7 +208,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         variants: initialData.variants || [],
         stockBalances: initialData.stockBalances || {}
       }));
-      setWarehouseSettings(initialData.warehouseSettings || {});
+      setWarehouseSettings(canonicalizeWarehouseRecord(initialData.warehouseSettings || {}, warehouses));
     }
   }, [initialData, availableTariffs, warehouses]);
 
@@ -704,6 +736,46 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     }
   };
 
+  const updateWarehouseSetting = (warehouseId: string, patch: Partial<{ min: number; max: number }>) => {
+    const resolvedWarehouseId = resolveWarehouseId(warehouseId, warehouses);
+    if (!resolvedWarehouseId) return;
+
+    setWarehouseSettings(prev => {
+      const normalized = canonicalizeWarehouseRecord(prev, warehouses);
+      return {
+        ...normalized,
+        [resolvedWarehouseId]: {
+          ...(normalized[resolvedWarehouseId] || { min: 0, max: 0 }),
+          ...patch,
+        },
+      };
+    });
+  };
+
+  const handleToggleWarehouseActivation = (warehouseId: string) => {
+    const resolvedWarehouseId = resolveWarehouseId(warehouseId, warehouses);
+    if (!resolvedWarehouseId) return;
+
+    const currentActive = canonicalizeWarehouseIds(formData.activeInWarehouses || [], warehouses);
+    const isActive = currentActive.includes(resolvedWarehouseId);
+    const nextActive = isActive
+      ? currentActive.filter(id => id !== resolvedWarehouseId)
+      : [...currentActive, resolvedWarehouseId];
+
+    setFormData(prev => ({ ...prev, activeInWarehouses: nextActive }));
+    setWarehouseSettings(prev => {
+      const normalized = canonicalizeWarehouseRecord(prev, warehouses);
+      if (isActive) {
+        const { [resolvedWarehouseId]: _removed, ...rest } = normalized;
+        return rest;
+      }
+      return {
+        ...normalized,
+        [resolvedWarehouseId]: normalized[resolvedWarehouseId] || { min: 0, max: 0 },
+      };
+    });
+  };
+
   const handleFinalSave = async () => {
     if (isSaving) return;
     if (!formData.name.trim()) return alert("Debe asignar un nombre al artículo.");
@@ -720,11 +792,16 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     }
 
     // Ensure updatedAt is set for Delta Sync
+    const finalWarehouseSettings = Object.fromEntries(
+      Object.entries(canonicalizeWarehouseRecord(warehouseSettings, warehouses))
+        .filter(([warehouseId]) => activeWarehouses.includes(warehouseId))
+    );
     const updatedProduct = {
       ...formData,
       tariffs: canonicalizeTariffEntries(formData.tariffs || [], availableTariffs),
+      stockBalances: canonicalizeWarehouseRecord(formData.stockBalances || {}, warehouses),
       activeInWarehouses: activeWarehouses,
-      warehouseSettings,
+      warehouseSettings: finalWarehouseSettings,
       updatedAt: new Date().toISOString()
     };
 
@@ -1428,7 +1505,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       fallback: formData.stockBalances?.[wh.id]
                     });
 
-                    const stock = detailedStock ? detailedStock.quantity : (formData.stockBalances?.[wh.id] || 0);
+                    const stock = detailedStock ? detailedStock.quantity : getWarehouseScopedNumber(formData.stockBalances || {}, wh.id, warehouses, 0);
                     const isActive = normalizedActiveWarehouseIds.includes(wh.id);
 
                     return (
@@ -1838,7 +1915,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     <tbody className="divide-y divide-gray-100">
                       {warehouses.map(wh => {
                         const isActive = normalizedActiveWarehouseIds.includes(wh.id);
-                        const settings = warehouseSettings[wh.id] || { min: 0, max: 0 };
+                        const settings = normalizedWarehouseSettings[wh.id] || { min: 0, max: 0 };
 
                         // Calculate In Transit quantity for this warehouse
                         const inTransitQty = transfers
@@ -1883,11 +1960,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                               <p className="text-[10px] text-gray-400">{wh.type}</p>
                             </td>
                             <td className="p-4 text-center">
-                              <button onClick={() => {
-                                const current = canonicalizeWarehouseIds(formData.activeInWarehouses || [], warehouses);
-                                const isAct = current.some(id => warehouseMatchesIdentifier({ id, code: id, name: id }, wh.id) || id === wh.id);
-                                setFormData({ ...formData, activeInWarehouses: isAct ? current.filter(id => !warehouseMatchesIdentifier({ id, code: id, name: id }, wh.id)) : [...current, wh.id] });
-                              }} className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${isActive ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                              <button onClick={() => handleToggleWarehouseActivation(wh.id)} className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${isActive ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-500'}`}>
                                 {isActive ? 'Activo' : 'Inactivo'}
                               </button>
                             </td>
@@ -1966,10 +2039,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                             </td>
 
                             <td className="p-4">
-                              <input type="number" disabled={!isActive} value={settings.min} onChange={e => setWarehouseSettings({ ...warehouseSettings, [wh.id]: { ...(warehouseSettings[wh.id] || { min: 0, max: 0 }), min: parseInt(e.target.value) || 0 } })} className="w-16 mx-auto block p-2 bg-gray-50 border border-gray-200 rounded-lg text-center font-bold text-blue-600 disabled:opacity-30" />
+                              <input type="number" disabled={!isActive} value={settings.min} onChange={e => updateWarehouseSetting(wh.id, { min: parseInt(e.target.value) || 0 })} className="w-16 mx-auto block p-2 bg-gray-50 border border-gray-200 rounded-lg text-center font-bold text-blue-600 disabled:opacity-30" />
                             </td>
                             <td className="p-4">
-                              <input type="number" disabled={!isActive} value={settings.max} onChange={e => setWarehouseSettings({ ...warehouseSettings, [wh.id]: { ...(warehouseSettings[wh.id] || { min: 0, max: 0 }), max: parseInt(e.target.value) || 0 } })} className="w-16 mx-auto block p-2 bg-gray-50 border border-gray-200 rounded-lg text-center font-bold text-gray-700 disabled:opacity-30" />
+                              <input type="number" disabled={!isActive} value={settings.max} onChange={e => updateWarehouseSetting(wh.id, { max: parseInt(e.target.value) || 0 })} className="w-16 mx-auto block p-2 bg-gray-50 border border-gray-200 rounded-lg text-center font-bold text-gray-700 disabled:opacity-30" />
                             </td>
                             <td className="p-4 text-center">
                               {isActive && (

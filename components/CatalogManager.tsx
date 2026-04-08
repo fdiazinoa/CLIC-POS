@@ -20,6 +20,7 @@ import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
 import ClassificationManager from './ClassificationManager';
+import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
 
 interface CatalogManagerProps {
    products: Product[];
@@ -51,7 +52,7 @@ const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks:
 
    // Get stock from detailed collection
    const detailedStock = productStocks.find(s => s.productId === product.id && s.warehouseId === warehouseId);
-   const warehouseStock = detailedStock ? detailedStock.quantity : (product.stockBalances?.[warehouseId] || 0);
+   const warehouseStock = detailedStock ? detailedStock.quantity : getWarehouseScopedNumber(product.stockBalances || {}, warehouseId, [], 0);
 
    const getStatusBadge = (qty: number) => {
       if (qty > 10) return <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full"><CheckCircle2 size={12} /> Disponible</span>;
@@ -138,11 +139,11 @@ const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks:
 // --- WAREHOUSE CARD CONTAINER ---
 const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Product[]; productStocks: ProductStock[] }> = ({ warehouse, filteredProducts, productStocks }) => {
    const [isCardExpanded, setIsCardExpanded] = useState(false);
-   const warehouseProducts = filteredProducts.filter(p => p.activeInWarehouses?.includes(warehouse.id));
+   const warehouseProducts = filteredProducts.filter(p => isProductWarehouseActive(p, warehouse.id, [warehouse]));
 
    const totalValue = warehouseProducts.reduce((acc, p) => {
       const detailedStock = productStocks.find(s => s.productId === p.id && s.warehouseId === warehouse.id);
-      const qty = detailedStock ? detailedStock.quantity : (p.stockBalances?.[warehouse.id] || 0);
+      const qty = detailedStock ? detailedStock.quantity : getWarehouseScopedNumber(p.stockBalances || {}, warehouse.id, [warehouse], 0);
       return acc + (qty * (p.cost || 0));
    }, 0);
    const itemCount = warehouseProducts.length;

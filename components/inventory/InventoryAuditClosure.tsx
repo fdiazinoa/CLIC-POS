@@ -13,6 +13,7 @@ import {
   Warehouse
 } from '../../types';
 import { db } from '../../utils/db';
+import { getWarehouseScopedNumber, isProductWarehouseActive } from '../../utils/masterIdentity';
 
 interface InventoryAuditClosureProps {
   warehouses: Warehouse[];
@@ -315,7 +316,7 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
       const ledger = (await db.get('inventoryLedger')) as InventoryLedgerEntry[] || [];
 
       const warehouseProducts = products.filter(p => {
-        if (p.activeInWarehouses && !p.activeInWarehouses.includes(selectedWarehouseId)) return false;
+        if (selectedWarehouseId && !isProductWarehouseActive(p, selectedWarehouseId, warehouses)) return false;
         return true;
       });
 
@@ -333,7 +334,7 @@ const InventoryAuditClosure: React.FC<InventoryAuditClosureProps> = ({
         let avgCost = Number(product.cost || 0);
 
         if (entries.length === 0) {
-          qty = Number(product.stockBalances?.[selectedWarehouseId] ?? 0);
+          qty = getWarehouseScopedNumber(product.stockBalances || {}, selectedWarehouseId, warehouses, 0);
         } else {
           for (const entry of entries) {
             const qtyIn = Number(entry.qtyIn || 0);

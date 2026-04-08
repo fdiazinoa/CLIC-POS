@@ -1,4 +1,4 @@
-import type { Tariff, TariffPrice, Warehouse } from '../types';
+import type { Product, Tariff, TariffPrice, Warehouse } from '../types';
 
 const normalizeToken = (value: unknown): string =>
   typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -44,6 +44,9 @@ const readEntryIdentifier = (entry: unknown, keys: string[]): string => {
 
   return '';
 };
+
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 
 export const tariffMatchesIdentifier = (tariff: Partial<Tariff> | TariffPrice | null | undefined, identifier: unknown): boolean => {
   const token = normalizeToken(identifier);
@@ -106,4 +109,85 @@ export const canonicalizeWarehouseIds = (warehouseIds: unknown[] = [], warehouse
   }
 
   return normalized;
+};
+
+export const canonicalizeWarehouseRecord = <T>(
+  record: Record<string, T> | null | undefined,
+  warehouses: Array<Partial<Warehouse>> = []
+): Record<string, T> => {
+  const normalized: Record<string, T> = {};
+
+  for (const [rawId, value] of Object.entries(record || {})) {
+    const warehouseId = resolveWarehouseId(rawId, warehouses);
+    if (!warehouseId) continue;
+    normalized[warehouseId] = value;
+  }
+
+  return normalized;
+};
+
+export const deriveWarehouseIdsFromSettings = (value: unknown): string[] => {
+  const settings = asRecord(value);
+  if (Object.keys(settings).length === 0) return [];
+
+  return Object.entries(settings)
+    .filter(([, rawValue]) => {
+      if (rawValue === false) return false;
+      const entry = asRecord(rawValue);
+      if (Object.keys(entry).length === 0) return true;
+      if (entry.active === false) return false;
+      if (entry.enabled === false) return false;
+      return true;
+    })
+    .map(([key]) => key)
+    .filter(Boolean);
+};
+
+export const resolveProductActiveWarehouseIds = (
+  product: Partial<Product> | Record<string, unknown> | null | undefined,
+  warehouses: Array<Partial<Warehouse>> = []
+): string[] => {
+  if (!product) return [];
+
+  const source = product as Record<string, unknown>;
+  const explicit = canonicalizeWarehouseIds(
+    Array.isArray(source.activeInWarehouses)
+      ? source.activeInWarehouses
+      : (Array.isArray(source.warehouse_ids)
+          ? source.warehouse_ids
+          : (Array.isArray(source.warehouseIds) ? source.warehouseIds : [])),
+    warehouses
+  );
+  if (explicit.length > 0) return explicit;
+
+  const fromSettings = canonicalizeWarehouseIds(
+    deriveWarehouseIdsFromSettings(source.warehouseSettings),
+    warehouses
+  );
+
+  return fromSettings;
+};
+
+export const isProductWarehouseActive = (
+  product: Partial<Product> | Record<string, unknown> | null | undefined,
+  warehouseId: unknown,
+  warehouses: Array<Partial<Warehouse>> = []
+): boolean => {
+  const resolvedWarehouseId = resolveWarehouseId(warehouseId, warehouses);
+  if (!resolvedWarehouseId) return false;
+  return resolveProductActiveWarehouseIds(product, warehouses).includes(resolvedWarehouseId);
+};
+
+export const getWarehouseScopedNumber = (
+  record: Record<string, unknown> | null | undefined,
+  warehouseId: unknown,
+  warehouses: Array<Partial<Warehouse>> = [],
+  fallback = 0
+): number => {
+  const resolvedWarehouseId = resolveWarehouseId(warehouseId, warehouses);
+  if (!resolvedWarehouseId) return fallback;
+
+  const value = canonicalizeWarehouseRecord(record || {}, warehouses)[resolvedWarehouseId];
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
 };
