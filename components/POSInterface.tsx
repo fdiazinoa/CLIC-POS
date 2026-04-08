@@ -71,6 +71,7 @@ import { calculateTaxBreakdownFromItems, formatTaxLineLabel, resolveEffectiveTax
 import { formatCurrency } from '../utils/format';
 import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from '../services/localRefundPersistence';
 import { resolveCustomerImageSrc } from '../utils/entityImage';
+import { resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 
 // ... existing imports
 
@@ -314,13 +315,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return 'Almacén Actual';
    }, [effectiveWarehouseKeys, warehouseAliasMap.displayMap]);
    const productMatchesTerminalWarehouse = useCallback((product: Product) => {
-      const activeWarehouses = (product.activeInWarehouses || [])
+      const activeWarehouses = resolveProductActiveWarehouseIds(product, warehouses)
          .map((warehouseId) => normalizeScopeKey(warehouseId))
          .filter(Boolean);
       if (activeWarehouses.length === 0) return false;
       if (effectiveWarehouseKeys.size === 0) return true;
       return activeWarehouses.some((warehouseId) => effectiveWarehouseKeys.has(warehouseId));
-   }, [effectiveWarehouseKeys, normalizeScopeKey]);
+   }, [effectiveWarehouseKeys, normalizeScopeKey, warehouses]);
    /** Tarifa OK en ERP pero almacenes activos no intersectan la caja: se muestra atenuado y no deja vender. */
    const isProductWarehouseBlockedForSale = useCallback(
       (product: Product) => !productMatchesTerminalWarehouse(product),
@@ -1037,7 +1038,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return false;
       }
 
-      const activeWarehouses = (product.activeInWarehouses || []).filter(Boolean);
+      const activeWarehouses = resolveProductActiveWarehouseIds(product, warehouses);
       if (activeWarehouses.length === 0) {
          setErrorToast('Artículo sin almacén asignado. Configure el producto antes de venderlo.');
          setTimeout(() => setErrorToast(null), 3500);
@@ -1400,7 +1401,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const filtered = products.filter(p => {
          if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
-         const erpWarehouses = (p.activeInWarehouses || []).filter(Boolean);
+         const erpWarehouses = resolveProductActiveWarehouseIds(p, warehouses);
          const hasErpWarehouse = erpWarehouses.length > 0;
          const productName = p.name || '';
          const matchSearch = productName.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
@@ -1424,7 +1425,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          seenIds.add(p.id);
          return true;
       });
-   }, [products, searchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff]);
+   }, [products, searchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
 
    const categories = useMemo(() => {
       const allowedDisplayCategories = Array.from(
@@ -1433,7 +1434,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const availableProducts = products.filter(p => {
          if (!p || p.is_sellable === false) return false;
          if (!productHasActiveTariff(p)) return false;
-         const erpWh = (p.activeInWarehouses || []).filter(Boolean);
+         const erpWh = resolveProductActiveWarehouseIds(p, warehouses);
          if (erpWh.length === 0) return false;
          if (effectiveAllowedCategorySet.size > 0) {
             const normalizedCategory = canonicalizeCategory(p.category);
@@ -1460,7 +1461,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const cats = ['ALL', ...scopedCategories];
       console.log('[POS] Categories:', cats);
       return cats;
-   }, [products, canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, productHasActiveTariff]);
+   }, [products, canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
 
    useEffect(() => {
       if (categoryFilter !== 'ALL' && !categories.includes(categoryFilter)) {

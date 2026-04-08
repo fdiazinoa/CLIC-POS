@@ -2,7 +2,12 @@ import { Capacitor } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import type { BusinessConfig, Product, TariffPrice, Warehouse } from '../../types';
 import { db } from '../../utils/db';
-import { canonicalizeTariffEntries, canonicalizeWarehouseIds } from '../../utils/masterIdentity';
+import {
+  canonicalizeTariffEntries,
+  canonicalizeWarehouseIds,
+  canonicalizeWarehouseRecord,
+  deriveWarehouseIdsFromSettings,
+} from '../../utils/masterIdentity';
 
 type IncomingProduct = Partial<Product> & Record<string, any>;
 
@@ -67,23 +72,6 @@ const normalizeTariffEntries = (value: unknown): TariffPrice[] => {
       };
     })
     .filter((entry): entry is TariffPrice => Boolean(entry));
-};
-
-const deriveWarehouseIdsFromSettings = (value: unknown): string[] => {
-  const settings = asObject(value);
-  if (Object.keys(settings).length === 0) return [];
-
-  return Object.entries(settings)
-    .filter(([, rawValue]) => {
-      if (rawValue === false) return false;
-      const entry = asObject(rawValue);
-      if (Object.keys(entry).length === 0) return true;
-      if (entry.active === false) return false;
-      if (entry.enabled === false) return false;
-      return true;
-    })
-    .map(([key]) => asString(key))
-    .filter(Boolean);
 };
 
 const normalizeTaxIdList = (value: unknown): string[] => {
@@ -371,6 +359,26 @@ class ProductImageCacheService {
     const incomingOperationalFlags = asObject(item.operationalFlags ?? item.operational_flags);
     const localOperationalFlags = asObject(localProduct?.operationalFlags);
     const recipeDetails = asArray(item.recipeDetails ?? item.recipe_details);
+    const incomingWarehouseSettings = asObject(item.warehouseSettings);
+    const metadataWarehouseSettings = asObject(metadata.warehouseSettings);
+    const normalizedWarehouseSettings = canonicalizeWarehouseRecord(
+      Object.keys(incomingWarehouseSettings).length > 0
+        ? incomingWarehouseSettings
+        : (Object.keys(metadataWarehouseSettings).length > 0
+            ? metadataWarehouseSettings
+            : (localProduct?.warehouseSettings || {})),
+      context.warehouses || []
+    );
+    const incomingStockBalances = asObject(item.stockBalances);
+    const metadataStockBalances = asObject(metadata.stockBalances);
+    const normalizedStockBalances = canonicalizeWarehouseRecord(
+      Object.keys(incomingStockBalances).length > 0
+        ? incomingStockBalances
+        : (Object.keys(metadataStockBalances).length > 0
+            ? metadataStockBalances
+            : (localProduct?.stockBalances || {})),
+      context.warehouses || []
+    );
     const rawKitInventoryMode = asString(item.kitInventoryMode ?? item.kit_inventory_mode).toUpperCase();
     const kitInventoryMode =
       rawKitInventoryMode === 'FINISHED_GOOD' || rawKitInventoryMode === 'COMPONENT_CONSUMPTION'
@@ -401,6 +409,8 @@ class ProductImageCacheService {
       ),
       recipeDetails: recipeDetails.length > 0 ? recipeDetails : localProduct?.recipeDetails || [],
       appliedTaxIds: resolveIncomingTaxIds(item, localProduct),
+      stockBalances: normalizedStockBalances,
+      warehouseSettings: normalizedWarehouseSettings,
       activeInWarehouses: canonicalizeWarehouseIds(
         Array.isArray(item.activeInWarehouses)
           ? item.activeInWarehouses
@@ -410,10 +420,10 @@ class ProductImageCacheService {
                   ? metadata.activeInWarehouses
                   : (Array.isArray(metadata.warehouse_ids)
                       ? metadata.warehouse_ids
-                      : (deriveWarehouseIdsFromSettings(item.warehouseSettings).length > 0
-                          ? deriveWarehouseIdsFromSettings(item.warehouseSettings)
-                          : (deriveWarehouseIdsFromSettings(metadata.warehouseSettings).length > 0
-                              ? deriveWarehouseIdsFromSettings(metadata.warehouseSettings)
+                      : (deriveWarehouseIdsFromSettings(normalizedWarehouseSettings).length > 0
+                          ? deriveWarehouseIdsFromSettings(normalizedWarehouseSettings)
+                          : (deriveWarehouseIdsFromSettings(localProduct?.warehouseSettings).length > 0
+                              ? deriveWarehouseIdsFromSettings(localProduct?.warehouseSettings)
                               : localProduct?.activeInWarehouses || []))))),
         context.warehouses || []
       ),

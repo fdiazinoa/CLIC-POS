@@ -5,6 +5,12 @@ import {
 } from 'lucide-react';
 import { Product, BusinessConfig, Warehouse, ProductStock, RoleDefinition, User } from '../types';
 import { db } from '../utils/db';
+import {
+    canonicalizeWarehouseIds,
+    canonicalizeWarehouseRecord,
+    getWarehouseScopedNumber,
+    resolveProductActiveWarehouseIds,
+} from '../utils/masterIdentity';
 
 interface QuickActionsProps {
     product: Product;
@@ -91,7 +97,7 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
     };
 
     const toggleWarehouse = async (warehouseId: string) => {
-        const currentActive = product.activeInWarehouses || [];
+        const currentActive = resolveProductActiveWarehouseIds(product, warehouses);
         const isCurrentlyActive = currentActive.includes(warehouseId);
 
         let nextActive;
@@ -101,7 +107,19 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
             nextActive = [...currentActive, warehouseId];
         }
 
-        const updatedProduct = { ...product, activeInWarehouses: nextActive, updatedAt: new Date().toISOString() };
+        const nextWarehouseSettings = canonicalizeWarehouseRecord(product.warehouseSettings || {}, warehouses);
+        if (isCurrentlyActive) {
+            delete nextWarehouseSettings[warehouseId];
+        } else {
+            nextWarehouseSettings[warehouseId] = nextWarehouseSettings[warehouseId] || { min: 0, max: 0 };
+        }
+
+        const updatedProduct = {
+            ...product,
+            activeInWarehouses: canonicalizeWarehouseIds(nextActive, warehouses),
+            warehouseSettings: nextWarehouseSettings,
+            updatedAt: new Date().toISOString()
+        };
         await persistProductUpdate(updatedProduct);
     };
 
@@ -248,7 +266,7 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
                         <h3 className="text-lg font-black text-gray-800 dark:text-white mb-4 shrink-0">Almacenes Disponibles</h3>
                         <div className="flex-1 overflow-y-auto space-y-2 pr-2">
                             {warehouses.map(wh => {
-                                const isActive = product.activeInWarehouses?.includes(wh.id);
+                                const isActive = resolveProductActiveWarehouseIds(product, warehouses).includes(wh.id);
                                 return (
                                     <button
                                         key={wh.id}
@@ -279,7 +297,7 @@ const ProductQuickActions: React.FC<QuickActionsProps> = ({
                         <div className="space-y-3">
                             {warehouses.map(wh => {
                                 const stock = productStocks.find(s => s.warehouseId === wh.id);
-                                const qty = stock ? stock.quantity : (product.stockBalances?.[wh.id] || 0);
+                                const qty = stock ? stock.quantity : getWarehouseScopedNumber(product.stockBalances || {}, wh.id, warehouses, 0);
                                 return (
                                     <div key={wh.id} className="flex items-center justify-between p-4 bg-gray-50 dark:bg-slate-900 rounded-2xl">
                                         <div className="flex items-center gap-3">
