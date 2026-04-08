@@ -71,6 +71,8 @@ type GatewayProgressOverlayState = {
    detail: string;
 };
 
+type RefundRequestMode = 'STANDARD' | 'AZUL_GATEWAY_REFUND';
+
 type AzulVoidResolution =
    | { mode: 'NOT_AZUL' }
    | { mode: 'BLOCK'; message: string }
@@ -82,6 +84,18 @@ type AzulVoidResolution =
       taxAmount: number;
       orderNumber: string;
       authorizationNumber: string;
+   };
+
+type AzulRefundResolution =
+   | { mode: 'NOT_AZUL' }
+   | { mode: 'BLOCK'; message: string }
+   | {
+      mode: 'REFUND';
+      integration: PaymentIntegrationDefinition;
+      payment: PaymentEntry;
+      amount: number;
+      taxAmount: number;
+      orderNumber: string;
    };
 
 const roundToTwo = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
@@ -124,6 +138,13 @@ const resolveAzulVoidResolution = (
       return { mode: 'NOT_AZUL' };
    }
 
+   if (transaction.status === 'PARTIAL_REFUND' || transaction.status === 'REFUNDED') {
+      return {
+         mode: 'BLOCK',
+         message: 'La venta ya tiene devoluciones registradas. La anulación AZUL automática solo se permite sobre tickets intactos.',
+      };
+   }
+
    if (positivePayments.length !== 1 || azulPayments.length !== 1) {
       return {
          mode: 'BLOCK',
@@ -161,7 +182,7 @@ const resolveAzulVoidResolution = (
    if (!Number.isFinite(elapsedMs) || elapsedMs > AZUL_VOID_WINDOW_MS) {
       return {
          mode: 'BLOCK',
-         message: 'Pasaron más de 20 minutos desde la venta. La anulación automática de AZUL ya no aplica; el flujo de refund del adquirente aún no está implementado en el POS.',
+         message: 'Pasaron más de 20 minutos desde la venta. La anulación automática de AZUL ya no aplica; use el botón Refund AZUL para continuar con el adquirente.',
       };
    }
 
@@ -203,6 +224,101 @@ const resolveAzulVoidResolution = (
       authorizationNumber,
    };
 };
+
+const resolveAzulRefundResolution = (
+   transaction: Transaction,
+   refundItems: CartItem[],
+   config: BusinessConfig
+): AzulRefundResolution => {
+   const positivePayments = getPositivePayments(transaction);
+   const azulPayments = positivePayments.filter(payment => payment.gatewayProvider === 'AZUL');
+
+   if (azulPayments.length === 0) {
+      return { mode: 'NOT_AZUL' };
+   }
+
+   if (transaction.status === 'PARTIAL_REFUND' || transaction.status === 'REFUNDED') {
+      return {
+         mode: 'BLOCK',
+         message: 'La venta ya tiene devoluciones registradas. El refund AZUL automático solo se permite sobre tickets intactos.',
+      };
+   }
+
+   if (positivePayments.length !== 1 || azulPayments.length !== 1) {
+      return {
+         mode: 'BLOCK',
+         message: 'El refund AZUL solo está disponible cuando la venta fue cobrada 100% con una única transacción integrada de tarjeta.',
+      };
+   }
+
+   if (!isFullRefundSelection(transaction, refundItems)) {
+      return {
+         mode: 'BLOCK',
+         message: 'El refund AZUL solo aplica a la venta completa. Las devoluciones parciales con AZUL todavía no están soportadas en el POS.',
+      };
+   }
+
+   const salePayment = azulPayments[0];
+   const integration = (config.integrations || []).find(candidate =>
+      candidate.id === salePayment.gatewayIntegrationId && candidate.provider === 'AZUL'
+   );
+
+   if (!integration || !integration.isEnabled) {
+      return {
+         mode: 'BLOCK',
+         message: 'La integración AZUL original ya no está disponible o está inactiva en esta terminal.',
+      };
+   }
+
+   if (integration.capabilities?.refund === false) {
+      return {
+         mode: 'BLOCK',
+         message: 'Esta integración AZUL no tiene habilitada la capacidad de refund.',
+      };
+   }
+
+   const elapsedMs = Date.now() - new Date(transaction.date).getTime();
+   if (Number.isFinite(elapsedMs) && elapsedMs <= AZUL_VOID_WINDOW_MS) {
+      return {
+         mode: 'BLOCK',
+         message: 'Esta venta todavía está dentro de la ventana de 20 minutos. En este caso corresponde usar la anulación AZUL, no el refund.',
+      };
+   }
+
+   const gatewayAmount = roundToTwo(Number(salePayment.gatewayProcessedAmount ?? salePayment.amount ?? 0));
+   if (!amountsMatch(gatewayAmount, roundToTwo(Number(transaction.total || 0)))) {
+      return {
+         mode: 'BLOCK',
+         message: 'La venta AZUL no coincide 100% con el total del ticket. Por ahora el POS solo hace refund sobre ventas totalmente cobradas por una sola transacción integrada.',
+      };
+   }
+
+   const orderNumber = extractGatewayOrderNumber(salePayment);
+   if (!orderNumber) {
+      return {
+         mode: 'BLOCK',
+         message: 'La venta no tiene OrderNumber numérico guardado. No se puede enviar el refund a AZUL con seguridad.',
+      };
+   }
+
+   const terminalConfig = config.terminals?.find(t => t.id === transaction.terminalId)?.config;
+   const fiscalSummary = calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
+   const taxAmount = roundToTwo(Number(salePayment.gatewayProcessedTaxAmount ?? fiscalSummary.taxTotal ?? transaction.taxAmount ?? 0));
+
+   return {
+      mode: 'REFUND',
+      integration,
+      payment: salePayment,
+      amount: gatewayAmount,
+      taxAmount,
+      orderNumber,
+   };
+};
+
+const canOfferAzulRefundAction = (
+   transaction: Transaction,
+   config: BusinessConfig
+): boolean => resolveAzulRefundResolution(transaction, transaction.items || [], config).mode === 'REFUND';
 
 // --- SUB-COMPONENTS ---
 
@@ -468,11 +584,12 @@ const TicketDetailDrawer: React.FC<{
    onClose: () => void;
    onPrint: (tx: Transaction) => void;
    onRequestRefund: (tx: Transaction) => void;
+   onRequestAzulRefund: (tx: Transaction) => void;
    onRetryFiscalDocument?: (tx: Transaction) => Promise<string>;
    themeText: string;
    themeBg: string;
    users: User[];
-}> = ({ tx, config, onClose, onPrint, onRequestRefund, onRetryFiscalDocument, themeText, themeBg, users }) => {
+}> = ({ tx, config, onClose, onPrint, onRequestRefund, onRequestAzulRefund, onRetryFiscalDocument, themeText, themeBg, users }) => {
    const [isRetryingFiscal, setIsRetryingFiscal] = useState(false);
    const [retryFeedback, setRetryFeedback] = useState<string | null>(null);
 
@@ -488,6 +605,7 @@ const TicketDetailDrawer: React.FC<{
    const fiscalSummary = calculateTransactionFiscalSummary(tx, config, { terminalConfig });
    const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
    const retryActionLabel = getFiscalRetryActionLabel(tx) || 'Reintentar envío';
+   const canRequestAzulRefund = !isRefundDoc && tx.status !== 'REFUNDED' && canOfferAzulRefundAction(tx, config);
 
    const handleRetryFiscal = async () => {
       if (!tx || !onRetryFiscalDocument || !canRetryFiscal) return;
@@ -782,22 +900,32 @@ const TicketDetailDrawer: React.FC<{
             </div>
 
             {/* Actions Footer */}
-            <footer className="p-6 border-t border-gray-100 bg-gray-50 grid grid-cols-2 gap-3">
+            <footer className="p-6 border-t border-gray-100 bg-gray-50">
                <>
-                  <button
-                     onClick={() => onPrint(tx)}
-                     className="flex items-center justify-center gap-2 py-3 bg-white border border-gray-200 text-gray-700 rounded-2xl font-bold hover:bg-gray-100 transition-all shadow-sm"
-                  >
-                     <Printer size={18} /> Reimprimir
-                  </button>
-                  {tx.status !== 'REFUNDED' && (
+                  <div className="flex flex-wrap gap-3">
                      <button
-                        onClick={() => onRequestRefund(tx)}
-                        className="flex items-center justify-center gap-2 py-3 bg-red-600 text-white rounded-2xl font-bold hover:bg-red-700 transition-all shadow-lg"
+                        onClick={() => onPrint(tx)}
+                        className="flex min-w-[140px] flex-1 items-center justify-center gap-2 py-3 bg-white border border-gray-200 text-gray-700 rounded-2xl font-bold hover:bg-gray-100 transition-all shadow-sm"
                      >
-                        <RotateCcw size={18} /> Devolución / Anular
+                        <Printer size={18} /> Reimprimir
                      </button>
-                  )}
+                     {tx.status !== 'REFUNDED' && (
+                        <button
+                           onClick={() => onRequestRefund(tx)}
+                           className="flex min-w-[180px] flex-1 items-center justify-center gap-2 py-3 bg-red-600 text-white rounded-2xl font-bold hover:bg-red-700 transition-all shadow-lg"
+                        >
+                           <RotateCcw size={18} /> Devolución / Anular
+                        </button>
+                     )}
+                     {canRequestAzulRefund && (
+                        <button
+                           onClick={() => onRequestAzulRefund(tx)}
+                           className="flex min-w-[180px] flex-1 items-center justify-center gap-2 py-3 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-all shadow-lg"
+                        >
+                           <CreditCard size={18} /> Refund AZUL
+                        </button>
+                     )}
+                  </div>
                </>
             </footer>
          </div>
@@ -847,6 +975,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    // Refund Modal State
    const [isRefundModalOpen, setIsRefundModalOpen] = useState(false);
    const [refundTx, setRefundTx] = useState<Transaction | null>(null);
+   const [refundRequestMode, setRefundRequestMode] = useState<RefundRequestMode>('STANDARD');
    const [gatewayProgress, setGatewayProgress] = useState<GatewayProgressOverlayState | null>(null);
 
    const persistIntegrationAuditEvent = async (
@@ -1299,17 +1428,149 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       originalTx: Transaction,
       refundItems: CartItem[],
       conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
-      reason: string
+      reason: string,
+      requestMode: RefundRequestMode = 'STANDARD'
    ) => {
-      const azulResolution = resolveAzulVoidResolution(originalTx, refundItems, config);
       let refundOptions: RefundProcessingOptions | undefined;
 
-      if (azulResolution.mode === 'BLOCK') {
-         alert(azulResolution.message);
-         return;
-      }
+      if (requestMode === 'AZUL_GATEWAY_REFUND') {
+         const azulRefundResolution = resolveAzulRefundResolution(originalTx, refundItems, config);
 
-      if (azulResolution.mode === 'VOID') {
+         if (azulRefundResolution.mode === 'BLOCK') {
+            alert(azulRefundResolution.message);
+            return;
+         }
+
+         if (azulRefundResolution.mode !== 'REFUND') {
+            alert('Este ticket no califica para Refund AZUL.');
+            return;
+         }
+
+         const { integration, amount, taxAmount, orderNumber, payment } = azulRefundResolution;
+         setGatewayProgress({
+            title: 'Procesando refund',
+            providerLabel: integration.name || 'AZUL',
+            detail: 'Enviando el refund al procesador.',
+         });
+
+         try {
+            const azulResponse = await azulMcmService.refund(integration, {
+               amount,
+               itbis: taxAmount,
+               orderNumber,
+            });
+
+            await persistIntegrationAuditEvent(integration, {
+               action: 'REFUND',
+               status: 'SUCCESS',
+               message: azulResponse.responseMessage || 'Refund aprobado por AZUL.',
+               requestDetails: {
+                  Amount: amount.toFixed(2),
+                  Itbis: taxAmount.toFixed(2),
+                  OrderNumber: orderNumber,
+               },
+               responseDetails: {
+                  MerchantId: azulResponse.merchantId || integration.merchantId || '',
+                  TerminalId: azulResponse.terminalId || integration.terminalId || '',
+                  EntryMode: azulResponse.entryMode || '',
+                  CardBrand: azulResponse.cardBrand || '',
+               },
+               responseCode: azulResponse.responseCode,
+               responseMessage: azulResponse.responseMessage,
+               authorizationCode: azulResponse.authorizationCode,
+               referenceNumber: azulResponse.referenceNumber,
+               invoiceNumber: azulResponse.invoiceNumber,
+               sequenceNumber: azulResponse.sequenceNumber,
+               maskedPan: azulResponse.maskedPan,
+               entryMode: azulResponse.entryMode,
+               merchantId: azulResponse.merchantId,
+               terminalId: azulResponse.terminalId,
+            });
+
+            refundOptions = {
+               settlementMode: 'CARD_REFUND',
+               skipWalletDeposit: true,
+               autoPrintIntegratedArtifacts: true,
+               refundPayments: [{
+                  id: `refund-${Date.now()}`,
+                  method: 'CARD',
+                  methodLabel: `Refund ${integration.provider}`,
+                  methodIcon: 'CreditCard',
+                  amount,
+                  timestamp: new Date(),
+                  gatewayProvider: 'AZUL',
+                  gatewayIntegrationId: integration.id,
+                  gatewayTransactionType: 'REFUND',
+                  gatewayStatus: azulResponse.approved ? 'APPROVED' : 'DECLINED',
+                  gatewayResponseCode: azulResponse.responseCode,
+                  gatewayResponseMessage: azulResponse.responseMessage,
+                  gatewayOrderNumber: azulResponse.orderNumber || orderNumber,
+                  gatewayProcessedAmount: amount,
+                  gatewayProcessedTaxAmount: taxAmount,
+                  gatewayAuthorizationCode: azulResponse.authorizationCode || payment.gatewayAuthorizationCode,
+                  gatewayReference: azulResponse.referenceNumber,
+                  gatewaySequenceNumber: azulResponse.sequenceNumber,
+                  gatewayInvoiceNumber: azulResponse.invoiceNumber,
+                  gatewayBatchNumber: azulResponse.batchNumber,
+                  gatewayMerchantId: azulResponse.merchantId,
+                  gatewayTerminalId: azulResponse.terminalId,
+                  gatewayMaskedPan: azulResponse.maskedPan || payment.gatewayMaskedPan,
+                  gatewayCardBrand: azulResponse.cardBrand || payment.gatewayCardBrand,
+                  gatewayEntryMode: azulResponse.entryMode || payment.gatewayEntryMode,
+                  gatewayReceiptMerchant: azulResponse.receiptMerchant,
+                  gatewayReceiptClient: azulResponse.receiptClient,
+                  gatewaySignatureData: azulResponse.signatureData,
+                  gatewayRequireSignature: azulResponse.requireSignature,
+                  gatewayRawResponse: azulResponse.rawResponse,
+               }],
+            };
+
+            setGatewayProgress({
+               title: 'Registrando devolución',
+               providerLabel: integration.name || 'AZUL',
+               detail: 'Generando la nota de crédito e imprimiendo comprobantes.',
+            });
+         } catch (error) {
+            const gatewayError = error instanceof AzulGatewayError ? error : null;
+            await persistIntegrationAuditEvent(integration, {
+               action: 'REFUND',
+               status: 'FAILED',
+               message: error instanceof Error ? error.message : 'No se pudo completar el refund en AZUL.',
+               requestDetails: {
+                  Amount: amount.toFixed(2),
+                  Itbis: taxAmount.toFixed(2),
+                  OrderNumber: orderNumber,
+               },
+               responseDetails: {
+                  MerchantId: gatewayError?.normalized?.merchantId || integration.merchantId || '',
+                  TerminalId: gatewayError?.normalized?.terminalId || integration.terminalId || '',
+                  EntryMode: gatewayError?.normalized?.entryMode || '',
+                  CardBrand: gatewayError?.normalized?.cardBrand || '',
+               },
+               responseCode: gatewayError?.normalized?.responseCode || gatewayError?.response?.ResponseCode,
+               responseMessage: gatewayError?.normalized?.responseMessage || gatewayError?.response?.ResponseMessage,
+               authorizationCode: gatewayError?.normalized?.authorizationCode,
+               referenceNumber: gatewayError?.normalized?.referenceNumber,
+               invoiceNumber: gatewayError?.normalized?.invoiceNumber,
+               sequenceNumber: gatewayError?.normalized?.sequenceNumber,
+               maskedPan: gatewayError?.normalized?.maskedPan,
+               entryMode: gatewayError?.normalized?.entryMode,
+               merchantId: gatewayError?.normalized?.merchantId,
+               terminalId: gatewayError?.normalized?.terminalId,
+            });
+            setGatewayProgress(null);
+            alert(error instanceof Error ? error.message : 'No se pudo completar el refund AZUL.');
+            return;
+         }
+      } else {
+         const azulResolution = resolveAzulVoidResolution(originalTx, refundItems, config);
+
+         if (azulResolution.mode === 'BLOCK') {
+            alert(azulResolution.message);
+            return;
+         }
+
+         if (azulResolution.mode === 'VOID') {
          const { integration, amount, taxAmount, orderNumber, authorizationNumber, payment } = azulResolution;
          setGatewayProgress({
             title: 'Procesando anulación',
@@ -1429,18 +1690,21 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             alert(error instanceof Error ? error.message : 'No se pudo completar la anulación AZUL.');
             return;
          }
+         }
       }
 
       try {
          await onRefundTransaction(originalTx, refundItems, conditions, reason || 'Devolución', refundOptions);
          setIsRefundModalOpen(false);
          setRefundTx(null);
+         setRefundRequestMode('STANDARD');
          setSelectedTxId(null);
       } catch (error) {
          console.error('❌ TicketHistory refund orchestration failed:', error);
-         if (refundOptions?.settlementMode === 'CARD_VOID') {
+         if (refundOptions?.settlementMode === 'CARD_VOID' || refundOptions?.settlementMode === 'CARD_REFUND') {
             setIsRefundModalOpen(false);
             setRefundTx(null);
+            setRefundRequestMode('STANDARD');
          }
       } finally {
          setGatewayProgress(null);
@@ -1486,7 +1750,8 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             transaction,
             itemsToRefund,
             conditions,
-            REASONS.find(r => r.id === returnReason)?.label || 'Devolución'
+            REASONS.find(r => r.id === returnReason)?.label || 'Devolución',
+            refundRequestMode
          );
          setReturnModeId(null);
          setSelectedItemsQty(new Map());
@@ -1537,7 +1802,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
       if (!authorized) return;
 
-      await executeRefundFlow(originalTx, refundItems, conditions, reason || 'Devolución');
+      await executeRefundFlow(originalTx, refundItems, conditions, reason || 'Devolución', refundRequestMode);
    };
 
    // Calculate Refund Total
@@ -1693,6 +1958,12 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             onClose={() => setSelectedTxId(null)}
             onPrint={(tx) => printTicket(tx, config)}
             onRequestRefund={(tx) => {
+               setRefundRequestMode('STANDARD');
+               setRefundTx(tx);
+               setIsRefundModalOpen(true);
+            }}
+            onRequestAzulRefund={(tx) => {
+               setRefundRequestMode('AZUL_GATEWAY_REFUND');
                setRefundTx(tx);
                setIsRefundModalOpen(true);
             }}
@@ -1739,10 +2010,12 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             onClose={() => {
                setIsRefundModalOpen(false);
                setRefundTx(null);
+               setRefundRequestMode('STANDARD');
             }}
             transaction={refundTx}
             onConfirm={handleConfirmRefundFromModal}
             currencySymbol={config.currencySymbol}
+            mode={refundRequestMode}
          />
 
          <SupervisorModal {...supervisorModalProps} users={users} />
