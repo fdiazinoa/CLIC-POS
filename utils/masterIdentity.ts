@@ -25,8 +25,14 @@ const buildWarehouseTokens = (warehouse?: Partial<Warehouse> | null): Set<string
   const tokens = new Set<string>();
   if (!warehouse) return tokens;
   pushToken(tokens, warehouse.id);
+  pushToken(tokens, (warehouse as any).warehouseId);
+  pushToken(tokens, (warehouse as any).warehouse_id);
   pushToken(tokens, warehouse.code);
+  pushToken(tokens, (warehouse as any).uid);
   pushToken(tokens, warehouse.name);
+  pushToken(tokens, (warehouse as any).label);
+  pushToken(tokens, (warehouse as any).storeId);
+  pushToken(tokens, (warehouse as any).store_id);
   return tokens;
 };
 
@@ -100,7 +106,7 @@ export const canonicalizeWarehouseIds = (warehouseIds: unknown[] = [], warehouse
 
   for (const rawId of warehouseIds) {
     const warehouseId = resolveWarehouseId(
-      readEntryIdentifier(rawId, ['id', 'warehouseId', 'warehouse_id', 'code', 'name']) || rawId,
+      readEntryIdentifier(rawId, ['id', 'warehouseId', 'warehouse_id', 'code', 'name', 'uid', 'label', 'storeId', 'store_id']) || rawId,
       warehouses
     );
     if (!warehouseId || seen.has(warehouseId)) continue;
@@ -143,6 +149,12 @@ export const deriveWarehouseIdsFromSettings = (value: unknown): string[] => {
     .filter(Boolean);
 };
 
+export const deriveWarehouseIdsFromStockBalances = (value: unknown): string[] => {
+  const balances = asRecord(value);
+  if (Object.keys(balances).length === 0) return [];
+  return Object.keys(balances).filter(Boolean);
+};
+
 export const resolveProductActiveWarehouseIds = (
   product: Partial<Product> | Record<string, unknown> | null | undefined,
   warehouses: Array<Partial<Warehouse>> = []
@@ -155,7 +167,9 @@ export const resolveProductActiveWarehouseIds = (
       ? source.activeInWarehouses
       : (Array.isArray(source.warehouse_ids)
           ? source.warehouse_ids
-          : (Array.isArray(source.warehouseIds) ? source.warehouseIds : [])),
+          : (Array.isArray(source.warehouseIds)
+              ? source.warehouseIds
+              : (Array.isArray(source.active_in_warehouses) ? source.active_in_warehouses : []))),
     warehouses
   );
   if (explicit.length > 0) return explicit;
@@ -164,8 +178,37 @@ export const resolveProductActiveWarehouseIds = (
     deriveWarehouseIdsFromSettings(source.warehouseSettings),
     warehouses
   );
+  if (fromSettings.length > 0) return fromSettings;
 
-  return fromSettings;
+  const metadata = asRecord(source.metadata);
+  const fromMetadataSettings = canonicalizeWarehouseIds(
+    deriveWarehouseIdsFromSettings(metadata.warehouseSettings),
+    warehouses
+  );
+  if (fromMetadataSettings.length > 0) return fromMetadataSettings;
+
+  const fromStockBalances = canonicalizeWarehouseIds(
+    deriveWarehouseIdsFromStockBalances(source.stockBalances),
+    warehouses
+  );
+  if (fromStockBalances.length > 0) return fromStockBalances;
+
+  const fromMetadataStockBalances = canonicalizeWarehouseIds(
+    deriveWarehouseIdsFromStockBalances(metadata.stockBalances),
+    warehouses
+  );
+  if (fromMetadataStockBalances.length > 0) return fromMetadataStockBalances;
+
+  return canonicalizeWarehouseIds(
+    Array.isArray(metadata.activeInWarehouses)
+      ? metadata.activeInWarehouses
+      : (Array.isArray(metadata.warehouse_ids)
+          ? metadata.warehouse_ids
+          : (Array.isArray(metadata.warehouseIds)
+              ? metadata.warehouseIds
+              : (Array.isArray(metadata.active_in_warehouses) ? metadata.active_in_warehouses : []))),
+    warehouses
+  );
 };
 
 export const isProductWarehouseActive = (

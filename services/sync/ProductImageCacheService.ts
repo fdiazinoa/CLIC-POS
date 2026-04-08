@@ -6,6 +6,7 @@ import {
   canonicalizeTariffEntries,
   canonicalizeWarehouseIds,
   canonicalizeWarehouseRecord,
+  deriveWarehouseIdsFromStockBalances,
   deriveWarehouseIdsFromSettings,
 } from '../../utils/masterIdentity';
 
@@ -379,6 +380,45 @@ class ProductImageCacheService {
             : (localProduct?.stockBalances || {})),
       context.warehouses || []
     );
+    const incomingActiveWarehouseIds = Array.isArray(item.activeInWarehouses)
+      ? item.activeInWarehouses
+      : (Array.isArray(item.warehouse_ids)
+          ? item.warehouse_ids
+          : (Array.isArray(item.warehouseIds)
+              ? item.warehouseIds
+              : (Array.isArray(item.active_in_warehouses) ? item.active_in_warehouses : [])));
+    const metadataActiveWarehouseIds = Array.isArray(metadata.activeInWarehouses)
+      ? metadata.activeInWarehouses
+      : (Array.isArray(metadata.warehouse_ids)
+          ? metadata.warehouse_ids
+          : (Array.isArray(metadata.warehouseIds)
+              ? metadata.warehouseIds
+              : (Array.isArray(metadata.active_in_warehouses) ? metadata.active_in_warehouses : [])));
+    let derivedActiveWarehouseIds = incomingActiveWarehouseIds;
+    if (derivedActiveWarehouseIds.length === 0) {
+      derivedActiveWarehouseIds = metadataActiveWarehouseIds;
+    }
+    if (derivedActiveWarehouseIds.length === 0) {
+      derivedActiveWarehouseIds = deriveWarehouseIdsFromSettings(normalizedWarehouseSettings);
+    }
+    if (derivedActiveWarehouseIds.length === 0) {
+      derivedActiveWarehouseIds = deriveWarehouseIdsFromSettings(metadata.warehouseSettings);
+    }
+    if (derivedActiveWarehouseIds.length === 0) {
+      derivedActiveWarehouseIds = deriveWarehouseIdsFromStockBalances(normalizedStockBalances);
+    }
+    if (derivedActiveWarehouseIds.length === 0) {
+      derivedActiveWarehouseIds = deriveWarehouseIdsFromStockBalances(metadata.stockBalances);
+    }
+    if (derivedActiveWarehouseIds.length === 0) {
+      derivedActiveWarehouseIds = deriveWarehouseIdsFromSettings(localProduct?.warehouseSettings);
+    }
+    if (derivedActiveWarehouseIds.length === 0) {
+      derivedActiveWarehouseIds = deriveWarehouseIdsFromStockBalances(localProduct?.stockBalances);
+    }
+    if (derivedActiveWarehouseIds.length === 0) {
+      derivedActiveWarehouseIds = localProduct?.activeInWarehouses || [];
+    }
     const rawKitInventoryMode = asString(item.kitInventoryMode ?? item.kit_inventory_mode).toUpperCase();
     const kitInventoryMode =
       rawKitInventoryMode === 'FINISHED_GOOD' || rawKitInventoryMode === 'COMPONENT_CONSUMPTION'
@@ -411,22 +451,7 @@ class ProductImageCacheService {
       appliedTaxIds: resolveIncomingTaxIds(item, localProduct),
       stockBalances: normalizedStockBalances,
       warehouseSettings: normalizedWarehouseSettings,
-      activeInWarehouses: canonicalizeWarehouseIds(
-        Array.isArray(item.activeInWarehouses)
-          ? item.activeInWarehouses
-          : (Array.isArray(item.warehouse_ids)
-              ? item.warehouse_ids
-              : (Array.isArray(metadata.activeInWarehouses)
-                  ? metadata.activeInWarehouses
-                  : (Array.isArray(metadata.warehouse_ids)
-                      ? metadata.warehouse_ids
-                      : (deriveWarehouseIdsFromSettings(normalizedWarehouseSettings).length > 0
-                          ? deriveWarehouseIdsFromSettings(normalizedWarehouseSettings)
-                          : (deriveWarehouseIdsFromSettings(localProduct?.warehouseSettings).length > 0
-                              ? deriveWarehouseIdsFromSettings(localProduct?.warehouseSettings)
-                              : localProduct?.activeInWarehouses || []))))),
-        context.warehouses || []
-      ),
+      activeInWarehouses: canonicalizeWarehouseIds(derivedActiveWarehouseIds, context.warehouses || []),
       isInventoriable: asBoolean(
         item.isInventoriable ?? item.is_inventoriable,
         localProduct?.isInventoriable ?? true,
