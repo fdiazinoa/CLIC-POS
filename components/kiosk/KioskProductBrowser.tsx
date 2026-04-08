@@ -5,7 +5,7 @@
  * Touch-first layout optimized for vertical kiosks.
  */
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   Search,
   ShoppingCart,
@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { Product, CartItem, BusinessConfig } from '../../types';
 import { hasProductPromotion } from '../../utils/promotionEngine';
+import { parseScaleBarcode } from '../../utils/barcodeParser';
 import PromoBottomSheet from '../PromoBottomSheet';
 import SecurityOverlay from './SecurityOverlay';
 import { useKioskSecurityContext } from './KioskContext';
@@ -244,6 +245,56 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
     clearSecurityState();
     onCancel();
   };
+
+  const handleHardwareScan = useCallback((rawCode: string) => {
+    const code = rawCode.trim();
+    if (!code) return;
+
+    if (config.scaleLabelConfig?.isEnabled) {
+      const scaleItem = parseScaleBarcode(code, config.scaleLabelConfig);
+      if (scaleItem) {
+        const weightedProduct = sellableProducts.find(
+          (product) => product.barcode === scaleItem.plu || product.id === scaleItem.plu
+        );
+
+        if (weightedProduct) {
+          const unitPrice = Number(weightedProduct.price || 0);
+          const quantity = scaleItem.type === 'WEIGHT'
+            ? scaleItem.value
+            : (unitPrice > 0 ? scaleItem.value / unitPrice : 1);
+
+          onAddToCart(weightedProduct, quantity);
+          markNeedsVerification(weightedProduct);
+          triggerAddFeedback(
+            scaleItem.type === 'WEIGHT' || unitPrice > 0
+              ? `${weightedProduct.name} (${quantity.toFixed(3)}kg)`
+              : weightedProduct.name,
+            weightedProduct.id
+          );
+          return;
+        }
+      }
+    }
+
+    const product = sellableProducts.find(
+      (candidate) => candidate.barcode === code || candidate.id === code
+    );
+
+    if (product) {
+      handleProductClick(product);
+    }
+  }, [config.scaleLabelConfig, handleProductClick, markNeedsVerification, onAddToCart, sellableProducts, triggerAddFeedback]);
+
+  useEffect(() => {
+    const onHardwareScan = (event: Event) => {
+      const barcode = (event as CustomEvent<{ barcode?: string }>).detail?.barcode;
+      if (!barcode) return;
+      handleHardwareScan(barcode);
+    };
+
+    window.addEventListener('barcodeScanned', onHardwareScan as EventListener);
+    return () => window.removeEventListener('barcodeScanned', onHardwareScan as EventListener);
+  }, [handleHardwareScan]);
 
   return (
     <div className="fixed inset-0 w-screen h-screen flex bg-slate-50 overflow-hidden">
