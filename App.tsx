@@ -1275,16 +1275,33 @@ const AppContent: React.FC = () => {
   };
 
   useKioskMode(getCurrentDeviceRole() === DeviceRole.SELF_CHECKOUT);
+  const scannerEnabledViews = currentView === 'POS'
+    || currentView === 'HISTORY'
+    || currentView === 'KIOSK_BROWSER'
+    || currentView === 'KIOSK_WELCOME';
+
   useBarcodeScanner({
-    enabled: currentView === 'POS' || currentView === 'HISTORY',
+    enabled: scannerEnabledViews,
     onScan: (barcode) => {
+      if (currentView === 'KIOSK_WELCOME') {
+        clearSecurityState();
+        setCurrentView('KIOSK_BROWSER');
+
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('barcodeScanned', { detail: { barcode } }));
+        }, 0);
+        return;
+      }
+
       window.dispatchEvent(new CustomEvent('barcodeScanned', { detail: { barcode } }));
     },
-    onTicketScan: (ticketId) => {
-      console.log(`🎟️ Smart Scan: Opening Ticket History for ${ticketId}`);
-      setScanTargetTicketId(ticketId);
-      setCurrentView('HISTORY');
-    }
+    onTicketScan: currentView === 'POS' || currentView === 'HISTORY'
+      ? (ticketId) => {
+        console.log(`🎟️ Smart Scan: Opening Ticket History for ${ticketId}`);
+        setScanTargetTicketId(ticketId);
+        setCurrentView('HISTORY');
+      }
+      : undefined
   });
 
   const inventoryCountSync = useOfflineInventoryCountSync({ enabled: isDataLoaded });
