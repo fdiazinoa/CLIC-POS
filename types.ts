@@ -683,7 +683,7 @@ export interface CurrencyAuditLog {
   terminalId?: string;             // Terminal donde se hizo el cambio
 }
 
-export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTHER' | 'CREDIT';
+export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTHER' | 'CREDIT' | 'STORE_CREDIT';
 export type PaymentIntegrationProvider = 'AZUL' | 'CARDNET' | 'CARNET' | 'VISANET' | 'STRIPE';
 export type PaymentIntegrationEnvironment = 'TEST' | 'PRODUCTION';
 export type PaymentIntegrationMode = 'MANUAL' | 'INTEGRATED';
@@ -1698,6 +1698,9 @@ export interface PaymentEntry {
   gatewayBatchNumber?: string;
   gatewayMerchantId?: string;
   gatewayTerminalId?: string;
+  gatewayOrderNumber?: string;
+  gatewayProcessedAmount?: number;
+  gatewayProcessedTaxAmount?: number;
   gatewayMaskedPan?: string;
   gatewayCardBrand?: string;
   gatewayEntryMode?: string;
@@ -1706,6 +1709,15 @@ export interface PaymentEntry {
   gatewaySignatureData?: string;
   gatewayRequireSignature?: boolean;
   gatewayRawResponse?: Record<string, any>;
+}
+
+export type RefundSettlementMode = 'WALLET' | 'CARD_VOID' | 'CARD_REFUND';
+
+export interface RefundProcessingOptions {
+  refundPayments?: PaymentEntry[];
+  settlementMode?: RefundSettlementMode;
+  skipWalletDeposit?: boolean;
+  autoPrintIntegratedArtifacts?: boolean;
 }
 
 export interface CustomerTransaction {

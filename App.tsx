@@ -29,7 +29,9 @@ import {
   DocumentSeries,
   Room,
   Table,
-  Collection
+  Collection,
+  PaymentEntry,
+  RefundProcessingOptions
 } from './types';
 import {
   DEFAULT_ROLES,
@@ -112,6 +114,7 @@ import { inventorySyncService } from './services/sync/InventorySyncService';
 import { processInventoryDeduction } from './utils/inventoryEngine';
 import { useOfflineInventoryCountSync } from './hooks/useOfflineInventoryCountSync';
 import { printLabelsFromTemplate } from './utils/labelPrinter';
+import { printIntegratedPaymentArtifacts } from './utils/printer';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { persistStandaloneRefundTransaction } from './services/localRefundPersistence';
@@ -4013,8 +4016,9 @@ const AppContent: React.FC = () => {
     originalTx: Transaction,
     itemsToRefund: CartItem[],
     conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
-    reason: string
-  ) => {
+    reason: string,
+    options: RefundProcessingOptions = {}
+  ): Promise<Transaction | null> => {
     console.log("🔄 Procesando Devolución Integral:", { originalTx, items: itemsToRefund.length, reason });
 
     const normalizedRefundItems = (itemsToRefund || [])
@@ -4026,7 +4030,7 @@ const AppContent: React.FC = () => {
 
     if (normalizedRefundItems.length === 0) {
       alert('No hay artículos válidos para procesar la devolución.');
-      return;
+      return null;
     }
 
     // 1. Calculations
@@ -4076,6 +4080,16 @@ const AppContent: React.FC = () => {
       setInternalSequences(updatedSequences);
     }
 
+    const refundPayments: PaymentEntry[] = options.refundPayments && options.refundPayments.length > 0
+      ? options.refundPayments
+      : [{
+        id: `refund-${Date.now()}`,
+        method: 'STORE_CREDIT',
+        methodLabel: 'Nota de crédito',
+        amount: refundTotal,
+        timestamp: new Date(),
+      }];
+
     // 4. Create Credit Note Record
     const creditNote: Transaction = {
       id: createRuntimeId('NC'),
@@ -4084,7 +4098,7 @@ const AppContent: React.FC = () => {
       date: new Date().toISOString(),
       items: normalizedRefundItems,
       total: refundTotal,
-      payments: [{ method: 'STORE_CREDIT', amount: refundTotal, currency: config.currencySymbol }],
+      payments: refundPayments,
       userId: currentUser?.id || 'sys',
       userName: currentUser?.name || 'System',
       terminalId: currentTerminalId,
@@ -4145,7 +4159,7 @@ const AppContent: React.FC = () => {
         }
 
         // Step B: If there is still a refund amount (Scenario B - pure credit or surplus), add to Wallet
-        if (remainingRefund > 0.01) {
+        if (!options.skipWalletDeposit && remainingRefund > 0.01) {
           try {
             await transactionService.applyRefundToWallet(
               resolvedCustomerId,
@@ -4212,10 +4226,24 @@ const AppContent: React.FC = () => {
     const finalizedCreditNote = refundPersistenceResult.refund || creditNote;
     syncFiscalDocument(finalizedCreditNote).catch(console.error);
 
+    let autoPrintNotice = '';
+    if (options.autoPrintIntegratedArtifacts) {
+      try {
+        const printResult = await printIntegratedPaymentArtifacts(finalizedCreditNote, config);
+        if (printResult.voucherCopiesFailed.length > 0) {
+          autoPrintNotice = `\nImpresión automática pendiente: ${printResult.voucherCopiesFailed.join(', ')}.`;
+        }
+      } catch (printError) {
+        console.error('❌ Refund integrated auto print failed:', printError);
+        autoPrintNotice = '\nOcurrió un problema al imprimir automáticamente el voucher y el ticket.';
+      }
+    }
+
     // Sync
     backgroundSyncManager.triggerSync().catch(console.error);
 
-    alert(`Devolución procesada correctamente.\nDocumento: ${displayId}\n${creditNoteNcf ? 'NCF: ' + creditNoteNcf : ''}`);
+    alert(`Devolución procesada correctamente.\nDocumento: ${displayId}\n${creditNoteNcf ? 'NCF: ' + creditNoteNcf : ''}${autoPrintNotice}`);
+    return finalizedCreditNote;
   };
 
   const renderView = () => {
@@ -4749,7 +4777,7 @@ const AppContent: React.FC = () => {
               setScanTargetTicketId(null); // Clear selection on close
               setCurrentView('POS');
             }}
-            onRefundTransaction={async (tx, items, conditions, reason) => {
+            onRefundTransaction={async (tx, items, conditions, reason, options) => {
               // Direct call support
               // If conditions is string (legacy call from somewhere else?), handle it. 
               // But TicketHistory calls it with Map.
@@ -4760,10 +4788,15 @@ const AppContent: React.FC = () => {
               const actualReason = typeof conditions === 'string' ? conditions : reason;
 
               try {
-                await handleProcessRefund(tx, items || [], validConditions, actualReason);
+                return await handleProcessRefund(tx, items || [], validConditions, actualReason, options);
               } catch (refundError: any) {
                 console.error('❌ Refund flow failed:', refundError);
-                alert(`Error procesando devolución: ${refundError?.message || 'Error desconocido'}`);
+                if (options?.settlementMode === 'CARD_VOID') {
+                  alert(`AZUL anuló el pago, pero el POS no pudo completar la nota de crédito.\nDetalle: ${refundError?.message || 'Error desconocido'}`);
+                } else {
+                  alert(`Error procesando devolución: ${refundError?.message || 'Error desconocido'}`);
+                }
+                throw refundError;
               }
             }}
             onRetryFiscalDocument={retryFiscalDocument}
