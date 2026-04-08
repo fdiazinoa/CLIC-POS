@@ -33,6 +33,13 @@ export interface AzulSaleRequest {
   originalTerminalId?: string | null;
 }
 
+export interface AzulSaleCancellationRequest {
+  amount: number;
+  itbis: number;
+  orderNumber: string;
+  authorizationNumber: string;
+}
+
 export interface AzulGetLastTransactionRequest {
   trxType?: string;
 }
@@ -338,6 +345,32 @@ export const azulMcmService = {
     if (!normalized.approved) {
       throw new AzulGatewayError({
         action: 'Sale',
+        message: extractErrorMessage(response),
+        response,
+        normalized,
+      });
+    }
+
+    return normalized;
+  },
+
+  async saleCancellation(
+    integration: PaymentIntegrationDefinition,
+    request: AzulSaleCancellationRequest
+  ): Promise<AzulNormalizedResult> {
+    const response = await postJson(integration, 'SaleCancellation', {
+      MerchantId: integration.merchantId?.trim(),
+      TerminalId: integration.terminalId?.trim(),
+      Amount: formatAmount(request.amount),
+      Itbis: formatAmount(request.itbis),
+      OrderNumber: request.orderNumber,
+      AuthorizationNumber: request.authorizationNumber,
+    });
+
+    const normalized = normalizeResult(integration, response);
+    if (!normalized.approved) {
+      throw new AzulGatewayError({
+        action: 'SaleCancellation',
         message: extractErrorMessage(response),
         response,
         normalized,

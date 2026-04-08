@@ -6,7 +6,16 @@ import {
    User as UserIcon, DollarSign, Box, Filter, Gift, QrCode, StickyNote,
    MoreVertical, CreditCard, Banknote, Wallet, TrendingUp, Hash, Percent
 } from 'lucide-react';
-import { Transaction, BusinessConfig, CartItem, RoleDefinition, ZReport } from '../types';
+import {
+   Transaction,
+   BusinessConfig,
+   CartItem,
+   RoleDefinition,
+   ZReport,
+   PaymentEntry,
+   PaymentIntegrationDefinition,
+   RefundProcessingOptions,
+} from '../types';
 import { validateTerminalDocument } from '../utils/validation';
 import { printTicket } from '../utils/printer';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
@@ -20,6 +29,11 @@ import {
    getFiscalRetryActionLabel,
    isRefundLikeTransaction
 } from '../utils/fiscal/fiscalHelpers';
+import { AzulGatewayError, azulMcmService } from '../services/payments/AzulMcmService';
+import {
+   createPaymentIntegrationAuditEvent,
+   dispatchAuditEventConfigUpdate,
+} from '../services/payments/paymentIntegrationAudit';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -31,7 +45,13 @@ interface TicketHistoryProps {
    onClose: () => void;
    initialSelectedId?: string | null; // NEW: For Smart Scan
    onRetryFiscalDocument?: (transaction: Transaction) => Promise<string>;
-   onRefundTransaction: (originalTx: Transaction, refundedItems: CartItem[], conditions: Map<string, 'SELLABLE' | 'DAMAGED'>, reason: string) => void;
+   onRefundTransaction: (
+      originalTx: Transaction,
+      refundedItems: CartItem[],
+      conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
+      reason: string,
+      options?: RefundProcessingOptions
+   ) => Promise<Transaction | null>;
 }
 
 type ReturnReason = 'DAMAGED' | 'DISLIKE' | 'ERROR' | 'EXPIRED';
@@ -42,6 +62,147 @@ const REASONS: { id: ReturnReason; label: string }[] = [
    { id: 'ERROR', label: 'Error en Cobro / Digitacion' },
    { id: 'EXPIRED', label: 'Producto Vencido' },
 ];
+
+const AZUL_VOID_WINDOW_MS = 20 * 60 * 1000;
+
+type GatewayProgressOverlayState = {
+   title: string;
+   providerLabel: string;
+   detail: string;
+};
+
+type AzulVoidResolution =
+   | { mode: 'NOT_AZUL' }
+   | { mode: 'BLOCK'; message: string }
+   | {
+      mode: 'VOID';
+      integration: PaymentIntegrationDefinition;
+      payment: PaymentEntry;
+      amount: number;
+      taxAmount: number;
+      orderNumber: string;
+      authorizationNumber: string;
+   };
+
+const roundToTwo = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const amountsMatch = (left: number, right: number): boolean => Math.abs(left - right) <= 0.01;
+
+const getPositivePayments = (transaction: Transaction): PaymentEntry[] => (
+   (transaction.payments || [])
+      .filter(payment => Number(payment?.amount || 0) > 0.009)
+      .map(payment => payment as PaymentEntry)
+);
+
+const isFullRefundSelection = (transaction: Transaction, refundItems: CartItem[]): boolean => {
+   const selectedQtyByCartId = new Map(refundItems.map(item => [item.cartId, Math.abs(Number(item.quantity || 0))]));
+   return transaction.items.every(item => (
+      Math.abs(Number(selectedQtyByCartId.get(item.cartId) || 0)) === Math.abs(Number(item.quantity || 0))
+   ));
+};
+
+const extractGatewayOrderNumber = (payment: PaymentEntry): string => {
+   const rawOrderNumber = (
+      payment.gatewayOrderNumber ||
+      String(payment.gatewayRawResponse?.OrderNumber || '').trim() ||
+      payment.gatewayInvoiceNumber ||
+      ''
+   ).trim();
+
+   return /^\d+$/.test(rawOrderNumber) ? rawOrderNumber : '';
+};
+
+const resolveAzulVoidResolution = (
+   transaction: Transaction,
+   refundItems: CartItem[],
+   config: BusinessConfig
+): AzulVoidResolution => {
+   const positivePayments = getPositivePayments(transaction);
+   const azulPayments = positivePayments.filter(payment => payment.gatewayProvider === 'AZUL');
+
+   if (azulPayments.length === 0) {
+      return { mode: 'NOT_AZUL' };
+   }
+
+   if (positivePayments.length !== 1 || azulPayments.length !== 1) {
+      return {
+         mode: 'BLOCK',
+         message: 'La anulación AZUL solo está disponible cuando la venta fue cobrada 100% con una única transacción integrada de tarjeta.',
+      };
+   }
+
+   if (!isFullRefundSelection(transaction, refundItems)) {
+      return {
+         mode: 'BLOCK',
+         message: 'La anulación AZUL solo aplica a la venta completa. Las devoluciones parciales con AZUL todavía no están soportadas en el POS.',
+      };
+   }
+
+   const salePayment = azulPayments[0];
+   const integration = (config.integrations || []).find(candidate =>
+      candidate.id === salePayment.gatewayIntegrationId && candidate.provider === 'AZUL'
+   );
+
+   if (!integration || !integration.isEnabled) {
+      return {
+         mode: 'BLOCK',
+         message: 'La integración AZUL original ya no está disponible o está inactiva en esta terminal.',
+      };
+   }
+
+   if (integration.capabilities?.void === false) {
+      return {
+         mode: 'BLOCK',
+         message: 'Esta integración AZUL no tiene habilitada la capacidad de anulación.',
+      };
+   }
+
+   const elapsedMs = Date.now() - new Date(transaction.date).getTime();
+   if (!Number.isFinite(elapsedMs) || elapsedMs > AZUL_VOID_WINDOW_MS) {
+      return {
+         mode: 'BLOCK',
+         message: 'Pasaron más de 20 minutos desde la venta. La anulación automática de AZUL ya no aplica; el flujo de refund del adquirente aún no está implementado en el POS.',
+      };
+   }
+
+   const gatewayAmount = roundToTwo(Number(salePayment.gatewayProcessedAmount ?? salePayment.amount ?? 0));
+   if (!amountsMatch(gatewayAmount, roundToTwo(Number(transaction.total || 0)))) {
+      return {
+         mode: 'BLOCK',
+         message: 'La venta AZUL no coincide 100% con el total del ticket. Por ahora el POS solo anula ventas totalmente cobradas por una sola transacción integrada.',
+      };
+   }
+
+   const authorizationNumber = String(salePayment.gatewayAuthorizationCode || '').trim();
+   if (!authorizationNumber) {
+      return {
+         mode: 'BLOCK',
+         message: 'La venta no tiene AUT No. almacenado, por lo que no se puede enviar la anulación a AZUL.',
+      };
+   }
+
+   const orderNumber = extractGatewayOrderNumber(salePayment);
+   if (!orderNumber) {
+      return {
+         mode: 'BLOCK',
+         message: 'La venta no tiene OrderNumber numérico guardado. No se puede enviar la anulación a AZUL con seguridad.',
+      };
+   }
+
+   const terminalConfig = config.terminals?.find(t => t.id === transaction.terminalId)?.config;
+   const fiscalSummary = calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
+   const taxAmount = roundToTwo(Number(salePayment.gatewayProcessedTaxAmount ?? fiscalSummary.taxTotal ?? transaction.taxAmount ?? 0));
+
+   return {
+      mode: 'VOID',
+      integration,
+      payment: salePayment,
+      amount: gatewayAmount,
+      taxAmount,
+      orderNumber,
+      authorizationNumber,
+   };
+};
 
 // --- SUB-COMPONENTS ---
 
@@ -686,6 +847,22 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
    // Refund Modal State
    const [isRefundModalOpen, setIsRefundModalOpen] = useState(false);
    const [refundTx, setRefundTx] = useState<Transaction | null>(null);
+   const [gatewayProgress, setGatewayProgress] = useState<GatewayProgressOverlayState | null>(null);
+
+   const persistIntegrationAuditEvent = async (
+      integration: PaymentIntegrationDefinition,
+      eventInput: Parameters<typeof createPaymentIntegrationAuditEvent>[1]
+   ) => {
+      const nextConfig = await dispatchAuditEventConfigUpdate(
+         config,
+         integration.id,
+         createPaymentIntegrationAuditEvent(integration, eventInput)
+      );
+
+      if (nextConfig) {
+         onUpdateConfig(nextConfig);
+      }
+   };
 
    // Load History on Mount
    useEffect(() => {
@@ -1118,6 +1295,158 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       setSelectedItemsQty(newMap);
    };
 
+   const executeRefundFlow = async (
+      originalTx: Transaction,
+      refundItems: CartItem[],
+      conditions: Map<string, 'SELLABLE' | 'DAMAGED'>,
+      reason: string
+   ) => {
+      const azulResolution = resolveAzulVoidResolution(originalTx, refundItems, config);
+      let refundOptions: RefundProcessingOptions | undefined;
+
+      if (azulResolution.mode === 'BLOCK') {
+         alert(azulResolution.message);
+         return;
+      }
+
+      if (azulResolution.mode === 'VOID') {
+         const { integration, amount, taxAmount, orderNumber, authorizationNumber, payment } = azulResolution;
+         setGatewayProgress({
+            title: 'Procesando anulación',
+            providerLabel: integration.name || 'AZUL',
+            detail: 'Enviando la anulación al procesador.',
+         });
+
+         try {
+            const azulResponse = await azulMcmService.saleCancellation(integration, {
+               amount,
+               itbis: taxAmount,
+               orderNumber,
+               authorizationNumber,
+            });
+
+            await persistIntegrationAuditEvent(integration, {
+               action: 'SALE_CANCELLATION',
+               status: 'SUCCESS',
+               message: azulResponse.responseMessage || 'Anulación aprobada por AZUL.',
+               requestDetails: {
+                  Amount: amount.toFixed(2),
+                  Itbis: taxAmount.toFixed(2),
+                  OrderNumber: orderNumber,
+                  AuthorizationNumber: authorizationNumber,
+               },
+               responseDetails: {
+                  MerchantId: azulResponse.merchantId || integration.merchantId || '',
+                  TerminalId: azulResponse.terminalId || integration.terminalId || '',
+                  EntryMode: azulResponse.entryMode || '',
+                  CardBrand: azulResponse.cardBrand || '',
+               },
+               responseCode: azulResponse.responseCode,
+               responseMessage: azulResponse.responseMessage,
+               authorizationCode: azulResponse.authorizationCode,
+               referenceNumber: azulResponse.referenceNumber,
+               invoiceNumber: azulResponse.invoiceNumber,
+               sequenceNumber: azulResponse.sequenceNumber,
+               maskedPan: azulResponse.maskedPan,
+               entryMode: azulResponse.entryMode,
+               merchantId: azulResponse.merchantId,
+               terminalId: azulResponse.terminalId,
+            });
+
+            refundOptions = {
+               settlementMode: 'CARD_VOID',
+               skipWalletDeposit: true,
+               autoPrintIntegratedArtifacts: true,
+               refundPayments: [{
+                  id: `void-${Date.now()}`,
+                  method: 'CARD',
+                  methodLabel: `Anulación ${integration.provider}`,
+                  methodIcon: 'CreditCard',
+                  amount,
+                  timestamp: new Date(),
+                  gatewayProvider: 'AZUL',
+                  gatewayIntegrationId: integration.id,
+                  gatewayTransactionType: 'VOID',
+                  gatewayStatus: azulResponse.approved ? 'APPROVED' : 'DECLINED',
+                  gatewayResponseCode: azulResponse.responseCode,
+                  gatewayResponseMessage: azulResponse.responseMessage,
+                  gatewayOrderNumber: azulResponse.orderNumber || orderNumber,
+                  gatewayProcessedAmount: amount,
+                  gatewayProcessedTaxAmount: taxAmount,
+                  gatewayAuthorizationCode: azulResponse.authorizationCode || payment.gatewayAuthorizationCode,
+                  gatewayReference: azulResponse.referenceNumber,
+                  gatewaySequenceNumber: azulResponse.sequenceNumber,
+                  gatewayInvoiceNumber: azulResponse.invoiceNumber,
+                  gatewayBatchNumber: azulResponse.batchNumber,
+                  gatewayMerchantId: azulResponse.merchantId,
+                  gatewayTerminalId: azulResponse.terminalId,
+                  gatewayMaskedPan: azulResponse.maskedPan || payment.gatewayMaskedPan,
+                  gatewayCardBrand: azulResponse.cardBrand || payment.gatewayCardBrand,
+                  gatewayEntryMode: azulResponse.entryMode || payment.gatewayEntryMode,
+                  gatewayReceiptMerchant: azulResponse.receiptMerchant,
+                  gatewayReceiptClient: azulResponse.receiptClient,
+                  gatewaySignatureData: azulResponse.signatureData,
+                  gatewayRequireSignature: azulResponse.requireSignature,
+                  gatewayRawResponse: azulResponse.rawResponse,
+               }],
+            };
+
+            setGatewayProgress({
+               title: 'Registrando devolución',
+               providerLabel: integration.name || 'AZUL',
+               detail: 'Generando la nota de crédito e imprimiendo comprobantes.',
+            });
+         } catch (error) {
+            const gatewayError = error instanceof AzulGatewayError ? error : null;
+            await persistIntegrationAuditEvent(integration, {
+               action: 'SALE_CANCELLATION',
+               status: 'FAILED',
+               message: error instanceof Error ? error.message : 'No se pudo anular la transacción en AZUL.',
+               requestDetails: {
+                  Amount: amount.toFixed(2),
+                  Itbis: taxAmount.toFixed(2),
+                  OrderNumber: orderNumber,
+                  AuthorizationNumber: authorizationNumber,
+               },
+               responseDetails: {
+                  MerchantId: gatewayError?.normalized?.merchantId || integration.merchantId || '',
+                  TerminalId: gatewayError?.normalized?.terminalId || integration.terminalId || '',
+                  EntryMode: gatewayError?.normalized?.entryMode || '',
+                  CardBrand: gatewayError?.normalized?.cardBrand || '',
+               },
+               responseCode: gatewayError?.normalized?.responseCode || gatewayError?.response?.ResponseCode,
+               responseMessage: gatewayError?.normalized?.responseMessage || gatewayError?.response?.ResponseMessage,
+               authorizationCode: gatewayError?.normalized?.authorizationCode,
+               referenceNumber: gatewayError?.normalized?.referenceNumber,
+               invoiceNumber: gatewayError?.normalized?.invoiceNumber,
+               sequenceNumber: gatewayError?.normalized?.sequenceNumber,
+               maskedPan: gatewayError?.normalized?.maskedPan,
+               entryMode: gatewayError?.normalized?.entryMode,
+               merchantId: gatewayError?.normalized?.merchantId,
+               terminalId: gatewayError?.normalized?.terminalId,
+            });
+            setGatewayProgress(null);
+            alert(error instanceof Error ? error.message : 'No se pudo completar la anulación AZUL.');
+            return;
+         }
+      }
+
+      try {
+         await onRefundTransaction(originalTx, refundItems, conditions, reason || 'Devolución', refundOptions);
+         setIsRefundModalOpen(false);
+         setRefundTx(null);
+         setSelectedTxId(null);
+      } catch (error) {
+         console.error('❌ TicketHistory refund orchestration failed:', error);
+         if (refundOptions?.settlementMode === 'CARD_VOID') {
+            setIsRefundModalOpen(false);
+            setRefundTx(null);
+         }
+      } finally {
+         setGatewayProgress(null);
+      }
+   };
+
    const confirmRefund = async (transaction: Transaction) => {
       if (selectedItemsQty.size === 0) return;
 
@@ -1153,7 +1482,12 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
          const conditions = new Map<string, 'SELLABLE' | 'DAMAGED'>();
          itemsToRefund.forEach(i => conditions.set(i.cartId, 'SELLABLE'));
 
-         onRefundTransaction(transaction, itemsToRefund, conditions, REASONS.find(r => r.id === returnReason)?.label || 'Devolución');
+         await executeRefundFlow(
+            transaction,
+            itemsToRefund,
+            conditions,
+            REASONS.find(r => r.id === returnReason)?.label || 'Devolución'
+         );
          setReturnModeId(null);
          setSelectedItemsQty(new Map());
       }
@@ -1203,10 +1537,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
       if (!authorized) return;
 
-      onRefundTransaction(originalTx, refundItems, conditions, reason || 'Devolución');
-      setIsRefundModalOpen(false);
-      setRefundTx(null);
-      setSelectedTxId(null);
+      await executeRefundFlow(originalTx, refundItems, conditions, reason || 'Devolución');
    };
 
    // Calculate Refund Total
@@ -1242,6 +1573,18 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
 
    return (
       <div className="h-screen w-full bg-gray-100 flex flex-col overflow-hidden relative">
+         {gatewayProgress && (
+            <div className="fixed inset-0 z-[160] flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4">
+               <div className="w-full max-w-sm rounded-[2rem] bg-white px-8 py-10 text-center shadow-2xl border border-slate-100">
+                  <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-indigo-50">
+                     <div className="h-10 w-10 animate-spin rounded-full border-4 border-indigo-200 border-t-indigo-600" />
+                  </div>
+                  <p className="text-xs font-black uppercase tracking-[0.24em] text-indigo-500">{gatewayProgress.providerLabel}</p>
+                  <h3 className="mt-3 text-2xl font-black text-slate-900">{gatewayProgress.title}</h3>
+                  <p className="mt-3 text-sm font-semibold text-slate-500">{gatewayProgress.detail}</p>
+               </div>
+            </div>
+         )}
 
          {/* Header & Compact Filters */}
          <header className="bg-white border-b border-gray-200 p-3 shadow-sm z-20">
