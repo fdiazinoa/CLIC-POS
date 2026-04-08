@@ -2301,7 +2301,16 @@ const AppContent: React.FC = () => {
       const sanitize = (c: any) => {
         if (!c || typeof c !== 'object') return {};
         const { id, _db_initialized, config_metadata, _id, ...rest } = c;
-        return rest;
+        return {
+          ...rest,
+          integrations: Array.isArray(rest.integrations)
+            ? rest.integrations.map((integration: any) => {
+              if (!integration || typeof integration !== 'object') return integration;
+              const { auditEvents, ...integrationRest } = integration;
+              return integrationRest;
+            })
+            : rest.integrations,
+        };
       };
 
       const oldConfigJson = JSON.stringify(sanitize(config));

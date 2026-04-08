@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -28,6 +28,7 @@ import {
   appendAuditEventToIntegration,
   appendAuditEventToIntegrations,
   createPaymentIntegrationAuditEvent,
+  persistConfigUpdate,
 } from '../services/payments/paymentIntegrationAudit';
 
 interface IntegrationSettingsProps {
@@ -93,6 +94,10 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
     () => integrations.find(integration => integration.id === auditIntegrationId) || null,
     [auditIntegrationId, integrations]
   );
+
+  useEffect(() => {
+    setIntegrations(config.integrations || []);
+  }, [config.integrations]);
 
   const handleCreate = () => {
     setEditingIntegration(createDefaultIntegration());
@@ -177,13 +182,22 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
   const handleTestConnection = async () => {
     if (!editingIntegration) return;
 
-    const updateAuditState = (event: PaymentIntegrationAuditEvent) => {
+    const updateAuditState = async (event: PaymentIntegrationAuditEvent) => {
       setEditingIntegration(prev => (
         prev && prev.id === event.integrationId
           ? appendAuditEventToIntegration(prev, event)
           : prev
       ));
-      setIntegrations(prev => appendAuditEventToIntegrations(prev, event.integrationId, event));
+      const nextIntegrations = appendAuditEventToIntegrations(integrations, event.integrationId, event);
+      setIntegrations(nextIntegrations);
+
+      const integrationExists = integrations.some(integration => integration.id === event.integrationId);
+      if (!integrationExists) return;
+
+      await persistConfigUpdate({
+        ...config,
+        integrations: nextIntegrations,
+      });
     };
 
     setIsTesting(true);
@@ -194,7 +208,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
           success: false,
           message: 'La prueba en vivo todavía solo está disponible para AZUL.',
         };
-        updateAuditState(createPaymentIntegrationAuditEvent(editingIntegration, {
+        await updateAuditState(createPaymentIntegrationAuditEvent(editingIntegration, {
           action: 'GET_LAST_TRX',
           status: 'FAILED',
           message: unsupportedResult.message,
@@ -210,7 +224,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
       }
 
       const result = await azulMcmService.testConnection(editingIntegration);
-      updateAuditState(createPaymentIntegrationAuditEvent(editingIntegration, {
+      await updateAuditState(createPaymentIntegrationAuditEvent(editingIntegration, {
         action: 'GET_LAST_TRX',
         status: result.success ? 'SUCCESS' : 'FAILED',
         message: result.message,
@@ -232,7 +246,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo probar la conexión.';
       const gatewayError = error instanceof AzulGatewayError ? error : null;
-      updateAuditState(createPaymentIntegrationAuditEvent(editingIntegration, {
+      await updateAuditState(createPaymentIntegrationAuditEvent(editingIntegration, {
         action: 'GET_LAST_TRX',
         status: 'FAILED',
         message,

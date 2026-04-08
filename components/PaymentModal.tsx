@@ -380,7 +380,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          });
 
          if (config) {
-            dispatchAuditEventConfigUpdate(
+            await dispatchAuditEventConfigUpdate(
                config,
                activeAzulIntegration.id,
                createPaymentIntegrationAuditEvent(activeAzulIntegration, {
@@ -439,7 +439,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       } catch (error) {
          if (config) {
             const gatewayError = error instanceof AzulGatewayError ? error : null;
-            dispatchAuditEventConfigUpdate(
+            await dispatchAuditEventConfigUpdate(
                config,
                activeAzulIntegration.id,
                createPaymentIntegrationAuditEvent(activeAzulIntegration, {
