@@ -2,7 +2,14 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
 
 import { PaymentIntegrationDefinition } from '../../types';
 
-export type AzulAction = 'Sale' | 'SaleCancellation' | 'Refund' | 'GetLastTrx' | 'PinpadInit';
+export type AzulAction =
+  | 'Sale'
+  | 'SaleCancellation'
+  | 'Refund'
+  | 'GetLastTrx'
+  | 'PinpadInit'
+  | 'PinpadTransactionTotals'
+  | 'PinpadSettle';
 
 export interface AzulResponseField {
   Name: string;
@@ -15,6 +22,7 @@ export interface AzulGatewayResponse {
   ResponseMessage?: string;
   IsoCode?: string;
   ErrorDescription?: string;
+  Receipt?: string;
   ReceiptMerchant?: string;
   ReceiptClient?: string;
   SignatureData?: string;
@@ -267,6 +275,7 @@ const postJson = async (
 
 const normalizeResult = (integration: PaymentIntegrationDefinition, response: AzulGatewayResponse): AzulNormalizedResult => {
   const fields = readResponseFields(response.ResponseFields);
+  const receipt = response.ReceiptMerchant || response.Receipt || fields.RCM || '';
 
   return {
     provider: 'AZUL',
@@ -286,7 +295,7 @@ const normalizeResult = (integration: PaymentIntegrationDefinition, response: Az
     maskedPan: fields.CRN || '',
     cardBrand: fields.CRT || '',
     entryMode: fields.SWP || '',
-    receiptMerchant: response.ReceiptMerchant || fields.RCM || '',
+    receiptMerchant: receipt,
     receiptClient: response.ReceiptClient || fields.RCC || '',
     signatureData: response.SignatureData || fields.SGN || '',
     requireSignature: toBooleanFlag(response.RequireSignature) || toBooleanFlag(fields.SIG),
@@ -422,6 +431,44 @@ export const azulMcmService = {
     });
 
     return normalizeResult(integration, response);
+  },
+
+  async getTransactionTotals(integration: PaymentIntegrationDefinition): Promise<AzulNormalizedResult> {
+    const response = await postJson(integration, 'PinpadTransactionTotals', {
+      MerchantId: integration.merchantId?.trim(),
+      TerminalId: integration.terminalId?.trim(),
+    });
+
+    const normalized = normalizeResult(integration, response);
+    if (!normalized.approved) {
+      throw new AzulGatewayError({
+        action: 'PinpadTransactionTotals',
+        message: extractErrorMessage(response),
+        response,
+        normalized,
+      });
+    }
+
+    return normalized;
+  },
+
+  async pinpadSettle(integration: PaymentIntegrationDefinition): Promise<AzulNormalizedResult> {
+    const response = await postJson(integration, 'PinpadSettle', {
+      MerchantId: integration.merchantId?.trim(),
+      TerminalId: integration.terminalId?.trim(),
+    });
+
+    const normalized = normalizeResult(integration, response);
+    if (!normalized.approved) {
+      throw new AzulGatewayError({
+        action: 'PinpadSettle',
+        message: extractErrorMessage(response),
+        response,
+        normalized,
+      });
+    }
+
+    return normalized;
   },
 };
 

@@ -22,14 +22,17 @@ import {
   PaymentIntegrationAuditEvent,
   PaymentIntegrationProvider,
 } from '../types';
+import AzulSettlementModal from './AzulSettlementModal';
 import IntegrationAuditModal from './IntegrationAuditModal';
-import { AzulGatewayError, azulMcmService } from '../services/payments/AzulMcmService';
+import { AzulGatewayError, AzulNormalizedResult, azulMcmService } from '../services/payments/AzulMcmService';
 import {
   appendAuditEventToIntegration,
   appendAuditEventToIntegrations,
   createPaymentIntegrationAuditEvent,
+  dispatchAuditEventConfigUpdate,
   persistConfigUpdate,
 } from '../services/payments/paymentIntegrationAudit';
+import { printGatewayReceipt } from '../utils/printer';
 
 interface IntegrationSettingsProps {
   config: BusinessConfig;
@@ -41,6 +44,17 @@ type TestResult = {
   success: boolean;
   message: string;
 } | null;
+
+type AzulTerminalModalState = {
+  integration: PaymentIntegrationDefinition;
+  mode: 'TOTALS' | 'SETTLE';
+  isLoadingTotals: boolean;
+  isSettling: boolean;
+  previewResult: AzulNormalizedResult | null;
+  settledResult: AzulNormalizedResult | null;
+  errorMessage: string | null;
+  printWarning: string | null;
+};
 
 const PROVIDER_LABELS: Record<PaymentIntegrationProvider, string> = {
   AZUL: 'AZUL',
@@ -76,6 +90,8 @@ const createDefaultIntegration = (
     refund: true,
     void: true,
     pinpadInit: true,
+    transactionTotals: true,
+    settle: true,
   },
   metadata: {},
   auditEvents: [],
@@ -88,6 +104,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult>(null);
   const [auditIntegrationId, setAuditIntegrationId] = useState<string | null>(null);
+  const [azulTerminalModal, setAzulTerminalModal] = useState<AzulTerminalModalState | null>(null);
 
   const enabledCount = useMemo(() => integrations.filter(integration => integration.isEnabled).length, [integrations]);
   const selectedAuditIntegration = useMemo(
@@ -179,26 +196,29 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
     setTestResult(null);
   };
 
+  const persistAuditEvent = async (event: PaymentIntegrationAuditEvent) => {
+    setEditingIntegration(prev => (
+      prev && prev.id === event.integrationId
+        ? appendAuditEventToIntegration(prev, event)
+        : prev
+    ));
+
+    const nextConfig = await dispatchAuditEventConfigUpdate(config, event.integrationId, event);
+    if (nextConfig?.integrations) {
+      setIntegrations(nextConfig.integrations);
+      return;
+    }
+
+    const nextIntegrations = appendAuditEventToIntegrations(integrations, event.integrationId, event);
+    setIntegrations(nextIntegrations);
+    await persistConfigUpdate({
+      ...config,
+      integrations: nextIntegrations,
+    });
+  };
+
   const handleTestConnection = async () => {
     if (!editingIntegration) return;
-
-    const updateAuditState = async (event: PaymentIntegrationAuditEvent) => {
-      setEditingIntegration(prev => (
-        prev && prev.id === event.integrationId
-          ? appendAuditEventToIntegration(prev, event)
-          : prev
-      ));
-      const nextIntegrations = appendAuditEventToIntegrations(integrations, event.integrationId, event);
-      setIntegrations(nextIntegrations);
-
-      const integrationExists = integrations.some(integration => integration.id === event.integrationId);
-      if (!integrationExists) return;
-
-      await persistConfigUpdate({
-        ...config,
-        integrations: nextIntegrations,
-      });
-    };
 
     setIsTesting(true);
     setTestResult(null);
@@ -208,7 +228,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
           success: false,
           message: 'La prueba en vivo todavía solo está disponible para AZUL.',
         };
-        await updateAuditState(createPaymentIntegrationAuditEvent(editingIntegration, {
+        await persistAuditEvent(createPaymentIntegrationAuditEvent(editingIntegration, {
           action: 'GET_LAST_TRX',
           status: 'FAILED',
           message: unsupportedResult.message,
@@ -224,7 +244,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
       }
 
       const result = await azulMcmService.testConnection(editingIntegration);
-      await updateAuditState(createPaymentIntegrationAuditEvent(editingIntegration, {
+      await persistAuditEvent(createPaymentIntegrationAuditEvent(editingIntegration, {
         action: 'GET_LAST_TRX',
         status: result.success ? 'SUCCESS' : 'FAILED',
         message: result.message,
@@ -246,7 +266,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo probar la conexión.';
       const gatewayError = error instanceof AzulGatewayError ? error : null;
-      await updateAuditState(createPaymentIntegrationAuditEvent(editingIntegration, {
+      await persistAuditEvent(createPaymentIntegrationAuditEvent(editingIntegration, {
         action: 'GET_LAST_TRX',
         status: 'FAILED',
         message,
@@ -272,6 +292,210 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
       setIsTesting(false);
     }
   };
+
+  const openAzulTerminalModal = (integration: PaymentIntegrationDefinition, mode: 'TOTALS' | 'SETTLE') => {
+    setAzulTerminalModal({
+      integration,
+      mode,
+      isLoadingTotals: true,
+      isSettling: false,
+      previewResult: null,
+      settledResult: null,
+      errorMessage: null,
+      printWarning: null,
+    });
+  };
+
+  const handleLoadAzulTotals = async (integration: PaymentIntegrationDefinition, mode: 'TOTALS' | 'SETTLE') => {
+    setAzulTerminalModal(prev => (
+      prev && prev.integration.id === integration.id
+        ? {
+          ...prev,
+          mode,
+          isLoadingTotals: true,
+          errorMessage: null,
+          printWarning: null,
+        }
+        : {
+          integration,
+          mode,
+          isLoadingTotals: true,
+          isSettling: false,
+          previewResult: null,
+          settledResult: null,
+          errorMessage: null,
+          printWarning: null,
+        }
+    ));
+
+    try {
+      const result = await azulMcmService.getTransactionTotals(integration);
+      await persistAuditEvent(createPaymentIntegrationAuditEvent(integration, {
+        action: 'PINPAD_TRANSACTION_TOTALS',
+        status: 'SUCCESS',
+        message: 'Totales recuperados desde AZUL correctamente.',
+        requestDetails: {
+          MerchantId: integration.merchantId || '',
+          TerminalId: integration.terminalId || '',
+        },
+        responseDetails: {
+          Batch: result.batchNumber || result.responseFields.BTC || '',
+          Estado: result.responseMessage || result.responseCode,
+        },
+        responseCode: result.responseCode,
+        responseMessage: result.responseMessage,
+        merchantId: result.merchantId,
+        terminalId: result.terminalId,
+      }));
+
+      setAzulTerminalModal(prev => (
+        prev && prev.integration.id === integration.id
+          ? {
+            ...prev,
+            mode,
+            isLoadingTotals: false,
+            previewResult: result,
+            settledResult: null,
+            errorMessage: null,
+            printWarning: null,
+          }
+          : prev
+      ));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudieron consultar los totales.';
+      const gatewayError = error instanceof AzulGatewayError ? error : null;
+      await persistAuditEvent(createPaymentIntegrationAuditEvent(integration, {
+        action: 'PINPAD_TRANSACTION_TOTALS',
+        status: 'FAILED',
+        message,
+        requestDetails: {
+          MerchantId: integration.merchantId || '',
+          TerminalId: integration.terminalId || '',
+        },
+        responseDetails: {
+          Estado: 'Error',
+        },
+        responseCode: gatewayError?.normalized?.responseCode || gatewayError?.response?.ResponseCode,
+        responseMessage: gatewayError?.normalized?.responseMessage || gatewayError?.response?.ResponseMessage,
+        merchantId: gatewayError?.normalized?.merchantId,
+        terminalId: gatewayError?.normalized?.terminalId,
+      }));
+
+      setAzulTerminalModal(prev => (
+        prev && prev.integration.id === integration.id
+          ? {
+            ...prev,
+            mode,
+            isLoadingTotals: false,
+            previewResult: null,
+            settledResult: null,
+            errorMessage: message,
+            printWarning: null,
+          }
+          : prev
+      ));
+    }
+  };
+
+  const handleConfirmAzulSettle = async () => {
+    if (!azulTerminalModal) return;
+
+    const { integration } = azulTerminalModal;
+    setAzulTerminalModal(prev => (
+      prev && prev.integration.id === integration.id
+        ? {
+          ...prev,
+          isSettling: true,
+          errorMessage: null,
+          printWarning: null,
+        }
+        : prev
+    ));
+
+    try {
+      const result = await azulMcmService.pinpadSettle(integration);
+      await persistAuditEvent(createPaymentIntegrationAuditEvent(integration, {
+        action: 'PINPAD_SETTLE',
+        status: 'SUCCESS',
+        message: 'Cierre de lote completado correctamente en AZUL.',
+        requestDetails: {
+          MerchantId: integration.merchantId || '',
+          TerminalId: integration.terminalId || '',
+        },
+        responseDetails: {
+          Batch: result.batchNumber || result.responseFields.BTC || '',
+          Estado: result.responseMessage || result.responseCode,
+        },
+        responseCode: result.responseCode,
+        responseMessage: result.responseMessage,
+        merchantId: result.merchantId,
+        terminalId: result.terminalId,
+      }));
+
+      let printWarning: string | null = null;
+      const receipt = result.receiptMerchant || '';
+      if (receipt) {
+        const printed = await printGatewayReceipt(config, {
+          providerLabel: 'AZUL',
+          copyLabel: 'Cierre de lote',
+          voucherText: receipt,
+          referenceId: `${integration.id}-settle-${Date.now()}`,
+          terminalId: integration.terminalId,
+        });
+        if (!printed) {
+          printWarning = 'AZUL cerró el lote, pero no se pudo imprimir el comprobante automáticamente.';
+        }
+      } else {
+        printWarning = 'AZUL no devolvió un comprobante legible para imprimir después del cierre.';
+      }
+
+      setAzulTerminalModal(prev => (
+        prev && prev.integration.id === integration.id
+          ? {
+            ...prev,
+            isSettling: false,
+            settledResult: result,
+            errorMessage: null,
+            printWarning,
+          }
+          : prev
+      ));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo cerrar el lote en AZUL.';
+      const gatewayError = error instanceof AzulGatewayError ? error : null;
+      await persistAuditEvent(createPaymentIntegrationAuditEvent(integration, {
+        action: 'PINPAD_SETTLE',
+        status: 'FAILED',
+        message,
+        requestDetails: {
+          MerchantId: integration.merchantId || '',
+          TerminalId: integration.terminalId || '',
+        },
+        responseDetails: {
+          Estado: 'Error',
+        },
+        responseCode: gatewayError?.normalized?.responseCode || gatewayError?.response?.ResponseCode,
+        responseMessage: gatewayError?.normalized?.responseMessage || gatewayError?.response?.ResponseMessage,
+        merchantId: gatewayError?.normalized?.merchantId,
+        terminalId: gatewayError?.normalized?.terminalId,
+      }));
+
+      setAzulTerminalModal(prev => (
+        prev && prev.integration.id === integration.id
+          ? {
+            ...prev,
+            isSettling: false,
+            errorMessage: message,
+          }
+          : prev
+      ));
+    }
+  };
+
+  useEffect(() => {
+    if (!azulTerminalModal) return;
+    void handleLoadAzulTotals(azulTerminalModal.integration, azulTerminalModal.mode);
+  }, [azulTerminalModal?.integration.id, azulTerminalModal?.mode]);
 
   const updateEditingIntegration = (patch: Partial<PaymentIntegrationDefinition>) => {
     if (!editingIntegration) return;
@@ -375,6 +599,26 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
                     </div>
 
                     <div className="flex items-center gap-2">
+                      {integration.provider === 'AZUL' && integration.isEnabled && (
+                        <>
+                          <button
+                            onClick={() => openAzulTerminalModal(integration, 'TOTALS')}
+                            className="rounded-lg bg-gray-50 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-700"
+                          >
+                            <span className="flex items-center gap-2">
+                              <RefreshCw size={16} /> Totales
+                            </span>
+                          </button>
+                          <button
+                            onClick={() => openAzulTerminalModal(integration, 'SETTLE')}
+                            className="rounded-lg bg-gray-50 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
+                          >
+                            <span className="flex items-center gap-2">
+                              <CheckCircle2 size={16} /> Cierre
+                            </span>
+                          </button>
+                        </>
+                      )}
                       <button
                         onClick={() => setAuditIntegrationId(integration.id)}
                         className="rounded-lg bg-gray-50 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-sky-50 hover:text-sky-700"
@@ -631,6 +875,26 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
         <IntegrationAuditModal
           integration={selectedAuditIntegration}
           onClose={() => setAuditIntegrationId(null)}
+        />
+      )}
+
+      {azulTerminalModal && (
+        <AzulSettlementModal
+          integration={azulTerminalModal.integration}
+          mode={azulTerminalModal.mode}
+          isLoadingTotals={azulTerminalModal.isLoadingTotals}
+          isSettling={azulTerminalModal.isSettling}
+          previewResult={azulTerminalModal.previewResult}
+          settledResult={azulTerminalModal.settledResult}
+          errorMessage={azulTerminalModal.errorMessage}
+          printWarning={azulTerminalModal.printWarning}
+          onRefreshTotals={() => {
+            void handleLoadAzulTotals(azulTerminalModal.integration, azulTerminalModal.mode);
+          }}
+          onConfirmSettle={() => {
+            void handleConfirmAzulSettle();
+          }}
+          onClose={() => setAzulTerminalModal(null)}
         />
       )}
     </div>

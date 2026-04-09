@@ -689,7 +689,14 @@ export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTH
 export type PaymentIntegrationProvider = 'AZUL' | 'CARDNET' | 'CARNET' | 'VISANET' | 'STRIPE';
 export type PaymentIntegrationEnvironment = 'TEST' | 'PRODUCTION';
 export type PaymentIntegrationMode = 'MANUAL' | 'INTEGRATED';
-export type PaymentIntegrationAuditAction = 'SALE' | 'SALE_CANCELLATION' | 'REFUND' | 'GET_LAST_TRX' | 'PINPAD_INIT';
+export type PaymentIntegrationAuditAction =
+  | 'SALE'
+  | 'SALE_CANCELLATION'
+  | 'REFUND'
+  | 'GET_LAST_TRX'
+  | 'PINPAD_INIT'
+  | 'PINPAD_TRANSACTION_TOTALS'
+  | 'PINPAD_SETTLE';
 export type PaymentIntegrationAuditStatus = 'SUCCESS' | 'FAILED';
 
 export interface PaymentIntegrationAuditEvent {
@@ -722,6 +729,8 @@ export interface PaymentIntegrationCapabilities {
   refund?: boolean;
   getLastTrx?: boolean;
   pinpadInit?: boolean;
+  transactionTotals?: boolean;
+  settle?: boolean;
 }
 
 export interface PaymentIntegrationDefinition {
