@@ -3574,27 +3574,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      // --- RETAIL MODE FOOTER (HORIZONTAL) ---
                      <>
                         {/* RIGHT: PAY & TOTAL */}
-                        <div className="flex items-center gap-4">
+                        <div className="flex justify-end items-center gap-5 shrink-0 xl:gap-8 min-w-max">
                            {/* TOTALS BREAKDOWN */}
-                           <div className="hidden xl:flex items-center gap-6 mr-2">
-                              <div className="text-right">
+                           <div className="hidden xl:flex items-center gap-8 mr-2">
+                              <div className="text-right whitespace-nowrap">
                                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Subtotal</p>
                                  <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                               </div>
                               {discountAmount > 0 && (
-                                 <div className="text-right">
+                                 <div className="text-right whitespace-nowrap">
                                     <p className="text-[10px] text-red-400 font-bold uppercase tracking-wider">Descuento</p>
                                     <p className="text-lg font-bold text-red-500">-{baseCurrency.symbol}{discountAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                                  </div>
                               )}
-                              <div className="text-right">
+                              <div className="text-right whitespace-nowrap">
                                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Impuestos</p>
                                  <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartTax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                               </div>
-                              <div className="w-px h-10 bg-gray-200"></div>
+                              <div className="w-px h-10 bg-gray-200 ml-2"></div>
                            </div>
 
-                           <div className="text-right hidden sm:block">
+                           <div className="text-right hidden sm:block whitespace-nowrap ml-2 mr-4">
                               <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Total a Pagar</p>
                               <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
                                  {baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -3604,33 +3604,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  {pointsEarned > 0 && <span className="text-purple-500 ml-2">• Ganarás +{pointsEarned} pts</span>}
                               </p>
                            </div>
-                           <button
-                              onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
-                              className="h-14 min-w-[132px] px-5 rounded-2xl font-black text-base border-2 border-red-100 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2.5 shrink-0"
-                           >
-                              <LogOut size={22} />
-                              <span>Salir</span>
-                           </button>
-                           <button
-                              onClick={() => {
-                                 if (cart.length > 0 && fiscalStatus.hasNCF) {
-                                    const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-                                    if (!validation.isValid) {
-                                       alert(validation.error);
-                                       return;
+                           <div className="flex items-center gap-4">
+                              <button
+                                 onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
+                                 className="h-14 min-w-[132px] px-5 rounded-2xl font-black text-base border-2 border-red-100 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2.5 shrink-0"
+                              >
+                                 <LogOut size={22} />
+                                 <span>Salir</span>
+                              </button>
+                              <button
+                                 onClick={() => {
+                                    if (cart.length > 0 && fiscalStatus.hasNCF) {
+                                       const validation = validateTerminalDocument(config, terminalId, 'TICKET');
+                                       if (!validation.isValid) {
+                                          alert(validation.error);
+                                          return;
+                                       }
+                                       if (!canProceedWithOperationalSession()) return;
+                                       proceedToCheckout();
+                                    } else if (!fiscalStatus.hasNCF) {
+                                       alert("No hay secuencias fiscales disponibles.");
                                     }
-                                    if (!canProceedWithOperationalSession()) return;
-                                    proceedToCheckout();
-                                 } else if (!fiscalStatus.hasNCF) {
-                                    alert("No hay secuencias fiscales disponibles.");
-                                 }
-                              }}
-                              disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                              className={`h-14 min-w-[220px] px-6 rounded-2xl font-black text-lg shadow-xl hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 shrink-0 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
-                           >
-                              <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
-                              <ArrowRight size={24} />
-                           </button>
+                                 }}
+                                 disabled={cart.length === 0 || !fiscalStatus.hasNCF}
+                                 className={`h-14 min-w-[220px] px-6 rounded-2xl font-black text-lg shadow-xl hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 shrink-0 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
+                              >
+                                 <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
+                                 <ArrowRight size={24} />
+                              </button>
+                           </div>
                         </div>
 
                         <div className="flex-1 w-full min-w-0 pr-4">
