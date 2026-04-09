@@ -751,6 +751,8 @@ export interface PaymentIntegrationDefinition {
   auditEvents?: PaymentIntegrationAuditEvent[];
 }
 
+export type PaymentMethodRoundingRule = 'NONE' | 'UP' | 'DOWN' | 'ZERO_DECIMALS';
+
 export interface PaymentMethodDefinition {
   id: string;
   name: string;
@@ -765,6 +767,7 @@ export interface PaymentMethodDefinition {
   integrationId?: string;
   integrationConfig?: Record<string, string>;
   paymentTermDays?: number; // Solo aplica para tipo CREDIT
+  foreignCurrencyRounding?: PaymentMethodRoundingRule;
 }
 
 

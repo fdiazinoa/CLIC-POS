@@ -19,6 +19,7 @@ import {
   PaymentIntegrationDefinition,
   PaymentMethod,
   PaymentMethodDefinition,
+  PaymentMethodRoundingRule,
 } from '../types';
 
 interface PaymentSettingsProps {
@@ -28,10 +29,17 @@ interface PaymentSettingsProps {
 }
 
 const DEFAULT_METHODS: PaymentMethodDefinition[] = [
-  { id: 'cash', name: 'Efectivo', type: 'CASH', isEnabled: true, icon: 'Banknote', color: 'bg-green-500', opensDrawer: true, requiresSignature: false, integration: 'NONE', integrationMode: 'MANUAL' },
-  { id: 'card', name: 'Tarjeta', type: 'CARD', isEnabled: true, icon: 'CreditCard', color: 'bg-blue-500', opensDrawer: false, requiresSignature: false, integration: 'NONE', integrationMode: 'MANUAL' },
-  { id: 'qr', name: 'Transferencia / QR', type: 'QR', isEnabled: true, icon: 'QrCode', color: 'bg-purple-500', opensDrawer: false, requiresSignature: false, integration: 'NONE', integrationMode: 'MANUAL' },
+  { id: 'cash', name: 'Efectivo', type: 'CASH', isEnabled: true, icon: 'Banknote', color: 'bg-green-500', opensDrawer: true, requiresSignature: false, integration: 'NONE', integrationMode: 'MANUAL', foreignCurrencyRounding: 'NONE' },
+  { id: 'card', name: 'Tarjeta', type: 'CARD', isEnabled: true, icon: 'CreditCard', color: 'bg-blue-500', opensDrawer: false, requiresSignature: false, integration: 'NONE', integrationMode: 'MANUAL', foreignCurrencyRounding: 'NONE' },
+  { id: 'qr', name: 'Transferencia / QR', type: 'QR', isEnabled: true, icon: 'QrCode', color: 'bg-purple-500', opensDrawer: false, requiresSignature: false, integration: 'NONE', integrationMode: 'MANUAL', foreignCurrencyRounding: 'NONE' },
 ];
+
+const ROUNDING_LABELS: Record<PaymentMethodRoundingRule, string> = {
+  NONE: 'Exacto',
+  UP: 'Hacia arriba',
+  DOWN: 'Hacia abajo',
+  ZERO_DECIMALS: 'En 0',
+};
 
 const ICONS = {
   Banknote,
@@ -72,6 +80,7 @@ const normalizePaymentMethod = (method: PaymentMethodDefinition): PaymentMethodD
     integration: forcedType === 'CARD' && integrationMode === 'INTEGRATED' ? method.integration || 'NONE' : 'NONE',
     integrationId: forcedType === 'CARD' && integrationMode === 'INTEGRATED' ? method.integrationId : undefined,
     integrationConfig: forcedType === 'CARD' ? method.integrationConfig || {} : {},
+    foreignCurrencyRounding: method.foreignCurrencyRounding || 'NONE',
   };
 
   if (forcedType === 'CREDIT') {
@@ -135,6 +144,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
       integrationMode: 'MANUAL',
       integrationConfig: {},
       paymentTermDays: 0,
+      foreignCurrencyRounding: 'NONE',
     });
     setIsMethodModalOpen(true);
   };
@@ -310,6 +320,9 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                           {method.paymentTermDays || 0} Días
                         </span>
                       )}
+                      <span className="rounded border border-violet-100 bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700">
+                        Redondeo: {ROUNDING_LABELS[method.foreignCurrencyRounding || 'NONE']}
+                      </span>
                       <span className="rounded border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-bold uppercase text-gray-500">
                         {method.type}
                       </span>
@@ -384,6 +397,23 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                       El método &quot;Pendiente&quot; siempre se guarda como Crédito.
                     </p>
                   )}
+                </div>
+
+                <div className="col-span-2">
+                  <label className="mb-1 block text-xs font-bold uppercase text-gray-500">Redondeo en otra moneda</label>
+                  <select
+                    value={editingMethod.foreignCurrencyRounding || 'NONE'}
+                    onChange={(event) => setEditingMethod({ ...editingMethod, foreignCurrencyRounding: event.target.value as PaymentMethodRoundingRule })}
+                    className="w-full rounded-xl bg-gray-50 p-3 outline-none transition-all focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="NONE">Exacto (sin redondeo)</option>
+                    <option value="UP">Hacia arriba</option>
+                    <option value="DOWN">Hacia abajo</option>
+                    <option value="ZERO_DECIMALS">En 0 (sin decimales)</option>
+                  </select>
+                  <p className="mt-1 text-[11px] font-medium text-gray-500">
+                    Aplica cuando el cobro se hace en una moneda distinta de la base.
+                  </p>
                 </div>
 
                 {editingMethod.type === 'CARD' && (
