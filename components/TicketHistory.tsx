@@ -17,7 +17,7 @@ import {
    RefundProcessingOptions,
 } from '../types';
 import { validateTerminalDocument } from '../utils/validation';
-import { printTicket } from '../utils/printer';
+import { printIntegratedPaymentArtifacts, printTicket } from '../utils/printer';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
 import { User, DeviceRole } from '../types';
@@ -993,6 +993,22 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
       }
    };
 
+   const handlePrintTransaction = async (transaction: Transaction) => {
+      const gatewayPayments = (transaction.payments || []).filter((payment: any) =>
+         payment?.gatewayProvider && (payment?.gatewayReceiptMerchant || payment?.gatewayReceiptClient)
+      );
+
+      if (gatewayPayments.length === 0) {
+         await printTicket(transaction, config);
+         return;
+      }
+
+      const printResult = await printIntegratedPaymentArtifacts(transaction, config);
+      if (printResult.voucherCopiesFailed.length > 0) {
+         alert(`No se pudo imprimir automáticamente: ${printResult.voucherCopiesFailed.join(', ')}.`);
+      }
+   };
+
    // Load History on Mount
    useEffect(() => {
       const loadHistory = async () => {
@@ -1956,7 +1972,7 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ transactions, config, cur
             tx={transactions.find(t => t.id === selectedTxId) || historyTransactions.find(t => t.id === selectedTxId) || null}
             config={config}
             onClose={() => setSelectedTxId(null)}
-            onPrint={(tx) => printTicket(tx, config)}
+            onPrint={(tx) => { void handlePrintTransaction(tx); }}
             onRequestRefund={(tx) => {
                setRefundRequestMode('STANDARD');
                setRefundTx(tx);
