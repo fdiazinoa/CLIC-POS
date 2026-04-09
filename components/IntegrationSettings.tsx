@@ -30,7 +30,6 @@ import {
   appendAuditEventToIntegrations,
   createPaymentIntegrationAuditEvent,
   dispatchAuditEventConfigUpdate,
-  persistConfigUpdate,
 } from '../services/payments/paymentIntegrationAudit';
 import { printGatewayReceipt } from '../utils/printer';
 
@@ -105,6 +104,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
   const [testResult, setTestResult] = useState<TestResult>(null);
   const [auditIntegrationId, setAuditIntegrationId] = useState<string | null>(null);
   const [azulTerminalModal, setAzulTerminalModal] = useState<AzulTerminalModalState | null>(null);
+  const [hasPendingIntegrationChanges, setHasPendingIntegrationChanges] = useState(false);
 
   const enabledCount = useMemo(() => integrations.filter(integration => integration.isEnabled).length, [integrations]);
   const selectedAuditIntegration = useMemo(
@@ -113,8 +113,9 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
   );
 
   useEffect(() => {
+    if (hasPendingIntegrationChanges) return;
     setIntegrations(config.integrations || []);
-  }, [config.integrations]);
+  }, [config.integrations, hasPendingIntegrationChanges]);
 
   const handleCreate = () => {
     setEditingIntegration(createDefaultIntegration());
@@ -134,6 +135,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
 
   const handleDelete = (integrationId: string) => {
     if (!window.confirm('¿Eliminar esta integración de pago?')) return;
+    setHasPendingIntegrationChanges(true);
     setIntegrations(prev => prev.filter(integration => integration.id !== integrationId));
   };
 
@@ -160,6 +162,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
       }
       return [...prev, normalized];
     });
+    setHasPendingIntegrationChanges(true);
     setIsEditorOpen(false);
   };
 
@@ -202,19 +205,13 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
         ? appendAuditEventToIntegration(prev, event)
         : prev
     ));
+    setIntegrations(prev => appendAuditEventToIntegrations(prev, event.integrationId, event));
 
     const nextConfig = await dispatchAuditEventConfigUpdate(config, event.integrationId, event);
-    if (nextConfig?.integrations) {
+    if (nextConfig?.integrations && !hasPendingIntegrationChanges) {
       setIntegrations(nextConfig.integrations);
       return;
     }
-
-    const nextIntegrations = appendAuditEventToIntegrations(integrations, event.integrationId, event);
-    setIntegrations(nextIntegrations);
-    await persistConfigUpdate({
-      ...config,
-      integrations: nextIntegrations,
-    });
   };
 
   const handleTestConnection = async () => {
