@@ -17,7 +17,8 @@ import {
    Permission,
    RoleDefinition,
    PaymentIntegrationDefinition,
-   PaymentMethodDefinition
+   PaymentMethodDefinition,
+   PaymentMethodRoundingRule
 } from '../types';
 import {
    evaluateCreditSupervisorGate,
@@ -119,6 +120,42 @@ const createPaymentId = (): string => {
 
 const roundToTwo = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
+const roundPaymentAmountByMethod = (
+   value: number,
+   rule: PaymentMethodRoundingRule,
+   selectedCurrencyCode: string,
+   baseCurrencyCode: string
+): number => {
+   if (!Number.isFinite(value) || value <= 0) return 0;
+   if (selectedCurrencyCode === baseCurrencyCode) return roundToTwo(value);
+
+   switch (rule) {
+      case 'UP':
+         return Math.ceil(value);
+      case 'DOWN':
+         return Math.floor(value);
+      case 'ZERO_DECIMALS':
+         return Math.round(value);
+      case 'NONE':
+      default:
+         return roundToTwo(value);
+   }
+};
+
+const formatRoundedInput = (
+   value: number,
+   rule: PaymentMethodRoundingRule,
+   selectedCurrencyCode: string,
+   baseCurrencyCode: string
+): string => {
+   const rounded = roundPaymentAmountByMethod(value, rule, selectedCurrencyCode, baseCurrencyCode);
+   if (rounded <= 0) return '';
+   if (selectedCurrencyCode !== baseCurrencyCode && rule !== 'NONE') {
+      return rounded.toFixed(0);
+   }
+   return rounded.toFixed(2);
+};
+
 const createAzulOrderNumber = (): string => {
    const base = `${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
    return base.slice(-8);
@@ -182,11 +219,6 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    const remaining = Math.max(0, parseFloat((absTotal - totalPaid).toFixed(2)));
    const change = Math.max(0, parseFloat((totalPaid - absTotal).toFixed(2)));
    const typedAmount = parseFloat(inputAmount || '0');
-   const typedAmountInBase = Number.isFinite(typedAmount) && typedAmount > 0
-      ? parseFloat((typedAmount * selectedCurrency.rate).toFixed(2))
-      : 0;
-   const canFinalizeWithTypedAmount = remaining > 0.01 && typedAmountInBase >= (remaining - 0.01);
-   const canFinalize = remaining <= 0.01 || canFinalizeWithTypedAmount;
 
    const configuredMethods = useMemo<ResolvedPaymentMethod[]>(() => {
       const enabledConfigMethods = (config?.paymentMethods || []).filter(m => m.isEnabled);
@@ -239,6 +271,15 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    const activeRuntimeMethod = activePaymentMethod
       ? resolvePaymentMethodTypeForRuntime(activePaymentMethod.type, activePaymentMethod.label, activePaymentMethod.id)
       : 'CASH';
+   const activeForeignCurrencyRounding = activePaymentMethod?.definition?.foreignCurrencyRounding || 'NONE';
+   const typedAmountInSelectedCurrency = Number.isFinite(typedAmount) && typedAmount > 0
+      ? roundPaymentAmountByMethod(typedAmount, activeForeignCurrencyRounding, selectedCurrency.code, baseCurrency.code)
+      : 0;
+   const typedAmountInBase = typedAmountInSelectedCurrency > 0
+      ? parseFloat((typedAmountInSelectedCurrency * selectedCurrency.rate).toFixed(2))
+      : 0;
+   const canFinalizeWithTypedAmount = remaining > 0.01 && typedAmountInBase >= (remaining - 0.01);
+   const canFinalize = remaining <= 0.01 || canFinalizeWithTypedAmount;
    const activeIsCxCCredit = activeRuntimeMethod === 'CREDIT';
    const activeIsIntegratedCard = activePaymentMethod?.definition?.type === 'CARD'
       && activePaymentMethod.definition.integrationMode === 'INTEGRATED';
@@ -266,14 +307,19 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
 
    useEffect(() => {
       if (remaining > 0) {
-         const suggestedAmount = (remaining / selectedCurrency.rate).toFixed(2);
+         const suggestedAmount = formatRoundedInput(
+            remaining / selectedCurrency.rate,
+            activeForeignCurrencyRounding,
+            selectedCurrency.code,
+            baseCurrency.code
+         );
          setInputAmount(suggestedAmount);
          setShouldClearInput(true);
       } else {
          setInputAmount('');
          setShouldClearInput(false);
       }
-   }, [remaining, activeMethod, selectedCurrency]);
+   }, [remaining, activeMethod, selectedCurrency, activeForeignCurrencyRounding, baseCurrency.code]);
 
    const handleNumPad = (key: string) => {
       if (key === 'C') { setInputAmount(''); setShouldClearInput(false); return; }
@@ -489,7 +535,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    };
 
    const handleAddPayment = async (amountOverride?: number) => {
-      const valInSelectedCurrency = amountOverride !== undefined ? amountOverride : parseFloat(inputAmount);
+      const rawAmount = amountOverride !== undefined ? amountOverride : parseFloat(inputAmount);
+      const valInSelectedCurrency = roundPaymentAmountByMethod(
+         rawAmount,
+         activeForeignCurrencyRounding,
+         selectedCurrency.code,
+         baseCurrency.code
+      );
       if (!valInSelectedCurrency || valInSelectedCurrency <= 0) return;
       if (!activePaymentMethod) {
          setFinalizeError('Seleccione un método de pago.');
@@ -521,6 +573,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          setFinalizeError(null);
          const newPayment = await buildPaymentEntry(valInSelectedCurrency);
          setPayments((prev) => [...prev, newPayment]);
+         setInputAmount(
+            formatRoundedInput(valInSelectedCurrency, activeForeignCurrencyRounding, selectedCurrency.code, baseCurrency.code)
+         );
          setShouldClearInput(true);
          setFinalizeError(null);
       } catch (error) {
@@ -579,7 +634,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                }
             }
 
-            const autoPayment = await buildPaymentEntry(typedAmount);
+            const autoPayment = await buildPaymentEntry(typedAmountInSelectedCurrency);
             paymentsToConfirm = [...payments, autoPayment];
             setPayments(paymentsToConfirm);
          }
@@ -1038,6 +1093,15 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                         placeholder="0.00"
                      />
                   </div>
+                  {selectedCurrency.code !== baseCurrency.code && activeForeignCurrencyRounding !== 'NONE' && (
+                     <p className="mt-2 text-[11px] font-bold uppercase tracking-[0.18em] text-violet-600">
+                        Redondeo {activeForeignCurrencyRounding === 'UP'
+                           ? 'hacia arriba'
+                           : activeForeignCurrencyRounding === 'DOWN'
+                           ? 'hacia abajo'
+                           : 'a 0 decimales'}
+                     </p>
+                  )}
 
                   {activeMethod === 'CASH' && (
                      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-3 md:mt-4">
