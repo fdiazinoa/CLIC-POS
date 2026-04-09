@@ -63,6 +63,37 @@ type ResolvedPaymentMethod = {
    integration?: PaymentIntegrationDefinition;
 };
 
+const normalizeRuntimePaymentMethodDefinition = (
+   method: PaymentMethodDefinition,
+   integrations: PaymentIntegrationDefinition[]
+): { definition: PaymentMethodDefinition; integration?: PaymentIntegrationDefinition } => {
+   const inferredIntegrationMode = method.type === 'CARD'
+      ? (method.integrationMode || (method.integration && method.integration !== 'NONE' ? 'INTEGRATED' : 'MANUAL'))
+      : 'MANUAL';
+
+   let assignedIntegration = method.integrationId
+      ? integrations.find((integration) => integration.id === method.integrationId)
+      : undefined;
+
+   if (!assignedIntegration && method.type === 'CARD' && inferredIntegrationMode === 'INTEGRATED' && method.integration && method.integration !== 'NONE') {
+      const providerMatches = integrations.filter((integration) => integration.provider === method.integration);
+      assignedIntegration = providerMatches[0];
+   }
+
+   return {
+      definition: {
+         ...method,
+         integrationMode: inferredIntegrationMode,
+         integrationId: assignedIntegration?.id || method.integrationId,
+         integration: method.type === 'CARD' && inferredIntegrationMode === 'INTEGRATED'
+            ? (assignedIntegration?.provider || method.integration)
+            : 'NONE',
+         foreignCurrencyRounding: method.foreignCurrencyRounding || 'NONE',
+      },
+      integration: assignedIntegration,
+   };
+};
+
 const PAYMENT_ICON_BY_NAME: Record<string, React.ElementType> = {
    Banknote,
    CreditCard,
@@ -226,9 +257,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
 
       const fromConfig: ResolvedPaymentMethod[] = enabledConfigMethods.map((method, index) => {
          const IconFromName = method.icon ? PAYMENT_ICON_BY_NAME[method.icon] : undefined;
-         const assignedIntegration = method.integrationId
-            ? integrations.find((integration) => integration.id === method.integrationId)
-            : undefined;
+         const normalized = normalizeRuntimePaymentMethodDefinition(method, integrations);
          return {
             key: `${method.id}-${index}`,
             id: method.id,
@@ -236,8 +265,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             label: method.name || getDefaultLabelByType(method.type),
             iconName: method.icon,
             Icon: IconFromName || getDefaultIconByType(method.type),
-            definition: method,
-            integration: assignedIntegration,
+            definition: normalized.definition,
+            integration: normalized.integration,
          };
       });
 
@@ -261,6 +290,21 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
 
       return methods;
    }, [config?.paymentMethods, config?.integrations, customer?.wallet]);
+
+   const selectPaymentMethod = (method: ResolvedPaymentMethod) => {
+      setActiveMethodKey(method.key);
+      if (remaining > 0) {
+         setInputAmount(
+            formatRoundedInput(
+               remaining / selectedCurrency.rate,
+               method.definition?.foreignCurrencyRounding || 'NONE',
+               selectedCurrency.code,
+               baseCurrency.code
+            )
+         );
+         setShouldClearInput(true);
+      }
+   };
 
    const activePaymentMethod = useMemo(
       () => configuredMethods.find(method => method.key === activeMethodKey) || configuredMethods[0] || null,
@@ -1046,7 +1090,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                      return (
                         <button
                            key={method.key}
-                           onClick={() => !methodDisabledOffline && setActiveMethodKey(method.key)}
+                           onClick={() => !methodDisabledOffline && selectPaymentMethod(method)}
                            disabled={methodDisabledOffline}
                            className={`min-w-[calc(50%-0.375rem)] lg:min-w-[calc(33.333%-0.75rem)] xl:min-w-[120px] flex-1 py-3 md:py-4 rounded-2xl md:rounded-3xl border-2 flex flex-col items-center justify-center gap-1 md:gap-2 transition-all bg-white ${activePaymentMethod?.key === method.key ? `border-current ${themeTextClass} shadow-sm` : 'border-gray-200 text-slate-500 hover:border-gray-300 hover:bg-white'} ${isExceeded ? 'bg-red-50/50 border-red-200' : ''} ${methodDisabledOffline ? 'opacity-50 cursor-not-allowed bg-gray-50 hover:border-gray-200 hover:bg-gray-50' : ''}`}
                         >
