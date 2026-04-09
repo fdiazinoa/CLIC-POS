@@ -175,7 +175,7 @@ const MobileReception: React.FC<MobileReceptionProps> = ({
     return {
       id: order.id,
       type: 'PURCHASE_ORDER',
-      code: order.id,
+      code: order.code || order.id,
       originName: supplierName,
       warehouseId,
       progressPct,
@@ -190,7 +190,9 @@ const MobileReception: React.FC<MobileReceptionProps> = ({
 
     const computedLines = (transfer.items || []).map((item) => {
       const product = productMap.get(item.productId);
-      const expectedQty = Math.max(0, toSafeNumber(item.quantity));
+      const sentQty = Math.max(0, toSafeNumber(item.quantity));
+      const alreadyReceivedQty = Math.max(0, toSafeNumber(item.receivedQuantity));
+      const expectedQty = Math.max(0, sentQty - alreadyReceivedQty);
 
       return {
         key: toLineKey(item.productId),

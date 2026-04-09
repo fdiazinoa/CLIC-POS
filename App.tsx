@@ -2290,6 +2290,8 @@ const AppContent: React.FC = () => {
           break;
         case 'customers': setCustomers(freshData as Customer[]); break;
         case 'suppliers': setSuppliers(freshData as Supplier[]); break;
+        case 'purchaseOrders': setPurchaseOrders(Array.isArray(freshData) ? freshData as PurchaseOrder[] : []); break;
+        case 'transfers': setTransfers(Array.isArray(freshData) ? freshData as StockTransfer[] : []); break;
         case 'internalSequences': /* No state for this, used directly from DB */ break;
         case 'transactions': setTransactions(Array.isArray(freshData) ? freshData as Transaction[] : []); break;
         case 'cashMovements': setCashMovements(freshData as CashMovement[]); break;
@@ -2304,7 +2306,7 @@ const AppContent: React.FC = () => {
       }
     };
 
-    const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'cashMovementsUpdated', 'zReportsUpdated', 'productStocksUpdated', 'tablesUpdated'];
+    const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'purchaseOrdersUpdated', 'transfersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'cashMovementsUpdated', 'zReportsUpdated', 'productStocksUpdated', 'tablesUpdated'];
     syncEvents.forEach(e => window.addEventListener(e, handleSyncUpdate));
 
     return () => {

@@ -15,7 +15,7 @@ import { permissionService } from './PermissionService';
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { productImageCacheService } from './ProductImageCacheService';
 import { masterDataImageCacheService, type ImageBackedCollection } from './MasterDataImageCacheService';
-import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig } from '../../types';
+import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer } from '../../types';
 import {
     applyTerminalConfigSnapshot,
     extractTerminalConfigSnapshot,
@@ -47,7 +47,7 @@ interface SyncStatus {
     error?: string;
 }
 
-type TerminalManifestMasterScope = 'items' | 'customers' | 'suppliers';
+type TerminalManifestMasterScope = 'items' | 'customers' | 'suppliers' | 'purchase_orders' | 'transfers';
 type TerminalManifestResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions' | 'loyalty';
 type TerminalManifestScope = 'terminal' | TerminalManifestMasterScope;
 
@@ -56,6 +56,8 @@ interface TerminalCursorMap {
     items?: string | null;
     customers?: string | null;
     suppliers?: string | null;
+    purchase_orders?: string | null;
+    transfers?: string | null;
 }
 
 interface TerminalManifestPayload {
@@ -622,6 +624,8 @@ class SyncManager {
                 items: typeof parsed.items === 'string' ? parsed.items.trim() || null : null,
                 customers: typeof parsed.customers === 'string' ? parsed.customers.trim() || null : null,
                 suppliers: typeof parsed.suppliers === 'string' ? parsed.suppliers.trim() || null : null,
+                purchase_orders: typeof parsed.purchase_orders === 'string' ? parsed.purchase_orders.trim() || null : null,
+                transfers: typeof parsed.transfers === 'string' ? parsed.transfers.trim() || null : null,
             };
         } catch {
             return {};
@@ -636,6 +640,8 @@ class SyncManager {
             items: typeof cursorMap.items === 'string' ? cursorMap.items.trim() || null : null,
             customers: typeof cursorMap.customers === 'string' ? cursorMap.customers.trim() || null : null,
             suppliers: typeof cursorMap.suppliers === 'string' ? cursorMap.suppliers.trim() || null : null,
+            purchase_orders: typeof cursorMap.purchase_orders === 'string' ? cursorMap.purchase_orders.trim() || null : null,
+            transfers: typeof cursorMap.transfers === 'string' ? cursorMap.transfers.trim() || null : null,
         };
 
         const hasValue = Object.values(normalizedCursorMap).some((value) => typeof value === 'string' && value.trim());
@@ -737,17 +743,23 @@ class SyncManager {
                 items: typeof cursorMap.items === 'string' ? cursorMap.items.trim() || null : null,
                 customers: typeof cursorMap.customers === 'string' ? cursorMap.customers.trim() || null : null,
                 suppliers: typeof cursorMap.suppliers === 'string' ? cursorMap.suppliers.trim() || null : null,
+                purchase_orders: typeof cursorMap.purchase_orders === 'string' ? cursorMap.purchase_orders.trim() || null : null,
+                transfers: typeof cursorMap.transfers === 'string' ? cursorMap.transfers.trim() || null : null,
             },
             changed: {
                 terminal: Boolean(changed.terminal),
                 items: Boolean(changed.items),
                 customers: Boolean(changed.customers),
                 suppliers: Boolean(changed.suppliers),
+                purchase_orders: Boolean(changed.purchase_orders),
+                transfers: Boolean(changed.transfers),
             },
             counts: {
                 items: Number.isFinite(Number(counts.items)) ? Number(counts.items) : 0,
                 customers: Number.isFinite(Number(counts.customers)) ? Number(counts.customers) : 0,
                 suppliers: Number.isFinite(Number(counts.suppliers)) ? Number(counts.suppliers) : 0,
+                purchase_orders: Number.isFinite(Number(counts.purchase_orders)) ? Number(counts.purchase_orders) : 0,
+                transfers: Number.isFinite(Number(counts.transfers)) ? Number(counts.transfers) : 0,
             },
             snapshot_at: typeof manifest.snapshot_at === 'string' ? manifest.snapshot_at.trim() || null : null,
         };
@@ -800,6 +812,8 @@ class SyncManager {
             if (cursorMap.items) params.set('items_cursor', cursorMap.items);
             if (cursorMap.customers) params.set('customers_cursor', cursorMap.customers);
             if (cursorMap.suppliers) params.set('suppliers_cursor', cursorMap.suppliers);
+            if (cursorMap.purchase_orders) params.set('purchase_orders_cursor', cursorMap.purchase_orders);
+            if (cursorMap.transfers) params.set('transfers_cursor', cursorMap.transfers);
 
             try {
                 const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/manifest`;
@@ -877,7 +891,7 @@ class SyncManager {
                 return null;
             }
 
-            const changedMasterScopes: TerminalManifestMasterScope[] = (['items', 'customers', 'suppliers'] as TerminalManifestMasterScope[])
+            const changedMasterScopes: TerminalManifestMasterScope[] = (['items', 'customers', 'suppliers', 'purchase_orders', 'transfers'] as TerminalManifestMasterScope[])
                 .filter((scope) => manifest.changed?.[scope]);
             const terminalChanged = Boolean(manifest.changed.terminal);
 
@@ -1069,6 +1083,14 @@ class SyncManager {
         const customersDelete = Array.isArray(delta.customers_delete) ? delta.customers_delete : [];
         const suppliersUpsert = Array.isArray(delta.suppliers_upsert) ? delta.suppliers_upsert : [];
         const suppliersDelete = Array.isArray(delta.suppliers_delete) ? delta.suppliers_delete : [];
+        const purchaseOrdersUpsert = Array.isArray(delta.purchase_orders_upsert)
+            ? delta.purchase_orders_upsert
+            : (Array.isArray(delta.purchaseOrders_upsert) ? delta.purchaseOrders_upsert : []);
+        const purchaseOrdersDelete = Array.isArray(delta.purchase_orders_delete)
+            ? delta.purchase_orders_delete
+            : (Array.isArray(delta.purchaseOrders_delete) ? delta.purchaseOrders_delete : []);
+        const transfersUpsert = Array.isArray(delta.transfers_upsert) ? delta.transfers_upsert : [];
+        const transfersDelete = Array.isArray(delta.transfers_delete) ? delta.transfers_delete : [];
 
         const productUpserted = itemsUpsert.length > 0
             ? await this.applySnapshotProducts({ masters: { items: itemsUpsert } })
@@ -1088,10 +1110,22 @@ class SyncManager {
         const supplierDeleted = suppliersDelete.length > 0
             ? await this.deleteSnapshotImageBackedCollection('suppliers', suppliersDelete)
             : 0;
+        const purchaseOrdersUpserted = purchaseOrdersUpsert.length > 0
+            ? await this.applySnapshotStructuredCollection('purchaseOrders', purchaseOrdersUpsert, this.normalizeSnapshotPurchaseOrder.bind(this))
+            : 0;
+        const purchaseOrdersDeleted = purchaseOrdersDelete.length > 0
+            ? await this.deleteSnapshotStructuredCollection('purchaseOrders', purchaseOrdersDelete)
+            : 0;
+        const transfersUpserted = transfersUpsert.length > 0
+            ? await this.applySnapshotStructuredCollection('transfers', transfersUpsert, this.normalizeSnapshotTransfer.bind(this))
+            : 0;
+        const transfersDeleted = transfersDelete.length > 0
+            ? await this.deleteSnapshotStructuredCollection('transfers', transfersDelete)
+            : 0;
 
         return {
-            upserted: productUpserted + customerUpserted + supplierUpserted,
-            deleted: productDeleted + customerDeleted + supplierDeleted,
+            upserted: productUpserted + customerUpserted + supplierUpserted + purchaseOrdersUpserted + transfersUpserted,
+            deleted: productDeleted + customerDeleted + supplierDeleted + purchaseOrdersDeleted + transfersDeleted,
         };
     }
 
@@ -1332,9 +1366,11 @@ class SyncManager {
             } else {
                 await this.applySnapshotProducts(snapshot);
             }
+            const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta);
             await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
             posCatalogDebugLog('refreshTerminalResolvedConfig: product apply success', {
                 usedCatalogDelta: Boolean(catalogDelta),
+                structuredMasterData,
                 elapsedMs: posCatalogDebugElapsedMs(applyStartedAt),
             });
         } catch (error) {
@@ -1535,7 +1571,10 @@ class SyncManager {
         return updatedCount;
     }
 
-    private snapshotMasterRows(snapshot: unknown, key: 'customers' | 'suppliers'): unknown[] | null {
+    private snapshotMasterRows(
+        snapshot: unknown,
+        key: 'customers' | 'suppliers' | 'purchaseOrders' | 'purchase_orders' | 'transfers'
+    ): unknown[] | null {
         const masters = snapshot && typeof snapshot === 'object'
             ? (snapshot as Record<string, any>).masters
             : null;
@@ -1572,6 +1611,307 @@ class SyncManager {
         await masterDataImageCacheService.syncSnapshotItems(collection, cleanItems as any[]);
         window.dispatchEvent(new CustomEvent(`${collection}Updated`));
         return normalizedItems.length;
+    }
+
+    private normalizeSnapshotPurchaseOrderStatus(value: unknown): PurchaseOrder['status'] {
+        const normalized = typeof value === 'string' ? value.trim().toUpperCase() : '';
+
+        switch (normalized) {
+            case 'COMPLETED':
+            case 'RECIBIDO':
+            case 'CERRADO':
+                return 'COMPLETED';
+            case 'PARTIAL':
+            case 'PARCIAL':
+                return 'PARTIAL';
+            default:
+                return 'ORDERED';
+        }
+    }
+
+    private normalizeSnapshotPurchaseOrder(raw: unknown): PurchaseOrder | null {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+            return null;
+        }
+
+        const row = raw as Record<string, unknown>;
+        const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+            ? row.metadata as Record<string, unknown>
+            : {};
+        const items = Array.isArray(row.items) ? row.items : [];
+        const normalizedItems = items
+            .map((entry) => {
+                if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+                    return null;
+                }
+
+                const line = entry as Record<string, unknown>;
+                const productId = typeof line.productId === 'string' ? line.productId.trim() : String(line.productId || line.item_id || '').trim();
+                if (!productId) {
+                    return null;
+                }
+
+                const quantityOrdered = Number(line.quantityOrdered ?? line.quantity_ordered ?? line.cantidad_ordenada ?? line.quantity ?? 0);
+                const quantityReceived = Number(line.quantityReceived ?? line.quantity_received ?? line.cantidad_recibida ?? 0);
+                const cost = Number(line.cost ?? line.unitCost ?? line.unit_cost ?? line.precio_unitario ?? 0);
+                const productName = typeof line.productName === 'string'
+                    ? line.productName.trim()
+                    : String(line.productName || line.product_name || line.name || '').trim();
+
+                return {
+                    productId,
+                    productName: productName || productId,
+                    quantityOrdered: Number.isFinite(quantityOrdered) ? Math.max(0, quantityOrdered) : 0,
+                    quantityReceived: Number.isFinite(quantityReceived) ? Math.max(0, quantityReceived) : 0,
+                    cost: Number.isFinite(cost) ? cost : 0,
+                    variantSku: typeof line.variantSku === 'string' ? line.variantSku.trim() : undefined,
+                    variantInfo: typeof line.variantInfo === 'string' ? line.variantInfo.trim() : undefined,
+                };
+            })
+            .filter(Boolean) as PurchaseOrder['items'];
+
+        const id = typeof row.id === 'string' ? row.id.trim() : String(row.id || '').trim();
+        if (!id) {
+            return null;
+        }
+
+        const status = this.normalizeSnapshotPurchaseOrderStatus(row.status);
+        const totalCost = Number(row.totalCost ?? row.total_cost ?? row.totalEstimated ?? row.total_estimated ?? 0);
+
+        return {
+            id,
+            code: typeof row.code === 'string'
+                ? row.code.trim()
+                : String(row.code || row.codigo || row.displayId || row.display_id || id).trim(),
+            supplierId: typeof row.supplierId === 'string' ? row.supplierId.trim() : String(row.supplierId || row.supplier_id || '').trim(),
+            supplierName: typeof row.supplierName === 'string'
+                ? row.supplierName.trim()
+                : String(row.supplierName || row.supplier_name || '').trim() || undefined,
+            warehouseId: typeof row.warehouseId === 'string'
+                ? row.warehouseId.trim()
+                : String(row.warehouseId || row.warehouse_id || metadata.warehouseId || metadata.warehouse_id || '').trim() || undefined,
+            date: typeof row.date === 'string' ? row.date : new Date().toISOString(),
+            expectedDate: typeof row.expectedDate === 'string'
+                ? row.expectedDate
+                : String(row.expectedDate || row.expected_date || row.date || new Date().toISOString()).trim(),
+            dueDate: typeof row.dueDate === 'string' ? row.dueDate : String(row.dueDate || row.due_date || '').trim() || undefined,
+            status,
+            items: normalizedItems,
+            totalCost: Number.isFinite(totalCost)
+                ? totalCost
+                : normalizedItems.reduce((sum, item) => sum + (Number(item.quantityOrdered || 0) * Number(item.cost || 0)), 0),
+            sentAt: typeof row.sentAt === 'string' ? row.sentAt : String(row.sentAt || row.sent_at || '').trim() || undefined,
+            syncSource: 'ERP_SNAPSHOT',
+        };
+    }
+
+    private normalizeSnapshotTransfer(raw: unknown): StockTransfer | null {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+            return null;
+        }
+
+        const row = raw as Record<string, unknown>;
+        const items = Array.isArray(row.items) ? row.items : [];
+        const normalizedItems = items
+            .map((entry) => {
+                if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+                    return null;
+                }
+
+                const line = entry as Record<string, unknown>;
+                const productId = typeof line.productId === 'string' ? line.productId.trim() : String(line.productId || line.item_id || '').trim();
+                if (!productId) {
+                    return null;
+                }
+
+                const quantity = Number(line.quantity ?? line.quantity_sent ?? 0);
+                const receivedQuantity = Number(line.receivedQuantity ?? line.quantity_received ?? 0);
+                const productName = typeof line.productName === 'string'
+                    ? line.productName.trim()
+                    : String(line.productName || line.product_name || line.name || '').trim();
+
+                return {
+                    productId,
+                    productName: productName || productId,
+                    quantity: Number.isFinite(quantity) ? Math.max(0, quantity) : 0,
+                    receivedQuantity: Number.isFinite(receivedQuantity) ? Math.max(0, receivedQuantity) : undefined,
+                };
+            })
+            .filter(Boolean) as StockTransfer['items'];
+
+        const id = typeof row.id === 'string' ? row.id.trim() : String(row.id || '').trim();
+        if (!id) {
+            return null;
+        }
+
+        const rawStatus = typeof row.status === 'string' ? row.status.trim().toUpperCase() : '';
+
+        return {
+            id,
+            displayId: typeof row.displayId === 'string'
+                ? row.displayId.trim()
+                : String(row.displayId || row.display_id || '').trim() || undefined,
+            sourceWarehouseId: typeof row.sourceWarehouseId === 'string'
+                ? row.sourceWarehouseId.trim()
+                : String(row.sourceWarehouseId || row.source_warehouse_id || '').trim(),
+            destinationWarehouseId: typeof row.destinationWarehouseId === 'string'
+                ? row.destinationWarehouseId.trim()
+                : String(row.destinationWarehouseId || row.destination_warehouse_id || '').trim(),
+            items: normalizedItems,
+            status: rawStatus === 'COMPLETED' ? 'COMPLETED' : 'IN_TRANSIT',
+            createdAt: typeof row.createdAt === 'string' ? row.createdAt : String(row.createdAt || row.created_at || new Date().toISOString()).trim(),
+            sentAt: typeof row.sentAt === 'string' ? row.sentAt : String(row.sentAt || row.sent_at || '').trim() || undefined,
+            receivedAt: typeof row.receivedAt === 'string' ? row.receivedAt : String(row.receivedAt || row.received_at || '').trim() || undefined,
+            createdBy: typeof row.createdBy === 'string' ? row.createdBy : String(row.createdBy || row.created_by || '').trim() || undefined,
+            syncSource: 'ERP_SNAPSHOT',
+        };
+    }
+
+    private async applySnapshotStructuredCollection<T extends { id: string; syncSource?: 'LOCAL' | 'ERP_SNAPSHOT' }>(
+        collection: 'purchaseOrders' | 'transfers',
+        incomingItems: unknown[],
+        normalize: (item: unknown) => T | null
+    ): Promise<number> {
+        const normalizedItems = (Array.isArray(incomingItems) ? incomingItems : [])
+            .map((item) => normalize(item))
+            .filter(Boolean) as T[];
+        const incomingIds = new Set(normalizedItems.map((item) => item.id));
+        const existingItems = (await db.get(collection)) as Array<T & { syncSource?: 'LOCAL' | 'ERP_SNAPSHOT' }> || [];
+        let updatedCount = 0;
+
+        for (const item of normalizedItems) {
+            await db.saveDocument(collection, item as any);
+            updatedCount += 1;
+        }
+
+        const staleIds = existingItems
+            .filter((item) => item?.syncSource === 'ERP_SNAPSHOT' && item?.id && !incomingIds.has(item.id))
+            .map((item) => item.id);
+
+        for (const staleId of staleIds) {
+            await db.deleteDocument(collection, staleId as any);
+        }
+
+        if (updatedCount > 0 || staleIds.length > 0) {
+            window.dispatchEvent(new CustomEvent(`${collection}Updated`));
+        }
+
+        return updatedCount + staleIds.length;
+    }
+
+    private async deleteSnapshotStructuredCollection(
+        collection: 'purchaseOrders' | 'transfers',
+        ids: unknown[]
+    ): Promise<number> {
+        const normalizedIds = Array.from(new Set(
+            (Array.isArray(ids) ? ids : [])
+                .map((value) => (typeof value === 'string' ? value.trim() : String(value || '').trim()))
+                .filter(Boolean),
+        ));
+
+        if (normalizedIds.length === 0) {
+            return 0;
+        }
+
+        let deletedCount = 0;
+
+        for (const id of normalizedIds) {
+            await db.deleteDocument(collection, id as any);
+            deletedCount += 1;
+        }
+
+        if (deletedCount > 0) {
+            window.dispatchEvent(new CustomEvent(`${collection}Updated`));
+        }
+
+        return deletedCount;
+    }
+
+    private async refreshTerminalStructuredMasterData(
+        snapshot: unknown,
+        catalogDelta?: Record<string, unknown> | null
+    ): Promise<{
+        purchaseOrders: number;
+        transfers: number;
+    }> {
+        const startedAt = posCatalogDebugNow();
+        const results = {
+            purchaseOrders: 0,
+            transfers: 0,
+        };
+
+        const collections: Array<{
+            resultKey: 'purchaseOrders' | 'transfers';
+            collection: 'purchaseOrders' | 'transfers';
+            snapshotKeys: Array<'purchaseOrders' | 'purchase_orders' | 'transfers'>;
+            upsertKeys: string[];
+            deleteKeys: string[];
+            normalize: (item: unknown) => PurchaseOrder | StockTransfer | null;
+        }> = [
+            {
+                resultKey: 'purchaseOrders',
+                collection: 'purchaseOrders',
+                snapshotKeys: ['purchaseOrders', 'purchase_orders'],
+                upsertKeys: ['purchase_orders_upsert', 'purchaseOrders_upsert'],
+                deleteKeys: ['purchase_orders_delete', 'purchaseOrders_delete'],
+                normalize: this.normalizeSnapshotPurchaseOrder.bind(this),
+            },
+            {
+                resultKey: 'transfers',
+                collection: 'transfers',
+                snapshotKeys: ['transfers'],
+                upsertKeys: ['transfers_upsert'],
+                deleteKeys: ['transfers_delete'],
+                normalize: this.normalizeSnapshotTransfer.bind(this),
+            },
+        ];
+
+        for (const entry of collections) {
+            const deltaUpsert = entry.upsertKeys.find((key) => Array.isArray((catalogDelta as Record<string, unknown> | null)?.[key]));
+            const deltaDelete = entry.deleteKeys.find((key) => Array.isArray((catalogDelta as Record<string, unknown> | null)?.[key]));
+
+            if (deltaUpsert || deltaDelete) {
+                const upserted = deltaUpsert
+                    ? await this.applySnapshotStructuredCollection(
+                        entry.collection,
+                        ((catalogDelta as Record<string, unknown>)[deltaUpsert] as unknown[]) || [],
+                        entry.normalize as (item: unknown) => any,
+                    )
+                    : 0;
+                const deleted = deltaDelete
+                    ? await this.deleteSnapshotStructuredCollection(
+                        entry.collection,
+                        ((catalogDelta as Record<string, unknown>)[deltaDelete] as unknown[]) || [],
+                    )
+                    : 0;
+                results[entry.resultKey] = upserted + deleted;
+                continue;
+            }
+
+            let snapshotRows: unknown[] | null = null;
+            for (const key of entry.snapshotKeys) {
+                snapshotRows = this.snapshotMasterRows(snapshot, key);
+                if (snapshotRows !== null) {
+                    break;
+                }
+            }
+
+            if (snapshotRows !== null) {
+                results[entry.resultKey] = await this.applySnapshotStructuredCollection(
+                    entry.collection,
+                    snapshotRows,
+                    entry.normalize as (item: unknown) => any,
+                );
+            }
+        }
+
+        posCatalogDebugLog('refreshTerminalResolvedConfig: structured master data complete', {
+            purchaseOrders: results.purchaseOrders,
+            transfers: results.transfers,
+            elapsedMs: posCatalogDebugElapsedMs(startedAt),
+        });
+
+        return results;
     }
 
     private async refreshTerminalSupplementalMasterData(
