@@ -87,11 +87,11 @@ const buildGatewayVoucherHtml = (providerLabel: string, copyLabel: string, vouch
 const printGatewayVoucher = async (
     config: BusinessConfig,
     params: {
-        transaction: Transaction;
         providerLabel: string;
         copyLabel: string;
         voucherText: string;
-        referenceSuffix: string;
+        referenceId: string;
+        terminalId?: string;
     }
 ): Promise<boolean> => {
     const normalizedText = normalizeVoucherText(params.voucherText);
@@ -110,9 +110,9 @@ const printGatewayVoucher = async (
             config,
             escPosBase64,
             role: 'TICKET',
-            terminalId: params.transaction.terminalId,
+            terminalId: params.terminalId,
             jobType: 'PAYMENT_VOUCHER',
-            referenceId: `${params.transaction.id}-${params.referenceSuffix}`,
+            referenceId: params.referenceId,
         });
     }
 
@@ -123,9 +123,9 @@ const printGatewayVoucher = async (
             config,
             html: silentHtml,
             role: 'TICKET',
-            terminalId: params.transaction.terminalId,
+            terminalId: params.terminalId,
             jobType: 'PAYMENT_VOUCHER',
-            referenceId: `${params.transaction.id}-${params.referenceSuffix}`,
+            referenceId: params.referenceId,
         });
     }
 
@@ -146,6 +146,17 @@ const printGatewayVoucher = async (
     alert('Por favor, permita las ventanas emergentes para imprimir el voucher.');
     return false;
 };
+
+export const printGatewayReceipt = async (
+    config: BusinessConfig,
+    params: {
+        providerLabel: string;
+        copyLabel: string;
+        voucherText: string;
+        referenceId: string;
+        terminalId?: string;
+    }
+): Promise<boolean> => printGatewayVoucher(config, params);
 
 export const printTicket = async (transaction: Transaction, config: BusinessConfig): Promise<boolean> => {
     const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
@@ -584,11 +595,11 @@ export const printIntegratedPaymentArtifacts = async (
 
         if (payment.gatewayReceiptMerchant) {
             const printed = await printGatewayVoucher(config, {
-                transaction,
                 providerLabel,
                 copyLabel: 'Copia Comercio',
                 voucherText: payment.gatewayReceiptMerchant,
-                referenceSuffix: `merchant-voucher-${index + 1}`,
+                referenceId: `${transaction.id}-merchant-voucher-${index + 1}`,
+                terminalId: transaction.terminalId,
             });
             if (printed) {
                 voucherCopiesPrinted += 1;
@@ -600,11 +611,11 @@ export const printIntegratedPaymentArtifacts = async (
 
         if (payment.gatewayReceiptClient) {
             const printed = await printGatewayVoucher(config, {
-                transaction,
                 providerLabel,
                 copyLabel: 'Copia Cliente',
                 voucherText: payment.gatewayReceiptClient,
-                referenceSuffix: `client-voucher-${index + 1}`,
+                referenceId: `${transaction.id}-client-voucher-${index + 1}`,
+                terminalId: transaction.terminalId,
             });
             if (printed) {
                 voucherCopiesPrinted += 1;

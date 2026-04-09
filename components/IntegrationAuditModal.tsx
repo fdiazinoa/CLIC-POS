@@ -27,6 +27,8 @@ const ACTION_LABELS: Record<PaymentIntegrationAuditAction, string> = {
   REFUND: 'Refund',
   GET_LAST_TRX: 'GetLastTrx',
   PINPAD_INIT: 'PinpadInit',
+  PINPAD_TRANSACTION_TOTALS: 'PinpadTransactionTotals',
+  PINPAD_SETTLE: 'PinpadSettle',
 };
 
 const IntegrationAuditModal: React.FC<IntegrationAuditModalProps> = ({ integration, onClose }) => {
@@ -173,7 +175,7 @@ const IntegrationAuditModal: React.FC<IntegrationAuditModalProps> = ({ integrati
               <ShieldAlert className="mx-auto text-slate-300" size={42} />
               <h3 className="mt-4 text-lg font-black text-slate-700">Todavía no hay eventos para mostrar</h3>
               <p className="mt-2 text-sm text-slate-500">
-                Aquí se registrarán eventos como <strong>Sale</strong>, <strong>GetLastTrx</strong>, <strong>Refund</strong> o <strong>PinpadInit</strong>.
+                Aquí se registrarán eventos como <strong>Sale</strong>, <strong>GetLastTrx</strong>, <strong>PinpadTransactionTotals</strong> o <strong>PinpadSettle</strong>.
               </p>
             </div>
           ) : (
