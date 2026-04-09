@@ -4,6 +4,32 @@ Registro de builds **release firmados** validados. El código fuente de referenc
 
 ---
 
+## 1.0.299 (versionCode 299) — 2026
+
+| Campo | Valor |
+|--------|--------|
+| **APK** | `Clic-Pos-1.0.299-release.apk` |
+| **Metadata** | `output-metadata.json` |
+| **versionCode** | 299 |
+| **versionName** | 1.0.299 |
+| **Rama de build** | `hotfix/apk-1.0.299-backend-license-guard` |
+| **Commit build** | `d01bce6` |
+| **Base desde `develop`** | `09408fa` |
+| **Worktree usada** | `/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite` |
+| **SHA-256** | `45819f013c09a6c5a69770b5b7ce634b3d73688be3ad10f1c72838d998e8dc2b` |
+| **Firma release** | Válida (`CN=CLIC POS, OU=Mobile...`) |
+| **Nota funcional** | Sin cambios de UI en POS para licencias; la protección `403 Forbidden` queda heredada desde backend API. |
+
+### Verificación ejecutada
+
+- `npx tsc -b` — OK
+- `npm run build` — OK
+- `npx cap sync android` — OK
+- `./gradlew clean assembleRelease` — OK
+- `apksigner verify --print-certs` — OK
+
+---
+
 ## 1.0.298 (versionCode 298) — 2026
 
 | Campo | Valor |
