@@ -459,6 +459,8 @@ export interface TerminalConfigSnapshot {
     items?: Record<string, any>[];
     customers?: Customer[];
     suppliers?: Supplier[];
+    purchaseOrders?: PurchaseOrder[];
+    transfers?: StockTransfer[];
     [key: string]: any;
   };
   resolved?: TerminalConfigResolvedSnapshot;
@@ -1462,6 +1464,7 @@ export interface StockTransfer {
   syncError?: string;
   updatedAt?: string;
   discrepancyReason?: string;
+  syncSource?: 'LOCAL' | 'ERP_SNAPSHOT';
 }
 
 export type PromotionType = 'DISCOUNT' | 'BOGO' | 'HAPPY_HOUR' | 'CONDITIONAL_TARGET' | 'BUNDLE';
@@ -1593,6 +1596,7 @@ export interface PurchaseOrderItem {
 
 export interface PurchaseOrder {
   id: string;
+  code?: string;
   supplierId: string;
   supplierName?: string; // Denormalized for reports
   warehouseId?: string;
@@ -1603,6 +1607,7 @@ export interface PurchaseOrder {
   items: PurchaseOrderItem[];
   totalCost: number;
   sentAt?: string; // For email tracking
+  syncSource?: 'LOCAL' | 'ERP_SNAPSHOT';
 }
 
 export interface Reception {
