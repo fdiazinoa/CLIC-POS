@@ -23,6 +23,8 @@ Para evitar releases incompletos, usa siempre esta jerarquía:
 Detalle operativo: [docs/APK_RELEASE_CHECKLIST.md](./docs/APK_RELEASE_CHECKLIST.md).
 Protocolo de coordinación con agentes: [docs/AGENT_RELEASE_PROTOCOL.md](./docs/AGENT_RELEASE_PROTOCOL.md).
 
+**Último APK release documentado:** `1.0.295` (versionCode 295), PR fix #128, merge en `develop` `9b4849b`, rama de build `hotfix/apk-1.0.295-warehouse-activation`, commit build `f3f31d1`, SHA-256 y verificación en [docs/RELEASES.md](./docs/RELEASES.md).
+
 ## Ramas
 
 - Base habitual: **`develop`**. Las ramas **`fix/*`** y **`feat/*`** (o `codex/*`) son para PRs; el nombre describe el cambio.

@@ -996,6 +996,7 @@ export interface ProductOperationalFlags {
 }
 
 export type ProductType = 'MATERIA_PRIMA' | 'PRODUCTO_TERMINADO' | 'RECETA' | 'KIT' | 'PRODUCT' | 'SERVICE';
+export type KitInventoryMode = 'FINISHED_GOOD' | 'COMPONENT_CONSUMPTION';
 
 export interface RecipeDetail {
   id: string;
@@ -1028,6 +1029,7 @@ export interface Product {
   theoreticalCost?: number; // New calculated cost
   type?: ProductType;
   isInventoriable?: boolean;
+  kitInventoryMode?: KitInventoryMode;
   recipeDetails?: RecipeDetail[]; // The BOM
   images: string[];
   attributes: ProductAttribute[];
@@ -1603,6 +1605,10 @@ export interface PaymentEntry {
   source_display_id?: string;
   source_terminal_id?: string;
   device_id?: string;
+  /** Integración de pasarela (ej. AZUL MCM) */
+  gatewayProvider?: string;
+  gatewayAuthorizationCode?: string;
+  gatewayReference?: string;
 }
 
 export interface CustomerTransaction {

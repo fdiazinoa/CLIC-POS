@@ -47,7 +47,7 @@ import { validateTerminalSeries } from '../utils/seriesValidation';
 import { applyPromotions } from '../utils/promotionEngine';
 import { calculatePointsEarned, getPrimaryLoyaltyCard } from '../utils/loyaltyEngine';
 import { couponService } from '../utils/couponService';
-import { transferStockToCommitted } from '../utils/inventoryEngine';
+import { calculateInventoryDeductions, resolveInventoryConsumptionMode, transferStockToCommitted } from '../utils/inventoryEngine';
 import { useSupervisorAuth } from '../hooks/useSupervisorAuth';
 import SupervisorModal from './SupervisorModal';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -978,6 +978,22 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, [customers, onSelectCustomer]);
 
+   const getCartInventoryDemandByProduct = useCallback((items: CartItem[]): Record<string, number> => {
+      const demand: Record<string, number> = {};
+
+      for (const cartItem of items || []) {
+         const quantity = Number(cartItem.quantity || 0);
+         if (quantity <= 0) continue;
+
+         const deductions = calculateInventoryDeductions(cartItem, quantity, products);
+         for (const deduction of deductions) {
+            demand[deduction.productId] = (demand[deduction.productId] || 0) + Math.max(0, Number(deduction.quantityToDeduct || 0));
+         }
+      }
+
+      return demand;
+   }, [products]);
+
    const canAddItemToCart = useCallback((product: Product, quantityToAdd: number = 1): boolean => {
       // 0. Sellable check
       if (product.is_sellable === false) {
@@ -1009,6 +1025,39 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       // 2. Stock validation
       const trackInventory = product.operationalFlags?.trackInventory ?? config.features.stockTracking;
       if (trackInventory) {
+         const consumptionMode = resolveInventoryConsumptionMode(product);
+         if (consumptionMode === 'COMPONENTS' && quantityToAdd > 0) {
+            const currentCartDemand = getCartInventoryDemandByProduct(cart as CartItem[]);
+            const componentDeductions = calculateInventoryDeductions(product, quantityToAdd, products);
+            const consolidatedDemand = componentDeductions.reduce<Record<string, number>>((acc, row) => {
+               acc[row.productId] = (acc[row.productId] || 0) + Math.max(0, Number(row.quantityToDeduct || 0));
+               return acc;
+            }, {});
+
+            for (const [componentId, qtyNeeded] of Object.entries(consolidatedDemand)) {
+               const component = products.find((candidate) => candidate.id === componentId);
+               if (!component) {
+                  setErrorToast(`El kit ${product.name} no tiene completos sus componentes en POS.`);
+                  setTimeout(() => setErrorToast(null), 3500);
+                  return false;
+               }
+
+               const currentStock = getScopedProductStock(component);
+               const committedQty = committedByProduct[componentId] || 0;
+               const inCartQty = currentCartDemand[componentId] || 0;
+               const availableStock = Math.max(0, currentStock - committedQty);
+               const totalRequested = inCartQty + qtyNeeded;
+
+               if (totalRequested > availableStock) {
+                  setErrorToast(`Stock insuficiente en componente ${component.name}. Disponible: ${availableStock}. Requerido: ${totalRequested}`);
+                  setTimeout(() => setErrorToast(null), 3500);
+                  return false;
+               }
+            }
+
+            return true;
+         }
+
          const productAllowsNegative = product.operationalFlags?.allowNegativeStock ?? false;
          const terminalAllowsNegative = activeTerminalConfig?.workflow?.inventory?.allowNegativeStock ?? false;
 
@@ -1029,7 +1078,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return true;
-   }, [config.features.stockTracking, activeTerminalConfig, cart, committedByProduct, getScopedProductStock, getTerminalWarehouseName, productHasActiveTariff, productMatchesTerminalWarehouse]);
+   }, [config.features.stockTracking, activeTerminalConfig, cart, committedByProduct, getCartInventoryDemandByProduct, getScopedProductStock, getTerminalWarehouseName, productHasActiveTariff, productMatchesTerminalWarehouse, products]);
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 

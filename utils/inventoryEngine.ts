@@ -5,21 +5,48 @@ import { getConversionFactor } from './units';
 
 // ... existing code ...
 
+const normalizeKitInventoryMode = (value: unknown): Product['kitInventoryMode'] | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim().toUpperCase();
+    if (normalized === 'FINISHED_GOOD' || normalized === 'COMPONENT_CONSUMPTION') {
+        return normalized;
+    }
+    return undefined;
+};
+
+export const resolveInventoryConsumptionMode = (item: Pick<Product, 'type' | 'recipeDetails' | 'isInventoriable' | 'kitInventoryMode'>): 'DIRECT' | 'COMPONENTS' => {
+    const type = String(item?.type || '').trim().toUpperCase();
+    const recipeDetails = Array.isArray(item?.recipeDetails) ? item.recipeDetails : [];
+    const explicitMode = normalizeKitInventoryMode(item?.kitInventoryMode);
+
+    if (explicitMode === 'FINISHED_GOOD') return 'DIRECT';
+    if (explicitMode === 'COMPONENT_CONSUMPTION') return 'COMPONENTS';
+
+    if (recipeDetails.length === 0) return 'DIRECT';
+    if (type === 'RECETA') return 'COMPONENTS';
+    if (type === 'KIT') {
+        return item?.isInventoriable === false ? 'COMPONENTS' : 'DIRECT';
+    }
+
+    return 'COMPONENTS';
+};
+
 /**
  * Helper to recursively calculate inventory deductions for a sold item.
  * Handles nested recipes, batch yields, and UOM conversions.
  * 
  * Returns a FLAT list of simple products (ingredients) to deduct from inventory.
  */
-export async function calculateInventoryDeductions(
+export function calculateInventoryDeductions(
     item: CartItem | Product,
     quantitySold: number,
     allProducts: Product[]
-): Promise<{ productId: string, quantityToDeduct: number }[]> {
+): { productId: string, quantityToDeduct: number }[] {
     const deductions: { productId: string, quantityToDeduct: number }[] = [];
+    const consumptionMode = resolveInventoryConsumptionMode(item);
 
     // 1. If it's a simple product (no recipe), deduct directly
-    if (!item.recipeDetails || item.recipeDetails.length === 0) {
+    if (consumptionMode === 'DIRECT' || !item.recipeDetails || item.recipeDetails.length === 0) {
         deductions.push({
             productId: item.id,
             quantityToDeduct: quantitySold
@@ -48,7 +75,7 @@ export async function calculateInventoryDeductions(
         const totalIngredientNeeded = ingredientQtyPerBatch * productionBatches;
 
         // Recurse (Deep Recipe Support)
-        const subDeductions = await calculateInventoryDeductions(ingredient, totalIngredientNeeded, allProducts);
+        const subDeductions = calculateInventoryDeductions(ingredient, totalIngredientNeeded, allProducts);
         deductions.push(...subDeductions);
     }
 

@@ -394,6 +394,16 @@ export const buildEscPosTicketPayload = (
     (transaction.payments || []).forEach((payment: any) => {
       const methodLabel = payment?.methodLabel || payment?.methodId || payment?.method || 'PAGO';
       pushPair(chunks, methodLabel, formatMoney(config.currencySymbol || '$', Number(payment?.amount || 0)), width);
+      const showAzulRefs =
+        payment?.gatewayProvider === 'AZUL' || payment?.gatewayAuthorizationCode || payment?.gatewayReference;
+      if (showAzulRefs) {
+        if (payment?.gatewayAuthorizationCode) {
+          pushTextLines(chunks, splitLines(`AUT No.: ${payment.gatewayAuthorizationCode}`, width));
+        }
+        if (payment?.gatewayReference) {
+          pushTextLines(chunks, splitLines(`Ref No.: ${payment.gatewayReference}`, width));
+        }
+      }
     });
 
     if (change > 0.0001) {
