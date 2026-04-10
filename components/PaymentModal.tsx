@@ -327,10 +327,6 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    const activeIsCxCCredit = activeRuntimeMethod === 'CREDIT';
    const activeIsIntegratedCard = activePaymentMethod?.definition?.type === 'CARD'
       && activePaymentMethod.definition.integrationMode === 'INTEGRATED';
-   const activeGatewayIntegration = activeIsIntegratedCard ? activePaymentMethod?.integration : undefined;
-   const activeAzulIntegration = activeGatewayIntegration?.provider === 'AZUL'
-      ? activeGatewayIntegration
-      : undefined;
    const activeIsLoyaltyRedeem = activePaymentMethod
       ? isLoyaltyRedeemMethod(activePaymentMethod.type, activePaymentMethod.label, activePaymentMethod.id)
       : false;
@@ -422,13 +418,61 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       return integration?.name?.trim() || integration?.provider || fallbackProvider || 'Procesador de pago';
    };
 
-   const buildLocalPaymentEntry = (valInSelectedCurrency: number, amountInBase: number): PaymentEntry => ({
+   const getMethodRuntimeType = (method: ResolvedPaymentMethod): PaymentMethod =>
+      resolvePaymentMethodTypeForRuntime(method.type, method.label, method.id);
+
+   const isIntegratedCardMethod = (method?: ResolvedPaymentMethod | null): boolean =>
+      method?.definition?.type === 'CARD' && method.definition.integrationMode === 'INTEGRATED';
+
+   const resolvePaymentMethodForEntry = (payment: PaymentEntry): ResolvedPaymentMethod | undefined => {
+      if (payment.methodId) {
+         const exactMethod = configuredMethods.find((method) => method.id === payment.methodId);
+         if (exactMethod) return exactMethod;
+      }
+
+      return configuredMethods.find((method) => {
+         const sameType = getMethodRuntimeType(method) === payment.method;
+         const sameLabel = payment.methodLabel ? method.label === payment.methodLabel : true;
+         return sameType && sameLabel;
+      });
+   };
+
+   const resolveGatewayIntegrationForPayment = (
+      payment: PaymentEntry,
+      method?: ResolvedPaymentMethod
+   ): PaymentIntegrationDefinition | undefined => {
+      if (payment.gatewayIntegrationId) {
+         const integrationById = config?.integrations?.find((integration) => integration.id === payment.gatewayIntegrationId);
+         if (integrationById) return integrationById;
+      }
+
+      if (method?.integration) {
+         return method.integration;
+      }
+
+      if (payment.gatewayProvider) {
+         return config?.integrations?.find((integration) => integration.provider === payment.gatewayProvider);
+      }
+
+      return undefined;
+   };
+
+   const calculateGatewayTaxAmount = (amountInBase: number): number =>
+      absTotal > 0
+         ? roundToTwo(Math.min(amountInBase, absTotal) / absTotal * Math.max(0, taxAmount))
+         : 0;
+
+   const buildLocalPaymentEntry = (
+      method: ResolvedPaymentMethod,
+      valInSelectedCurrency: number,
+      amountInBase: number
+   ): PaymentEntry => ({
       id: createPaymentId(),
-      method: activeRuntimeMethod,
-      methodId: activePaymentMethod?.id,
-      methodLabel: activePaymentMethod?.label,
-      methodIcon: activePaymentMethod?.iconName,
-      creditOverrideApproved: activeIsCxCCredit && canBypassCreditLimit ? true : undefined,
+      method: getMethodRuntimeType(method),
+      methodId: method.id,
+      methodLabel: method.label,
+      methodIcon: method.iconName,
+      creditOverrideApproved: getMethodRuntimeType(method) === 'CREDIT' && canBypassCreditLimit ? true : undefined,
       amount: roundToTwo(amountInBase),
       timestamp: new Date(),
       currencyCode: selectedCurrency.code,
@@ -436,33 +480,63 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       exchangeRate: selectedCurrency.rate,
    });
 
-   const authorizeIntegratedCardPayment = async (valInSelectedCurrency: number, amountInBase: number): Promise<PaymentEntry> => {
-      if (!activePaymentMethod || !activeGatewayIntegration) {
+   const buildPendingIntegratedCardPayment = (
+      method: ResolvedPaymentMethod,
+      valInSelectedCurrency: number,
+      amountInBase: number
+   ): PaymentEntry => {
+      if (!isIntegratedCardMethod(method) || !method.integration) {
          throw new Error('La tarjeta integrada no tiene una integración asignada.');
-      }
-
-      if (!activeAzulIntegration) {
-         throw new Error(`La integración ${activeGatewayIntegration.provider} todavía no está soportada en caja.`);
       }
 
       if (amountInBase > remaining + 0.01) {
          throw new Error('La tarjeta integrada no puede cobrar más que el restante del ticket.');
       }
 
-      const proportionalTax = absTotal > 0
-         ? roundToTwo(Math.min(amountInBase, absTotal) / absTotal * Math.max(0, taxAmount))
-         : 0;
+      if (method.integration.provider !== 'AZUL') {
+         throw new Error(`La integración ${method.integration.provider} todavía no está soportada en caja.`);
+      }
+
+      return {
+         ...buildLocalPaymentEntry(method, valInSelectedCurrency, amountInBase),
+         gatewayProvider: method.integration.provider,
+         gatewayIntegrationId: method.integration.id,
+         gatewayTransactionType: 'SALE',
+         gatewayStatus: 'PENDING',
+         gatewayResponseMessage: 'Pendiente de autorización al finalizar.',
+      };
+   };
+
+   const authorizeIntegratedCardPayment = async (payment: PaymentEntry): Promise<PaymentEntry> => {
+      const method = resolvePaymentMethodForEntry(payment);
+      const integration = resolveGatewayIntegrationForPayment(payment, method);
+
+      if (!integration) {
+         throw new Error('La tarjeta integrada no tiene una integración asignada.');
+      }
+
+      if (integration.provider !== 'AZUL') {
+         throw new Error(`La integración ${integration.provider} todavía no está soportada en caja.`);
+      }
+
+      const amountInBase = roundToTwo(Number(payment.amount || 0));
+      const valInSelectedCurrency = roundToTwo(
+         Number(payment.amountOriginal || 0) > 0
+            ? Number(payment.amountOriginal)
+            : amountInBase / Number(payment.exchangeRate || selectedCurrency.rate || 1)
+      );
+      const proportionalTax = calculateGatewayTaxAmount(amountInBase);
       const orderNumber = createAzulOrderNumber();
 
       setIsProcessingGateway(true);
       setFinalizeError(null);
       setGatewayProgress({
          title: 'Procesando pago',
-         providerLabel: resolveGatewayDisplayName(activeAzulIntegration, 'AZUL'),
+         providerLabel: resolveGatewayDisplayName(integration, 'AZUL'),
          detail: 'Espere la confirmación del procesador.',
       });
       try {
-         const azulResponse = await azulMcmService.sale(activeAzulIntegration, {
+         const azulResponse = await azulMcmService.sale(integration, {
             amount: amountInBase,
             itbis: proportionalTax,
             orderNumber,
@@ -472,8 +546,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          if (config) {
             await dispatchAuditEventConfigUpdate(
                config,
-               activeAzulIntegration.id,
-               createPaymentIntegrationAuditEvent(activeAzulIntegration, {
+               integration.id,
+               createPaymentIntegrationAuditEvent(integration, {
                   action: 'SALE',
                   status: 'SUCCESS',
                   message: azulResponse.responseMessage || 'Pago aprobado por el procesador.',
@@ -483,8 +557,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                      OrderNumber: orderNumber,
                   },
                   responseDetails: {
-                     MerchantId: azulResponse.merchantId || activeAzulIntegration.merchantId || '',
-                     TerminalId: azulResponse.terminalId || activeAzulIntegration.terminalId || '',
+                     MerchantId: azulResponse.merchantId || integration.merchantId || '',
+                     TerminalId: azulResponse.terminalId || integration.terminalId || '',
                      EntryMode: azulResponse.entryMode || '',
                      CardBrand: azulResponse.cardBrand || '',
                   },
@@ -503,9 +577,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          }
 
          return {
-            ...buildLocalPaymentEntry(valInSelectedCurrency, amountInBase),
+            ...payment,
             gatewayProvider: 'AZUL',
-            gatewayIntegrationId: activeAzulIntegration.id,
+            gatewayIntegrationId: integration.id,
             gatewayTransactionType: 'SALE',
             gatewayStatus: azulResponse.approved ? 'APPROVED' : 'DECLINED',
             gatewayResponseCode: azulResponse.responseCode,
@@ -526,7 +600,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             gatewayReceiptMerchant: azulResponse.receiptMerchant,
             gatewayReceiptClient: azulResponse.receiptClient,
             gatewaySignatureData: azulResponse.signatureData,
-            gatewayRequireSignature: azulResponse.requireSignature || !!activePaymentMethod.definition?.requiresSignature,
+            gatewayRequireSignature: azulResponse.requireSignature || !!method?.definition?.requiresSignature,
             gatewayRawResponse: azulResponse.rawResponse,
          };
       } catch (error) {
@@ -534,8 +608,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             const gatewayError = error instanceof AzulGatewayError ? error : null;
             await dispatchAuditEventConfigUpdate(
                config,
-               activeAzulIntegration.id,
-               createPaymentIntegrationAuditEvent(activeAzulIntegration, {
+               integration.id,
+               createPaymentIntegrationAuditEvent(integration, {
                   action: 'SALE',
                   status: 'FAILED',
                   message: error instanceof Error ? error.message : 'No se pudo completar la venta integrada.',
@@ -545,8 +619,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                      OrderNumber: orderNumber,
                   },
                   responseDetails: {
-                     MerchantId: gatewayError?.normalized?.merchantId || activeAzulIntegration.merchantId || '',
-                     TerminalId: gatewayError?.normalized?.terminalId || activeAzulIntegration.terminalId || '',
+                     MerchantId: gatewayError?.normalized?.merchantId || integration.merchantId || '',
+                     TerminalId: gatewayError?.normalized?.terminalId || integration.terminalId || '',
                      EntryMode: gatewayError?.normalized?.entryMode || '',
                      CardBrand: gatewayError?.normalized?.cardBrand || '',
                   },
@@ -570,12 +644,29 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       }
    };
 
-   const buildPaymentEntry = async (valInSelectedCurrency: number): Promise<PaymentEntry> => {
+   const buildPaymentEntry = (method: ResolvedPaymentMethod, valInSelectedCurrency: number): PaymentEntry => {
       const amountInBase = roundToTwo(valInSelectedCurrency * selectedCurrency.rate);
-      if (activeIsIntegratedCard) {
-         return authorizeIntegratedCardPayment(valInSelectedCurrency, amountInBase);
+      if (isIntegratedCardMethod(method)) {
+         return buildPendingIntegratedCardPayment(method, valInSelectedCurrency, amountInBase);
       }
-      return buildLocalPaymentEntry(valInSelectedCurrency, amountInBase);
+      return buildLocalPaymentEntry(method, valInSelectedCurrency, amountInBase);
+   };
+
+   const paymentRequiresGatewayAuthorization = (payment: PaymentEntry): boolean =>
+      payment.gatewayTransactionType === 'SALE' &&
+      payment.gatewayStatus === 'PENDING' &&
+      !!payment.gatewayProvider;
+
+   const authorizePendingGatewayPayments = async (entries: PaymentEntry[]): Promise<PaymentEntry[]> => {
+      const processedEntries: PaymentEntry[] = [];
+      for (const entry of entries) {
+         if (paymentRequiresGatewayAuthorization(entry)) {
+            processedEntries.push(await authorizeIntegratedCardPayment(entry));
+         } else {
+            processedEntries.push(entry);
+         }
+      }
+      return processedEntries;
    };
 
    const handleAddPayment = async (amountOverride?: number) => {
@@ -615,7 +706,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
 
       try {
          setFinalizeError(null);
-         const newPayment = await buildPaymentEntry(valInSelectedCurrency);
+         const newPayment = buildPaymentEntry(activePaymentMethod, valInSelectedCurrency);
          setPayments((prev) => [...prev, newPayment]);
          setInputAmount(
             formatRoundedInput(valInSelectedCurrency, activeForeignCurrencyRounding, selectedCurrency.code, baseCurrency.code)
@@ -678,7 +769,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                }
             }
 
-            const autoPayment = await buildPaymentEntry(typedAmountInSelectedCurrency);
+            const autoPayment = buildPaymentEntry(activePaymentMethod, typedAmountInSelectedCurrency);
             paymentsToConfirm = [...payments, autoPayment];
             setPayments(paymentsToConfirm);
          }
@@ -712,7 +803,8 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             const blockedPayment = paymentsToConfirm.find(p =>
                p.method === 'CREDIT' ||
                p.method === 'WALLET' ||
-               isLoyaltyRedeemMethod(p.method, p.methodLabel, p.methodId)
+               isLoyaltyRedeemMethod(p.method, p.methodLabel, p.methodId) ||
+               paymentRequiresGatewayAuthorization(p)
             );
             if (blockedPayment) {
                setFinalizeError(`El pago con ${blockedPayment.methodLabel} requiere conexión con la Terminal Master.`);
@@ -720,6 +812,9 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                return;
             }
          }
+
+         paymentsToConfirm = await authorizePendingGatewayPayments(paymentsToConfirm);
+         setPayments(paymentsToConfirm);
 
          let slowProcessTimer: number | undefined;
          try {
@@ -1017,8 +1112,10 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                                     <span className="text-[9px] md:text-[10px] text-gray-400 font-bold">{p.amountOriginal} {p.currencyCode}</span>
                                  )}
                                  {p.gatewayProvider === 'AZUL' && (
-                                    <span className="text-[9px] md:text-[10px] text-indigo-500 font-bold block">
-                                       AUT {p.gatewayAuthorizationCode || '-'} · REF {p.gatewayReference || '-'}
+                                    <span className={`text-[9px] md:text-[10px] font-bold block ${p.gatewayStatus === 'PENDING' ? 'text-amber-600' : 'text-indigo-500'}`}>
+                                       {p.gatewayStatus === 'PENDING'
+                                          ? 'PENDIENTE DE COBRO AL FINALIZAR'
+                                          : `AUT ${p.gatewayAuthorizationCode || '-'} · REF ${p.gatewayReference || '-'}`}
                                     </span>
                                  )}
                               </div>
@@ -1188,7 +1285,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   >
                      <Plus size={28} className="md:w-8 md:h-8" />
                      <span className="text-[10px] tracking-widest uppercase">
-                        {isProcessingGateway ? 'Procesando' : activeIsIntegratedCard ? 'Cobrar' : 'Agregar'}
+                        {isProcessingGateway ? 'Procesando' : 'Agregar'}
                      </span>
                   </button>
 
