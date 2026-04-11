@@ -5,6 +5,7 @@ import path from 'path';
 import { createHash } from 'crypto';
 import { emitSyncEvent } from '../socket.js';
 import { coerceTransactionItemsForErp } from '../../services/sync/erpOutboundPayloads.js';
+import { normalizeTransactionForSync } from '../../services/sync/sourceIdentity.js';
 import { forwardTransactionsToErpInbox } from '../services/erpInboxForward.js';
 
 const router = express.Router();
@@ -165,6 +166,12 @@ const buildProductImageHash = (product: any): string => {
 const toFiniteNumber = (value: any, fallback = 0): number => {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
+};
+
+const toNullableFiniteNumber = (value: any): number | null => {
+    if (value === undefined || value === null || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
 };
 
 const toNumericMap = (value: any): Record<string, number> => {
@@ -764,7 +771,7 @@ const normalizeTransactionIdentity = (txn: any) => {
 };
 
 const canonicalizeTransactionForLocalPersistence = (txn: any) => {
-    const normalizedTxn = normalizeTransactionIdentity(txn);
+    const normalizedTxn = normalizeTransactionForSync(normalizeTransactionIdentity(txn));
     const technicalId = normalizedTxn.source_transaction_id || normalizedTxn.id;
 
     return {
@@ -1604,8 +1611,8 @@ router.post('/transactions', async (req, res) => {
         const persistedPendingItems: any[] = [];
         const now = new Date().toISOString();
         db.transaction(() => {
-            const stmt = db.prepare(`INSERT OR IGNORE INTO transactions (id, globalSequence, displayId, documentType, seriesId, seriesNumber, date, items, total, payments, userId, userName, terminalId, status, customerId, customerName, customerSnapshot, taxAmount, netAmount, discountAmount, isTaxIncluded, ncf, ncfType, relatedTransactions, originalTransactionId, refundReason, affectedInvoiceNumber, affectedNCF, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-            const updateStmt = db.prepare(`UPDATE transactions SET globalSequence = ?, displayId = ?, documentType = ?, seriesId = ?, seriesNumber = ?, date = ?, items = ?, total = ?, payments = ?, userId = ?, userName = ?, terminalId = ?, status = ?, customerId = ?, customerName = ?, customerSnapshot = ?, taxAmount = ?, netAmount = ?, discountAmount = ?, isTaxIncluded = ?, ncf = ?, ncfType = ?, relatedTransactions = ?, originalTransactionId = ?, refundReason = ?, affectedInvoiceNumber = ?, affectedNCF = ?, syncStatus = ?, syncError = ? WHERE id = ?`);
+            const stmt = db.prepare(`INSERT OR IGNORE INTO transactions (id, globalSequence, displayId, documentType, seriesId, seriesNumber, date, items, total, payments, userId, userName, terminalId, status, customerId, customerName, customerSnapshot, taxAmount, netAmount, discountAmount, isTaxIncluded, ncf, ncfType, relatedTransactions, originalTransactionId, refundReason, affectedInvoiceNumber, affectedNCF, settlement_currency_code, settlement_exchange_rate, settlement_received_original, settlement_received_base, settlement_applied_base, settlement_change_base, settlement_change_currency_code, syncStatus, syncError) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            const updateStmt = db.prepare(`UPDATE transactions SET globalSequence = ?, displayId = ?, documentType = ?, seriesId = ?, seriesNumber = ?, date = ?, items = ?, total = ?, payments = ?, userId = ?, userName = ?, terminalId = ?, status = ?, customerId = ?, customerName = ?, customerSnapshot = ?, taxAmount = ?, netAmount = ?, discountAmount = ?, isTaxIncluded = ?, ncf = ?, ncfType = ?, relatedTransactions = ?, originalTransactionId = ?, refundReason = ?, affectedInvoiceNumber = ?, affectedNCF = ?, settlement_currency_code = ?, settlement_exchange_rate = ?, settlement_received_original = ?, settlement_received_base = ?, settlement_applied_base = ?, settlement_change_base = ?, settlement_change_currency_code = ?, syncStatus = ?, syncError = ? WHERE id = ?`);
             const byIdStmt = db.prepare(`SELECT id, displayId, terminalId FROM transactions WHERE id = ?`);
             const byDisplayIdStmt = db.prepare(`SELECT id, displayId, terminalId FROM transactions WHERE displayId = ?`);
             const byNcfStmt = db.prepare(`SELECT id, displayId, terminalId, ncf FROM transactions WHERE ncf = ?`);
@@ -1640,6 +1647,13 @@ router.post('/transactions', async (req, res) => {
                     txn.refundReason,
                     txn.affectedInvoiceNumber,
                     txn.affectedNCF,
+                    normalizeIdentityString(txn.settlement_currency_code) || normalizeIdentityString(txn.settlementCurrencyCode),
+                    toNullableFiniteNumber(txn.settlement_exchange_rate ?? txn.settlementExchangeRate),
+                    toNullableFiniteNumber(txn.settlement_received_original ?? txn.settlementReceivedOriginal),
+                    toNullableFiniteNumber(txn.settlement_received_base ?? txn.settlementReceivedBase),
+                    toNullableFiniteNumber(txn.settlement_applied_base ?? txn.settlementAppliedBase),
+                    toNullableFiniteNumber(txn.settlement_change_base ?? txn.settlementChangeBase),
+                    normalizeIdentityString(txn.settlement_change_currency_code) || normalizeIdentityString(txn.settlementChangeCurrencyCode),
                     txn.syncStatus,
                     txn.syncError
                 );
@@ -1673,6 +1687,13 @@ router.post('/transactions', async (req, res) => {
                     txn.refundReason,
                     txn.affectedInvoiceNumber,
                     txn.affectedNCF,
+                    normalizeIdentityString(txn.settlement_currency_code) || normalizeIdentityString(txn.settlementCurrencyCode),
+                    toNullableFiniteNumber(txn.settlement_exchange_rate ?? txn.settlementExchangeRate),
+                    toNullableFiniteNumber(txn.settlement_received_original ?? txn.settlementReceivedOriginal),
+                    toNullableFiniteNumber(txn.settlement_received_base ?? txn.settlementReceivedBase),
+                    toNullableFiniteNumber(txn.settlement_applied_base ?? txn.settlementAppliedBase),
+                    toNullableFiniteNumber(txn.settlement_change_base ?? txn.settlementChangeBase),
+                    normalizeIdentityString(txn.settlement_change_currency_code) || normalizeIdentityString(txn.settlementChangeCurrencyCode),
                     txn.syncStatus,
                     txn.syncError,
                     targetId

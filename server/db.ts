@@ -87,6 +87,24 @@ const SCOPED_TABLE_COLUMNS: Record<string, string[]> = {
     wallet_transactions: ['tenant_id TEXT', 'company_id TEXT', 'store_id TEXT'],
 };
 
+const TRANSACTION_SETTLEMENT_COLUMN_DEFINITIONS = [
+    ['settlement_currency_code', 'TEXT'],
+    ['settlement_exchange_rate', 'REAL'],
+    ['settlement_received_original', 'REAL DEFAULT 0'],
+    ['settlement_received_base', 'REAL DEFAULT 0'],
+    ['settlement_applied_base', 'REAL DEFAULT 0'],
+    ['settlement_change_base', 'REAL DEFAULT 0'],
+    ['settlement_change_currency_code', 'TEXT'],
+] as const;
+
+const ensureTransactionSettlementColumns = () => {
+    for (const table of ['transactions', 'transaction_history']) {
+        for (const [column, definition] of TRANSACTION_SETTLEMENT_COLUMN_DEFINITIONS) {
+            ensureColumn(table, column, definition);
+        }
+    }
+};
+
 const applyAuditAndScopeColumns = () => {
     for (const table of SYNC_AUDIT_TABLES) {
         ensureColumn(table, 'updated_at', 'TEXT');
@@ -325,6 +343,7 @@ ensureColumn('customers', 'imageUrl', 'TEXT');
 ensureColumn('customers', 'imageVersion', 'TEXT');
 
 applyAuditAndScopeColumns();
+ensureTransactionSettlementColumns();
 ensureSyncIndexes();
 backfillAuditColumns();
 
