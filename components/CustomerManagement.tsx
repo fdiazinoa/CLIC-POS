@@ -1836,6 +1836,19 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             const isRefundDoc = isRefundLikeTransaction(tx);
             const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
             const affectedNCF = (tx.affectedNCF || '').toString().trim();
+            const settlementCurrencyCode = String(tx.settlementCurrencyCode || tx.settlement_currency_code || paymentSettlement.settlementCurrencyCode || '').trim().toUpperCase() || baseCurrency.code;
+            const settlementExchangeRate = Number((tx.settlementExchangeRate ?? tx.settlement_exchange_rate ?? paymentSettlement.settlementExchangeRate ?? 1)) || 1;
+            const settlementReceivedOriginal = Number((tx.settlementReceivedOriginal ?? tx.settlement_received_original ?? paymentSettlement.settlementReceivedOriginal ?? paymentSettlement.totalReceivedBase ?? 0)) || 0;
+            const settlementReceivedBase = Number((tx.settlementReceivedBase ?? tx.settlement_received_base ?? paymentSettlement.settlementReceivedBase ?? 0)) || 0;
+            const settlementAppliedBase = Number((tx.settlementAppliedBase ?? tx.settlement_applied_base ?? paymentSettlement.settlementAppliedBase ?? 0)) || 0;
+            const settlementChangeBase = Number((tx.settlementChangeBase ?? tx.settlement_change_base ?? paymentSettlement.settlementChangeBase ?? 0)) || 0;
+            const shouldShowSettlementHero =
+               !isRefundDoc && (
+                  settlementCurrencyCode !== baseCurrency.code
+                  || settlementChangeBase > 0.009
+                  || Math.abs(settlementReceivedBase - settlementAppliedBase) > 0.009
+               );
+            const settlementCurrencySymbol = resolveCurrencySymbol(config, settlementCurrencyCode, config.currencySymbol);
             const terminalConfig = config.terminals?.find(t => t.id === tx.terminalId)?.config;
             const fiscalSummary = calculateTransactionFiscalSummary(tx, config, { terminalConfig });
             const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
@@ -1886,6 +1899,23 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                  <p className="text-xs font-bold text-gray-700">{tx.userName || 'Sistema'}</p>
                               </div>
                            </div>
+                           {shouldShowSettlementHero && (
+                              <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4">
+                                 <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Liquidación del Cobro</p>
+                                 <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-[11px] font-bold text-indigo-900">
+                                    <span>
+                                       Recibido: {settlementCurrencySymbol}{settlementReceivedOriginal.toFixed(2)} {settlementCurrencyCode}
+                                    </span>
+                                    {settlementCurrencyCode !== baseCurrency.code && (
+                                       <span>Tasa: {config.currencySymbol}{settlementExchangeRate.toFixed(2)}</span>
+                                    )}
+                                    <span>Aplicado: {config.currencySymbol}{settlementAppliedBase.toFixed(2)}</span>
+                                    {settlementChangeBase > 0.009 && (
+                                       <span>Cambio: {config.currencySymbol}{settlementChangeBase.toFixed(2)}</span>
+                                    )}
+                                 </div>
+                              </div>
+                           )}
                         </section>
 
                         <section>

@@ -2133,6 +2133,12 @@ export interface Collection {
   date: string;
   totalAmount: number;
   method: CollectionMethod;
+  currencyCode?: string;
+  exchangeRate?: number;
+  receivedAmountOriginal?: number;
+  receivedAmountBase?: number;
+  appliedAmountBase?: number;
+  unappliedAmountBase?: number;
   reference?: string;
   userId: string;
   userName: string;
