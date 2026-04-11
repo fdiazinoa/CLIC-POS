@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Delete, KeyRound, Lock, User, UserCircle, Globe, ChevronDown, Fingerprint } from 'lucide-react';
 import { User as UserType, TerminalConfig } from '../types';
 import { biometricService } from '../services/BiometricAuthService';
@@ -20,6 +20,13 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
   const [biometricFailCount, setBiometricFailCount] = useState(0);
   const [isHardwareAvailable, setIsHardwareAvailable] = useState(false);
   const [buildVersion, setBuildVersion] = useState<string>('');
+  const pinInputRef = useRef<HTMLInputElement>(null);
+
+  const focusPinInput = React.useCallback(() => {
+    window.requestAnimationFrame(() => {
+      pinInputRef.current?.focus();
+    });
+  }, []);
 
   // Check availability on mount
   React.useEffect(() => {
@@ -99,6 +106,13 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
         return prev;
       });
     }
+    focusPinInput();
+  }, [focusPinInput]);
+
+  const handlePinInputChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const nextPin = event.target.value.replace(/\D/g, '').slice(0, 4);
+    setError(false);
+    setPin(nextPin);
   }, []);
 
   // Use Effect for auto-check when PIN reaches 4 digits
@@ -110,14 +124,24 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
 
   // Handle physical keyboard input
   const handleKeyDown = React.useCallback((e: KeyboardEvent) => {
-    if (['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(e.key)) {
-      handleKeyPress(e.key);
+    if (document.activeElement === pinInputRef.current) {
+      return;
+    }
+
+    const keypadDigit = e.code.match(/^Numpad([0-9])$/)?.[1];
+    const digit = /^[0-9]$/.test(e.key) ? e.key : keypadDigit;
+
+    if (digit) {
+      e.preventDefault();
+      handleKeyPress(digit);
     } else if (e.key === 'Backspace') {
+      e.preventDefault();
       handleKeyPress('BACK');
     } else if (e.key === 'Escape' || e.key === 'c' || e.key === 'C') {
+      e.preventDefault();
       handleKeyPress('C');
     } else if (e.key === 'Enter') {
-      // Enter is redundant but good for UX if they type 4 digits and hit enter
+      e.preventDefault();
       if (pin.length === 4) checkLogin(pin);
     }
   }, [pin, handleKeyPress, checkLogin]);
@@ -126,6 +150,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
+
+  React.useEffect(() => {
+    focusPinInput();
+  }, [focusPinInput]);
 
 
   const handleBiometricLogin = async () => {
@@ -249,7 +277,28 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, subVertical, availab
         )}
 
         {/* PIN Display */}
-        <div className="mb-5 sm:mb-8">
+        <div className="mb-5 sm:mb-8 relative" onClick={focusPinInput}>
+          <input
+            ref={pinInputRef}
+            type="tel"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            autoComplete="off"
+            enterKeyHint="done"
+            value={pin}
+            onChange={handlePinInputChange}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' || event.key === 'c' || event.key === 'C') {
+                event.preventDefault();
+                handleKeyPress('C');
+              } else if (event.key === 'Enter' && pin.length === 4) {
+                event.preventDefault();
+                checkLogin(pin);
+              }
+            }}
+            className="absolute inset-x-0 top-0 z-10 h-12 w-full cursor-text opacity-0"
+            aria-label="PIN de acceso"
+          />
           <div className={`flex justify-center gap-3 sm:gap-4 transition-all duration-300 ${error ? 'animate-shake' : ''}`}>
             {[0, 1, 2, 3].map((i) => (
               <div
