@@ -72,6 +72,7 @@ import { formatCurrency } from '../utils/format';
 import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from '../services/localRefundPersistence';
 import { resolveCustomerImageSrc } from '../utils/entityImage';
 import { resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
+import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
 
 // ... existing imports
 
@@ -1951,6 +1952,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const saleNetAmount = isTaxIncluded
                   ? Math.round(((saleTotal - saleTaxAmount) + Number.EPSILON) * 100) / 100
                   : saleTotal;
+               const salePayments = payments.filter(p => !['WALLET', 'ADVANCE'].includes(p.method));
+               const saleSettlement = buildTransactionSettlementFields(salePayments, saleTotal, baseCurrency.code);
 
                // Prepare wallet operations
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
@@ -1975,7 +1978,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         seriesId: assignedSequenceId,
                         items: saleItems,
                         total: saleTotal,
-                        payments: payments.filter(p => !['WALLET', 'ADVANCE'].includes(p.method)),
+                        ...saleSettlement,
                         userId: currentUser.id,
                         userName: currentUser.name,
                         terminalId: terminalId,
@@ -2086,6 +2089,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
                const refundDocumentTotal = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
                const documentItems = isRefundOnly ? normalizedRefundItems : processedCart;
+               const documentTotal = isRefundOnly ? refundDocumentTotal : cartTotal;
+               const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, documentTotal, baseCurrency.code);
 
                const txn = await withTimeout(transactionService.createTransaction({
                   documentType: hasReturns ? 'REFUND' : 'TICKET',
@@ -2094,8 +2099,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      : assignedSequenceId,
                   date: new Date().toISOString(),
                   items: documentItems,
-                  total: isRefundOnly ? refundDocumentTotal : cartTotal,
-                  payments: paymentsForTransaction,
+                  total: documentTotal,
+                  ...transactionSettlement,
                   userId: currentUser.id,
                   userName: currentUser.name,
                   terminalId: terminalId,

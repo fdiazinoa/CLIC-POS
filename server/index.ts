@@ -872,6 +872,13 @@ const ensureTransactionHistoryTable = () => {
                     refundReason TEXT,
                     affectedInvoiceNumber TEXT,
                     affectedNCF TEXT,
+                    settlement_currency_code TEXT,
+                    settlement_exchange_rate REAL,
+                    settlement_received_original REAL DEFAULT 0,
+                    settlement_received_base REAL DEFAULT 0,
+                    settlement_applied_base REAL DEFAULT 0,
+                    settlement_change_base REAL DEFAULT 0,
+                    settlement_change_currency_code TEXT,
                     syncStatus TEXT DEFAULT 'PENDING',
                     syncError TEXT,
                     zReportId TEXT

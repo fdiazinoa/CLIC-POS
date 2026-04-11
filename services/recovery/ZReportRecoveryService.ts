@@ -1,6 +1,7 @@
 
 import { db } from '../../utils/db';
 import { ZReport, Transaction } from '../../types';
+import { getPaymentAppliedBaseAmount } from '../../utils/paymentSettlement';
 
 type RecoveryOptions = {
     notifyUser?: boolean;
@@ -93,7 +94,7 @@ export class ZReportRecoveryService {
                 for (const tx of txs) {
                     if (tx.payments) {
                         for (const p of tx.payments) {
-                            totalsByMethod[p.method] = (totalsByMethod[p.method] || 0) + p.amount;
+                            totalsByMethod[p.method] = (totalsByMethod[p.method] || 0) + getPaymentAppliedBaseAmount(p);
                         }
                     }
                 }

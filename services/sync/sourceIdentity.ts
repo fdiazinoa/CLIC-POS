@@ -37,6 +37,15 @@ const normalizePaymentEntries = (
         const exchangeRateRaw = payment?.exchange_rate ?? payment?.exchangeRate;
         const exchangeRate =
             typeof exchangeRateRaw === 'number' && !Number.isNaN(exchangeRateRaw) ? exchangeRateRaw : undefined;
+        const appliedAmountRaw = Number(payment?.applied_amount ?? payment?.appliedAmount ?? payment?.amountApplied);
+        const appliedAmount =
+            Number.isFinite(appliedAmountRaw) ? appliedAmountRaw : undefined;
+        const changeAmountRaw = Number(payment?.change_amount ?? payment?.changeAmount);
+        const changeAmount =
+            Number.isFinite(changeAmountRaw) ? changeAmountRaw : undefined;
+        const changeCurrencyCode =
+            normalizeString(payment?.change_currency_code) ||
+            normalizeString(payment?.changeCurrencyCode);
 
         return {
             ...payment,
@@ -48,7 +57,14 @@ const normalizePaymentEntries = (
             device_id: context.deviceId,
             payment_method: payment?.payment_method ?? payment?.method,
             currency_code: currencyCode,
-            exchange_rate: exchangeRate
+            exchange_rate: exchangeRate,
+            appliedAmount,
+            amountApplied: appliedAmount,
+            applied_amount: appliedAmount,
+            changeAmount,
+            change_amount: changeAmount,
+            changeCurrencyCode,
+            change_currency_code: changeCurrencyCode
         };
     });
 };
@@ -87,6 +103,52 @@ export const normalizeTransactionForSync = (transaction: Transaction): Transacti
         isCreditNote
             ? (normalizeString((transaction as any).source_credit_note_id) || sourceTransactionId)
             : undefined;
+    const settlementCurrencyCode =
+        normalizeString((transaction as any).settlement_currency_code) ||
+        normalizeString((transaction as any).settlementCurrencyCode);
+    const settlementExchangeRateRaw =
+        (transaction as any).settlement_exchange_rate ??
+        (transaction as any).settlementExchangeRate;
+    const settlementExchangeRateValue = Number(settlementExchangeRateRaw);
+    const settlementExchangeRate =
+        Number.isFinite(settlementExchangeRateValue)
+            ? settlementExchangeRateValue
+            : undefined;
+    const settlementReceivedOriginalRaw =
+        (transaction as any).settlement_received_original ??
+        (transaction as any).settlementReceivedOriginal;
+    const settlementReceivedOriginalValue = Number(settlementReceivedOriginalRaw);
+    const settlementReceivedOriginal =
+        Number.isFinite(settlementReceivedOriginalValue)
+            ? settlementReceivedOriginalValue
+            : undefined;
+    const settlementReceivedBaseRaw =
+        (transaction as any).settlement_received_base ??
+        (transaction as any).settlementReceivedBase;
+    const settlementReceivedBaseValue = Number(settlementReceivedBaseRaw);
+    const settlementReceivedBase =
+        Number.isFinite(settlementReceivedBaseValue)
+            ? settlementReceivedBaseValue
+            : undefined;
+    const settlementAppliedBaseRaw =
+        (transaction as any).settlement_applied_base ??
+        (transaction as any).settlementAppliedBase;
+    const settlementAppliedBaseValue = Number(settlementAppliedBaseRaw);
+    const settlementAppliedBase =
+        Number.isFinite(settlementAppliedBaseValue)
+            ? settlementAppliedBaseValue
+            : undefined;
+    const settlementChangeBaseRaw =
+        (transaction as any).settlement_change_base ??
+        (transaction as any).settlementChangeBase;
+    const settlementChangeBaseValue = Number(settlementChangeBaseRaw);
+    const settlementChangeBase =
+        Number.isFinite(settlementChangeBaseValue)
+            ? settlementChangeBaseValue
+            : undefined;
+    const settlementChangeCurrencyCode =
+        normalizeString((transaction as any).settlement_change_currency_code) ||
+        normalizeString((transaction as any).settlementChangeCurrencyCode);
 
     return {
         ...transaction,
@@ -98,6 +160,20 @@ export const normalizeTransactionForSync = (transaction: Transaction): Transacti
         source_credit_note_id: sourceCreditNoteId,
         original_transaction_id: originalTransactionId,
         original_display_id: originalDisplayId,
+        settlementCurrencyCode,
+        settlementExchangeRate,
+        settlementReceivedOriginal,
+        settlementReceivedBase,
+        settlementAppliedBase,
+        settlementChangeBase,
+        settlementChangeCurrencyCode,
+        settlement_currency_code: settlementCurrencyCode,
+        settlement_exchange_rate: settlementExchangeRate,
+        settlement_received_original: settlementReceivedOriginal,
+        settlement_received_base: settlementReceivedBase,
+        settlement_applied_base: settlementAppliedBase,
+        settlement_change_base: settlementChangeBase,
+        settlement_change_currency_code: settlementChangeCurrencyCode,
         payments: normalizePaymentEntries(Array.isArray(transaction.payments) ? transaction.payments : [], {
             sourceTransactionId,
             sourceDisplayId,

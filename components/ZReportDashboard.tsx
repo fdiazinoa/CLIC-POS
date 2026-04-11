@@ -9,6 +9,11 @@ import { sendZReportEmail } from '../utils/email';
 import ZReportHistory from './ZReportHistory';
 import { calculateZReportStats } from '../utils/analytics';
 import { ThermalPrinterService } from '../services/printer/ThermalPrinterService';
+import {
+   getPaymentAppliedBaseAmount,
+   getPaymentChangeBaseAmount,
+   getPaymentReceivedAmountForDrawer,
+} from '../utils/paymentSettlement';
 
 interface ZReportDashboardProps {
    transactions: Transaction[];
@@ -160,7 +165,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
                filteredTransactions.forEach(t => {
                   (t?.payments || []).forEach(p => {
                      if (p && p.method) {
-                        totalsByMethod[p.method] = (totalsByMethod[p.method] || 0) + p.amount;
+                        totalsByMethod[p.method] = (totalsByMethod[p.method] || 0) + getPaymentAppliedBaseAmount(p);
                      }
                   });
                });
@@ -197,7 +202,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
             filteredTransactions.forEach(t => {
                (t?.payments || []).forEach(p => {
                   if (p && p.method) {
-                     finalTotalsByMethod[p.method] = (finalTotalsByMethod[p.method] || 0) + p.amount;
+                     finalTotalsByMethod[p.method] = (finalTotalsByMethod[p.method] || 0) + getPaymentAppliedBaseAmount(p);
                   }
                });
             });
@@ -305,7 +310,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    payments.forEach(p => {
       if (p.method === 'CASH') {
          const currency = (p as any).currencyCode || baseCurrencyCode;
-         cashSalesByCurrency[currency] = (cashSalesByCurrency[currency] || 0) + p.amount;
+         cashSalesByCurrency[currency] = (cashSalesByCurrency[currency] || 0) + getPaymentReceivedAmountForDrawer(p, baseCurrencyCode);
       }
    });
 
@@ -319,6 +324,13 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
       } else {
          cashOutByCurrency[currency] = (cashOutByCurrency[currency] || 0) + m.amount;
       }
+   });
+
+   payments.forEach(p => {
+      if (p.method !== 'CASH') return;
+      const changeBase = getPaymentChangeBaseAmount(p);
+      if (changeBase <= 0.0001) return;
+      cashOutByCurrency[baseCurrencyCode] = (cashOutByCurrency[baseCurrencyCode] || 0) + changeBase;
    });
 
    // Calculate expected cash per currency
@@ -357,10 +369,10 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    const cashDiscrepancy = cashDiscrepancyByCurrency[baseCurrencyCode] || 0;
    const expectedCardTotal = payments
       .filter(p => p.method === 'CARD')
-      .reduce((sum, p) => sum + p.amount, 0);
+      .reduce((sum, p) => sum + getPaymentAppliedBaseAmount(p), 0);
    const expectedOtherTotal = payments
       .filter(p => p.method !== 'CARD' && p.method !== 'CASH')
-      .reduce((sum, p) => sum + p.amount, 0);
+      .reduce((sum, p) => sum + getPaymentAppliedBaseAmount(p), 0);
 
    // Calculate Stats for Preview
    const stats = calculateZReportStats(filteredTransactions, filteredCollections);

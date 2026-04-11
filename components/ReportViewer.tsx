@@ -30,6 +30,7 @@ import {
 } from './AnalyticsLogic';
 import { useCustomerAnalytics } from '../hooks/useCustomerAnalytics';
 import { formatFiscalExcel } from '../utils/fiscalExcel';
+import { getPaymentAppliedBaseAmount } from '../utils/paymentSettlement';
 
 interface InventoryReportContext {
     products: Product[];
@@ -1058,7 +1059,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                     if (!method) return null;
                     return {
                         method,
-                        amount: Math.abs(toNumber(payment?.amount))
+                        amount: Math.abs(getPaymentAppliedBaseAmount(payment))
                     };
                 })
                 .filter(Boolean) as Array<{ method: PaymentMethodKey; amount: number }>;

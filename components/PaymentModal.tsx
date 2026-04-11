@@ -34,6 +34,10 @@ import {
    createPaymentIntegrationAuditEvent,
    dispatchAuditEventConfigUpdate,
 } from '../services/payments/paymentIntegrationAudit';
+import {
+   buildPaymentSettlementSummary,
+   resolveCurrencySymbol,
+} from '../utils/paymentSettlement';
 
 interface PaymentModalProps {
    total: number;
@@ -246,9 +250,17 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    // Lock total/refund mode at modal open to avoid recalculating to 0 when parent clears cart.
    const [isRefund] = useState(() => total < 0);
    const [absTotal] = useState(() => Math.abs(total));
-   const totalPaid = payments.reduce((acc, p) => acc + p.amount, 0);
-   const remaining = Math.max(0, parseFloat((absTotal - totalPaid).toFixed(2)));
-   const change = Math.max(0, parseFloat((totalPaid - absTotal).toFixed(2)));
+   const paymentSettlementPreview = useMemo(
+      () => buildPaymentSettlementSummary(payments, absTotal, baseCurrency.code),
+      [payments, absTotal, baseCurrency.code]
+   );
+   const paymentPreviewById = useMemo(
+      () => new Map(paymentSettlementPreview.lines.map(line => [line.paymentId, line])),
+      [paymentSettlementPreview]
+   );
+   const totalPaid = paymentSettlementPreview.totalReceivedBase;
+   const remaining = paymentSettlementPreview.remainingBase;
+   const change = paymentSettlementPreview.totalChangeBase;
    const typedAmount = parseFloat(inputAmount || '0');
 
    const configuredMethods = useMemo<ResolvedPaymentMethod[]>(() => {
@@ -476,7 +488,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       amount: roundToTwo(amountInBase),
       timestamp: new Date(),
       currencyCode: selectedCurrency.code,
-      amountOriginal: valInSelectedCurrency,
+      amountOriginal: roundToTwo(valInSelectedCurrency),
       exchangeRate: selectedCurrency.rate,
    });
 
@@ -894,6 +906,16 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    const [showEmailInput, setShowEmailInput] = useState(false);
    const [emailInput, setEmailInput] = useState('');
    const [isSendingEmail, setIsSendingEmail] = useState(false);
+   const completedPaymentSettlement = useMemo(
+      () => completedTransaction
+         ? buildPaymentSettlementSummary(
+            Array.isArray(completedTransaction.payments) ? completedTransaction.payments as PaymentEntry[] : [],
+            Math.abs(Number(completedTransaction.total || 0)),
+            baseCurrency.code
+         )
+         : null,
+      [completedTransaction, baseCurrency.code]
+   );
 
    const gatewayProgressOverlay = gatewayProgress ? (
       <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4">
@@ -1010,10 +1032,47 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                <h2 className="text-3xl font-black text-gray-900 mb-2">¡Venta Exitosa!</h2>
                <div className="w-full bg-gray-50 rounded-2xl p-6 mb-8 border border-gray-100">
                   <div className="flex items-end justify-between gap-4 mb-2">
-                     <span className="text-lg md:text-xl font-black text-gray-700">Cobrado</span>
-                     <span className="text-3xl md:text-4xl font-black text-gray-900">{currencySymbol}{totalPaid.toFixed(2)}</span>
+                     <span className="text-lg md:text-xl font-black text-gray-700">Recibido</span>
+                     <span className="text-3xl md:text-4xl font-black text-gray-900">
+                        {currencySymbol}{(completedPaymentSettlement?.totalReceivedBase ?? totalPaid).toFixed(2)}
+                     </span>
                   </div>
-                  {change > 0 && <div className="flex justify-between items-center pt-2 border-t border-gray-200 mt-2"><span className="text-green-600 font-bold">Cambio</span><span className="font-black text-green-600 text-2xl">{currencySymbol}{change.toFixed(2)}</span></div>}
+                  <div className="flex justify-between items-center pt-2 border-t border-gray-200 mt-2">
+                     <span className="font-bold text-gray-600">Aplicado</span>
+                     <span className="font-black text-gray-900 text-2xl">
+                        {currencySymbol}{(completedPaymentSettlement?.totalAppliedBase ?? absTotal).toFixed(2)}
+                     </span>
+                  </div>
+                  {(completedPaymentSettlement?.totalChangeBase ?? change) > 0 && (
+                     <div className="flex justify-between items-center pt-2 border-t border-gray-200 mt-2">
+                        <span className="text-green-600 font-bold">Cambio</span>
+                        <span className="font-black text-green-600 text-2xl">
+                           {currencySymbol}{(completedPaymentSettlement?.totalChangeBase ?? change).toFixed(2)}
+                        </span>
+                     </div>
+                  )}
+                  {completedPaymentSettlement?.settlementCurrencyCode && completedPaymentSettlement.settlementCurrencyCode !== baseCurrency.code && (
+                     <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-left">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">
+                           Cobro en {completedPaymentSettlement.settlementCurrencyCode}
+                        </p>
+                        <div className="mt-2 flex items-center justify-between text-sm">
+                           <span className="font-semibold text-blue-800">Recibido</span>
+                           <span className="font-black text-blue-900">
+                              {resolveCurrencySymbol(config, completedPaymentSettlement.settlementCurrencyCode, completedPaymentSettlement.settlementCurrencyCode)}
+                              {(completedPaymentSettlement.settlementReceivedOriginal || 0).toFixed(2)}
+                           </span>
+                        </div>
+                        {completedPaymentSettlement.settlementExchangeRate ? (
+                           <div className="mt-1 flex items-center justify-between text-sm">
+                              <span className="font-semibold text-blue-800">Tasa</span>
+                              <span className="font-black text-blue-900">
+                                 {currencySymbol}{completedPaymentSettlement.settlementExchangeRate.toFixed(2)}
+                              </span>
+                           </div>
+                        ) : null}
+                     </div>
+                  )}
                </div>
                <div className="w-full space-y-3">
                   {successNotice && (
@@ -1100,6 +1159,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                <div className="flex-1 overflow-y-auto space-y-2 md:space-y-3 no-scrollbar max-h-[22vh] lg:max-h-full">
                   {payments.map(p => {
                      const EntryIcon = getEntryIcon(p);
+                     const previewLine = paymentPreviewById.get(p.id);
+                     const displayCurrencyCode = previewLine?.currencyCode || p.currencyCode || baseCurrency.code;
+                     const displayCurrencySymbol = resolveCurrencySymbol(config, displayCurrencyCode, currencySymbol);
+                     const displayReceivedOriginal = previewLine?.receivedOriginal ?? Number(p.amountOriginal || p.amount || 0);
+                     const displayReceivedBase = previewLine?.receivedBase ?? Number(p.amount || 0);
+                     const displayChangeBase = previewLine?.changeBase ?? Number(p.changeAmount || 0);
+                     const displayExchangeRate = previewLine?.exchangeRate ?? Number(p.exchangeRate || 1);
                      return (
                         <div key={p.id} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-xl md:rounded-2xl shadow-sm border border-gray-100 animate-in slide-in-from-left-2">
                            <div className="flex items-center gap-2 md:gap-3">
@@ -1108,9 +1174,16 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                               </div>
                               <div>
                                  <span className="font-bold text-[10px] md:text-xs text-gray-800 block">{getEntryLabel(p)}</span>
-                                 {p.currencyCode !== baseCurrency.code && (
-                                    <span className="text-[9px] md:text-[10px] text-gray-400 font-bold">{p.amountOriginal} {p.currencyCode}</span>
-                                 )}
+                                 {displayCurrencyCode !== baseCurrency.code ? (
+                                    <span className="text-[9px] md:text-[10px] text-gray-500 font-bold block">
+                                       Recibido {displayCurrencySymbol}{displayReceivedOriginal.toFixed(2)} · Tasa {currencySymbol}{displayExchangeRate.toFixed(2)}
+                                    </span>
+                                 ) : null}
+                                 {displayCurrencyCode !== baseCurrency.code ? (
+                                    <span className="text-[9px] md:text-[10px] text-gray-400 font-bold block">
+                                       Eq. {currencySymbol}{displayReceivedBase.toFixed(2)}
+                                    </span>
+                                 ) : null}
                                  {p.gatewayProvider === 'AZUL' && (
                                     <span className={`text-[9px] md:text-[10px] font-bold block ${p.gatewayStatus === 'PENDING' ? 'text-amber-600' : 'text-indigo-500'}`}>
                                        {p.gatewayStatus === 'PENDING'
@@ -1121,7 +1194,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                               </div>
                            </div>
                            <div className="flex items-center gap-2 md:gap-4">
-                              <span className="font-bold text-sm md:text-gray-900">{currencySymbol}{p.amount.toFixed(2)}</span>
+                              <span className="font-bold text-sm md:text-gray-900">
+                                 {displayCurrencyCode === baseCurrency.code
+                                    ? `${currencySymbol}${displayReceivedBase.toFixed(2)}`
+                                    : `${displayCurrencySymbol}${displayReceivedOriginal.toFixed(2)}`}
+                              </span>
                               <button
                                  onClick={() => handleRemovePayment(p.id)}
                                  className="p-1.5 rounded-full bg-red-50 border border-red-100 text-red-500 hover:bg-red-100 transition-colors"
@@ -1146,11 +1223,19 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                         <div className="w-full text-right">
                            <p className="text-[9px] md:text-[10px] font-bold text-emerald-600 uppercase tracking-widest">{isRefund ? 'Diferencia a Favor' : 'Cambio'}</p>
                            <p className="text-xl md:text-3xl font-black text-emerald-600">{currencySymbol}{change.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                           <p className="mt-1 text-[10px] font-bold text-slate-500">
+                              Aplicado {currencySymbol}{paymentSettlementPreview.totalAppliedBase.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                           </p>
                         </div>
                      ) : (
                         <div>
                            <p className="text-[9px] md:text-[10px] font-bold text-gray-400 uppercase tracking-widest">Restante</p>
                            <p className={`text-xl md:text-3xl font-black ${remaining > 0 ? (isRefund ? 'text-rose-500' : 'text-amber-500') : 'text-emerald-500'}`}>{currencySymbol}{remaining.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                           {paymentSettlementPreview.totalReceivedBase > 0.009 && (
+                              <p className="mt-1 text-[10px] font-bold text-slate-500">
+                                 Recibido {currencySymbol}{paymentSettlementPreview.totalReceivedBase.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                              </p>
+                           )}
                         </div>
                      )}
                   </div>

@@ -3,6 +3,7 @@ import { X, DollarSign, Check, AlertCircle, Printer, Save, Banknote, CreditCard,
 import { Customer, Transaction, BusinessConfig, Collection, CollectionMethod, User } from '../types';
 import { suggestFIFOAllocation, DelinquentInvoice } from '../hooks/useCreditControl';
 import { db } from '../utils/db';
+import { resolveCurrencySymbol } from '../utils/paymentSettlement';
 
 interface AccountReceivableModalProps {
     isOpen: boolean;
@@ -33,6 +34,8 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
 }) => {
     const [amount, setAmount] = useState<string>(initialAmount ? initialAmount.toString() : '');
     const [method, setMethod] = useState<CollectionMethod>('CASH');
+    const [selectedCurrencyCode, setSelectedCurrencyCode] = useState<string>('');
+    const [exchangeRateInput, setExchangeRateInput] = useState<string>('1');
     const [reference, setReference] = useState('');
     const [notes, setNotes] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
@@ -126,6 +129,32 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
     }, [transactions, customer.id, collections]);
 
     const totalOwed = unpaidInvoices.reduce((sum, inv) => sum + (inv.pendingBalance || 0), 0);
+    const activeCurrencies = useMemo(() => {
+        const configured = Array.isArray(config.currencies) && config.currencies.length > 0
+            ? config.currencies.filter(currency => currency?.isEnabled !== false)
+            : [];
+        if (configured.length > 0) {
+            return configured;
+        }
+        return [{
+            code: 'DOP',
+            name: 'Peso Dominicano',
+            symbol: config.currencySymbol || 'RD$',
+            rate: 1,
+            isEnabled: true,
+            isBase: true
+        }];
+    }, [config.currencies, config.currencySymbol]);
+    const baseCurrency = activeCurrencies.find(currency => currency?.isBase) || activeCurrencies[0];
+    const selectedCurrency = activeCurrencies.find(currency => currency?.code === selectedCurrencyCode) || baseCurrency;
+    const enteredAmountOriginal = parseFloat(amount) || 0;
+    const parsedExchangeRate = parseFloat(exchangeRateInput) || 0;
+    const effectiveExchangeRate = selectedCurrency.code === baseCurrency.code
+        ? 1
+        : (parsedExchangeRate > 0 ? parsedExchangeRate : Number(selectedCurrency.rate || 1));
+    const enteredAmountBase = selectedCurrency.code === baseCurrency.code
+        ? enteredAmountOriginal
+        : Math.round((enteredAmountOriginal * effectiveExchangeRate + Number.EPSILON) * 100) / 100;
     const pendingByTxId = useMemo(() => {
         const map = new globalThis.Map<string, number>();
         for (const inv of unpaidInvoices) {
@@ -135,16 +164,34 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
     }, [unpaidInvoices]);
 
     const allocationResult = useMemo(() => {
-        const numAmount = parseFloat(amount) || 0;
-
         // Filter invoices if selection is active
         const eligibleInvoices = selectedInvoices.size > 0
             ? unpaidInvoices.filter(inv => selectedInvoices.has(inv.id))
             : unpaidInvoices;
 
-        return suggestFIFOAllocation(numAmount, eligibleInvoices);
-    }, [amount, unpaidInvoices, selectedInvoices]);
-    const enteredAmount = parseFloat(amount) || 0;
+        return suggestFIFOAllocation(enteredAmountBase, eligibleInvoices);
+    }, [enteredAmountBase, unpaidInvoices, selectedInvoices]);
+    const allocatedAmountBase = allocationResult.allocations.reduce((sum, alloc) => sum + alloc.amount, 0);
+    const unappliedAmountBase = Math.max(0, enteredAmountBase - allocatedAmountBase);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const initialCurrencyCode = baseCurrency.code || 'DOP';
+        setSelectedCurrencyCode(initialCurrencyCode);
+        setExchangeRateInput(initialCurrencyCode === baseCurrency.code ? '1' : String(baseCurrency.rate || 1));
+    }, [isOpen, baseCurrency.code, baseCurrency.rate]);
+
+    useEffect(() => {
+        if (!selectedCurrencyCode) return;
+        if (selectedCurrencyCode === baseCurrency.code) {
+            setExchangeRateInput('1');
+            return;
+        }
+        const matchedCurrency = activeCurrencies.find(currency => currency?.code === selectedCurrencyCode);
+        if (matchedCurrency) {
+            setExchangeRateInput(String(matchedCurrency.rate || 1));
+        }
+    }, [selectedCurrencyCode, activeCurrencies, baseCurrency.code]);
 
     const generateCollectionDisplayId = async (): Promise<{
         displayId: string;
@@ -191,9 +238,8 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
     };
 
     const handleProcessPayment = async () => {
-        const numAmount = parseFloat(amount) || 0;
-        if (numAmount <= 0) return;
-        if (numAmount > totalOwed + 0.01) {
+        if (enteredAmountOriginal <= 0 || enteredAmountBase <= 0) return;
+        if (enteredAmountBase > totalOwed + 0.01) {
             alert('El monto no puede exceder la deuda total.');
             return;
         }
@@ -211,8 +257,14 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
                 customerId: customer.id,
                 customerName: customer.name,
                 date: new Date().toISOString(),
-                totalAmount: numAmount,
+                totalAmount: enteredAmountBase,
                 method,
+                currencyCode: selectedCurrency.code,
+                exchangeRate: effectiveExchangeRate,
+                receivedAmountOriginal: enteredAmountOriginal,
+                receivedAmountBase: enteredAmountBase,
+                appliedAmountBase: allocatedAmountBase,
+                unappliedAmountBase,
                 reference,
                 userId: currentUser.id,
                 userName: currentUser.name,
@@ -262,7 +314,7 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
             // 3. Update customer currentDebt
             const updatedCustomer = {
                 ...customer,
-                currentDebt: Math.max(0, parseFloat(((customer.currentDebt || 0) - numAmount).toFixed(2))),
+                currentDebt: Math.max(0, parseFloat(((customer.currentDebt || 0) - allocatedAmountBase).toFixed(2))),
                 updatedAt: new Date().toISOString()
             };
             await db.saveDocument('customers', updatedCustomer);
@@ -309,7 +361,9 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
 
                             <div className="space-y-4">
                                 <label className="block">
-                                    <span className="text-xs font-black text-gray-500 uppercase tracking-widest ml-1">Monto a Recibir</span>
+                                    <span className="text-xs font-black text-gray-500 uppercase tracking-widest ml-1">
+                                        Monto Recibido {selectedCurrency?.code ? `(${selectedCurrency.code})` : ''}
+                                    </span>
                                     <input
                                         type="text"
                                         value={amount ? Number(amount.replace(/,/g, '')).toLocaleString() : ''}
@@ -323,6 +377,73 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
                                         placeholder="0.00"
                                     />
                                 </label>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <label className="block">
+                                        <span className="text-xs font-black text-gray-500 uppercase tracking-widest ml-1">Moneda de Cobro</span>
+                                        <select
+                                            value={selectedCurrencyCode}
+                                            onChange={(e) => setSelectedCurrencyCode(e.target.value)}
+                                            className="mt-2 w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-800 outline-none focus:border-blue-500"
+                                        >
+                                            {activeCurrencies.map(currency => (
+                                                <option key={currency.code} value={currency.code}>
+                                                    {currency.code} · {currency.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+
+                                    <label className="block">
+                                        <span className="text-xs font-black text-gray-500 uppercase tracking-widest ml-1">Tasa</span>
+                                        <input
+                                            type="text"
+                                            value={exchangeRateInput}
+                                            onChange={(e) => setExchangeRateInput(e.target.value)}
+                                            disabled={selectedCurrency.code === baseCurrency.code}
+                                            className="mt-2 w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-800 outline-none focus:border-blue-500 disabled:bg-gray-100 disabled:text-gray-400"
+                                            placeholder="1.00"
+                                        />
+                                    </label>
+                                </div>
+
+                                {(enteredAmountOriginal > 0 || enteredAmountBase > 0) && (
+                                    <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4 space-y-2">
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Resumen Multimoneda</p>
+                                        <div className="grid grid-cols-2 gap-3 text-sm">
+                                            <div>
+                                                <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-300">Recibido</p>
+                                                <p className="font-black text-indigo-900">
+                                                    {resolveCurrencySymbol(config, selectedCurrency.code, config.currencySymbol)}
+                                                    {enteredAmountOriginal.toFixed(2)}
+                                                </p>
+                                            </div>
+                                            <div>
+                                                <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-300">Equivalente</p>
+                                                <p className="font-black text-indigo-900">
+                                                    {config.currencySymbol}{enteredAmountBase.toFixed(2)}
+                                                </p>
+                                            </div>
+                                            <div>
+                                                <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-300">Aplicado</p>
+                                                <p className="font-black text-indigo-900">
+                                                    {config.currencySymbol}{allocatedAmountBase.toFixed(2)}
+                                                </p>
+                                            </div>
+                                            <div>
+                                                <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-300">Saldo a Favor</p>
+                                                <p className="font-black text-indigo-900">
+                                                    {config.currencySymbol}{unappliedAmountBase.toFixed(2)}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        {selectedCurrency.code !== baseCurrency.code && (
+                                            <p className="text-[11px] font-bold text-indigo-700">
+                                                Tasa aplicada: {config.currencySymbol}{effectiveExchangeRate.toFixed(2)} por {selectedCurrency.code}
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
 
                                 <div className="grid grid-cols-2 gap-3">
                                     {(['CASH', 'TRANSFER', 'CARD', 'CHECK'] as CollectionMethod[]).map(m => (
@@ -361,13 +482,13 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
                         <div>
                             <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">DISTRIBUCIÓN AUTOMÁTICA</h4>
                             <div className="space-y-3">
-                                {enteredAmount <= 0 && unpaidInvoices.length > 0 && (
+                                {enteredAmountBase <= 0 && unpaidInvoices.length > 0 && (
                                     <p className="text-xs text-gray-500 font-bold p-4 bg-gray-50 rounded-2xl border border-gray-100">
                                         Ingrese un monto para previsualizar la distribución. Facturas pendientes:
                                     </p>
                                 )}
 
-                                {enteredAmount <= 0 && unpaidInvoices.map(inv => (
+                                {enteredAmountBase <= 0 && unpaidInvoices.map(inv => (
                                     <div key={`pending-${inv.id}`} className="p-4 bg-gray-50 rounded-2xl border border-gray-100 flex justify-between items-center">
                                         <div>
                                             <p className="text-[10px] font-black text-gray-900">#{inv.displayId || inv.id.slice(-8).toUpperCase()}</p>
@@ -377,7 +498,7 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
                                     </div>
                                 ))}
 
-                                {enteredAmount > 0 && allocationResult.allocations.map(alloc => (
+                                {enteredAmountBase > 0 && allocationResult.allocations.map(alloc => (
                                     <div key={alloc.transactionId} className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100 flex justify-between items-center animate-in slide-in-from-right-2">
                                         <div>
                                             <p className="text-[10px] font-black text-blue-900">#{alloc.displayId}</p>
@@ -387,7 +508,7 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
                                     </div>
                                 ))}
 
-                                {enteredAmount > 0 && allocationResult.allocations.length === 0 && (
+                                {enteredAmountBase > 0 && allocationResult.allocations.length === 0 && (
                                     <p className="text-xs text-amber-600 font-bold p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-center gap-2">
                                         <AlertCircle size={16} /> No se encontraron facturas para liquidar.
                                     </p>
@@ -408,7 +529,7 @@ const AccountReceivableModal: React.FC<AccountReceivableModalProps> = ({
                     <button onClick={onClose} className="flex-1 py-4 text-gray-500 font-black uppercase text-sm hover:bg-gray-100 rounded-2xl transition-all">Cancelar</button>
                     <button
                         onClick={handleProcessPayment}
-                        disabled={isProcessing || parseFloat(amount) <= 0}
+                        disabled={isProcessing || enteredAmountOriginal <= 0 || enteredAmountBase <= 0}
                         className="flex-[2] py-4 bg-indigo-600 text-white font-black uppercase text-sm rounded-2xl hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 disabled:bg-gray-200 disabled:shadow-none flex items-center justify-center gap-2"
                     >
                         {isProcessing ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}

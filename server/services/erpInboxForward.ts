@@ -26,6 +26,11 @@ function asNumber(value: unknown, fallback = 0): number {
     return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function asNullableNumber(value: unknown): number | undefined {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function asArray(value: unknown): any[] {
     return Array.isArray(value) ? value : [];
 }
@@ -52,10 +57,31 @@ function extractCouponCodes(transaction: any): string[] {
     return out.filter(Boolean);
 }
 
+function buildSettlementSummary(transaction: any) {
+    const record = transaction || {};
+    const settlement = {
+        currency_code: asString(record.settlement_currency_code || record.settlementCurrencyCode),
+        exchange_rate: asNullableNumber(record.settlement_exchange_rate ?? record.settlementExchangeRate),
+        received_original: asNullableNumber(record.settlement_received_original ?? record.settlementReceivedOriginal),
+        received_base: asNullableNumber(record.settlement_received_base ?? record.settlementReceivedBase),
+        applied_base: asNullableNumber(record.settlement_applied_base ?? record.settlementAppliedBase),
+        change_base: asNullableNumber(record.settlement_change_base ?? record.settlementChangeBase),
+        change_currency_code: asString(record.settlement_change_currency_code || record.settlementChangeCurrencyCode),
+    };
+
+    const hasAnySettlementValue = Object.values(settlement).some(value => {
+        if (typeof value === 'number') return Number.isFinite(value);
+        return typeof value === 'string' && value.length > 0;
+    });
+
+    return hasAnySettlementValue ? settlement : null;
+}
+
 function buildTransactionSummary(transaction: any) {
     const record = transaction || {};
     const payments = asArray(record.payments);
     const items = asArray(record.items);
+    const settlement = buildSettlementSummary(record);
 
     return {
         transaction_id: asString(record.id),
@@ -79,7 +105,15 @@ function buildTransactionSummary(transaction: any) {
         wallet_payment_amount: asNumber(record.walletPaymentAmount),
         wallet_deposit_amount: asNumber(record.walletDepositAmount),
         loyalty_points_used: getUsedLoyaltyPoints(record),
-        coupon_codes: extractCouponCodes(record)
+        coupon_codes: extractCouponCodes(record),
+        settlement_currency_code: settlement?.currency_code,
+        settlement_exchange_rate: settlement?.exchange_rate,
+        settlement_received_original: settlement?.received_original,
+        settlement_received_base: settlement?.received_base,
+        settlement_applied_base: settlement?.applied_base,
+        settlement_change_base: settlement?.change_base,
+        settlement_change_currency_code: settlement?.change_currency_code,
+        settlement
     };
 }
 
@@ -90,6 +124,7 @@ export interface BuildSaleInboxBodyOptions {
 export function buildSalePostedInboxBody(txn: any, options?: BuildSaleInboxBodyOptions) {
     const txnForErp = coerceTransactionItemsForErp(txn);
     const summary = buildTransactionSummary(txnForErp);
+    const settlement = buildSettlementSummary(txnForErp);
     const documentType = summary.document_type;
     const isCreditNote = documentType === 'REFUND' || summary.ncf_type === 'B04';
     const eventBase = summary.transaction_id || `${documentType || 'TXN'}-${Date.now()}`;
@@ -108,6 +143,9 @@ export function buildSalePostedInboxBody(txn: any, options?: BuildSaleInboxBodyO
         summary,
         transaction: txnForErp
     };
+    if (settlement) {
+        payload.settlement = settlement;
+    }
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(tenantRaw)) {
         payload.tenant_id = tenantRaw;
     }

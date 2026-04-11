@@ -24,6 +24,10 @@ import {
    isRefundLikeTransaction
 } from '../utils/fiscal/fiscalHelpers';
 import { resolveCustomerImageSrc } from '../utils/entityImage';
+import {
+   buildPaymentSettlementSummary,
+   resolveCurrencySymbol,
+} from '../utils/paymentSettlement';
 
 interface CustomerManagementProps {
    customers: Customer[];
@@ -1826,10 +1830,25 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             };
 
             const payments = Array.isArray(tx.payments) ? tx.payments : [];
-            const paymentTotal = payments.reduce((acc, p: any) => acc + Number(p?.amount || 0), 0);
+            const baseCurrency = config.currencies?.find(currency => currency.isBase) || config.currencies?.[0] || { code: 'DOP', symbol: config.currencySymbol || 'RD$' };
+            const paymentSettlement = buildPaymentSettlementSummary(payments as any, Math.abs(Number(tx.total || 0)), baseCurrency.code);
+            const paymentLineById = new globalThis.Map(paymentSettlement.lines.map(line => [line.paymentId, line]));
             const isRefundDoc = isRefundLikeTransaction(tx);
             const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
             const affectedNCF = (tx.affectedNCF || '').toString().trim();
+            const settlementCurrencyCode = String(tx.settlementCurrencyCode || tx.settlement_currency_code || paymentSettlement.settlementCurrencyCode || '').trim().toUpperCase() || baseCurrency.code;
+            const settlementExchangeRate = Number((tx.settlementExchangeRate ?? tx.settlement_exchange_rate ?? paymentSettlement.settlementExchangeRate ?? 1)) || 1;
+            const settlementReceivedOriginal = Number((tx.settlementReceivedOriginal ?? tx.settlement_received_original ?? paymentSettlement.settlementReceivedOriginal ?? paymentSettlement.totalReceivedBase ?? 0)) || 0;
+            const settlementReceivedBase = Number((tx.settlementReceivedBase ?? tx.settlement_received_base ?? paymentSettlement.settlementReceivedBase ?? 0)) || 0;
+            const settlementAppliedBase = Number((tx.settlementAppliedBase ?? tx.settlement_applied_base ?? paymentSettlement.settlementAppliedBase ?? 0)) || 0;
+            const settlementChangeBase = Number((tx.settlementChangeBase ?? tx.settlement_change_base ?? paymentSettlement.settlementChangeBase ?? 0)) || 0;
+            const shouldShowSettlementHero =
+               !isRefundDoc && (
+                  settlementCurrencyCode !== baseCurrency.code
+                  || settlementChangeBase > 0.009
+                  || Math.abs(settlementReceivedBase - settlementAppliedBase) > 0.009
+               );
+            const settlementCurrencySymbol = resolveCurrencySymbol(config, settlementCurrencyCode, config.currencySymbol);
             const terminalConfig = config.terminals?.find(t => t.id === tx.terminalId)?.config;
             const fiscalSummary = calculateTransactionFiscalSummary(tx, config, { terminalConfig });
             const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
@@ -1880,6 +1899,23 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                  <p className="text-xs font-bold text-gray-700">{tx.userName || 'Sistema'}</p>
                               </div>
                            </div>
+                           {shouldShowSettlementHero && (
+                              <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4">
+                                 <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Liquidación del Cobro</p>
+                                 <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-[11px] font-bold text-indigo-900">
+                                    <span>
+                                       Recibido: {settlementCurrencySymbol}{settlementReceivedOriginal.toFixed(2)} {settlementCurrencyCode}
+                                    </span>
+                                    {settlementCurrencyCode !== baseCurrency.code && (
+                                       <span>Tasa: {config.currencySymbol}{settlementExchangeRate.toFixed(2)}</span>
+                                    )}
+                                    <span>Aplicado: {config.currencySymbol}{settlementAppliedBase.toFixed(2)}</span>
+                                    {settlementChangeBase > 0.009 && (
+                                       <span>Cambio: {config.currencySymbol}{settlementChangeBase.toFixed(2)}</span>
+                                    )}
+                                 </div>
+                              </div>
+                           )}
                         </section>
 
                         <section>
@@ -2006,22 +2042,74 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                  {payments.length === 0 ? (
                                     <p className="text-xs text-gray-400 italic">Sin información de pagos</p>
                                  ) : (
-                                    payments.map((payment: any, index: number) => (
-                                       <div key={`${tx.id}-payment-${index}`} className="flex items-center justify-between rounded-lg bg-white border border-gray-100 px-3 py-2">
-                                          <div className="flex items-center gap-2">
-                                             {getPaymentMethodIcon(payment?.method)}
-                                             <span className="text-xs font-bold text-gray-700">{getPaymentMethodLabel(payment)}</span>
+                                    payments.map((payment: any, index: number) => {
+                                       const settlementLine = paymentLineById.get(payment?.id);
+                                       const paymentCurrencyCode = settlementLine?.currencyCode || payment?.currencyCode || baseCurrency.code;
+                                       const paymentCurrencySymbol = resolveCurrencySymbol(config, paymentCurrencyCode, config.currencySymbol);
+                                       const receivedOriginal = settlementLine?.receivedOriginal ?? Number(payment?.amountOriginal || payment?.amount || 0);
+                                       const receivedBase = settlementLine?.receivedBase ?? Number(payment?.amount || 0);
+                                       const appliedBase = settlementLine?.appliedBase ?? Number(payment?.appliedAmount || payment?.amount || 0);
+                                       const changeBase = settlementLine?.changeBase ?? Number(payment?.changeAmount || 0);
+                                       const exchangeRate = settlementLine?.exchangeRate ?? Number(payment?.exchangeRate || 1);
+
+                                       return (
+                                       <div key={`${tx.id}-payment-${index}`} className="rounded-lg bg-white border border-gray-100 overflow-hidden">
+                                          <div className="flex items-center justify-between px-3 py-2">
+                                             <div className="flex items-center gap-2">
+                                                {getPaymentMethodIcon(payment?.method)}
+                                                <span className="text-xs font-bold text-gray-700">{getPaymentMethodLabel(payment)}</span>
+                                             </div>
+                                             <span className="text-xs font-black text-gray-900">
+                                                {config.currencySymbol}{appliedBase.toFixed(2)}
+                                             </span>
                                           </div>
-                                          <span className="text-xs font-black text-gray-900">
-                                             {config.currencySymbol}{Number(payment?.amount || 0).toFixed(2)}
-                                          </span>
+                                          {(paymentCurrencyCode !== baseCurrency.code || changeBase > 0.009) && (
+                                             <div className="px-3 pb-2 pt-2 border-t border-gray-50 bg-gray-50/50 space-y-1">
+                                                {paymentCurrencyCode !== baseCurrency.code ? (
+                                                   <>
+                                                      <p className="text-[11px] text-gray-700">
+                                                         <span className="font-semibold text-gray-500">Recibido:</span>{' '}
+                                                         {paymentCurrencySymbol}{receivedOriginal.toFixed(2)}
+                                                      </p>
+                                                      <p className="text-[11px] text-gray-700">
+                                                         <span className="font-semibold text-gray-500">Tasa:</span>{' '}
+                                                         {config.currencySymbol}{exchangeRate.toFixed(2)}
+                                                      </p>
+                                                      <p className="text-[11px] text-gray-700">
+                                                         <span className="font-semibold text-gray-500">Equivalente:</span>{' '}
+                                                         {config.currencySymbol}{receivedBase.toFixed(2)}
+                                                      </p>
+                                                   </>
+                                                ) : null}
+                                                {changeBase > 0.009 ? (
+                                                   <p className="text-[11px] text-gray-700">
+                                                      <span className="font-semibold text-gray-500">Cambio:</span>{' '}
+                                                      {config.currencySymbol}{changeBase.toFixed(2)}
+                                                   </p>
+                                                ) : null}
+                                             </div>
+                                          )}
                                        </div>
-                                    ))
+                                    )})
                                  )}
                                  <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-                                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Total Recibido</span>
-                                    <span className="text-sm font-black text-gray-900">{config.currencySymbol}{paymentTotal.toFixed(2)}</span>
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Total Aplicado</span>
+                                    <span className="text-sm font-black text-gray-900">{config.currencySymbol}{paymentSettlement.totalAppliedBase.toFixed(2)}</span>
                                  </div>
+                                 {(paymentSettlement.hasForeignCurrency || paymentSettlement.totalChangeBase > 0.009 || Math.abs(paymentSettlement.totalReceivedBase - paymentSettlement.totalAppliedBase) > 0.009) && (
+                                    <>
+                                       <div className="flex items-center justify-between">
+                                          <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Total Recibido</span>
+                                          <span className="text-sm font-black text-gray-900">{config.currencySymbol}{paymentSettlement.totalReceivedBase.toFixed(2)}</span>
+                                       </div>
+                                       {paymentSettlement.totalChangeBase > 0.009 ? (
+                                          <div className="flex items-center justify-between">
+                                             <span className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Cambio</span>
+                                             <span className="text-sm font-black text-emerald-600">{config.currencySymbol}{paymentSettlement.totalChangeBase.toFixed(2)}</span>
+                                          </div>
+                                       ) : null}
+                                    </>
+                                 )}
                               </div>
                            </div>
                         </section>

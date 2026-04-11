@@ -1,5 +1,6 @@
 import { BusinessConfig, Reservation, Transaction, ZReport } from '../../types';
 import { findTaxByIdentifier } from '../../utils/taxIdentity';
+import { buildPaymentSettlementSummary } from '../../utils/paymentSettlement';
 
 export interface EscPosLabelRecord {
   productId: string;
@@ -415,12 +416,35 @@ export const buildEscPosTicketPayload = (
   if ((transaction.payments || []).length > 0) {
     chunks.push(divider(width));
     pushTextLines(chunks, splitLines('PAGOS', width));
-    const totalPaid = (transaction.payments || []).reduce((sum, payment: any) => sum + Number(payment?.amount || 0), 0);
-    const change = Math.max(0, totalPaid - Number(totals.total || 0));
+    const baseCurrencyCode = config.currencies?.find(currency => currency.isBase)?.code || 'DOP';
+    const settlementSummary = buildPaymentSettlementSummary(
+      Array.isArray(transaction.payments) ? transaction.payments as any : [],
+      Number(totals.total || transaction.total || 0),
+      baseCurrencyCode
+    );
+    const settlementLineById = new Map(settlementSummary.lines.map(line => [line.paymentId, line]));
 
-    (transaction.payments || []).forEach((payment: any) => {
+    (settlementSummary.payments || []).forEach((payment: any) => {
+      const settlementLine = settlementLineById.get(payment?.id);
       const methodLabel = payment?.methodLabel || payment?.methodId || payment?.method || 'PAGO';
-      pushPair(chunks, methodLabel, formatMoney(config.currencySymbol || '$', Number(payment?.amount || 0)), width);
+      const paymentCurrencyCode = settlementLine?.currencyCode || payment?.currencyCode || baseCurrencyCode;
+      const paymentCurrencySymbol = resolveCurrencySymbol(config, paymentCurrencyCode);
+      const appliedBase = Number((settlementLine?.appliedBase ?? payment?.appliedAmount ?? payment?.amount) || 0);
+      const receivedBase = Number((settlementLine?.receivedBase ?? payment?.amount) || 0);
+      const receivedOriginal = Number((settlementLine?.receivedOriginal ?? payment?.amountOriginal ?? payment?.amount) || 0);
+      const changeBase = Number((settlementLine?.changeBase ?? payment?.changeAmount) || 0);
+      const exchangeRate = Number((settlementLine?.exchangeRate ?? payment?.exchangeRate) || 1);
+      pushPair(chunks, methodLabel, formatMoney(config.currencySymbol || '$', appliedBase), width);
+      if (paymentCurrencyCode !== baseCurrencyCode) {
+        pushPair(chunks, 'Recibido', `${paymentCurrencySymbol}${receivedOriginal.toFixed(2)}`, width);
+        pushPair(chunks, 'Tasa', formatMoney(config.currencySymbol || '$', exchangeRate), width);
+      }
+      if (paymentCurrencyCode !== baseCurrencyCode || Math.abs(receivedBase - appliedBase) > 0.0001) {
+        pushPair(chunks, 'Equivalente', formatMoney(config.currencySymbol || '$', receivedBase), width);
+      }
+      if (changeBase > 0.0001) {
+        pushPair(chunks, 'Cambio', formatMoney(config.currencySymbol || '$', changeBase), width);
+      }
       const showAzulRefs =
         payment?.gatewayProvider === 'AZUL' || payment?.gatewayAuthorizationCode || payment?.gatewayReference;
       if (showAzulRefs) {
@@ -433,8 +457,12 @@ export const buildEscPosTicketPayload = (
       }
     });
 
-    if (change > 0.0001) {
-      pushPair(chunks, 'CAMBIO', formatMoney(config.currencySymbol || '$', change), width);
+    pushPair(chunks, 'TOTAL APLICADO', formatMoney(config.currencySymbol || '$', settlementSummary.totalAppliedBase), width);
+    if (settlementSummary.hasForeignCurrency || Math.abs(settlementSummary.totalReceivedBase - settlementSummary.totalAppliedBase) > 0.0001) {
+      pushPair(chunks, 'TOTAL RECIBIDO', formatMoney(config.currencySymbol || '$', settlementSummary.totalReceivedBase), width);
+    }
+    if (settlementSummary.totalChangeBase > 0.0001) {
+      pushPair(chunks, 'CAMBIO', formatMoney(config.currencySymbol || '$', settlementSummary.totalChangeBase), width);
     }
   }
 

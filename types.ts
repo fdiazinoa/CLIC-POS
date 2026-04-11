@@ -1352,6 +1352,22 @@ export interface Transaction {
   dueDate?: string;         // ISO Date
   pendingBalance?: number;  // Amount still owed on this transaction
 
+  // Settlement Summary
+  settlementCurrencyCode?: string;
+  settlementExchangeRate?: number;
+  settlementReceivedOriginal?: number;
+  settlementReceivedBase?: number;
+  settlementAppliedBase?: number;
+  settlementChangeBase?: number;
+  settlementChangeCurrencyCode?: string;
+  settlement_currency_code?: string;
+  settlement_exchange_rate?: number;
+  settlement_received_original?: number;
+  settlement_received_base?: number;
+  settlement_applied_base?: number;
+  settlement_change_base?: number;
+  settlement_change_currency_code?: string;
+
   // Relationships
   relatedTransactions?: string[];   // Related transaction IDs
   originalTransactionId?: string;   // For refunds/voids
@@ -1693,9 +1709,16 @@ export interface PaymentEntry {
   currencyCode?: string;
   amountOriginal?: number;
   exchangeRate?: number;
+  appliedAmount?: number;
+  changeAmount?: number;
+  changeCurrencyCode?: string;
+  amountApplied?: number;
   payment_method?: PaymentMethod | string;
   currency_code?: string;
   exchange_rate?: number;
+  applied_amount?: number;
+  change_amount?: number;
+  change_currency_code?: string;
   source_channel?: 'POS';
   source_payment_id?: string;
   source_transaction_id?: string;
@@ -2110,6 +2133,12 @@ export interface Collection {
   date: string;
   totalAmount: number;
   method: CollectionMethod;
+  currencyCode?: string;
+  exchangeRate?: number;
+  receivedAmountOriginal?: number;
+  receivedAmountBase?: number;
+  appliedAmountBase?: number;
+  unappliedAmountBase?: number;
   reference?: string;
   userId: string;
   userName: string;

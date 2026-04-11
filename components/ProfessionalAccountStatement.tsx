@@ -14,6 +14,8 @@ import {
     ArrowUpRight,
     ArrowDownLeft
 } from 'lucide-react';
+import { buildCollectionSettlementSummary, hasCollectionSettlementDetails } from '../utils/collectionSettlement';
+import { resolveCurrencySymbol } from '../utils/paymentSettlement';
 
 interface ProfessionalAccountStatementProps {
     customer: Customer;
@@ -39,19 +41,27 @@ const ProfessionalAccountStatement: React.FC<ProfessionalAccountStatementProps> 
 
     // Group allocations by transactionId
     const allocationsByTx = useMemo(() => {
-        const map: Record<string, (CollectionAllocation & { collectionDisplayId: string, collectionDate: string })[]> = {};
+        const baseCurrencyCode = config.currencies?.find(currency => currency.isBase)?.code || 'DOP';
+        const map: Record<string, (CollectionAllocation & {
+            collectionDisplayId: string,
+            collectionDate: string,
+            collectionMethod: string,
+            collectionSettlement: ReturnType<typeof buildCollectionSettlementSummary>
+        })[]> = {};
         (collections || []).forEach(col => {
             (col.allocations || []).forEach(alloc => {
                 if (!map[alloc.transactionId]) map[alloc.transactionId] = [];
                 map[alloc.transactionId].push({
                     ...alloc,
                     collectionDisplayId: col.displayId || 'S/N',
-                    collectionDate: col.date
+                    collectionDate: col.date,
+                    collectionMethod: col.method,
+                    collectionSettlement: buildCollectionSettlementSummary(col, baseCurrencyCode)
                 });
             });
         });
         return map;
-    }, [collections]);
+    }, [collections, config.currencies]);
 
     // Financial Indicators Calculation
     const stats = useMemo(() => {
@@ -90,6 +100,8 @@ const ProfessionalAccountStatement: React.FC<ProfessionalAccountStatementProps> 
             currency: 'DOP',
         }).format(amount).replace('DOP', config.currencySymbol);
     };
+
+    const baseCurrencyCode = config.currencies?.find(currency => currency.isBase)?.code || 'DOP';
 
     const getStatusBadge = (tx: Transaction) => {
         if (isRefundDocument(tx)) {
@@ -160,6 +172,17 @@ const ProfessionalAccountStatement: React.FC<ProfessionalAccountStatementProps> 
                             const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
                             const affectedNCF = (tx.affectedNCF || '').toString().trim();
                             const rowNcf = (tx.ncf || '').toString().trim();
+                            const settlementCurrencyCode = String(tx.settlementCurrencyCode || tx.settlement_currency_code || '').trim().toUpperCase() || baseCurrencyCode;
+                            const settlementExchangeRate = Number((tx.settlementExchangeRate ?? tx.settlement_exchange_rate ?? 1)) || 1;
+                            const settlementReceivedOriginal = Number((tx.settlementReceivedOriginal ?? tx.settlement_received_original ?? tx.total ?? 0)) || 0;
+                            const settlementReceivedBase = Number((tx.settlementReceivedBase ?? tx.settlement_received_base ?? tx.total ?? 0)) || 0;
+                            const settlementAppliedBase = Number((tx.settlementAppliedBase ?? tx.settlement_applied_base ?? tx.total ?? 0)) || 0;
+                            const settlementChangeBase = Number(tx.settlementChangeBase ?? tx.settlement_change_base ?? 0) || 0;
+                            const shouldShowTxSettlement =
+                                settlementCurrencyCode !== baseCurrencyCode
+                                || settlementChangeBase > 0.009
+                                || Math.abs(settlementReceivedBase - settlementAppliedBase) > 0.009;
+                            const settlementSymbol = resolveCurrencySymbol(config, settlementCurrencyCode, config.currencySymbol);
 
                             return (
                                 <React.Fragment key={tx.id}>
@@ -219,6 +242,18 @@ const ProfessionalAccountStatement: React.FC<ProfessionalAccountStatementProps> 
                                                                             </p>
                                                                         </div>
                                                                     )}
+                                                                    {!isRefund && shouldShowTxSettlement && (
+                                                                        <div className="mt-1 space-y-0.5">
+                                                                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">
+                                                                                Cobro recibido: {settlementSymbol}{settlementReceivedOriginal.toFixed(2)} {settlementCurrencyCode}
+                                                                                {settlementCurrencyCode !== baseCurrencyCode ? ` · Tasa ${config.currencySymbol}${settlementExchangeRate.toFixed(2)}` : ''}
+                                                                            </p>
+                                                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
+                                                                                Aplicado: {formatCurrency(settlementAppliedBase)}
+                                                                                {settlementChangeBase > 0.009 ? ` · Cambio ${formatCurrency(settlementChangeBase)}` : ''}
+                                                                            </p>
+                                                                        </div>
+                                                                    )}
                                                                 </div>
                                                             </div>
                                                             <span className={`text-[11px] font-black ${isRefund ? 'text-red-500' : 'text-slate-500'}`}>
@@ -239,6 +274,18 @@ const ProfessionalAccountStatement: React.FC<ProfessionalAccountStatementProps> 
                                                                             <Calendar size={10} /> {new Date(alloc.collectionDate).toLocaleDateString()}
                                                                             <Clock size={10} /> {new Date(alloc.collectionDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                                                         </div>
+                                                                        {hasCollectionSettlementDetails(alloc.collectionSettlement, baseCurrencyCode) && (
+                                                                            <div className="mt-1 space-y-0.5">
+                                                                                <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wide">
+                                                                                    Recibido: {resolveCurrencySymbol(config, alloc.collectionSettlement.currencyCode, config.currencySymbol)}{alloc.collectionSettlement.receivedOriginal.toFixed(2)} {alloc.collectionSettlement.currencyCode}
+                                                                                    {alloc.collectionSettlement.currencyCode !== baseCurrencyCode ? ` · Tasa ${config.currencySymbol}${alloc.collectionSettlement.exchangeRate.toFixed(2)}` : ''}
+                                                                                </p>
+                                                                                <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-wide">
+                                                                                    Aplicado a este documento: {formatCurrency(alloc.amount)}
+                                                                                    {alloc.collectionSettlement.unappliedBase > 0.009 ? ` · Saldo a favor ${formatCurrency(alloc.collectionSettlement.unappliedBase)}` : ''}
+                                                                                </p>
+                                                                            </div>
+                                                                        )}
                                                                     </div>
                                                                 </div>
                                                                 <span className="text-[11px] font-black text-red-500">-{formatCurrency(alloc.amount)}</span>
