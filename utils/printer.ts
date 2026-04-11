@@ -4,6 +4,7 @@ import { buildEscPosReservationPayload, buildEscPosTicketPayload, buildEscPosVou
 import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
 import { dbAdapter } from '../services/db';
 import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, formatTaxLineLabel } from './fiscalBreakdown';
+import { buildPaymentSettlementSummary, resolveCurrencySymbol } from './paymentSettlement';
 
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -429,8 +430,9 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
 
             ${(() => {
             const payments = transaction.payments || [];
-            const totalPaid = payments.reduce((acc: number, p: any) => acc + (p.amount || 0), 0);
-            const change = Math.max(0, totalPaid - (finalTotal || 0));
+            const baseCurrencyCode = config.currencies?.find(currency => currency.isBase)?.code || 'DOP';
+            const settlementSummary = buildPaymentSettlementSummary(payments as any, finalTotal || transaction.total || 0, baseCurrencyCode);
+            const settlementLineById = new Map(settlementSummary.lines.map(line => [line.paymentId, line]));
 
             if (payments.length === 0) return '';
 
@@ -439,7 +441,15 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                 <div class="totals-section">
                     <div style="font-weight: bold; margin-bottom: 4px; font-size: 10px;">FORMAS DE PAGO</div>
                     ${payments.map((p: any) => {
+            const settlementLine = settlementLineById.get(p.id);
             const methodLabel = p.method === 'CASH' ? 'EFECTIVO' : p.method === 'CARD' ? 'TARJETA' : p.method === 'STORE_CREDIT' ? 'NOTA DE CRÉDITO' : p.method;
+            const paymentCurrencyCode = settlementLine?.currencyCode || p.currencyCode || baseCurrencyCode;
+            const paymentCurrencySymbol = resolveCurrencySymbol(config, paymentCurrencyCode, currencySymbol);
+            const appliedBase = Number((settlementLine?.appliedBase ?? p.appliedAmount ?? p.amount) || 0);
+            const receivedBase = Number((settlementLine?.receivedBase ?? p.amount) || 0);
+            const receivedOriginal = Number((settlementLine?.receivedOriginal ?? p.amountOriginal ?? p.amount) || 0);
+            const changeBase = Number((settlementLine?.changeBase ?? p.changeAmount) || 0);
+            const exchangeRate = Number((settlementLine?.exchangeRate ?? p.exchangeRate) || 1);
             const showAzulRefs = p.gatewayProvider === 'AZUL' || p.gatewayAuthorizationCode || p.gatewayReference;
             const azulLines = showAzulRefs
                ? [
@@ -447,19 +457,37 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
                   p.gatewayReference ? `<div class="meta-row" style="font-size: 11px;">Ref No.: ${p.gatewayReference}</div>` : '',
                ].join('')
                : '';
+            const settlementLines = [
+               paymentCurrencyCode !== baseCurrencyCode ? `<div class="meta-row" style="font-size: 11px;">Recibido: ${paymentCurrencySymbol}${receivedOriginal.toFixed(2)}</div>` : '',
+               paymentCurrencyCode !== baseCurrencyCode ? `<div class="meta-row" style="font-size: 11px;">Tasa: ${currencySymbol}${exchangeRate.toFixed(2)}</div>` : '',
+               (paymentCurrencyCode !== baseCurrencyCode || Math.abs(receivedBase - appliedBase) > 0.0001)
+                  ? `<div class="meta-row" style="font-size: 11px;">Equivalente: ${currencySymbol}${receivedBase.toFixed(2)}</div>`
+                  : '',
+               changeBase > 0.0001 ? `<div class="meta-row" style="font-size: 11px;">Cambio: ${currencySymbol}${changeBase.toFixed(2)}</div>` : '',
+            ].join('');
             return `
                     <div class="total-row">
                         <span>${methodLabel}</span>
-                        <span>${currencySymbol}${(p.amount || 0).toFixed(2)}</span>
+                        <span>${currencySymbol}${appliedBase.toFixed(2)}</span>
                     </div>
+                    ${settlementLines}
                     ${azulLines}
                     `;
          }).join('')}
-                    
-                    ${change > 0 ? `
+                    <div class="total-row" style="margin-top: 4px; font-weight: bold;">
+                        <span>TOTAL APLICADO</span>
+                        <span>${currencySymbol}${settlementSummary.totalAppliedBase.toFixed(2)}</span>
+                    </div>
+                    ${settlementSummary.hasForeignCurrency || Math.abs(settlementSummary.totalReceivedBase - settlementSummary.totalAppliedBase) > 0.0001 ? `
+                    <div class="total-row" style="margin-top: 4px; font-weight: bold;">
+                        <span>TOTAL RECIBIDO</span>
+                        <span>${currencySymbol}${settlementSummary.totalReceivedBase.toFixed(2)}</span>
+                    </div>
+                    ` : ''}
+                    ${settlementSummary.totalChangeBase > 0 ? `
                     <div class="total-row" style="margin-top: 4px; font-weight: bold;">
                         <span>CAMBIO</span>
-                        <span>${currencySymbol}${change.toFixed(2)}</span>
+                        <span>${currencySymbol}${settlementSummary.totalChangeBase.toFixed(2)}</span>
                     </div>
                     ` : ''}
                 </div>

@@ -34,6 +34,10 @@ import {
    createPaymentIntegrationAuditEvent,
    dispatchAuditEventConfigUpdate,
 } from '../services/payments/paymentIntegrationAudit';
+import {
+   buildPaymentSettlementSummary,
+   resolveCurrencySymbol,
+} from '../utils/paymentSettlement';
 
 interface TicketHistoryProps {
    transactions: Transaction[];
@@ -597,7 +601,9 @@ const TicketDetailDrawer: React.FC<{
    const cashierName = tx.userName || users.find(u => u.id === tx.userId)?.name || 'Sistema';
    const supervisorName = tx.authorizedByName || users.find(u => u.id === tx.authorizedById)?.name || null;
    const payments = Array.isArray(tx.payments) ? tx.payments : [];
-   const paymentTotal = payments.reduce((acc, p: any) => acc + Number(p?.amount || 0), 0);
+   const baseCurrency = config.currencies?.find(currency => currency.isBase) || config.currencies?.[0] || { code: 'DOP', symbol: config.currencySymbol || 'RD$' };
+   const paymentSettlement = buildPaymentSettlementSummary(payments as PaymentEntry[], Math.abs(Number(tx.total || 0)), baseCurrency.code);
+   const paymentLineById = new Map(paymentSettlement.lines.map(line => [line.paymentId, line]));
    const isRefundDoc = isRefundLikeTransaction(tx);
    const affectedInvoice = (tx.affectedInvoiceNumber || '').toString().trim();
    const affectedNCF = (tx.affectedNCF || '').toString().trim();
@@ -843,7 +849,7 @@ const TicketDetailDrawer: React.FC<{
                      </div>
                   )}
 
-                  <div className="rounded-xl border border-gray-100 overflow-hidden">
+                           <div className="rounded-xl border border-gray-100 overflow-hidden">
                      <div className="px-3 py-2 bg-gray-50 border-b border-gray-100">
                         <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">Formas de Pago</p>
                      </div>
@@ -852,10 +858,18 @@ const TicketDetailDrawer: React.FC<{
                            <p className="text-xs text-gray-400 italic">Sin información de pagos</p>
                         ) : (
                            payments.map((payment: any, index: number) => {
+                              const settlementLine = paymentLineById.get(payment?.id);
                               const showAzulRefs =
                                  payment?.gatewayProvider === 'AZUL' ||
                                  payment?.gatewayAuthorizationCode ||
                                  payment?.gatewayReference;
+                              const paymentCurrencyCode = settlementLine?.currencyCode || payment?.currencyCode || baseCurrency.code;
+                              const paymentCurrencySymbol = resolveCurrencySymbol(config, paymentCurrencyCode, config.currencySymbol);
+                              const receivedOriginal = settlementLine?.receivedOriginal ?? Number(payment?.amountOriginal || payment?.amount || 0);
+                              const receivedBase = settlementLine?.receivedBase ?? Number(payment?.amount || 0);
+                              const appliedBase = settlementLine?.appliedBase ?? Number(payment?.appliedAmount || payment?.amount || 0);
+                              const changeBase = settlementLine?.changeBase ?? Number(payment?.changeAmount || 0);
+                              const exchangeRate = settlementLine?.exchangeRate ?? Number(payment?.exchangeRate || 1);
                               return (
                                  <div
                                     key={`${tx.id}-payment-${index}`}
@@ -867,11 +881,35 @@ const TicketDetailDrawer: React.FC<{
                                           <span className="text-xs font-bold text-gray-700">{getPaymentMethodLabel(payment)}</span>
                                        </div>
                                        <span className="text-xs font-black text-gray-900">
-                                          {config.currencySymbol}{Number(payment?.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                          {config.currencySymbol}{appliedBase.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                        </span>
                                     </div>
-                                    {showAzulRefs ? (
-                                       <div className="px-3 pb-2 pt-0 space-y-0.5 border-t border-gray-50 bg-gray-50/50">
+                                    {(paymentCurrencyCode !== baseCurrency.code || changeBase > 0.009 || showAzulRefs) ? (
+                                       <div className="px-3 pb-2 pt-2 space-y-1 border-t border-gray-50 bg-gray-50/50">
+                                          {paymentCurrencyCode !== baseCurrency.code ? (
+                                             <>
+                                                <p className="text-[11px] text-gray-700">
+                                                   <span className="font-semibold text-gray-500">Recibido:</span>{' '}
+                                                   {paymentCurrencySymbol}{receivedOriginal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                </p>
+                                                <p className="text-[11px] text-gray-700">
+                                                   <span className="font-semibold text-gray-500">Tasa:</span>{' '}
+                                                   {config.currencySymbol}{exchangeRate.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                </p>
+                                             </>
+                                          ) : null}
+                                          {(paymentCurrencyCode !== baseCurrency.code || Math.abs(receivedBase - appliedBase) > 0.009) ? (
+                                             <p className="text-[11px] text-gray-700">
+                                                <span className="font-semibold text-gray-500">Equivalente:</span>{' '}
+                                                {config.currencySymbol}{receivedBase.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                             </p>
+                                          ) : null}
+                                          {changeBase > 0.009 ? (
+                                             <p className="text-[11px] text-gray-700">
+                                                <span className="font-semibold text-gray-500">Cambio:</span>{' '}
+                                                {config.currencySymbol}{changeBase.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                             </p>
+                                          ) : null}
                                           {payment?.gatewayAuthorizationCode ? (
                                              <p className="text-[11px] text-gray-700">
                                                 <span className="font-semibold text-gray-500">AUT No.:</span>{' '}
@@ -891,9 +929,23 @@ const TicketDetailDrawer: React.FC<{
                            })
                         )}
                         <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-                           <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Total Recibido</span>
-                           <span className="text-sm font-black text-gray-900">{config.currencySymbol}{paymentTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                           <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Total Aplicado</span>
+                           <span className="text-sm font-black text-gray-900">{config.currencySymbol}{paymentSettlement.totalAppliedBase.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
+                        {(paymentSettlement.hasForeignCurrency || paymentSettlement.totalChangeBase > 0.009 || Math.abs(paymentSettlement.totalReceivedBase - paymentSettlement.totalAppliedBase) > 0.009) && (
+                           <>
+                              <div className="flex items-center justify-between">
+                                 <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Total Recibido</span>
+                                 <span className="text-sm font-black text-gray-900">{config.currencySymbol}{paymentSettlement.totalReceivedBase.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              </div>
+                              {paymentSettlement.totalChangeBase > 0.009 ? (
+                                 <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Cambio</span>
+                                    <span className="text-sm font-black text-emerald-600">{config.currencySymbol}{paymentSettlement.totalChangeBase.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                 </div>
+                              ) : null}
+                           </>
+                        )}
                      </div>
                   </div>
                </section>

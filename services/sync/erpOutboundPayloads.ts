@@ -44,6 +44,10 @@ export function coerceTransactionItemsForErp<T extends { items?: unknown }>(txn:
 }
 
 const pickTransactionCurrency = (tx: Transaction): string => {
+    const fromSettlement = (tx.settlementCurrencyCode || (tx as any).settlement_currency_code || '').trim();
+    if (fromSettlement) {
+        return fromSettlement;
+    }
     const fromPayments = Array.isArray(tx.payments)
         ? tx.payments.map((p: any) => p?.currencyCode).find((c: unknown) => typeof c === 'string' && c.trim())
         : undefined;
@@ -51,6 +55,10 @@ const pickTransactionCurrency = (tx: Transaction): string => {
 };
 
 const pickTransactionExchangeRate = (tx: Transaction): number | undefined => {
+    const settlementRate = (tx.settlementExchangeRate ?? (tx as any).settlement_exchange_rate);
+    if (typeof settlementRate === 'number' && !Number.isNaN(settlementRate)) {
+        return settlementRate;
+    }
     const rates = Array.isArray(tx.payments)
         ? tx.payments.map((p: any) => p?.exchangeRate).filter((r: unknown) => typeof r === 'number' && !Number.isNaN(r))
         : [];
