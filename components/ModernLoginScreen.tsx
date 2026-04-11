@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Delete, Lock, Fingerprint } from 'lucide-react';
 import { User as UserType, TerminalConfig } from '../types';
 import { biometricService } from '../services/BiometricAuthService';
@@ -24,6 +24,13 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   const [biometricFailCount, setBiometricFailCount] = useState(0);
   const [isHardwareAvailable, setIsHardwareAvailable] = useState(false);
   const [buildVersion, setBuildVersion] = useState<string>('');
+  const pinInputRef = useRef<HTMLInputElement>(null);
+
+  const focusPinInput = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      pinInputRef.current?.focus();
+    });
+  }, []);
 
   useEffect(() => {
     const initBiometrics = async () => {
@@ -94,6 +101,13 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
         return prev;
       });
     }
+    focusPinInput();
+  }, [focusPinInput]);
+
+  const handlePinInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const nextPin = event.target.value.replace(/\D/g, '').slice(0, 4);
+    setError(false);
+    setPin(nextPin);
   }, []);
 
   useEffect(() => {
@@ -103,19 +117,36 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   }, [pin, checkLogin]);
 
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
-    if (['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(event.key)) {
-      handleKeyPress(event.key);
+    if (document.activeElement === pinInputRef.current) {
+      return;
+    }
+
+    const keypadDigit = event.code.match(/^Numpad([0-9])$/)?.[1];
+    const digit = /^[0-9]$/.test(event.key) ? event.key : keypadDigit;
+
+    if (digit) {
+      event.preventDefault();
+      handleKeyPress(digit);
     } else if (event.key === 'Backspace') {
+      event.preventDefault();
       handleKeyPress('BACK');
     } else if (event.key === 'Escape' || event.key.toLowerCase() === 'c') {
+      event.preventDefault();
       handleKeyPress('C');
+    } else if (event.key === 'Enter' && pin.length === 4) {
+      event.preventDefault();
+      checkLogin(pin);
     }
-  }, [handleKeyPress]);
+  }, [checkLogin, handleKeyPress, pin]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
+
+  useEffect(() => {
+    focusPinInput();
+  }, [focusPinInput]);
 
   const handleBiometricLogin = async () => {
     if (biometricFailCount >= 3) {
@@ -202,7 +233,28 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
 
         {/* Right Side: PIN Entry & Keypad */}
         <div className="modern-login-right">
-          <div className="modern-pin-section">
+          <div className="modern-pin-section" onClick={focusPinInput}>
+            <input
+              ref={pinInputRef}
+              type="tel"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              autoComplete="off"
+              enterKeyHint="done"
+              className="modern-pin-input"
+              value={pin}
+              onChange={handlePinInputChange}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' || event.key.toLowerCase() === 'c') {
+                  event.preventDefault();
+                  handleKeyPress('C');
+                } else if (event.key === 'Enter' && pin.length === 4) {
+                  event.preventDefault();
+                  checkLogin(pin);
+                }
+              }}
+              aria-label="PIN de acceso"
+            />
             <div className="modern-pin-display">
               {[0, 1, 2, 3].map((index) => (
                 <div
