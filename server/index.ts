@@ -944,6 +944,7 @@ const ensureFloorPlanTables = () => {
                     status TEXT DEFAULT 'FREE',
                     consumo_minimo_mesa REAL DEFAULT 0,
                     comensales_minimos INTEGER DEFAULT 1,
+                    guests INTEGER DEFAULT 1,
                     data TEXT,
                     FOREIGN KEY (roomId) REFERENCES rooms(id)
                 );
@@ -1015,6 +1016,10 @@ const ensureFloorPlanTables = () => {
                 console.log('📦 Migrating tables: Adding designer properties columns...');
                 db.prepare("ALTER TABLE tables ADD COLUMN consumo_minimo_mesa REAL DEFAULT 0").run();
                 db.prepare("ALTER TABLE tables ADD COLUMN comensales_minimos INTEGER DEFAULT 1").run();
+            }
+            if (!tableCols.some(c => c.name === 'guests')) {
+                console.log('📦 Migrating tables: Adding guests column...');
+                db.prepare("ALTER TABLE tables ADD COLUMN guests INTEGER DEFAULT 1").run();
             }
 
             // Ensure terminals_rooms_visibility
