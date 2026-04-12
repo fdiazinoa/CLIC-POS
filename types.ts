@@ -955,6 +955,7 @@ export interface BusinessConfig {
     viewMode: 'VISUAL' | 'RETAIL';
   };
   terminalSnapshots?: Record<string, TerminalConfigSnapshot>;
+  metadata?: Record<string, any>;
 }
 
 export interface RoleDefinition {
