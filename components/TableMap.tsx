@@ -30,6 +30,7 @@ interface TableMapProps {
     isRestaurantMode?: boolean;
     onRefreshTables?: () => void;
     canViewBusinessMetrics?: boolean;
+    onPrintPrecheck?: (table: Table) => void;
 }
 
 type SmartStatus = 'FREE' | 'ATTENTION' | 'OCCUPIED' | 'CHECK_REQUESTED';
@@ -209,7 +210,8 @@ const TableMap: React.FC<TableMapProps> = ({
     bloqueoMeseros,
     isRestaurantMode,
     onRefreshTables,
-    canViewBusinessMetrics
+    canViewBusinessMetrics,
+    onPrintPrecheck
 }) => {
     const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || rooms[0]?.id || '');
     const [selectedTable, setSelectedTable] = useState<Table | null>(null);
@@ -801,7 +803,9 @@ const TableMap: React.FC<TableMapProps> = ({
                             onTableClick(selectedTable);
                             setSelectedTable(null);
                         }}
-                        onPrintPrecheck={() => console.log('Print precheck')}
+                        onPrintPrecheck={() => {
+                            if (onPrintPrecheck) onPrintPrecheck(selectedTable);
+                        }}
                         onSplitItems={() => console.log('Split items')}
                         onSplitPayment={() => console.log('Split payment')}
                         onMoveTable={async (targetTableId) => {

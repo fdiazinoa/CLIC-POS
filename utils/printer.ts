@@ -1,4 +1,4 @@
-import { Transaction, BusinessConfig, Reservation } from '../types';
+import { Transaction, BusinessConfig, Reservation, CartItem, Table } from '../types';
 import { PrintRouterService } from '../services/printer/PrintRouterService';
 import { buildEscPosReservationPayload, buildEscPosTicketPayload, buildEscPosVoucherPayload } from '../services/printer/EscPosFormatter';
 import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRuntime';
@@ -831,6 +831,295 @@ export const printReservation = async (
 
     if (shouldSuppressBrowserPrintFallback()) {
         console.warn('Silent native reservation print failed; browser print fallback suppressed.');
+        return false;
+    }
+
+    const printWindow = window.open('', '_blank', 'width=400,height=600');
+    if (printWindow) {
+        printWindow.document.write(receiptHtml);
+        printWindow.document.close();
+        return true;
+    }
+
+    return false;
+};
+
+export const printPrecuenta = async (
+    config: BusinessConfig,
+    params: {
+        items: CartItem[];
+        subtotal: number;
+        discountTotal: number;
+        taxTotal: number;
+        finalTotal: number;
+        table?: Table | null;
+        customerName?: string;
+        terminalId?: string;
+    }
+): Promise<boolean> => {
+    const { companyInfo, currencySymbol } = config;
+    const dateStr = new Date().toLocaleDateString();
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const receiptHtml = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Pre-Cuenta</title>
+            <style>
+                @page { size: 80mm auto; margin: 0; }
+                body {
+                    font-family: 'Courier New', Courier, monospace;
+                    width: 72mm;
+                    margin: 0 auto;
+                    padding: 4mm;
+                    font-size: 14px;
+                    line-height: 1.2;
+                    color: #000;
+                    background: #fff;
+                }
+                .text-center { text-align: center; }
+                .text-right { text-align: right; }
+                .font-bold { font-weight: 700; }
+                .font-black { font-weight: 900; }
+                .company-name { font-size: 18px; font-weight: 900; margin-bottom: 2px; text-transform: uppercase; }
+                .company-info { font-size: 12px; }
+                .divider { border-top: 1px dashed #000; margin: 8px 0; }
+                .doc-title { font-size: 16px; font-weight: 900; text-transform: uppercase; margin-bottom: 5px; }
+                .warning-title { font-size: 12px; font-weight: bold; background: #000; color: #fff; padding: 3px; display: inline-block; margin-bottom: 5px; }
+                .meta-row { font-size: 12px; }
+                .items-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
+                .items-table td { padding: 4px 0; vertical-align: top; }
+                .item-name { font-weight: 700; display: block; }
+                .item-meta { font-size: 12px; display: block; margin-left: 5px; }
+                .totals-section { margin-top: 10px; }
+                .total-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+                .total-final { font-size: 18px; font-weight: 900; border-top: 2px solid #000; padding-top: 5px; }
+            </style>
+        </head>
+        <body>
+            <div class="text-center">
+                <div class="company-name">${companyInfo.name}</div>
+                <div class="company-info">
+                    <div>RNC: ${companyInfo.rnc}</div>
+                    <div>${companyInfo.address}</div>
+                    <div>TEL: ${companyInfo.phone}</div>
+                </div>
+            </div>
+
+            <div class="divider"></div>
+            
+            <div class="text-center">
+                <div class="warning-title">NO VÁLIDO COMO FACTURA FISCAL</div>
+                <div class="doc-title">PRE-CUENTA</div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="meta-row">
+                ${params.table ? `<div><strong>Mesa:</strong> ${params.table.name || params.table.nombre}</div>` : ''}
+                ${params.customerName ? `<div><strong>Cliente:</strong> ${params.customerName}</div>` : ''}
+                <div><strong>Fecha:</strong> ${dateStr} ${timeStr}</div>
+            </div>
+
+            <div class="divider"></div>
+
+            <table class="items-table">
+                <tbody>
+                    ${params.items.map(item => `
+                        <tr>
+                            <td style="width: 70%;">
+                                <span class="item-name">${item.name}</span>
+                                <span class="item-meta">
+                                    ${item.quantity} x ${currencySymbol}${item.price.toFixed(2)}
+                                    ${item.modifiers && item.modifiers.length > 0 ? `<br/>Op: ${item.modifiers.join(', ')}` : ''}
+                                </span>
+                            </td>
+                            <td class="text-right font-bold">
+                                ${currencySymbol}${(item.price * item.quantity).toFixed(2)}
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+
+            <div class="divider"></div>
+
+            <div class="totals-section">
+                <div class="total-row">
+                    <span>SUBTOTAL</span>
+                    <span>${currencySymbol}${params.subtotal.toFixed(2)}</span>
+                </div>
+                ${params.discountTotal > 0 ? `
+                <div class="total-row">
+                    <span>DESCUENTO</span>
+                    <span>-${currencySymbol}${params.discountTotal.toFixed(2)}</span>
+                </div>` : ''}
+                <div class="total-row">
+                    <span>IMPUESTOS</span>
+                    <span>${currencySymbol}${params.taxTotal.toFixed(2)}</span>
+                </div>
+                
+                <div class="total-row total-final">
+                    <span>TOTAL A PAGAR</span>
+                    <span>${currencySymbol}${params.finalTotal.toFixed(2)}</span>
+                </div>
+            </div>
+
+            <div class="text-center" style="margin-top: 20px; font-size: 11px; margin-bottom: 20px;">
+                Verifique su consumo antes de emitir la factura.
+                <br/><br/>
+                Propina Legal no incluida.
+            </div>
+
+            <script>
+                window.onload = function() {
+                    setTimeout(() => { window.print(); }, 500);
+                }
+            </script>
+        </body>
+        </html>
+    `;
+
+    const silentHtml = receiptHtml.replace(/<script>[\s\S]*?window\.onload[\s\S]*?<\/script>/, '');
+    let printedSilently = false;
+
+    if (!shouldSuppressBrowserPrintFallback()) {
+        printedSilently = await PrintRouterService.routeAndPrintHtml({
+            config,
+            html: silentHtml,
+            role: 'TICKET',
+            jobType: 'TICKET',
+            referenceId: `PRECUENTA-${Date.now()}`,
+            copies: 1,
+        });
+    }
+
+    if (printedSilently) return true;
+
+    if (shouldSuppressBrowserPrintFallback()) {
+        console.warn('Silent native precuenta print failed; fallback suppressed.');
+        return false;
+    }
+
+    const printWindow = window.open('', '_blank', 'width=400,height=600');
+    if (printWindow) {
+        printWindow.document.write(receiptHtml);
+        printWindow.document.close();
+        return true;
+    }
+
+    return false;
+};
+
+export const printComanda = async (
+    config: BusinessConfig,
+    params: {
+        items: CartItem[];
+        table?: Table | null;
+        customerName?: string;
+        orderNumber?: string;
+        terminalId?: string;
+    }
+): Promise<boolean> => {
+    const { companyInfo } = config;
+    const dateStr = new Date().toLocaleDateString();
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const receiptHtml = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Comanda - Cocina</title>
+            <style>
+                @page { size: 80mm auto; margin: 0; }
+                body {
+                    font-family: 'Courier New', Courier, monospace;
+                    width: 72mm;
+                    margin: 0 auto;
+                    padding: 4mm;
+                    font-size: 16px;
+                    line-height: 1.1;
+                    color: #000;
+                    background: #fff;
+                }
+                .text-center { text-align: center; }
+                .font-bold { font-weight: 700; }
+                .font-black { font-weight: 900; }
+                .divider { border-top: 2px solid #000; margin: 8px 0; }
+                .doc-title { font-size: 22px; font-weight: 900; text-transform: uppercase; margin-bottom: 5px; border: 3px solid #000; padding: 5px; }
+                .meta-row { font-size: 14px; margin-bottom: 5px; }
+                .items-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
+                .items-table td { padding: 6px 0; vertical-align: top; border-bottom: 1px solid #eee; }
+                .qty-cell { font-size: 24px; font-weight: 900; width: 40px; text-align: center; border: 2px solid #000; }
+                .item-name { font-size: 18px; font-weight: 900; display: block; margin-left: 10px; }
+                .item-meta { font-size: 14px; display: block; margin-left: 10px; font-style: italic; background: #f0f0f0; padding: 2px; }
+                .footer { margin-top: 20px; font-size: 12px; }
+            </style>
+        </head>
+        <body>
+            <div class="text-center">
+                <div class="doc-title">COCINA</div>
+            </div>
+
+            <div class="meta-row text-center">
+                ${params.table ? `<div style="font-size: 24px; font-weight: 900;">MESA: ${params.table.name || params.table.nombre}</div>` : ''}
+                ${params.orderNumber ? `<div>ORDEN: #${params.orderNumber}</div>` : ''}
+                <div>${dateStr} ${timeStr}</div>
+                ${params.customerName ? `<div>Cliente: ${params.customerName}</div>` : ''}
+            </div>
+
+            <div class="divider"></div>
+
+            <table class="items-table">
+                <tbody>
+                    ${params.items.filter(i => i.quantity > 0).map(item => `
+                        <tr>
+                            <td class="qty-cell">${item.quantity}</td>
+                            <td>
+                                <span class="item-name">${item.name}</span>
+                                ${item.modifiers && item.modifiers.length > 0 ? `<span class="item-meta">*** ${item.modifiers.join(', ')}</span>` : ''}
+                                ${item.note ? `<span class="item-meta">NOTA: ${item.note}</span>` : ''}
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+
+            <div class="divider"></div>
+            
+            <div class="footer text-center">
+                Impreso en Terminal: ${params.terminalId || 'POS'}
+            </div>
+
+            <script>
+                window.onload = function() {
+                    setTimeout(() => { window.print(); }, 500);
+                }
+            </script>
+        </body>
+        </html>
+    `;
+
+    const silentHtml = receiptHtml.replace(/<script>[\s\S]*?window\.onload[\s\S]*?<\/script>/, '');
+    let printedSilently = false;
+
+    // Use KITCHEN role for routing
+    if (!shouldSuppressBrowserPrintFallback()) {
+        printedSilently = await PrintRouterService.routeAndPrintHtml({
+            config,
+            html: silentHtml,
+            role: 'KITCHEN',
+            jobType: 'TICKET',
+            referenceId: `COMANDA-${Date.now()}`,
+            copies: 1,
+        });
+    }
+
+    if (printedSilently) return true;
+
+    if (shouldSuppressBrowserPrintFallback()) {
+        console.warn('Silent native kitchen print failed; fallback suppressed.');
         return false;
     }
 

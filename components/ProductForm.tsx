@@ -54,7 +54,7 @@ interface ProductFormProps {
   allProducts?: Product[]; // For recipe search
 }
 
-type ProductTab = 'GENERAL' | 'CLASSIFICATION' | 'LABELS' | 'OPERATIVE' | 'TAXES' | 'PRICING' | 'VARIANTS' | 'LOGISTICS' | 'STOCKS' | 'KARDEX' | 'RECIPE';
+type ProductTab = 'GENERAL' | 'CLASSIFICATION' | 'LABELS' | 'OPERATIVE' | 'TAXES' | 'PRICING' | 'VARIANTS' | 'MODIFIERS' | 'LOGISTICS' | 'STOCKS' | 'KARDEX' | 'RECIPE';
 
 const DEFAULT_OPERATIONAL_FLAGS: ProductOperationalFlags = {
   isWeighted: false,
@@ -873,6 +873,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             { id: 'OPERATIVE', label: 'Operativa', icon: Settings2 },
             { id: 'PRICING', label: 'Tarifas', icon: Tag },
             { id: 'VARIANTS', label: 'Variantes', icon: Layers },
+            { id: 'MODIFIERS', label: 'Modificadores', icon: Plus },
             { id: 'STOCKS', label: 'Existencias', icon: ClipboardList },
             { id: 'KARDEX', label: 'Kardex', icon: BookOpen },
             { id: 'RECIPE', label: 'Receta / Kit', icon: Layers }, // Using Layers or similar
