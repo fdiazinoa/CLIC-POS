@@ -1269,6 +1269,7 @@ export interface CartItem extends Product {
   trackingCode?: string; // NEW: Assigned lot/serial code
   trackingData?: any[]; // NEW: Detailed tracking records selected
   variantInfo?: string; // NEW: Human readable variant detail
+  variantSku?: string; // NEW: Variant SKU for inventory/receipts
   dispatched?: boolean; // NEW: Track if item was sent to kitchen
 }
 
