@@ -154,6 +154,14 @@ type ReceivableRepairSummary = {
   creditNoteIds: string[];
 };
 
+const LICENSE_REFRESH_BASE_MS = 60_000;
+const TIMER_JITTER_MIN_MS = 3_000;
+const TIMER_JITTER_MAX_MS = 5_000;
+
+const getTimerJitterMs = (): number => (
+  TIMER_JITTER_MIN_MS + Math.floor(Math.random() * (TIMER_JITTER_MAX_MS - TIMER_JITTER_MIN_MS + 1))
+);
+
 const resolveSetupTenantId = (): string => {
   const candidates = [
     localStorage.getItem('active_tenant_id'),
@@ -651,9 +659,18 @@ const AppContent: React.FC = () => {
     const hasActivationIdentity = Boolean(persistedTenantId && persistedTenantEmail);
     if (!hasActivationIdentity) return;
 
+    let disposed = false;
+    let timeoutId: number | null = null;
+
     const runLicenseCheck = async (fallbackMessage: string) => {
       try {
         const res = await checkLicenseStatus(persistedTenantId, deviceId);
+        if (disposed) return;
+
+        if (res.tenantId && res.tenantId !== persistedTenantId) {
+          localStorage.setItem('clic_tenant_id', res.tenantId);
+        }
+
         if (!res.isValid) {
           triggerLockdown(res.reason || fallbackMessage);
         }
@@ -664,39 +681,27 @@ const AppContent: React.FC = () => {
 
     void runLicenseCheck('Servicio Suspendido.');
 
-    const intervalId = window.setInterval(async () => {
-      await runLicenseCheck('Servicio Suspendido por el Administrador.');
-    }, 30000);
+    const scheduleNextLicenseCheck = () => {
+      if (disposed) return;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
 
-    return () => window.clearInterval(intervalId);
-  }, [isDataLoaded, deviceId, triggerLockdown]);
+      // Jitter: evita que múltiples terminales disparen el chequeo al mismo milisegundo.
+      timeoutId = window.setTimeout(async () => {
+        await runLicenseCheck('Servicio Suspendido por el Administrador.');
+        scheduleNextLicenseCheck();
+      }, LICENSE_REFRESH_BASE_MS + getTimerJitterMs());
+    };
 
-  // --- TENANT ID SELF-CORRECTION ---
-  useEffect(() => {
-    if (!isDataLoaded) return;
+    scheduleNextLicenseCheck();
 
-    const persistedTenantId = (localStorage.getItem('clic_tenant_id') || '').trim();
-    if (!persistedTenantId) return;
-
-    resolveTenantId(persistedTenantId)
-      .then((resolvedTenantId) => {
-        if (!resolvedTenantId) return;
-
-        const currentId = (localStorage.getItem('clic_tenant_id') || '').trim();
-        if (resolvedTenantId !== currentId) {
-          console.log('🔄 Syncing local tenant ID with cloud session:', resolvedTenantId);
-          localStorage.setItem('clic_tenant_id', resolvedTenantId);
-        }
-
-        return checkLicenseStatus(resolvedTenantId, deviceId).then(res => {
-          if (!res.isValid) {
-            triggerLockdown(res.reason || 'Servicio Suspendido');
-          }
-        });
-      })
-      .catch(error => {
-        console.warn('Tenant self-correction skipped:', error);
-      });
+    return () => {
+      disposed = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
   }, [isDataLoaded, deviceId, triggerLockdown]);
 
   // --- AUTO-RETRY ON BOOT ERROR ---
@@ -971,6 +976,7 @@ const AppContent: React.FC = () => {
     const HEARTBEAT_INTERVAL_MS = 120000;
     const MANIFEST_REFRESH_INTERVAL_MS = 300000;
     let lastManifestRefreshAt = 0;
+    let heartbeatTimeoutId: number | null = null;
 
     const syncLifecycle = async (options?: { forceManifestRefresh?: boolean }) => {
       try {
@@ -1011,31 +1017,33 @@ const AppContent: React.FC = () => {
       }
     };
 
+    // Boot: publica una sola vez; el diff check del registry evita reescrituras redundantes.
     void publishEndpoint();
     void syncLifecycle({ forceManifestRefresh: true });
 
-    const heartbeatId = window.setInterval(() => {
-      if (navigator.onLine) {
-        void publishEndpoint();
-        void syncLifecycle();
+    const scheduleNextHeartbeat = () => {
+      if (disposed) return;
+      if (heartbeatTimeoutId !== null) {
+        window.clearTimeout(heartbeatTimeoutId);
       }
-    }, HEARTBEAT_INTERVAL_MS);
 
-    const republish = () => {
-      if (navigator.onLine) {
-        void publishEndpoint();
-        void syncLifecycle({ forceManifestRefresh: true });
-      }
+      heartbeatTimeoutId = window.setTimeout(async () => {
+        if (!disposed && navigator.onLine) {
+          // Publish on heartbeat is diff-only: cloudMasterRegistry.ts compara fingerprint e IP antes de escribir.
+          void publishEndpoint();
+          await syncLifecycle();
+        }
+        scheduleNextHeartbeat();
+      }, HEARTBEAT_INTERVAL_MS + getTimerJitterMs());
     };
 
-    window.addEventListener('online', republish);
-    window.addEventListener('focus', republish);
+    scheduleNextHeartbeat();
 
     return () => {
       disposed = true;
-      window.clearInterval(heartbeatId);
-      window.removeEventListener('online', republish);
-      window.removeEventListener('focus', republish);
+      if (heartbeatTimeoutId !== null) {
+        window.clearTimeout(heartbeatTimeoutId);
+      }
     };
   }, [currentView, deviceId, getCurrentTerminal]);
 

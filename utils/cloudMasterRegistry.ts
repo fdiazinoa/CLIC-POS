@@ -38,6 +38,14 @@ type RuntimeNetworkInfo = {
     localIps?: string[];
 };
 
+type PublishedEndpointState = {
+    localIp: string | null;
+    fingerprint: string;
+    lastPublishedAt: number;
+    abortController: AbortController | null;
+    endpoint: CloudMasterEndpoint | null;
+};
+
 const DIRECT_RESOLVE_RPC_CANDIDATES = [
     'resolve_tenant_server_endpoint',
     'get_tenant_server_endpoint',
@@ -80,6 +88,7 @@ const safeJson = async (response: Response) => {
 };
 
 let cachedRuntimeAppVersion: { appVersion: string | null; appVersionCode: number | null } | undefined;
+const publishedStateByTerminal = new Map<string, PublishedEndpointState>();
 
 const readRuntimeDeviceInfo = async (): Promise<RuntimeDeviceInfo | null> => {
     try {
@@ -136,6 +145,16 @@ const resolveRuntimeNetworkInfo = async (): Promise<RuntimeNetworkInfo> => {
 
 const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 3500) => {
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const upstreamSignal = init.signal;
+    const abortFromUpstream = () => controller?.abort();
+
+    if (upstreamSignal && controller) {
+        if (upstreamSignal.aborted) {
+            controller.abort();
+        } else {
+            upstreamSignal.addEventListener('abort', abortFromUpstream, { once: true });
+        }
+    }
 
     let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
@@ -154,6 +173,9 @@ const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit = {}
             timeoutPromise,
         ]) as Response;
     } finally {
+        if (upstreamSignal && controller) {
+            upstreamSignal.removeEventListener('abort', abortFromUpstream);
+        }
         if (typeof timeoutId !== 'undefined') {
             globalThis.clearTimeout(timeoutId);
         }
@@ -298,6 +320,37 @@ const buildRpcPayload = (identity: TenantIdentity) => ({
     p_tenant_email: identity.tenantEmail || null,
 });
 
+const buildPublishedStateKey = (identity: TenantIdentity, payload: {
+    deviceId: string;
+    terminalId: string;
+}) => (
+    [
+        identity.tenantId || identity.tenantSlug || identity.tenantEmail || 'unknown',
+        payload.terminalId,
+        payload.deviceId,
+    ].join(':')
+);
+
+const stablePublishFingerprint = (payload: {
+    endpointUrl: string | null;
+    localIp: string | null;
+    localIps: string[];
+    appVersion: string | null;
+    appVersionCode: number | null;
+    isPrimary: boolean;
+    terminalId: string;
+    terminalName: string;
+}) => JSON.stringify({
+    endpointUrl: payload.endpointUrl,
+    localIp: payload.localIp,
+    localIps: [...payload.localIps].sort(),
+    appVersion: payload.appVersion,
+    appVersionCode: payload.appVersionCode,
+    isPrimary: payload.isPrimary,
+    terminalId: payload.terminalId,
+    terminalName: payload.terminalName,
+});
+
 const buildDirectRpcHeaders = async (includeRepresentation = false): Promise<Record<string, string> | null> => {
     const { supabaseAnonKey } = getCloudConfig();
     if (!supabaseAnonKey) return null;
@@ -363,7 +416,8 @@ const buildForwardedCloudHeaders = async (): Promise<Record<string, string>> => 
 const callDirectRpc = async (
     rpcCandidates: string[],
     payload: Record<string, unknown>,
-    includeRepresentation = false
+    includeRepresentation = false,
+    signal?: AbortSignal
 ): Promise<CloudMasterEndpoint | null> => {
     const { supabaseUrl } = getCloudConfig();
     const profiledHeaders = await buildDirectRpcHeaders(includeRepresentation);
@@ -379,6 +433,7 @@ const callDirectRpc = async (
                 method: 'POST',
                 headers,
                 body: JSON.stringify(payload),
+                signal,
             }, 5000);
 
             if (!response.ok) {
@@ -523,6 +578,39 @@ export const publishMasterEndpointToCloud = async (payload: {
         ? discoveredLocalIps
         : runtimeNetworkInfo.localIps || [];
     const localIp = localIps[0] || runtimeNetworkInfo.localIp || null;
+    const endpointUrl = localIp ? `${protocol}://${localIp}:${port}` : null;
+    const publishStateKey = buildPublishedStateKey(identity, payload);
+    const fingerprint = stablePublishFingerprint({
+        endpointUrl,
+        localIp,
+        localIps,
+        appVersion: runtimeDeviceInfo.appVersion,
+        appVersionCode: runtimeDeviceInfo.appVersionCode,
+        isPrimary: payload.isPrimary ?? true,
+        terminalId: payload.terminalId,
+        terminalName: payload.terminalName || payload.terminalId,
+    });
+    const existingState = publishedStateByTerminal.get(publishStateKey);
+
+    // Diff check: si el estado publicado sigue siendo el mismo, no volvemos a escribir en cloud.
+    if (existingState && existingState.fingerprint === fingerprint) {
+        return existingState.endpoint;
+    }
+
+    // IP en vuelo: si cambia mientras una publicación sigue corriendo, abortamos la anterior.
+    if (existingState?.abortController && existingState.localIp !== localIp) {
+        existingState.abortController.abort();
+    }
+
+    const publishController = typeof AbortController === 'function' ? new AbortController() : null;
+    publishedStateByTerminal.set(publishStateKey, {
+        localIp,
+        fingerprint,
+        lastPublishedAt: existingState?.lastPublishedAt || 0,
+        abortController: publishController,
+        endpoint: existingState?.endpoint || null,
+    });
+
     const nextRpcPayload = {
         ...buildRpcPayload(identity),
         p_device_id: payload.deviceId,
@@ -533,7 +621,7 @@ export const publishMasterEndpointToCloud = async (payload: {
         p_port: port,
         p_local_ip: localIp,
         p_local_ips: localIps,
-        p_endpoint_url: localIp ? `${protocol}://${localIp}:${port}` : null,
+        p_endpoint_url: endpointUrl,
         p_is_primary: payload.isPrimary ?? true,
         p_status: 'ONLINE',
         p_app_version: runtimeDeviceInfo.appVersion,
@@ -542,15 +630,22 @@ export const publishMasterEndpointToCloud = async (payload: {
 
     if (localIp) {
         const directEndpoint =
-            await callDirectRpc(DIRECT_PUBLISH_RPC_CANDIDATES, nextRpcPayload, true)
+            await callDirectRpc(DIRECT_PUBLISH_RPC_CANDIDATES, nextRpcPayload, true, publishController?.signal)
             || await callDirectRpc(DIRECT_PUBLISH_RPC_CANDIDATES, {
                 ...nextRpcPayload,
                 p_app_version: undefined,
                 p_app_version_code: undefined,
-            }, true);
+            }, true, publishController?.signal);
 
         if (directEndpoint) {
             persistMasterEndpoint(directEndpoint);
+            publishedStateByTerminal.set(publishStateKey, {
+                localIp,
+                fingerprint,
+                lastPublishedAt: Date.now(),
+                abortController: null,
+                endpoint: directEndpoint,
+            });
             return directEndpoint;
         }
     } else {
@@ -580,6 +675,7 @@ export const publishMasterEndpointToCloud = async (payload: {
                     ...forwardedHeaders,
                 },
                 body: fallbackBody,
+                signal: publishController?.signal,
             }, 4000);
 
             if (!response.ok) continue;
@@ -589,11 +685,28 @@ export const publishMasterEndpointToCloud = async (payload: {
             if (!endpoint) continue;
 
             persistMasterEndpoint(endpoint);
+            publishedStateByTerminal.set(publishStateKey, {
+                localIp,
+                fingerprint,
+                lastPublishedAt: Date.now(),
+                abortController: null,
+                endpoint,
+            });
             return endpoint;
         } catch (error) {
+            if (error instanceof Error && error.name === 'AbortError') {
+                return existingState?.endpoint || null;
+            }
             console.warn('[cloudMasterRegistry] publish fallback failed:', url, error);
         }
     }
 
+    publishedStateByTerminal.set(publishStateKey, {
+        localIp,
+        fingerprint,
+        lastPublishedAt: existingState?.lastPublishedAt || 0,
+        abortController: null,
+        endpoint: existingState?.endpoint || null,
+    });
     return null;
 };
