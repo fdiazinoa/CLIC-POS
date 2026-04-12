@@ -1192,6 +1192,9 @@ const AppContent: React.FC = () => {
   }, [customers, selectedCustomer]);
 
   const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
+  const isRestaurantVertical = (value?: string | null) => value === 'RESTAURANT' || value === 'RESTAURANTE';
+  const isRestaurantTerminal = (terminal?: any) =>
+    isRestaurantVertical(terminal?.config?.operational?.vertical_negocio) || config.vertical === 'RESTAURANT';
 
   const getLatestZCloseTimestamp = (terminalId: string) => {
     const terminalKey = normalizeTerminalId(terminalId);
@@ -1270,9 +1273,78 @@ const AppContent: React.FC = () => {
         }
       }
     } catch (e) {
-      console.error("Failed to fetch tables:", e);
+      console.warn("Failed to fetch tables from API, falling back to local DB:", e);
+      try {
+        const [localRooms, localTables] = await Promise.all([
+          db.get('rooms') as Promise<Room[]>,
+          db.get('tables') as Promise<Table[]>
+        ]);
+        const nextRooms = Array.isArray(localRooms) ? localRooms : [];
+        const nextTables = Array.isArray(localTables) ? localTables : [];
+        setTables(nextTables);
+        if (nextRooms.length > 0) {
+          setRooms(nextRooms);
+          setActiveRoomId(prev =>
+            prev && nextRooms.some((room: Room) => room.id === prev)
+              ? prev
+              : (nextRooms[0]?.id || '')
+          );
+        }
+      } catch (fallbackError) {
+        console.error('Failed to load tables from local DB:', fallbackError);
+      }
     }
   };
+
+  const openTableForService = useCallback(async (table: Table): Promise<Table | null> => {
+    if (!currentUser) return null;
+
+    const nowIso = new Date().toISOString();
+    const baseUpdate = {
+      ...table,
+      status: 'OCCUPIED' as const,
+      timeSeated: table.timeSeated || nowIso,
+      waiterId: currentUser.id,
+      waiterName: currentUser.name
+    };
+
+    try {
+      const res = await fetch('/api/mesas/abrir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tableId: table.id,
+          waiterId: currentUser.id,
+          waiterName: currentUser.name
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        const updated = { ...baseUpdate, currentOrderId: data.orden_id };
+        setTables(prev => {
+          const next = prev.map(t => t.id === updated.id ? updated : t);
+          db.save('tables', next).catch(error => console.error('Failed to persist tables:', error));
+          return next;
+        });
+        return updated;
+      }
+
+      alert(data?.message || 'Error abriendo mesa');
+      return null;
+    } catch (error) {
+      console.warn('Table service not available, opening table locally:', error);
+    }
+
+    const localOrderId = table.currentOrderId || `ORD-${Date.now()}`;
+    const updated = { ...baseUpdate, currentOrderId: localOrderId };
+    setTables(prev => {
+      const next = prev.map(t => t.id === updated.id ? updated : t);
+      db.save('tables', next).catch(error => console.error('Failed to persist tables:', error));
+      return next;
+    });
+    return updated;
+  }, [currentUser]);
 
   useKioskMode(getCurrentDeviceRole() === DeviceRole.SELF_CHECKOUT);
   const scannerEnabledViews = currentView === 'POS'
@@ -2749,6 +2821,18 @@ const AppContent: React.FC = () => {
       localStorage.setItem(SETUP_WIZARD_COMPLETED_KEY, '1');
       localStorage.setItem(SETUP_FLOW_STAGE_KEY, 'COMPLETE');
       localStorage.setItem(SETUP_FLOW_VERSION_KEY, SETUP_FLOW_VERSION);
+
+      const setupMode = getStoredTerminalSetupMode();
+      if (setupMode === 'SERVER_LOCAL') {
+        const binding = await activateLocalPrimaryTerminal(nextConfig, effectiveDeviceId);
+        if (binding) {
+          localStorage.setItem('active_terminal_id', binding.terminalId);
+          localStorage.setItem('CLIC_POS_TERMINAL_ID', binding.terminalId);
+          localStorage.setItem('initial_terminal_config', JSON.stringify(binding.nextConfig || nextConfig));
+          setCurrentView('LOGIN');
+          return;
+        }
+      }
 
       setConfig(nextConfig);
       await db.save('config', nextConfig);
@@ -4518,7 +4602,8 @@ const AppContent: React.FC = () => {
                 currentUser={currentUser!}
                 isAdmin={currentUser?.role === 'ADMIN'}
                 bloqueoMeseros={getCurrentTerminal()?.config?.operational?.bloqueo_meseros}
-                isRestaurantMode={config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL'}
+                isRestaurantMode={isRestaurantTerminal(getCurrentTerminal())}
+                onOpenTable={openTableForService}
                 canViewBusinessMetrics={canViewBusinessMetrics}
                 onPrintPrecheck={async (table) => {
                   if (!table.currentOrderId) return;

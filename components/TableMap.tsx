@@ -28,6 +28,7 @@ interface TableMapProps {
     isAdmin?: boolean;
     bloqueoMeseros?: boolean;
     isRestaurantMode?: boolean;
+    onOpenTable?: (table: Table) => Promise<Table | null>;
     onRefreshTables?: () => void;
     canViewBusinessMetrics?: boolean;
     onPrintPrecheck?: (table: Table) => void;
@@ -209,6 +210,7 @@ const TableMap: React.FC<TableMapProps> = ({
     isAdmin,
     bloqueoMeseros,
     isRestaurantMode,
+    onOpenTable,
     onRefreshTables,
     canViewBusinessMetrics,
     onPrintPrecheck
@@ -413,6 +415,15 @@ const TableMap: React.FC<TableMapProps> = ({
         }
 
         if (isRestaurantMode) {
+            if (onOpenTable) {
+                const openedTable = await onOpenTable(table);
+                if (openedTable) {
+                    onRefreshTables?.();
+                    onTableClick(openedTable);
+                }
+                return;
+            }
+
             try {
                 const res = await fetch('/api/mesas/abrir', {
                     method: 'POST',
@@ -439,7 +450,7 @@ const TableMap: React.FC<TableMapProps> = ({
         }
 
         setSelectedTable(table);
-    }, [currentUser.id, currentUser.name, isRestaurantMode, onRefreshTables, onTableClick]);
+    }, [currentUser.id, currentUser.name, isRestaurantMode, onOpenTable, onRefreshTables, onTableClick]);
 
     const handleNodeSelect = useCallback(
         (model: SmartTableModel) => {
