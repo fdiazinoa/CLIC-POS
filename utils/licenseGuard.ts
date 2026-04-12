@@ -5,6 +5,14 @@ export interface LicenseStatus {
     isValid: boolean;
     reason?: string;
     tenantId?: string;
+    branchId?: string;
+    checkedAt?: string;
+    lastSuccessfulAt?: string | null;
+    expiresAt?: string | null;
+    source?: 'erp-cloud' | 'erp-cache' | 'pos-cache';
+    inGracePeriod?: boolean;
+    cloudReachable?: boolean;
+    lastCloudError?: string | null;
 }
 
 interface TenantRecord {
@@ -29,6 +37,20 @@ interface TenantIdentity {
     email?: string;
 }
 
+interface ErpLicenseStatusResponse {
+    tenantId: string;
+    branchId: string;
+    licensed: boolean;
+    reason: string | null;
+    checkedAt: string;
+    lastSuccessfulAt: string | null;
+    expiresAt: string | null;
+    source: 'erp-cloud' | 'erp-cache' | 'pos-cache';
+    inGracePeriod: boolean;
+    cloudReachable: boolean;
+    lastCloudError?: string | null;
+}
+
 const LANDLORD_PROFILE = 'landlord';
 const BLOCKED_STATUSES = new Set([
     'SUSPENDED',
@@ -40,6 +62,141 @@ const BLOCKED_STATUSES = new Set([
     'PAST_DUE',
     'EXPIRED',
 ]);
+
+const POS_LICENSE_CACHE_KEY = 'clic:license:last-success';
+const POS_LICENSE_GRACE_PERIOD_MS = 15 * 60_000;
+
+const normalizeBaseUrl = (value?: string | null): string | null => {
+    const raw = normalizeValue(value);
+    if (!raw) return null;
+
+    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `${window.location.protocol}//${raw}`;
+
+    try {
+        const url = new URL(withProtocol);
+        return url
+            .toString()
+            .replace(/\/api\/sync\/?$/i, '')
+            .replace(/\/api\/?$/i, '')
+            .replace(/\/+$/, '');
+    } catch {
+        return null;
+    }
+};
+
+const resolveLicenseEndpointBaseUrl = (): string | null => {
+    const env = import.meta.env as Record<string, string | boolean | undefined>;
+    const candidates = [
+        localStorage.getItem('CLIC_ERP_BASE_URL'),
+        localStorage.getItem('erp_base_url'),
+        localStorage.getItem('CLIC_POS_MASTER_URL'),
+        env['VITE_ERP_BASE_URL'] as string | undefined,
+        env['VITE_ERP_SYNC_API_URL'] as string | undefined,
+        env['VITE_SYNC_API_URL'] as string | undefined,
+    ];
+
+    for (const candidate of candidates) {
+        const normalized = normalizeBaseUrl(candidate);
+        if (normalized) {
+            return normalized;
+        }
+    }
+
+    return null;
+};
+
+const safeParseJson = <T>(raw: string | null): T | null => {
+    if (!raw) return null;
+
+    try {
+        return JSON.parse(raw) as T;
+    } catch {
+        return null;
+    }
+};
+
+const toTimestamp = (value?: string | null): number | null => {
+    if (!value) return null;
+    const parsed = new Date(value).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
+const isWithinGracePeriod = (lastSuccessfulAt?: string | null): boolean => {
+    const ts = toTimestamp(lastSuccessfulAt);
+    if (!ts) return false;
+    return Date.now() - ts <= POS_LICENSE_GRACE_PERIOD_MS;
+};
+
+const readCachedLicenseStatus = (): ErpLicenseStatusResponse | null => (
+    safeParseJson<ErpLicenseStatusResponse>(localStorage.getItem(POS_LICENSE_CACHE_KEY))
+);
+
+const writeCachedLicenseStatus = (status: ErpLicenseStatusResponse) => {
+    if (!status.lastSuccessfulAt) return;
+    localStorage.setItem(POS_LICENSE_CACHE_KEY, JSON.stringify(status));
+};
+
+const mapErpLicenseStatus = (status: ErpLicenseStatusResponse): LicenseStatus => ({
+    isValid: status.licensed,
+    reason: status.reason || undefined,
+    tenantId: status.tenantId,
+    branchId: status.branchId,
+    checkedAt: status.checkedAt,
+    lastSuccessfulAt: status.lastSuccessfulAt,
+    expiresAt: status.expiresAt,
+    source: status.source,
+    inGracePeriod: status.inGracePeriod,
+    cloudReachable: status.cloudReachable,
+    lastCloudError: status.lastCloudError || null,
+});
+
+const buildLicenseQuery = (tenantId: string, deviceId: string) => {
+    const params = new URLSearchParams();
+    const normalizedTenantId = normalizeValue(tenantId) || normalizeValue(localStorage.getItem('clic_tenant_id'));
+    const normalizedBranchId =
+        normalizeValue(localStorage.getItem('clic_branch_id'))
+        || normalizeValue(localStorage.getItem('clic_store_id'))
+        || normalizeValue(localStorage.getItem('clic_erp_sync_store_id'))
+        || normalizeValue(localStorage.getItem('active_terminal_id'))
+        || normalizeValue(deviceId)
+        || 'default';
+
+    if (normalizedTenantId) params.set('tenantId', normalizedTenantId);
+    params.set('branchId', normalizedBranchId);
+    return params.toString();
+};
+
+const fetchLicenseStatusFromErp = async (
+    tenantId: string,
+    deviceId: string,
+    timeoutMs = 3500
+): Promise<ErpLicenseStatusResponse> => {
+    const erpBaseUrl = resolveLicenseEndpointBaseUrl();
+    if (!erpBaseUrl) {
+        throw new Error('ERP license endpoint base URL is not configured');
+    }
+
+    const response = await fetchWithTimeout(
+        `${erpBaseUrl}/api/license/status?${buildLicenseQuery(tenantId, deviceId)}`,
+        {
+            method: 'GET',
+            credentials: 'include',
+            headers: { Accept: 'application/json' },
+        },
+        timeoutMs
+    );
+
+    const payload = await response.json().catch(() => null) as ErpLicenseStatusResponse | null;
+    if (!response.ok || !payload) {
+        throw new Error(`ERP license endpoint failed with HTTP ${response.status}`);
+    }
+
+    if (payload.lastSuccessfulAt) {
+        writeCachedLicenseStatus(payload);
+    }
+
+    return payload;
+};
 
 const getCloudConfig = () => {
     const env = import.meta.env as Record<string, string | boolean | undefined>;
@@ -366,6 +523,11 @@ export const resolveTenantRecord = async (identity?: string | TenantIdentity): P
 };
 
 export const resolveTenantId = async (preferredTenantId?: string): Promise<string | null> => {
+    const cached = readCachedLicenseStatus();
+    if (cached?.tenantId) {
+        return cached.tenantId;
+    }
+
     const tenant = await resolveTenantRecord(preferredTenantId);
     return tenant?.id || null;
 };
@@ -375,60 +537,46 @@ export const checkLicenseStatus = async (
     deviceId: string
 ): Promise<LicenseStatus> => {
     try {
-        const { supabaseUrl, supabaseKey } = getCloudConfig();
-
-        if (!supabaseUrl || !supabaseKey) {
-            // Failsafe: Si no hay credenciales de la nube configuradas localmente, asumimos modo on-premise puro.
-            console.warn("No Cloud Supabase configuration found. License check bypassed.");
-            return { isValid: true };
-        }
-
-        const storedEmail = normalizeEmail(localStorage.getItem('clic_tenant_email'));
-        const storedSlug = normalizeValue(localStorage.getItem('clic_tenant_slug'));
-        const tenant = await resolveTenantRecord({
-            tenantId,
-            email: storedEmail || undefined,
-            slug: storedSlug || undefined,
-        });
-        if (!tenant) {
-            console.warn('[LICENSE] Tenant could not be resolved. Allowing offline-safe usage.');
-            return { isValid: true };
-        }
-
-        if (isTenantBlocked(tenant)) {
-            console.warn('[LICENSE] Tenant is blocked:', tenant.id, tenant.status);
-            return {
-                isValid: false,
-                reason: 'Servicio Suspendido. Por favor, contacte a soporte o regularice su pago para restaurar el servicio.',
-                tenantId: tenant.id,
-            };
-        }
-
-        const subscriptions = await fetchSubscriptionRecords(supabaseUrl, supabaseKey, tenant.id);
-        if (subscriptions && hasExplicitlyInactiveSubscription(subscriptions)) {
-            console.warn('[LICENSE] Subscription inactive for tenant:', tenant.id);
-            return {
-                isValid: false,
-                reason: 'Suscripción inactiva. Active el tenant en Cloud Admin para continuar.',
-                tenantId: tenant.id,
-            };
-        }
-
-        if (deviceId) {
-            fetch(`${supabaseUrl}/rest/v1/terminals?device_token=eq.${encodeURIComponent(deviceId)}`, {
-                method: 'PATCH',
-                headers: {
-                    ...buildApiHeaders(supabaseKey, true),
-                    Prefer: 'return=minimal',
-                },
-                body: JSON.stringify({ last_checkin_at: new Date().toISOString() }),
-            }).catch(e => console.warn("Check-in silenciado falló", e));
-        }
-
-        return { isValid: true, tenantId: tenant.id };
+        const status = await fetchLicenseStatusFromErp(tenantId, deviceId);
+        return mapErpLicenseStatus(status);
     } catch (error) {
-        console.error("License validation local network/fetch fail, allowing offline tolerance usage: ", error);
-        // Tolerancia a fallos: permitimos operar de forma offline si la red se corta y no se pudo validar
-        return { isValid: true };
+        const cached = readCachedLicenseStatus();
+        if (cached && isWithinGracePeriod(cached.lastSuccessfulAt)) {
+            const lastSuccessfulTs = toTimestamp(cached.lastSuccessfulAt);
+            const gracePeriodRemainingMs = lastSuccessfulTs
+                ? Math.max(0, POS_LICENSE_GRACE_PERIOD_MS - (Date.now() - lastSuccessfulTs))
+                : 0;
+
+            // Grace Period + fallback a caché POS para que el POS no dependa del cloud directo.
+            console.warn('[licenseGuard] GRACE_PERIOD_ACTIVE', {
+                source: 'pos-cache',
+                lastSuccessfulAt: cached.lastSuccessfulAt,
+                gracePeriodRemainingMs,
+                lastCloudError: error instanceof Error ? error.message : String(error),
+            });
+
+            return mapErpLicenseStatus({
+                ...cached,
+                source: 'pos-cache',
+                inGracePeriod: true,
+                cloudReachable: false,
+                checkedAt: new Date().toISOString(),
+                lastCloudError: error instanceof Error ? error.message : String(error),
+            });
+        }
+
+        console.warn('[licenseGuard] ERP license endpoint unavailable, allowing offline-safe fallback.', error);
+        return {
+            isValid: true,
+            tenantId: normalizeValue(tenantId) || normalizeValue(localStorage.getItem('clic_tenant_id')) || undefined,
+            reason: undefined,
+            source: 'pos-cache',
+            inGracePeriod: false,
+            cloudReachable: false,
+            lastCloudError: error instanceof Error ? error.message : String(error),
+            checkedAt: new Date().toISOString(),
+            lastSuccessfulAt: cached?.lastSuccessfulAt || null,
+            expiresAt: cached?.expiresAt || null,
+        };
     }
 };
