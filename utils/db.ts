@@ -196,7 +196,8 @@ const SEED_DATA = {
   paymentMethods: [] as PaymentMethodDefinition[],
   activities: [] as any[],
   wallet_transactions: [] as any[],
-  loyalty_events: [] as any[]
+  loyalty_events: [] as any[],
+  productionAreas: [] as any[]
 };
 
 const normalizeSequenceKey = (value?: string | null): string =>

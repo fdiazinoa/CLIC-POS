@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Save, Printer, Monitor, Layers, Server, AlertCircle, ChefHat } from 'lucide-react';
-import { TerminalConfig } from '../types';
+import { BusinessConfig, TerminalConfig } from '../types';
+import { db } from '../utils/db';
 
 interface ProductionArea {
     id: string;
@@ -25,11 +26,45 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
         fetchConfig();
     }, []);
 
+    const resolveErpBaseUrl = () => {
+        const env = (import.meta as any)?.env || {};
+        const candidates = [
+            localStorage.getItem('CLIC_ERP_BASE_URL'),
+            localStorage.getItem('CLIC_POS_MASTER_URL'),
+            localStorage.getItem('CLIC_ERP_SYNC_URL'),
+            env.VITE_ERP_BASE_URL,
+            env.VITE_ERP_SYNC_API_URL
+        ].filter(Boolean) as string[];
+
+        for (const candidate of candidates) {
+            const normalized = candidate.replace(/\/$/, '');
+            if (normalized.includes('/api/sync')) {
+                return normalized.replace(/\/api\/sync$/, '');
+            }
+            if (normalized.endsWith('/api')) {
+                return normalized.replace(/\/api$/, '');
+            }
+            return normalized;
+        }
+
+        return null;
+    };
+
     const fetchConfig = async () => {
         try {
-            const res = await fetch('http://localhost:8001/api/config/operativa');
-            const data = await res.json();
-            setKitchenEnabled(data.usa_modulos_cocina);
+            const baseUrl = resolveErpBaseUrl();
+            if (baseUrl) {
+                const res = await fetch(`${baseUrl}/api/config/operativa`);
+                const data = await res.json();
+                setKitchenEnabled(Boolean(data.usa_modulos_cocina));
+                return;
+            }
+
+            const rawConfig = await db.get('config' as any) as BusinessConfig | BusinessConfig[];
+            const configDoc = Array.isArray(rawConfig)
+                ? (rawConfig.find((c: any) => c.id === 'current') || rawConfig[0])
+                : rawConfig;
+            setKitchenEnabled(Boolean(configDoc?.operational?.usa_modulos_cocina));
         } catch (e) {
             console.error("Failed to fetch operational config", e);
         }
@@ -38,11 +73,29 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     const toggleKitchen = async (val: boolean) => {
         setKitchenEnabled(val);
         try {
-            await fetch('http://localhost:8001/api/config/operativa', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ usa_modulos_cocina: val })
-            });
+            const baseUrl = resolveErpBaseUrl();
+            if (baseUrl) {
+                await fetch(`${baseUrl}/api/config/operativa`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ usa_modulos_cocina: val })
+                });
+                return;
+            }
+
+            const rawConfig = await db.get('config' as any) as BusinessConfig | BusinessConfig[];
+            const configDoc = Array.isArray(rawConfig)
+                ? (rawConfig.find((c: any) => c.id === 'current') || rawConfig[0])
+                : rawConfig;
+            if (!configDoc) return;
+            const nextConfig: BusinessConfig = {
+                ...configDoc,
+                operational: {
+                    ...(configDoc.operational || {}),
+                    usa_modulos_cocina: val
+                }
+            };
+            await db.save('config' as any, nextConfig);
         } catch (e) {
             console.error("Failed to update kitchen module status", e);
             setKitchenEnabled(!val); // Revert on failure
@@ -51,9 +104,16 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
 
     const fetchAreas = async () => {
         try {
-            const res = await fetch('http://localhost:8001/api/produccion/areas');
-            const data = await res.json();
-            setAreas(data);
+            const baseUrl = resolveErpBaseUrl();
+            if (baseUrl) {
+                const res = await fetch(`${baseUrl}/api/produccion/areas`);
+                const data = await res.json();
+                setAreas(Array.isArray(data) ? data : []);
+                return;
+            }
+
+            const localAreas = await db.get('productionAreas' as any) as ProductionArea[] || [];
+            setAreas(Array.isArray(localAreas) ? localAreas : []);
         } catch (e) {
             console.error("Failed to fetch production areas", e);
         } finally {
@@ -84,14 +144,21 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     const handleSave = async (area: ProductionArea) => {
         setSaving(true);
         try {
-            const res = await fetch('http://localhost:8001/api/produccion/areas', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(area)
-            });
-            if (res.ok) {
-                alert("Área guardada correctamente");
+            const baseUrl = resolveErpBaseUrl();
+            if (baseUrl) {
+                const res = await fetch(`${baseUrl}/api/produccion/areas`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(area)
+                });
+                if (res.ok) {
+                    alert("Área guardada correctamente");
+                }
+                return;
             }
+
+            await db.save('productionAreas' as any, areas);
+            alert("Área guardada correctamente");
         } catch (e) {
             alert("Error al guardar área");
         } finally {
