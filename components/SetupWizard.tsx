@@ -2,31 +2,135 @@ import React, { useState, useEffect } from 'react';
 import { 
   ArrowRight, ArrowLeft, Check, UploadCloud, FileSpreadsheet, 
   Map, DollarSign, Flag, Building2, Package, Percent, Wand2,
-  CheckCircle2, X, ChevronDown, AlertCircle
+  CheckCircle2, ChevronDown, AlertCircle
 } from 'lucide-react';
-import { BusinessConfig, CompanyInfo } from '../types';
+import { BusinessConfig, CompanyInfo, CurrencyConfig, DocumentSeries, DocumentType, PaymentMethodDefinition, TaxDefinition, Tariff, Warehouse } from '../types';
+import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG, INITIAL_TAXES, INITIAL_TARIFFS } from '../constants';
+import { db } from '../utils/db';
 
 interface SetupWizardProps {
   initialConfig: BusinessConfig;
   onComplete: (finalConfig: BusinessConfig) => void;
 }
 
-type WizardStep = 'BUSINESS' | 'CATALOG' | 'TAXES' | 'READY';
+type WizardStep =
+  | 'SEED'
+  | 'BUSINESS'
+  | 'TERMINAL'
+  | 'CURRENCIES'
+  | 'TAXES'
+  | 'WAREHOUSES'
+  | 'TARIFFS'
+  | 'PAYMENTS'
+  | 'SERIES'
+  | 'CATALOG'
+  | 'READY';
 
 const STEPS: { id: WizardStep; label: string; icon: any }[] = [
+  { id: 'SEED', label: 'Base', icon: Map },
   { id: 'BUSINESS', label: 'Negocio', icon: Building2 },
-  { id: 'CATALOG', label: 'Catálogo', icon: Package },
+  { id: 'TERMINAL', label: 'Terminal', icon: Building2 },
+  { id: 'CURRENCIES', label: 'Monedas', icon: Flag },
   { id: 'TAXES', label: 'Impuestos', icon: DollarSign },
+  { id: 'WAREHOUSES', label: 'Almacenes', icon: Package },
+  { id: 'TARIFFS', label: 'Tarifas', icon: Percent },
+  { id: 'PAYMENTS', label: 'Pagos', icon: DollarSign },
+  { id: 'SERIES', label: 'Series', icon: FileSpreadsheet },
+  { id: 'CATALOG', label: 'Catálogo', icon: Package },
   { id: 'READY', label: 'Listo', icon: CheckCircle2 },
 ];
 
-const TAX_PRESETS = [
-  { id: 'DO', label: 'Rep. Dominicana', taxName: 'ITBIS', rate: 0.18, currency: 'RD$', flag: '🇩🇴' },
-  { id: 'ES', label: 'España', taxName: 'IVA', rate: 0.21, currency: '€', flag: '🇪🇸' },
-  { id: 'MX', label: 'México', taxName: 'IVA', rate: 0.16, currency: '$', flag: '🇲🇽' },
-  { id: 'US', label: 'USA', taxName: 'Sales Tax', rate: 0.08, currency: '$', flag: '🇺🇸' },
-  { id: 'OTHER', label: 'Otro', taxName: 'Tax', rate: 0.00, currency: '$', flag: '🌍' },
+const DOCUMENT_TYPES: DocumentType[] = [
+  'TICKET',
+  'REFUND',
+  'VOID',
+  'TRANSFER',
+  'ADJUSTMENT_IN',
+  'ADJUSTMENT_OUT',
+  'PURCHASE',
+  'PRODUCTION',
+  'CASH_IN',
+  'CASH_OUT',
+  'CASH_DEPOSIT',
+  'CASH_WITHDRAWAL',
+  'Z_REPORT',
+  'X_REPORT',
+  'RECEIVABLE',
+  'PAYABLE',
+  'PAYMENT_IN',
+  'PAYMENT_OUT'
 ];
+
+const DEFAULT_BASE_CURRENCY: CurrencyConfig = {
+  code: 'DOP',
+  name: 'Peso Dominicano',
+  symbol: 'RD$',
+  rate: 1,
+  isEnabled: true,
+  isBase: true,
+};
+
+const DEFAULT_PAYMENT_METHODS: PaymentMethodDefinition[] = [
+  {
+    id: 'cash',
+    name: 'Efectivo',
+    type: 'CASH',
+    isEnabled: true,
+    icon: 'Banknote',
+    color: 'bg-green-500',
+    opensDrawer: true,
+    requiresSignature: false,
+    integration: 'NONE',
+    foreignCurrencyRounding: 'NONE',
+  },
+  {
+    id: 'card',
+    name: 'Tarjeta',
+    type: 'CARD',
+    isEnabled: true,
+    icon: 'CreditCard',
+    color: 'bg-blue-500',
+    opensDrawer: false,
+    requiresSignature: false,
+    integration: 'NONE',
+    foreignCurrencyRounding: 'NONE',
+  },
+];
+
+const DEFAULT_WAREHOUSE: Warehouse = {
+  id: 'wh-1',
+  code: 'ALM-1',
+  name: 'Almacén General',
+  type: 'PHYSICAL',
+  address: '',
+  allowPosSale: true,
+  allowNegativeStock: false,
+  isMain: true,
+};
+
+const SUGGESTED_DOCUMENT_SERIES: DocumentSeries[] = [
+  { id: 'TICKET', documentType: 'TICKET', name: 'Ticket de Venta', description: 'Comprobante estándar de venta.', prefix: 'TCK', nextNumber: 1, padding: 6, icon: 'Receipt', color: 'blue' },
+  { id: 'REFUND', documentType: 'REFUND', name: 'Devolución / Abono', description: 'Notas de crédito por devoluciones.', prefix: 'NC', nextNumber: 1, padding: 6, icon: 'RotateCcw', color: 'orange' },
+  { id: 'VOID', documentType: 'VOID', name: 'Anulación', description: 'Anulación de ventas.', prefix: 'ANU', nextNumber: 1, padding: 6, icon: 'X', color: 'red' },
+  { id: 'TRANSFER', documentType: 'TRANSFER', name: 'Traspaso', description: 'Movimiento entre almacenes.', prefix: 'TR', nextNumber: 1, padding: 6, icon: 'ArrowRightLeft', color: 'purple' },
+  { id: 'ADJ_IN', documentType: 'ADJUSTMENT_IN', name: 'Ajuste +', description: 'Ajuste positivo de inventario.', prefix: 'AJI', nextNumber: 1, padding: 6, icon: 'Plus', color: 'green' },
+  { id: 'ADJ_OUT', documentType: 'ADJUSTMENT_OUT', name: 'Ajuste -', description: 'Ajuste negativo de inventario.', prefix: 'AJO', nextNumber: 1, padding: 6, icon: 'Minus', color: 'red' },
+  { id: 'PURCHASE', documentType: 'PURCHASE', name: 'Compra', description: 'Recepción de compras.', prefix: 'COM', nextNumber: 1, padding: 6, icon: 'Package', color: 'blue' },
+  { id: 'PRODUCTION', documentType: 'PRODUCTION', name: 'Producción', description: 'Producción / ensamble.', prefix: 'PRO', nextNumber: 1, padding: 6, icon: 'Wand2', color: 'teal' },
+  { id: 'CASH_IN', documentType: 'CASH_IN', name: 'Entrada de Caja', description: 'Entrada de efectivo.', prefix: 'CI', nextNumber: 1, padding: 6, icon: 'ArrowRight', color: 'green' },
+  { id: 'CASH_OUT', documentType: 'CASH_OUT', name: 'Salida de Caja', description: 'Salida de efectivo.', prefix: 'CO', nextNumber: 1, padding: 6, icon: 'ArrowLeft', color: 'red' },
+  { id: 'CASH_DEPOSIT', documentType: 'CASH_DEPOSIT', name: 'Depósito', description: 'Depósito bancario.', prefix: 'DEP', nextNumber: 1, padding: 6, icon: 'Banknote', color: 'blue' },
+  { id: 'CASH_WITHDRAWAL', documentType: 'CASH_WITHDRAWAL', name: 'Retiro', description: 'Retiro bancario.', prefix: 'RET', nextNumber: 1, padding: 6, icon: 'Banknote', color: 'orange' },
+  { id: 'Z_REPORT', documentType: 'Z_REPORT', name: 'Cierre Z', description: 'Cierre de caja.', prefix: 'Z', nextNumber: 1, padding: 6, icon: 'FileText', color: 'gray' },
+  { id: 'X_REPORT', documentType: 'X_REPORT', name: 'Corte X', description: 'Reporte parcial.', prefix: 'X', nextNumber: 1, padding: 6, icon: 'FileText', color: 'gray' },
+  { id: 'RECEIVABLE', documentType: 'RECEIVABLE', name: 'Cuentas por Cobrar', description: 'Registro CxC.', prefix: 'CXC', nextNumber: 1, padding: 6, icon: 'Wallet', color: 'indigo' },
+  { id: 'PAYABLE', documentType: 'PAYABLE', name: 'Cuentas por Pagar', description: 'Registro CxP.', prefix: 'CXP', nextNumber: 1, padding: 6, icon: 'Wallet', color: 'purple' },
+  { id: 'PAYMENT_IN', documentType: 'PAYMENT_IN', name: 'Pago Recibido', description: 'Ingreso de pago.', prefix: 'PR', nextNumber: 1, padding: 6, icon: 'ArrowDown', color: 'green' },
+  { id: 'PAYMENT_OUT', documentType: 'PAYMENT_OUT', name: 'Pago Realizado', description: 'Salida de pago.', prefix: 'PP', nextNumber: 1, padding: 6, icon: 'ArrowUp', color: 'red' },
+];
+
+const makeId = (prefix: string) =>
+  `${prefix}-${Date.now()}-${Math.round(Math.random() * 1000)}`;
 
 // Available fields in the App to map to
 const SYSTEM_FIELDS = [
@@ -51,8 +155,21 @@ const DETECTED_CSV_HEADERS = [
 ];
 
 const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) => {
-  const [currentStep, setCurrentStep] = useState<WizardStep>('BUSINESS');
+  const [currentStep, setCurrentStep] = useState<WizardStep>('SEED');
+  const [seedMode, setSeedMode] = useState<'DEMO' | 'BLANK'>('DEMO');
   const [config, setConfig] = useState<BusinessConfig>(initialConfig);
+  const [taxes, setTaxes] = useState<TaxDefinition[]>(initialConfig.taxes || []);
+  const [tariffs, setTariffs] = useState<Tariff[]>(initialConfig.tariffs || []);
+  const [currencies, setCurrencies] = useState<CurrencyConfig[]>(initialConfig.currencies || []);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodDefinition[]>(initialConfig.paymentMethods || []);
+  const [documentSeries, setDocumentSeries] = useState<DocumentSeries[]>(DEFAULT_DOCUMENT_SERIES);
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
+  const [defaultCurrencyCode, setDefaultCurrencyCode] = useState<string>('');
+  const [defaultTariffId, setDefaultTariffId] = useState<string>('');
+  const [defaultWarehouseId, setDefaultWarehouseId] = useState<string>('');
+  const [terminalId, setTerminalId] = useState('t1');
+  const [terminalName, setTerminalName] = useState('Caja 1');
+  const [stationNumber, setStationNumber] = useState('1');
   
   // Catalog Import State
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -60,14 +177,184 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [isAutoMatching, setIsAutoMatching] = useState(false);
 
+  const hydrateFromConfig = (nextConfig: BusinessConfig, mode: 'DEMO' | 'BLANK') => {
+    const terminal = (nextConfig.terminals || [])[0];
+    const terminalConfig = terminal?.config || DEFAULT_TERMINAL_CONFIG;
+    const nextTaxes = Array.isArray(nextConfig.taxes) ? nextConfig.taxes : [];
+    const nextTariffs = Array.isArray(nextConfig.tariffs) ? nextConfig.tariffs : [];
+    const nextCurrencies = Array.isArray(nextConfig.currencies) ? nextConfig.currencies : [];
+    const nextPayments = Array.isArray(nextConfig.paymentMethods) ? nextConfig.paymentMethods : [];
+    const nextSeries = Array.isArray(terminalConfig.documentSeries) && terminalConfig.documentSeries.length > 0
+      ? terminalConfig.documentSeries
+      : DEFAULT_DOCUMENT_SERIES;
+    const nextWarehouses = Array.isArray(terminalConfig.inventoryScope?.warehouses)
+      ? terminalConfig.inventoryScope?.warehouses
+      : [];
+
+    setConfig(nextConfig);
+    setTaxes(nextTaxes);
+    setTariffs(nextTariffs);
+    setCurrencies(nextCurrencies);
+    setPaymentMethods(nextPayments);
+    setDocumentSeries(nextSeries);
+    setWarehouses(nextWarehouses || []);
+    setTerminalId(terminal?.id || 't1');
+    setTerminalName(terminalConfig.terminalName || 'Caja 1');
+    setStationNumber(terminalConfig.stationNumber ? String(terminalConfig.stationNumber) : '1');
+
+    const baseCurrency = (nextCurrencies || []).find((c) => c.isBase) || nextCurrencies[0];
+    setDefaultCurrencyCode(baseCurrency?.code || '');
+    setDefaultTariffId(terminalConfig.pricing?.defaultTariffId || nextTariffs[0]?.id || '');
+    setDefaultWarehouseId(terminalConfig.inventoryScope?.defaultSalesWarehouseId || nextWarehouses?.[0]?.id || '');
+
+    if (mode === 'BLANK') {
+      if (!nextCurrencies.length) {
+        setCurrencies([DEFAULT_BASE_CURRENCY]);
+        setDefaultCurrencyCode(DEFAULT_BASE_CURRENCY.code);
+      }
+      if (!nextPayments.length) setPaymentMethods(DEFAULT_PAYMENT_METHODS);
+      if (!nextSeries.length) setDocumentSeries(SUGGESTED_DOCUMENT_SERIES);
+      if (!nextTaxes.length) setTaxes(INITIAL_TAXES);
+      if (!nextTariffs.length) {
+        setTariffs(INITIAL_TARIFFS);
+        setDefaultTariffId(INITIAL_TARIFFS[0]?.id || '');
+      }
+      if (!nextWarehouses.length) {
+        setWarehouses([DEFAULT_WAREHOUSE]);
+        setDefaultWarehouseId(DEFAULT_WAREHOUSE.id);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (seedMode === 'DEMO') {
+      hydrateFromConfig(initialConfig, 'DEMO');
+      return;
+    }
+
+    const blankConfig: BusinessConfig = {
+      ...initialConfig,
+      taxes: [],
+      tariffs: [],
+      currencies: [],
+      paymentMethods: [],
+      inventoryScope: {
+        defaultSalesWarehouseId: '',
+        visibleWarehouseIds: []
+      },
+      terminals: [
+        {
+          id: 't1',
+          config: {
+            ...DEFAULT_TERMINAL_CONFIG,
+            isPrimaryNode: true,
+            currentDeviceId: undefined,
+          }
+        }
+      ]
+    };
+    hydrateFromConfig(blankConfig, 'BLANK');
+  }, [seedMode, initialConfig]);
+
   // --- HANDLERS ---
 
-  const handleNext = () => {
+  const buildFinalConfig = () => {
+    const normalizedCurrencies = (currencies.length ? currencies : [DEFAULT_BASE_CURRENCY]).map((currency) => ({
+      ...currency,
+      isEnabled: currency.isEnabled ?? true,
+      isBase: currency.code === (defaultCurrencyCode || currencies[0]?.code || DEFAULT_BASE_CURRENCY.code)
+    }));
+
+    const normalizedTaxes = taxes.length ? taxes : INITIAL_TAXES;
+    const normalizedTariffs = tariffs.length ? tariffs : INITIAL_TARIFFS;
+    const normalizedPayments = paymentMethods.length ? paymentMethods : DEFAULT_PAYMENT_METHODS;
+    const normalizedWarehouses = warehouses.length ? warehouses : [DEFAULT_WAREHOUSE];
+    const normalizedSeries = documentSeries.length ? documentSeries : SUGGESTED_DOCUMENT_SERIES;
+
+    const baseCurrency = normalizedCurrencies.find((currency) => currency.isBase) || normalizedCurrencies[0];
+    const primaryVat = normalizedTaxes.find((tax) => tax.type === 'VAT');
+    const effectiveDefaultTariffId = defaultTariffId || normalizedTariffs[0]?.id || '';
+    const effectiveDefaultWarehouseId = defaultWarehouseId || normalizedWarehouses[0]?.id || '';
+
+    const documentAssignments = normalizedSeries.reduce<Record<string, string>>((acc, series) => {
+      if (!acc[series.documentType]) acc[series.documentType] = series.id;
+      return acc;
+    }, {});
+
+    const terminalConfig = {
+      ...DEFAULT_TERMINAL_CONFIG,
+      terminalName,
+      stationNumber,
+      pricing: {
+        ...DEFAULT_TERMINAL_CONFIG.pricing,
+        allowedTariffIds: normalizedTariffs.map((tariff) => tariff.id),
+        defaultTariffId: effectiveDefaultTariffId,
+        tariffs: normalizedTariffs
+      },
+      financial: {
+        ...DEFAULT_TERMINAL_CONFIG.financial,
+        acceptedCurrencies: normalizedCurrencies.map((currency) => currency.code)
+      },
+      inventoryScope: {
+        defaultSalesWarehouseId: effectiveDefaultWarehouseId,
+        visibleWarehouseIds: normalizedWarehouses.map((warehouse) => warehouse.id),
+        warehouses: normalizedWarehouses,
+        defaultWarehouse: normalizedWarehouses.find((warehouse) => warehouse.id === effectiveDefaultWarehouseId)
+      },
+      documentSeries: normalizedSeries,
+      documentAssignments,
+      operational: {
+        ...DEFAULT_TERMINAL_CONFIG.operational,
+        defaultTaxIds: primaryVat ? [primaryVat.id] : []
+      }
+    };
+
+    return {
+      ...config,
+      currencySymbol: baseCurrency?.symbol || config.currencySymbol,
+      taxRate: primaryVat?.rate ?? config.taxRate,
+      taxes: normalizedTaxes,
+      tariffs: normalizedTariffs,
+      currencies: normalizedCurrencies,
+      paymentMethods: normalizedPayments,
+      inventoryScope: {
+        defaultSalesWarehouseId: effectiveDefaultWarehouseId,
+        visibleWarehouseIds: normalizedWarehouses.map((warehouse) => warehouse.id)
+      },
+      terminals: [
+        {
+          id: terminalId || 't1',
+          config: terminalConfig
+        }
+      ]
+    };
+  };
+
+  const finalizeConfig = async () => {
+    const finalConfig = buildFinalConfig();
+    const warehousesToPersist = finalConfig.terminals[0]?.config.inventoryScope?.warehouses || [];
+    if (warehousesToPersist.length) {
+      await db.save('warehouses', warehousesToPersist);
+    }
+    return finalConfig;
+  };
+
+  const handleNext = async () => {
+    if (currentStep === 'CATALOG') {
+      const finalConfig = await finalizeConfig();
+      setConfig(finalConfig);
+      setCurrentStep('READY');
+      return;
+    }
+
+    if (currentStep === 'READY') {
+      onComplete(config);
+      return;
+    }
+
     const currentIndex = STEPS.findIndex(s => s.id === currentStep);
     if (currentIndex < STEPS.length - 1) {
       setCurrentStep(STEPS[currentIndex + 1].id);
-    } else {
-      onComplete(config);
     }
   };
 
@@ -83,15 +370,6 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
       ...prev,
       companyInfo: { ...prev.companyInfo, [field]: value }
     }));
-  };
-
-  const handleTaxSelect = (preset: typeof TAX_PRESETS[0]) => {
-    setConfig(prev => ({
-      ...prev,
-      currencySymbol: preset.currency,
-      taxRate: preset.rate
-    }));
-    handleNext();
   };
 
   // Mock File Upload
@@ -135,6 +413,42 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
       ...prev,
       [header]: fieldId
     }));
+  };
+
+  const updateCurrency = (index: number, patch: Partial<CurrencyConfig>) => {
+    setCurrencies(prev =>
+      prev.map((currency, i) => (i === index ? { ...currency, ...patch } : currency))
+    );
+  };
+
+  const updateTax = (index: number, patch: Partial<TaxDefinition>) => {
+    setTaxes(prev =>
+      prev.map((tax, i) => (i === index ? { ...tax, ...patch } : tax))
+    );
+  };
+
+  const updateWarehouse = (index: number, patch: Partial<Warehouse>) => {
+    setWarehouses(prev =>
+      prev.map((warehouse, i) => (i === index ? { ...warehouse, ...patch } : warehouse))
+    );
+  };
+
+  const updateTariff = (index: number, patch: Partial<Tariff>) => {
+    setTariffs(prev =>
+      prev.map((tariff, i) => (i === index ? { ...tariff, ...patch } : tariff))
+    );
+  };
+
+  const updatePayment = (index: number, patch: Partial<PaymentMethodDefinition>) => {
+    setPaymentMethods(prev =>
+      prev.map((payment, i) => (i === index ? { ...payment, ...patch } : payment))
+    );
+  };
+
+  const updateSeries = (index: number, patch: Partial<DocumentSeries>) => {
+    setDocumentSeries(prev =>
+      prev.map((series, i) => (i === index ? { ...series, ...patch } : series))
+    );
   };
 
   // --- RENDER STEPS ---
@@ -188,6 +502,574 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
             placeholder="Calle Principal #123"
           />
         </div>
+      </div>
+    </div>
+  );
+
+  const renderSeedStep = () => (
+    <div className="space-y-6 animate-in slide-in-from-right-8 duration-500">
+      <div className="text-center mb-8">
+        <h2 className="text-2xl font-bold text-gray-800">Base de Datos Inicial</h2>
+        <p className="text-gray-500">Elige cómo quieres iniciar el sistema local.</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <button
+          onClick={() => setSeedMode('DEMO')}
+          className={`p-6 rounded-2xl border-2 text-left transition-all hover:-translate-y-1 hover:shadow-lg ${
+            seedMode === 'DEMO' ? 'border-blue-500 bg-blue-50/50' : 'border-gray-200 bg-white'
+          }`}
+        >
+          <div className="text-lg font-bold text-gray-800">Cargar Demo</div>
+          <p className="text-sm text-gray-500 mt-2">
+            Incluye datos de ejemplo para iniciar rápido y explorar el POS.
+          </p>
+        </button>
+        <button
+          onClick={() => setSeedMode('BLANK')}
+          className={`p-6 rounded-2xl border-2 text-left transition-all hover:-translate-y-1 hover:shadow-lg ${
+            seedMode === 'BLANK' ? 'border-blue-500 bg-blue-50/50' : 'border-gray-200 bg-white'
+          }`}
+        >
+          <div className="text-lg font-bold text-gray-800">Base en Blanco</div>
+          <p className="text-sm text-gray-500 mt-2">
+            Configura tu propia terminal, almacenes, tarifas, impuestos y series.
+          </p>
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderTerminalStep = () => (
+    <div className="space-y-6 animate-in slide-in-from-right-8 duration-500">
+      <div className="text-center mb-8">
+        <h2 className="text-2xl font-bold text-gray-800">Terminal Local</h2>
+        <p className="text-gray-500">Define el nombre y número de estación.</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+          <label className="block text-sm font-bold text-gray-600 mb-2">ID de Terminal</label>
+          <input
+            type="text"
+            value={terminalId}
+            onChange={(e) => setTerminalId(e.target.value)}
+            className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-bold text-gray-600 mb-2">Número de Estación</label>
+          <input
+            type="text"
+            value={stationNumber}
+            onChange={(e) => setStationNumber(e.target.value)}
+            className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+          />
+        </div>
+        <div className="md:col-span-2">
+          <label className="block text-sm font-bold text-gray-600 mb-2">Nombre de la Caja</label>
+          <input
+            type="text"
+            value={terminalName}
+            onChange={(e) => setTerminalName(e.target.value)}
+            className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-lg"
+            placeholder="Ej. Caja Principal"
+          />
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderCurrenciesStep = () => (
+    <div className="space-y-6 animate-in slide-in-from-right-8 duration-500">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800">Monedas</h2>
+          <p className="text-gray-500">Define la moneda base y las adicionales.</p>
+        </div>
+        <button
+          onClick={() =>
+            setCurrencies(prev => [
+              ...prev,
+              { code: '', name: '', symbol: '', rate: 1, isEnabled: true }
+            ])
+          }
+          className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold"
+        >
+          + Agregar moneda
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        {currencies.map((currency, index) => (
+          <div key={`${currency.code}-${index}`} className="grid grid-cols-12 gap-3 items-center bg-white border border-gray-200 rounded-2xl p-4">
+            <div className="col-span-1 flex items-center justify-center">
+              <input
+                type="radio"
+                name="baseCurrency"
+                checked={defaultCurrencyCode === currency.code && !!currency.code}
+                onChange={() => {
+                  setDefaultCurrencyCode(currency.code);
+                  setConfig(prev => ({ ...prev, currencySymbol: currency.symbol || prev.currencySymbol }));
+                }}
+              />
+            </div>
+            <input
+              className="col-span-2 p-2 border rounded-lg text-sm"
+              placeholder="Código"
+              value={currency.code}
+              onChange={(e) => {
+                const value = e.target.value.toUpperCase();
+                updateCurrency(index, { code: value });
+                if (!defaultCurrencyCode || defaultCurrencyCode === currency.code) {
+                  setDefaultCurrencyCode(value);
+                }
+              }}
+            />
+            <input
+              className="col-span-3 p-2 border rounded-lg text-sm"
+              placeholder="Nombre"
+              value={currency.name}
+              onChange={(e) => updateCurrency(index, { name: e.target.value })}
+            />
+            <input
+              className="col-span-2 p-2 border rounded-lg text-sm"
+              placeholder="Símbolo"
+              value={currency.symbol}
+              onChange={(e) => {
+                const symbol = e.target.value;
+                updateCurrency(index, { symbol });
+                if (currency.code === defaultCurrencyCode) {
+                  setConfig(prev => ({ ...prev, currencySymbol: symbol }));
+                }
+              }}
+            />
+            <input
+              className="col-span-2 p-2 border rounded-lg text-sm"
+              type="number"
+              step="0.0001"
+              placeholder="Tasa"
+              value={currency.rate}
+              onChange={(e) => updateCurrency(index, { rate: Number(e.target.value) })}
+            />
+            <div className="col-span-2 flex justify-end">
+              <button
+                onClick={() => {
+                  setCurrencies(prev => {
+                    const next = prev.filter((_, i) => i !== index);
+                    if (defaultCurrencyCode === currency.code) {
+                      setDefaultCurrencyCode(next[0]?.code || '');
+                    }
+                    return next;
+                  });
+                }}
+                className="text-sm text-red-500 font-bold"
+              >
+                Quitar
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderTaxesStep = () => (
+    <div className="space-y-6 animate-in slide-in-from-right-8 duration-500">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800">Impuestos</h2>
+          <p className="text-gray-500">Configura tasas e identifica la principal.</p>
+        </div>
+        <button
+          onClick={() => setTaxes(prev => [...prev, { id: makeId('tax'), name: 'Nuevo impuesto', rate: 0, type: 'VAT' }])}
+          className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold"
+        >
+          + Agregar impuesto
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        {taxes.map((tax, index) => (
+          <div key={tax.id} className="grid grid-cols-12 gap-3 items-center bg-white border border-gray-200 rounded-2xl p-4">
+            <input
+              className="col-span-5 p-2 border rounded-lg text-sm"
+              value={tax.name}
+              onChange={(e) => updateTax(index, { name: e.target.value })}
+            />
+            <input
+              className="col-span-3 p-2 border rounded-lg text-sm"
+              type="number"
+              step="0.01"
+              value={tax.rate}
+              onChange={(e) => updateTax(index, { rate: Number(e.target.value) })}
+            />
+            <select
+              className="col-span-3 p-2 border rounded-lg text-sm"
+              value={tax.type}
+              onChange={(e) => updateTax(index, { type: e.target.value as TaxDefinition['type'] })}
+            >
+              <option value="VAT">IVA/ITBIS</option>
+              <option value="SERVICE_CHARGE">Propina</option>
+              <option value="EXEMPT">Exento</option>
+              <option value="OTHER">Otro</option>
+            </select>
+            <button
+              onClick={() => setTaxes(prev => prev.filter((_, i) => i !== index))}
+              className="col-span-1 text-sm text-red-500 font-bold justify-self-end"
+            >
+              Quitar
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderWarehousesStep = () => (
+    <div className="space-y-6 animate-in slide-in-from-right-8 duration-500">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800">Almacenes</h2>
+          <p className="text-gray-500">Define almacenes y selecciona el principal.</p>
+        </div>
+        <button
+          onClick={() =>
+            setWarehouses(prev => [
+              ...prev,
+              {
+                id: makeId('wh'),
+                code: '',
+                name: 'Nuevo almacén',
+                type: 'PHYSICAL',
+                address: '',
+                allowPosSale: true,
+                allowNegativeStock: false
+              }
+            ])
+          }
+          className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold"
+        >
+          + Agregar almacén
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        {warehouses.map((warehouse, index) => (
+          <div key={warehouse.id} className="grid grid-cols-12 gap-3 items-center bg-white border border-gray-200 rounded-2xl p-4">
+            <div className="col-span-1 flex items-center justify-center">
+              <input
+                type="radio"
+                name="defaultWarehouse"
+                checked={defaultWarehouseId === warehouse.id}
+                onChange={() => setDefaultWarehouseId(warehouse.id)}
+              />
+            </div>
+            <input
+              className="col-span-2 p-2 border rounded-lg text-sm"
+              placeholder="Código"
+              value={warehouse.code}
+              onChange={(e) => updateWarehouse(index, { code: e.target.value })}
+            />
+            <input
+              className="col-span-4 p-2 border rounded-lg text-sm"
+              placeholder="Nombre"
+              value={warehouse.name}
+              onChange={(e) => updateWarehouse(index, { name: e.target.value })}
+            />
+            <input
+              className="col-span-3 p-2 border rounded-lg text-sm"
+              placeholder="Dirección"
+              value={warehouse.address}
+              onChange={(e) => updateWarehouse(index, { address: e.target.value })}
+            />
+            <div className="col-span-2 flex justify-end gap-3">
+              <label className="text-xs text-gray-500 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={warehouse.allowPosSale}
+                  onChange={(e) => updateWarehouse(index, { allowPosSale: e.target.checked })}
+                />
+                POS
+              </label>
+              <button
+                onClick={() =>
+                  setWarehouses(prev => {
+                    const next = prev.filter((_, i) => i !== index);
+                    if (defaultWarehouseId === warehouse.id) {
+                      setDefaultWarehouseId(next[0]?.id || '');
+                    }
+                    return next;
+                  })
+                }
+                className="text-sm text-red-500 font-bold"
+              >
+                Quitar
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderTariffsStep = () => (
+    <div className="space-y-6 animate-in slide-in-from-right-8 duration-500">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800">Tarifas</h2>
+          <p className="text-gray-500">Configura precios y selecciona la tarifa base.</p>
+        </div>
+        <button
+          onClick={() =>
+            setTariffs(prev => [
+              ...prev,
+              {
+                id: makeId('trf'),
+                name: 'Nueva tarifa',
+                active: true,
+                currency: defaultCurrencyCode || currencies[0]?.code || DEFAULT_BASE_CURRENCY.code,
+                taxIncluded: true,
+                strategy: { type: 'MANUAL', rounding: 'NONE' },
+                scope: { storeIds: ['ALL'], priority: 0 },
+                schedule: { daysOfWeek: [0, 1, 2, 3, 4, 5, 6], timeStart: '00:00', timeEnd: '23:59' },
+                items: {}
+              }
+            ])
+          }
+          className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold"
+        >
+          + Agregar tarifa
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        {tariffs.map((tariff, index) => (
+          <div key={tariff.id} className="grid grid-cols-12 gap-3 items-center bg-white border border-gray-200 rounded-2xl p-4">
+            <div className="col-span-1 flex items-center justify-center">
+              <input
+                type="radio"
+                name="defaultTariff"
+                checked={defaultTariffId === tariff.id}
+                onChange={() => setDefaultTariffId(tariff.id)}
+              />
+            </div>
+            <input
+              className="col-span-4 p-2 border rounded-lg text-sm"
+              value={tariff.name}
+              onChange={(e) => updateTariff(index, { name: e.target.value })}
+            />
+            <select
+              className="col-span-2 p-2 border rounded-lg text-sm"
+              value={tariff.currency}
+              onChange={(e) => updateTariff(index, { currency: e.target.value })}
+            >
+              {currencies.map((currency) => (
+                <option key={currency.code} value={currency.code}>
+                  {currency.code}
+                </option>
+              ))}
+            </select>
+            <select
+              className="col-span-3 p-2 border rounded-lg text-sm"
+              value={tariff.strategy.rounding}
+              onChange={(e) =>
+                updateTariff(index, { strategy: { ...tariff.strategy, rounding: e.target.value as Tariff['strategy']['rounding'] } })
+              }
+            >
+              <option value="NONE">Sin redondeo</option>
+              <option value="ROUND_HALF_UP">Redondeo normal</option>
+              <option value="ROUND_FLOOR">Redondear abajo</option>
+              <option value="CEILING">Redondear arriba</option>
+              <option value="ENDING_99">Finalizar en .99</option>
+            </select>
+            <div className="col-span-2 flex justify-end">
+              <button
+                onClick={() =>
+                  setTariffs(prev => {
+                    const next = prev.filter((_, i) => i !== index);
+                    if (defaultTariffId === tariff.id) {
+                      setDefaultTariffId(next[0]?.id || '');
+                    }
+                    return next;
+                  })
+                }
+                className="text-sm text-red-500 font-bold"
+              >
+                Quitar
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderPaymentsStep = () => (
+    <div className="space-y-6 animate-in slide-in-from-right-8 duration-500">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800">Medios de Pago</h2>
+          <p className="text-gray-500">Define tus métodos y reglas de redondeo.</p>
+        </div>
+        <button
+          onClick={() =>
+            setPaymentMethods(prev => [
+              ...prev,
+              {
+                id: makeId('pay'),
+                name: 'Nuevo método',
+                type: 'CASH',
+                isEnabled: true,
+                icon: 'Banknote',
+                color: 'bg-gray-500',
+                opensDrawer: false,
+                requiresSignature: false,
+                integration: 'NONE',
+                foreignCurrencyRounding: 'NONE'
+              }
+            ])
+          }
+          className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold"
+        >
+          + Agregar método
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        {paymentMethods.map((payment, index) => (
+          <div key={payment.id} className="grid grid-cols-12 gap-3 items-center bg-white border border-gray-200 rounded-2xl p-4">
+            <input
+              className="col-span-4 p-2 border rounded-lg text-sm"
+              value={payment.name}
+              onChange={(e) => updatePayment(index, { name: e.target.value })}
+            />
+            <select
+              className="col-span-3 p-2 border rounded-lg text-sm"
+              value={payment.type}
+              onChange={(e) => updatePayment(index, { type: e.target.value as PaymentMethodDefinition['type'] })}
+            >
+              <option value="CASH">Efectivo</option>
+              <option value="CARD">Tarjeta</option>
+              <option value="QR">QR</option>
+              <option value="WALLET">Billetera</option>
+              <option value="ADVANCE">Anticipo</option>
+              <option value="CREDIT">Crédito</option>
+              <option value="STORE_CREDIT">Crédito tienda</option>
+              <option value="OTHER">Otro</option>
+            </select>
+            <select
+              className="col-span-3 p-2 border rounded-lg text-sm"
+              value={payment.foreignCurrencyRounding || 'NONE'}
+              onChange={(e) => updatePayment(index, { foreignCurrencyRounding: e.target.value as PaymentMethodDefinition['foreignCurrencyRounding'] })}
+            >
+              <option value="NONE">Sin redondeo</option>
+              <option value="UP">Redondear arriba</option>
+              <option value="DOWN">Redondear abajo</option>
+              <option value="ZERO_DECIMALS">A 0 decimales</option>
+            </select>
+            <div className="col-span-2 flex justify-end">
+              <button
+                onClick={() => setPaymentMethods(prev => prev.filter((_, i) => i !== index))}
+                className="text-sm text-red-500 font-bold"
+              >
+                Quitar
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderSeriesStep = () => (
+    <div className="space-y-6 animate-in slide-in-from-right-8 duration-500">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800">Series de Documentos</h2>
+          <p className="text-gray-500">Define prefijos y numeración por tipo.</p>
+        </div>
+        <div className="flex gap-3">
+          <button
+            onClick={() => setDocumentSeries(SUGGESTED_DOCUMENT_SERIES.map(series => ({ ...series })))}
+            className="px-4 py-2 rounded-xl border border-blue-200 text-blue-600 text-sm font-bold"
+          >
+            Sugerir series
+          </button>
+          <button
+            onClick={() =>
+              setDocumentSeries(prev => [
+                ...prev,
+                {
+                  id: makeId('series'),
+                  documentType: 'TICKET',
+                  name: 'Nueva serie',
+                  description: '',
+                  prefix: '',
+                  nextNumber: 1,
+                  padding: 6,
+                  icon: 'FileText',
+                  color: 'blue'
+                }
+              ])
+            }
+            className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold"
+          >
+            + Agregar serie
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {documentSeries.map((series, index) => (
+          <div key={series.id} className="grid grid-cols-12 gap-3 items-center bg-white border border-gray-200 rounded-2xl p-4">
+            <select
+              className="col-span-3 p-2 border rounded-lg text-sm"
+              value={series.documentType}
+              onChange={(e) =>
+                updateSeries(index, {
+                  documentType: e.target.value as DocumentSeries['documentType'],
+                  id: e.target.value
+                })
+              }
+            >
+              {DOCUMENT_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {type}
+                </option>
+              ))}
+            </select>
+            <input
+              className="col-span-3 p-2 border rounded-lg text-sm"
+              value={series.prefix}
+              onChange={(e) => updateSeries(index, { prefix: e.target.value })}
+              placeholder="Prefijo"
+            />
+            <input
+              className="col-span-2 p-2 border rounded-lg text-sm"
+              type="number"
+              value={series.nextNumber}
+              onChange={(e) => updateSeries(index, { nextNumber: Number(e.target.value) })}
+            />
+            <input
+              className="col-span-2 p-2 border rounded-lg text-sm"
+              type="number"
+              value={series.padding}
+              onChange={(e) => updateSeries(index, { padding: Number(e.target.value) })}
+            />
+            <input
+              className="col-span-1 p-2 border rounded-lg text-sm"
+              value={series.name}
+              onChange={(e) => updateSeries(index, { name: e.target.value })}
+            />
+            <button
+              onClick={() => setDocumentSeries(prev => prev.filter((_, i) => i !== index))}
+              className="col-span-1 text-sm text-red-500 font-bold justify-self-end"
+            >
+              Quitar
+            </button>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -310,44 +1192,6 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
     </div>
   );
 
-  const renderTaxesStep = () => (
-    <div className="space-y-6 animate-in slide-in-from-right-8 duration-500">
-      <div className="text-center mb-8">
-        <h2 className="text-2xl font-bold text-gray-800">Región e Impuestos</h2>
-        <p className="text-gray-500">Selecciona tu región para configurar automáticamente.</p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        {TAX_PRESETS.map((preset) => (
-          <button
-            key={preset.id}
-            onClick={() => handleTaxSelect(preset)}
-            className={`
-              relative group p-6 rounded-2xl border-2 text-left transition-all duration-300 hover:-translate-y-1 hover:shadow-lg
-              ${config.currencySymbol === preset.currency && config.taxRate === preset.rate 
-                ? 'border-blue-500 bg-blue-50/50 ring-2 ring-blue-200' 
-                : 'border-gray-100 bg-white hover:border-blue-200'
-              }
-            `}
-          >
-            <div className="text-4xl mb-4 transform transition-transform group-hover:scale-110 origin-left">{preset.flag}</div>
-            <h3 className="text-lg font-bold text-gray-800">{preset.label}</h3>
-            <div className="flex items-center gap-2 mt-2 text-sm text-gray-600">
-              <span className="bg-gray-200 px-2 py-0.5 rounded text-gray-700 font-mono font-bold">{preset.currency}</span>
-              <span>{preset.taxName}: <strong>{(preset.rate * 100).toFixed(0)}%</strong></span>
-            </div>
-            
-            {config.currencySymbol === preset.currency && config.taxRate === preset.rate && (
-              <div className="absolute top-4 right-4 bg-blue-500 text-white p-1 rounded-full">
-                <Check size={16} />
-              </div>
-            )}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-
   const renderReadyStep = () => (
     <div className="flex flex-col items-center justify-center text-center space-y-8 animate-in zoom-in duration-500 py-10">
       <div className="relative">
@@ -425,9 +1269,16 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
 
         {/* Content Area */}
         <div className="flex-1 p-8 overflow-y-auto relative">
+          {currentStep === 'SEED' && renderSeedStep()}
           {currentStep === 'BUSINESS' && renderBusinessStep()}
+          {currentStep === 'TERMINAL' && renderTerminalStep()}
+          {currentStep === 'CURRENCIES' && renderCurrenciesStep()}
           {currentStep === 'CATALOG' && renderCatalogStep()}
           {currentStep === 'TAXES' && renderTaxesStep()}
+          {currentStep === 'WAREHOUSES' && renderWarehousesStep()}
+          {currentStep === 'TARIFFS' && renderTariffsStep()}
+          {currentStep === 'PAYMENTS' && renderPaymentsStep()}
+          {currentStep === 'SERIES' && renderSeriesStep()}
           {currentStep === 'READY' && renderReadyStep()}
         </div>
 
@@ -435,10 +1286,10 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
         <div className="p-6 border-t border-gray-100 flex justify-between items-center bg-white">
           <button 
             onClick={handleBack}
-            disabled={currentStep === 'BUSINESS' || currentStep === 'READY'}
+            disabled={currentStep === 'SEED' || currentStep === 'READY'}
             className={`
               flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-gray-500 transition-colors
-              ${currentStep === 'BUSINESS' || currentStep === 'READY' ? 'opacity-0 pointer-events-none' : 'hover:bg-gray-100'}
+              ${currentStep === 'SEED' || currentStep === 'READY' ? 'opacity-0 pointer-events-none' : 'hover:bg-gray-100'}
             `}
           >
             <ArrowLeft size={20} /> Atrás
