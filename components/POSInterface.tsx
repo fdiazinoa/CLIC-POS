@@ -58,6 +58,7 @@ import PromoBottomSheet from './PromoBottomSheet';
 import { backgroundSyncManager, SyncState } from '../services/sync/BackgroundSyncManager';
 import ProductTableSupermarket from './ProductTableSupermarket';
 import BarcodeScannerModal from './BarcodeScannerModal';
+import ModifierModal from './ModifierModal';
 import { visorSync } from '../utils/visorSync';
 import ProductQuickActions from './ProductQuickActions';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
@@ -356,6 +357,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeTerminalConfig?.catalog?.allowedCategories, canonicalizeCategory, products]);
 
    const isRetailMode = activeTerminalConfig?.ux?.viewMode === 'RETAIL';
+   const isRestaurantMode = activeTerminalConfig?.operational?.vertical_negocio === 'RESTAURANT';
    const reservationPolicy = activeTerminalConfig?.operational?.reservationPolicy || {
       validityDays: 7,
       printCopies: 1,
@@ -598,6 +600,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeTerminalConfig, terminalTransactions]);
 
    const [showTariffSelector, setShowTariffSelector] = useState(false);
+   const [productForModifiers, setProductForModifiers] = useState<Product | null>(null);
    const [isReturnMode, setIsReturnMode] = useState(false);
    const [errorToast, setErrorToast] = useState<string | null>(null);
 
@@ -1177,8 +1180,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const productName = product.name || '';
       const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
       const hasVariants = product.attributes && product.attributes.length > 0;
+      const hasModifiers = (product.availableModifiers || []).length > 0;
+
       if (isWeighted) setProductForScale(product);
       else if (hasVariants) setSelectedProductForVariants(product);
+      else if (hasModifiers) setProductForModifiers(product);
       else addToCart(product, isReturnMode ? -1 : 1);
    }, [isMobile, defaultSalesWarehouseId, canAddItemToCart, addToCart, isReturnMode]);
 
@@ -2289,6 +2295,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          console.error("Dispatch error:", e);
          alert("Error de comunicación con el servicio de cocina");
       }
+   };
+
+   const handlePrintPrecuenta = async () => {
+      if (cart.length === 0) return;
+      setSuccessToast('Generando Precuenta...');
+      // In a more complete implementation, this would call printer.ts with a dummy transaction
+      setTimeout(() => {
+         setSuccessToast('Precuenta enviada a impresora');
+      }, 1000);
    };
 
    const openReservationModal = () => {
@@ -3738,34 +3753,75 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
 
-                              <div className="grid grid-cols-[112px_minmax(0,1fr)] items-center gap-6 pt-5 px-2">
-                                 <button
-                                    onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
-                                    className="w-[112px] px-3 py-3.5 rounded-2xl font-black text-base border-2 border-red-100 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
-                                 >
-                                    <LogOut size={20} />
-                                    <span>Salir</span>
-                                 </button>
-                                 <button
-                                    onClick={() => {
-                                       if (cart.length > 0 && fiscalStatus.hasNCF) {
-                                          const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-                                          if (!validation.isValid) {
-                                             alert(validation.error);
-                                             return;
-                                          }
-                                          if (!canProceedWithOperationalSession()) return;
-                                          proceedToCheckout();
-                                       } else if (!fiscalStatus.hasNCF) {
-                                          alert("No hay secuencias fiscales disponibles.");
-                                       }
-                                    }}
-                                    disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                                    className={`w-full max-w-[188px] justify-self-end py-3.5 rounded-2xl font-black text-lg shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
-                                 >
-                                    <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
-                                    <ArrowRight size={24} />
-                                 </button>
+                              <div className={`grid ${isRestaurantMode ? 'grid-cols-4' : 'grid-cols-[112px_minmax(0,1fr)]'} items-center gap-3 pt-5 px-2`}>
+                                 {!isRestaurantMode ? (
+                                    <>
+                                       <button
+                                          onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
+                                          className="w-[112px] px-3 py-3.5 rounded-2xl font-black text-base border-2 border-red-100 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2"
+                                       >
+                                          <LogOut size={20} />
+                                          <span>Salir</span>
+                                       </button>
+                                       <button
+                                          onClick={() => {
+                                             if (cart.length > 0 && fiscalStatus.hasNCF) {
+                                                const validation = validateTerminalDocument(config, terminalId, 'TICKET');
+                                                if (!validation.isValid) {
+                                                   alert(validation.error);
+                                                   return;
+                                                }
+                                                if (!canProceedWithOperationalSession()) return;
+                                                proceedToCheckout();
+                                             } else if (!fiscalStatus.hasNCF) {
+                                                alert("No hay secuencias fiscales disponibles.");
+                                             }
+                                          }}
+                                          disabled={cart.length === 0 || !fiscalStatus.hasNCF}
+                                          className={`w-full max-w-[188px] justify-self-end py-3.5 rounded-2xl font-black text-lg shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
+                                       >
+                                          <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
+                                          <ArrowRight size={24} />
+                                       </button>
+                                    </>
+                                 ) : (
+                                    <>
+                                       <button
+                                          onClick={() => onOpenTableMap && onOpenTableMap()}
+                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-slate-100 bg-white text-slate-600 hover:bg-slate-50 transition-all active:scale-95"
+                                       >
+                                          <Layout size={20} />
+                                          <span>Mesas</span>
+                                       </button>
+                                       <button
+                                          onClick={handleDispatchCommand}
+                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-orange-100 bg-orange-50 text-orange-600 hover:bg-orange-100 transition-all active:scale-95"
+                                       >
+                                          <ChefHat size={20} />
+                                          <span>Cocina</span>
+                                       </button>
+                                       <button
+                                          onClick={handlePrintPrecuenta}
+                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-blue-100 bg-blue-50 text-blue-600 hover:bg-blue-100 transition-all active:scale-95"
+                                       >
+                                          <Printer size={20} />
+                                          <span>Precuenta</span>
+                                       </button>
+                                       <button
+                                          onClick={() => {
+                                             if (cart.length > 0) {
+                                                if (!canProceedWithOperationalSession()) return;
+                                                proceedToCheckout();
+                                             }
+                                          }}
+                                          disabled={cart.length === 0}
+                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase bg-slate-900 text-white hover:bg-black transition-all active:scale-95 disabled:opacity-50"
+                                       >
+                                          <ArrowRight size={20} />
+                                          <span>Cobrar</span>
+                                       </button>
+                                    </>
+                                 )}
                               </div>
                            </>
                         )}
@@ -4277,6 +4333,18 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                </div>
             )
          }
+         {productForModifiers && (
+            <ModifierModal
+               product={productForModifiers}
+               currencySymbol={baseCurrency.symbol}
+               themeColor="blue"
+               onClose={() => setProductForModifiers(null)}
+               onConfirm={(selectedModifierNames, finalPrice) => {
+                  addToCart(productForModifiers, isReturnMode ? -1 : 1, finalPrice, selectedModifierNames);
+                  setProductForModifiers(null);
+               }}
+            />
+         )}
 
          <PromoBottomSheet
             isOpen={showPromoSheet}

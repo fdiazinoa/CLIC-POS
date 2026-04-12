@@ -114,7 +114,7 @@ import { inventorySyncService } from './services/sync/InventorySyncService';
 import { processInventoryDeduction } from './utils/inventoryEngine';
 import { useOfflineInventoryCountSync } from './hooks/useOfflineInventoryCountSync';
 import { printLabelsFromTemplate } from './utils/labelPrinter';
-import { printIntegratedPaymentArtifacts } from './utils/printer';
+import { printIntegratedPaymentArtifacts, printPrecuenta } from './utils/printer';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { persistStandaloneRefundTransaction } from './services/localRefundPersistence';
@@ -4500,6 +4500,27 @@ const AppContent: React.FC = () => {
                 bloqueoMeseros={getCurrentTerminal()?.config?.operational?.bloqueo_meseros}
                 isRestaurantMode={config.vertical === 'RESTAURANT' || config.vertical === 'RETAIL'}
                 canViewBusinessMetrics={canViewBusinessMetrics}
+                onPrintPrecheck={async (table) => {
+                  if (!table.currentOrderId) return;
+                  const order = (parkedTickets || []).find(p => p.id === table.currentOrderId);
+                  if (order) {
+                    // Pre-calculate totals for printPrecuenta
+                    const subtotal = order.items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+                    
+                    await printPrecuenta(config, {
+                      items: order.items,
+                      subtotal: subtotal,
+                      discountTotal: 0, // Simplified for now
+                      taxTotal: 0,      // Simplified for now
+                      finalTotal: order.total || subtotal,
+                      table: table,
+                      customerName: order.customerName,
+                      terminalId: getCurrentTerminal()?.id || 'T1'
+                    });
+                  } else {
+                    alert('No se encontró el pedido activo para esta mesa.');
+                  }
+                }}
               />
             </div>
           </div>
