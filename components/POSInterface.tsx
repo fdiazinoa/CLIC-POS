@@ -361,7 +361,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeTerminalConfig?.catalog?.allowedCategories, canonicalizeCategory, products]);
 
    const isRetailMode = activeTerminalConfig?.ux?.viewMode === 'RETAIL';
-   const operationalVertical = activeTerminalConfig?.operational?.vertical_negocio;
+   const operationalVertical = String(activeTerminalConfig?.operational?.vertical_negocio || '');
    const isRestaurantMode =
       operationalVertical === 'RESTAURANT' ||
       operationalVertical === 'RESTAURANTE' ||
