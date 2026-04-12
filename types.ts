@@ -95,6 +95,7 @@ export interface PrinterDevice {
   address?: string; // IP o MAC
   status: 'CONNECTED' | 'DISCONNECTED';
   type: 'TICKET' | 'LABEL' | 'KITCHEN' | 'LOGISTICS';
+  productionAreaId?: string;
 }
 
 export type FingerprintDriver =
@@ -1233,6 +1234,7 @@ export interface Table {
   waiterName?: string;
   waiterId?: string;
   timeSeated?: string;
+  guests?: number;
 }
 
 /**
@@ -1266,8 +1268,8 @@ export interface CartItem extends Product {
   trackingId?: string; // NEW: Assigned lot/serial ID
   trackingCode?: string; // NEW: Assigned lot/serial code
   trackingData?: any[]; // NEW: Detailed tracking records selected
-  variantSku?: string; // NEW: Specific SKU for variants
   variantInfo?: string; // NEW: Human readable variant detail
+  dispatched?: boolean; // NEW: Track if item was sent to kitchen
 }
 
 export interface Transaction {
@@ -1380,6 +1382,10 @@ export interface Transaction {
   // Wallet Interaction
   walletDepositAmount?: number;     // Amount sent to customer wallet (advance/refund)
   walletPaymentAmount?: number;     // Amount paid using customer wallet balance
+
+  // Restaurant fields
+  serviceChargeAmount?: number;     // Propina Legal (10%)
+  voluntaryTipAmount?: number;      // Propina Voluntaria
 }
 
 export type ViewState =
@@ -1664,6 +1670,7 @@ export interface ParkedTicket {
   customerId?: string;
   customerName?: string;
   timestamp: string;
+  tableId?: string | number;
 }
 
 export type ReservationStatus = 'ACTIVE' | 'INVOICED' | 'EXPIRED' | 'CANCELLED';

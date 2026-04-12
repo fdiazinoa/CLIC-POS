@@ -2845,6 +2845,26 @@ const AppContent: React.FC = () => {
     await db.save('parkedTickets', tickets); // Uses 'settings' table logic or collection
   };
 
+  const handleUpdateActiveTableGuests = async (guests: number) => {
+    if (!activeTable) return;
+    try {
+      const updatedTable = { ...activeTable, guests };
+      setActiveTable(updatedTable);
+      
+      // Update in server
+      await fetch(`/api/tables/${activeTable.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guests })
+      });
+      
+      // Update in local state list to avoid jumpy UI on refresh
+      setTables(prev => prev.map(t => t.id === activeTable.id ? updatedTable : t));
+    } catch (e) {
+      console.error("Failed to update guest count:", e);
+    }
+  };
+
   const handleRepairLegacyReceivables = useCallback(async (): Promise<ReceivableRepairSummary> => {
     const now = new Date().toISOString();
     const [persistedTransactions, persistedTransactionHistory, persistedCustomers, persistedWallets, persistedWalletTransactions] = await Promise.all([
@@ -4629,6 +4649,7 @@ const AppContent: React.FC = () => {
             onUpdateConfig={handleConfigUpdate}
             onKioskPay={() => handleViewChange('KIOSK_PAYMENT' as any)}
             activeTerminalId={getCurrentTerminal()!.id}
+            onUpdateActiveTableGuests={handleUpdateActiveTableGuests}
           />
         );
 

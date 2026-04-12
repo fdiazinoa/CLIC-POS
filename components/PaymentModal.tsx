@@ -46,7 +46,7 @@ interface PaymentModalProps {
    currencySymbol: string;
    config?: BusinessConfig;
    onClose: () => void;
-   onConfirm: (payments: PaymentEntry[]) => Promise<Transaction | null>;
+   onConfirm: (payments: PaymentEntry[], voluntaryTip?: number) => Promise<Transaction | null>;
    themeColor: string;
    customer?: Customer | null;
    isDelinquent?: boolean;
@@ -54,6 +54,7 @@ interface PaymentModalProps {
    isMaster?: boolean;
    currentUser?: User | null;
    roles?: RoleDefinition[];
+   isRestaurantMode?: boolean;
 }
 
 type ResolvedPaymentMethod = {
@@ -204,13 +205,14 @@ type GatewayProgressOverlayState = {
 
 import SupervisorAuthModal from './SupervisorAuthModal';
 
-const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles }) => {
+const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmount = 0, currencySymbol, config, onClose, onConfirm, themeColor, customer, isDelinquent, users, isMaster, currentUser, roles, isRestaurantMode }) => {
    const [payments, setPayments] = useState<PaymentEntry[]>([]);
    const [activeMethodKey, setActiveMethodKey] = useState<string>('');
    const [inputAmount, setInputAmount] = useState<string>('');
    const [isSuccessScreen, setIsSuccessScreen] = useState(false);
    const [completedTransaction, setCompletedTransaction] = useState<Transaction | null>(null);
    const [shouldClearInput, setShouldClearInput] = useState(true);
+   const [voluntaryTip, setVoluntaryTip] = useState(0);
    const [isFinalizing, setIsFinalizing] = useState(false);
    const [finalizeError, setFinalizeError] = useState<string | null>(null);
    const [isOnline, setIsOnline] = useState(networkSyncService.getStatus().isOnline);
@@ -250,9 +252,13 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
    // Lock total/refund mode at modal open to avoid recalculating to 0 when parent clears cart.
    const [isRefund] = useState(() => total < 0);
    const [absTotal] = useState(() => Math.abs(total));
+   
+   // El total a pagar ahora incluye la propina voluntaria
+   const effectiveTotalToPay = useMemo(() => absTotal + voluntaryTip, [absTotal, voluntaryTip]);
+
    const paymentSettlementPreview = useMemo(
-      () => buildPaymentSettlementSummary(payments, absTotal, baseCurrency.code),
-      [payments, absTotal, baseCurrency.code]
+      () => buildPaymentSettlementSummary(payments, effectiveTotalToPay, baseCurrency.code),
+      [payments, effectiveTotalToPay, baseCurrency.code]
    );
    const paymentPreviewById = useMemo(
       () => new Map(paymentSettlementPreview.lines.map(line => [line.paymentId, line])),
@@ -833,7 +839,7 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
             slowProcessTimer = window.setTimeout(() => {
                setFinalizeError('El cobro está tardando más de lo esperado, espere unos segundos...');
             }, 15000);
-            const txn = await onConfirm(paymentsToConfirm);
+            const txn = await onConfirm(paymentsToConfirm, voluntaryTip);
 
             if (txn) {
                const finalizedTransaction = txn.payments?.length
@@ -1139,8 +1145,49 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                      {isRefund ? 'Monto a Devolver' : 'Total a Cobrar'}
                   </p>
                   <h1 className={`text-3xl md:text-5xl font-black leading-none ${isRefund ? 'text-rose-600' : 'text-gray-900'}`}>
-                     {currencySymbol}{absTotal.toFixed(2)}
+                     {currencySymbol}{effectiveTotalToPay.toFixed(2)}
                   </h1>
+                  {voluntaryTip > 0 && (
+                     <p className="text-[10px] font-bold text-sky-600 mt-1 uppercase tracking-wider">
+                        Incluye {currencySymbol}{voluntaryTip.toFixed(2)} de propina voluntaria
+                     </p>
+                  )}
+               </div>
+
+               {isRestaurantMode && !isRefund && (
+                  <div className="mb-6 p-4 rounded-2xl bg-sky-50 border border-sky-100">
+                     <div className="flex justify-between items-center mb-3">
+                        <span className="text-[10px] font-black uppercase text-sky-600 tracking-wider">Propina Voluntaria Extra</span>
+                        <div className="flex items-center gap-1">
+                           <span className="text-xs font-bold text-sky-400">{currencySymbol}</span>
+                           <input 
+                              type="number" 
+                              value={voluntaryTip || ''} 
+                              onChange={(e) => setVoluntaryTip(Math.max(0, parseFloat(e.target.value) || 0))}
+                              className="w-20 bg-transparent border-b border-sky-200 focus:border-sky-500 outline-none text-right font-black text-sky-700"
+                              placeholder="0.00"
+                           />
+                        </div>
+                     </div>
+                     <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                        {[100, 200, 500, 1000].map(amt => (
+                           <button 
+                             key={amt}
+                             onClick={() => setVoluntaryTip(prev => prev + amt)}
+                             className="whitespace-nowrap px-3 py-2 rounded-xl bg-white border border-sky-200 text-[10px] font-bold text-sky-700 hover:bg-sky-100 transition-all active:scale-95 shadow-sm"
+                           >
+                             +{amt}
+                           </button>
+                        ))}
+                        <button 
+                           onClick={() => setVoluntaryTip(0)}
+                           className="px-3 py-2 rounded-xl bg-rose-50 border border-rose-100 text-[10px] font-bold text-rose-600 hover:bg-rose-100 transition-all active:scale-95"
+                        >
+                           Borrar
+                        </button>
+                     </div>
+                  </div>
+               )}
 
                   <div className="hidden lg:flex mt-6 gap-2">
                      {currencies.filter(c => c.isEnabled).map(c => (
@@ -1153,7 +1200,6 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                         </button>
                      ))}
                   </div>
-               </div>
 
                {/* Payments List (Compact on mobile) */}
                <div className="flex-1 overflow-y-auto space-y-2 md:space-y-3 no-scrollbar max-h-[22vh] lg:max-h-full">
@@ -1381,24 +1427,23 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   <button onClick={() => handleNumPad('C')} className="rounded-xl md:rounded-2xl bg-gray-200 text-gray-600 font-black text-lg md:text-xl active:scale-95 transition-all shadow-inner">C</button>
                   <button onClick={() => handleNumPad('0')} className="rounded-xl md:rounded-2xl bg-white border border-gray-100 text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">0</button>
                   <button onClick={() => handleNumPad('.')} className="rounded-xl md:rounded-2xl bg-white border border-gray-100 text-2xl md:text-3xl font-black text-gray-700 active:bg-gray-50 active:scale-95 transition-all shadow-sm">.</button>
-               </div>
             </div>
          </div>
-
-         {showSupervisorModal && (
-            <SupervisorAuthModal
-               isOpen={showSupervisorModal}
-               onClose={() => setShowSupervisorModal(false)}
-               onSuccess={() => {
-                  setIsOverrideActive(true);
-                  setShowSupervisorModal(false);
-               }}
-               users={users}
-               requiredPermission="POS_CREDIT_OVERRIDE"
-            />
-         )}
-         </div>
-      </>
+      </div>
+   </div>
+      {showSupervisorModal && (
+         <SupervisorAuthModal
+            isOpen={showSupervisorModal}
+            onClose={() => setShowSupervisorModal(false)}
+            onSuccess={() => {
+               setIsOverrideActive(true);
+               setShowSupervisorModal(false);
+            }}
+            users={users}
+            requiredPermission="POS_CREDIT_OVERRIDE"
+         />
+      )}
+   </>
    );
 };
 

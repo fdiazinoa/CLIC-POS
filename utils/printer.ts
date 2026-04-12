@@ -1014,15 +1014,16 @@ export const printPrecuenta = async (
 
 export const printComanda = async (
     config: BusinessConfig,
-    params: {
+    data: {
         items: CartItem[];
-        table?: Table | null;
-        customerName?: string;
+        table?: Table;
         orderNumber?: string;
-        terminalId?: string;
+        customerName?: string;
+        areaTitle?: string;
+        productionAreaId?: string;
     }
 ): Promise<boolean> => {
-    const { companyInfo } = config;
+    const { items, table, orderNumber, customerName, areaTitle, productionAreaId } = data;
     const dateStr = new Date().toLocaleDateString();
     const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -1059,21 +1060,21 @@ export const printComanda = async (
         </head>
         <body>
             <div class="text-center">
-                <div class="doc-title">COCINA</div>
+                <div class="doc-title">${areaTitle || 'COCINA'}</div>
             </div>
 
             <div class="meta-row text-center">
-                ${params.table ? `<div style="font-size: 24px; font-weight: 900;">MESA: ${params.table.name || params.table.nombre}</div>` : ''}
-                ${params.orderNumber ? `<div>ORDEN: #${params.orderNumber}</div>` : ''}
+                ${table ? `<div style="font-size: 24px; font-weight: 900;">MESA: ${table.name || table.nombre}</div>` : ''}
+                ${orderNumber ? `<div>ORDEN: #${orderNumber}</div>` : ''}
                 <div>${dateStr} ${timeStr}</div>
-                ${params.customerName ? `<div>Cliente: ${params.customerName}</div>` : ''}
+                ${customerName ? `<div>Cliente: ${customerName}</div>` : ''}
             </div>
 
             <div class="divider"></div>
 
             <table class="items-table">
                 <tbody>
-                    ${params.items.filter(i => i.quantity > 0).map(item => `
+                    ${items.filter(i => i.quantity > 0).map(item => `
                         <tr>
                             <td class="qty-cell">${item.quantity}</td>
                             <td>
@@ -1089,7 +1090,7 @@ export const printComanda = async (
             <div class="divider"></div>
             
             <div class="footer text-center">
-                Impreso en Terminal: ${params.terminalId || 'POS'}
+                Impreso en Terminal: POS
             </div>
 
             <script>
@@ -1104,7 +1105,7 @@ export const printComanda = async (
     const silentHtml = receiptHtml.replace(/<script>[\s\S]*?window\.onload[\s\S]*?<\/script>/, '');
     let printedSilently = false;
 
-    // Use KITCHEN role for routing
+    // Use KITCHEN role for routing, or specific productionAreaId if we had a mapping
     if (!shouldSuppressBrowserPrintFallback()) {
         printedSilently = await PrintRouterService.routeAndPrintHtml({
             config,
@@ -1113,6 +1114,7 @@ export const printComanda = async (
             jobType: 'TICKET',
             referenceId: `COMANDA-${Date.now()}`,
             copies: 1,
+            preferredPrinterId: productionAreaId // Use this if it maps to a printer
         });
     }
 
