@@ -361,7 +361,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeTerminalConfig?.catalog?.allowedCategories, canonicalizeCategory, products]);
 
    const isRetailMode = activeTerminalConfig?.ux?.viewMode === 'RETAIL';
-   const isRestaurantMode = activeTerminalConfig?.operational?.vertical_negocio === 'RESTAURANT';
+   const operationalVertical = activeTerminalConfig?.operational?.vertical_negocio;
+   const isRestaurantMode =
+      operationalVertical === 'RESTAURANT' ||
+      operationalVertical === 'RESTAURANTE' ||
+      config.vertical === 'RESTAURANT';
+   const hideTableExtras = isRestaurantMode && !!activeTable;
    const reservationPolicy = activeTerminalConfig?.operational?.reservationPolicy || {
       validityDays: 7,
       printCopies: 1,
@@ -3932,13 +3937,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           <ChefHat size={20} />
                                           <span>Cocina</span>
                                        </button>
-                                       <button
-                                          onClick={() => setShowSplitModal(true)}
-                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-purple-100 bg-purple-50 text-purple-600 hover:bg-purple-100 transition-all active:scale-95"
-                                       >
-                                          <Split size={20} />
-                                          <span>Dividir</span>
-                                       </button>
+                                       {!hideTableExtras && (
+                                          <button
+                                             onClick={() => setShowSplitModal(true)}
+                                             className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-purple-100 bg-purple-50 text-purple-600 hover:bg-purple-100 transition-all active:scale-95"
+                                          >
+                                             <Split size={20} />
+                                             <span>Dividir</span>
+                                          </button>
+                                       )}
                                        <button
                                           onClick={handlePrintPrecuenta}
                                           className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-blue-100 bg-blue-50 text-blue-600 hover:bg-blue-100 transition-all active:scale-95"
@@ -3988,33 +3995,39 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            <QrCode size={18} />
                            <span className="text-[9px] font-bold uppercase">Cupón</span>
                         </button>
-                        <button onClick={openParkAliasModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
-                           <Save size={18} />
-                           <span className="text-[9px] font-bold uppercase">Grd.</span>
-                        </button>
-                        <button onClick={() => setShowParkedList(!showParkedList)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-500 relative">
-                           <Inbox size={18} />
-                           <span className="text-[9px] font-bold uppercase">Esp.</span>
-                           {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
-                        </button>
-                        <button onClick={openReservationModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-amber-600">
-                           <StickyNote size={18} />
-                           <span className="text-[9px] font-bold uppercase">Res.</span>
-                        </button>
-                        <button onClick={openRecoverReservationModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-teal-600">
-                           <QrCode size={18} />
-                           <span className="text-[9px] font-bold uppercase">Rec.</span>
-                        </button>
+                        {!hideTableExtras && (
+                           <>
+                              <button onClick={openParkAliasModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-blue-500">
+                                 <Save size={18} />
+                                 <span className="text-[9px] font-bold uppercase">Grd.</span>
+                              </button>
+                              <button onClick={() => setShowParkedList(!showParkedList)} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-500 relative">
+                                 <Inbox size={18} />
+                                 <span className="text-[9px] font-bold uppercase">Esp.</span>
+                                 {(Array.isArray(parkedTickets) ? parkedTickets : []).length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full"></span>}
+                              </button>
+                              <button onClick={openReservationModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-amber-600">
+                                 <StickyNote size={18} />
+                                 <span className="text-[9px] font-bold uppercase">Res.</span>
+                              </button>
+                              <button onClick={openRecoverReservationModal} className="flex flex-col items-center gap-1 text-gray-400 hover:text-teal-600">
+                                 <QrCode size={18} />
+                                 <span className="text-[9px] font-bold uppercase">Rec.</span>
+                              </button>
+                           </>
+                        )}
                         {activeTerminalConfig?.operational?.usa_modulos_cocina && (
                            <button onClick={handleDispatchCommand} className="flex flex-col items-center gap-1 text-gray-400 hover:text-orange-600">
                               <ChefHat size={18} />
                               <span className="text-[9px] font-bold uppercase">March.</span>
                            </button>
                         )}
-                        <button onClick={() => onOpenInventoryTracking()} className="flex flex-col items-center gap-1 text-gray-400 hover:text-indigo-500">
-                           <Package size={18} />
-                           <span className="text-[9px] font-bold uppercase">Rast.</span>
-                        </button>
+                        {!hideTableExtras && (
+                           <button onClick={() => onOpenInventoryTracking()} className="flex flex-col items-center gap-1 text-gray-400 hover:text-indigo-500">
+                              <Package size={18} />
+                              <span className="text-[9px] font-bold uppercase">Rast.</span>
+                           </button>
+                        )}
                      </div>
                      <div className="text-right">
                         <span className="text-[10px] font-bold text-gray-400 uppercase block">Subtotal: {baseCurrency.symbol}{cartSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
