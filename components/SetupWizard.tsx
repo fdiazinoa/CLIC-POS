@@ -4,7 +4,7 @@ import {
   Map, DollarSign, Flag, Building2, Package, Percent, Wand2,
   CheckCircle2, ChevronDown, AlertCircle
 } from 'lucide-react';
-import { BusinessConfig, CompanyInfo, CurrencyConfig, DocumentSeries, DocumentType, PaymentMethodDefinition, TaxDefinition, Tariff, Warehouse } from '../types';
+import { BusinessConfig, CompanyInfo, CurrencyConfig, DocumentSeries, DocumentType, PaymentMethodDefinition, TaxDefinition, Tariff, TerminalConfig, Warehouse } from '../types';
 import { DEFAULT_DOCUMENT_SERIES, DEFAULT_TERMINAL_CONFIG, INITIAL_TAXES, INITIAL_TARIFFS } from '../constants';
 import { db } from '../utils/db';
 
@@ -179,7 +179,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
 
   const hydrateFromConfig = (nextConfig: BusinessConfig, mode: 'DEMO' | 'BLANK') => {
     const terminal = (nextConfig.terminals || [])[0];
-    const terminalConfig = terminal?.config || DEFAULT_TERMINAL_CONFIG;
+    const terminalConfig = (terminal?.config || DEFAULT_TERMINAL_CONFIG) as TerminalConfig;
     const nextTaxes = Array.isArray(nextConfig.taxes) ? nextConfig.taxes : [];
     const nextTariffs = Array.isArray(nextConfig.tariffs) ? nextConfig.tariffs : [];
     const nextCurrencies = Array.isArray(nextConfig.currencies) ? nextConfig.currencies : [];
