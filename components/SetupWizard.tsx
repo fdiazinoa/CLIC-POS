@@ -336,6 +336,60 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
     if (warehousesToPersist.length) {
       await db.save('warehouses', warehousesToPersist);
     }
+    if (seedMode === 'BLANK') {
+      const collectionsToClear = [
+        'products',
+        'customers',
+        'transactions',
+        'transactionHistory',
+        'cashMovements',
+        'transfers',
+        'parkedTickets',
+        'purchaseOrders',
+        'suppliers',
+        'inventoryLedger',
+        'watchlists',
+        'campaigns',
+        'coupons',
+        'zReports',
+        'receptions',
+        'productStocks',
+        'reservations',
+        'inventoryCommitments',
+        'supplierProductPrices',
+        'inventoryTracking',
+        'inventorySnapshots',
+        'inventoryAuditLogs',
+        'inventoryCounts',
+        'offline_receptions',
+        'offline_reception_queue',
+        'offline_reception_conflicts',
+        'offline_inventory_counts',
+        'offline_inventory_count_queue',
+        'offline_inventory_count_conflicts',
+        'offline_print_queue',
+        'rooms',
+        'tables',
+        'collections',
+        'activities',
+        'wallet_transactions',
+        'loyalty_events'
+      ] as const;
+
+      await Promise.all(
+        collectionsToClear.map((collection) => db.save(collection as any, []))
+      );
+
+      await db.save('warehouses' as any, warehousesToPersist);
+      await db.save('paymentMethods' as any, finalConfig.paymentMethods || []);
+      await db.save('internalSequences' as any, finalConfig.terminals[0]?.config.documentSeries || []);
+      await db.saveDocument('config' as any, {
+        id: '_db_initialized',
+        timestamp: new Date().toISOString(),
+        version: 1,
+        seedMode: 'BLANK'
+      });
+    }
     return finalConfig;
   };
 
