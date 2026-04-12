@@ -169,6 +169,7 @@ CREATE TABLE IF NOT EXISTS tables (
     status TEXT DEFAULT 'FREE',
     consumo_minimo_mesa REAL DEFAULT 0,
     comensales_minimos INTEGER DEFAULT 1,
+    guests INTEGER DEFAULT 1,
     updated_at TEXT,
     deleted_at TEXT,
     FOREIGN KEY (roomId) REFERENCES rooms(id)

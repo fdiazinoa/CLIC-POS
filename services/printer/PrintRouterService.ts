@@ -34,7 +34,10 @@ const resolveTerminalPrinter = (
     preferredPrinterId?: string
 ): PrinterDevice | undefined => {
     if (preferredPrinterId) {
-        const preferred = (config.availablePrinters || []).find(p => p.id === preferredPrinterId);
+        const preferred = (config.availablePrinters || []).find(p => 
+            p.id === preferredPrinterId || 
+            p.productionAreaId === preferredPrinterId
+        );
         if (preferred) return preferred;
     }
 

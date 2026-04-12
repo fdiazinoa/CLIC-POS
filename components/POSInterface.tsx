@@ -6,7 +6,7 @@ import {
    Settings, Users, History, Wallet,
    UserPlus, PlusCircle, X, Percent, ArrowLeft, ChevronRight,
    Scale as ScaleIcon, PauseCircle, LogOut, Minus, Plus, Edit3,
-   ArrowRightLeft, Globe, DollarSign,
+   ArrowRightLeft, Globe, DollarSign, Split,
    ChevronDown, Check, AlertCircle, Layers,
    ShoppingBag, ScanBarcode, ArrowRight, Clock, Camera, AlertTriangle,
    MessageSquare, PlayCircle, Download, Lock, ArrowUpRight, Landmark,
@@ -58,6 +58,7 @@ import PromoBottomSheet from './PromoBottomSheet';
 import { backgroundSyncManager, SyncState } from '../services/sync/BackgroundSyncManager';
 import ProductTableSupermarket from './ProductTableSupermarket';
 import BarcodeScannerModal from './BarcodeScannerModal';
+import { printComanda, printPrecuenta } from '../utils/printer';
 import ModifierModal from './ModifierModal';
 import { visorSync } from '../utils/visorSync';
 import ProductQuickActions from './ProductQuickActions';
@@ -74,10 +75,11 @@ import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from
 import { resolveCustomerImageSrc } from '../utils/entityImage';
 import { resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
+import SplitTicketModal from './SplitTicketModal';
 
 // ... existing imports
 
-interface POSInterfaceProps {
+export interface POSInterfaceProps {
    config: BusinessConfig;
    currentUser: UserType;
    roles: RoleDefinition[];
@@ -108,6 +110,7 @@ interface POSInterfaceProps {
    activeTerminalId: string;
    activeTable?: Table | null;
    onClearActiveTable?: () => void;
+   onUpdateActiveTableGuests?: (guests: number) => void;
    onKioskPay?: () => void;
    internalSequences?: any[];
    rooms?: Room[];
@@ -156,6 +159,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    activeTerminalId,
    activeTable,
    onClearActiveTable,
+   onUpdateActiveTableGuests,
    onKioskPay,
    internalSequences,
    rooms = []
@@ -610,6 +614,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    const [mobileView, setMobileView] = useState<'PRODUCTS' | 'TICKET'>('PRODUCTS');
 
+   const [showDiscountModal, setShowDiscountModal] = useState(false);
+   const [showSplitModal, setShowSplitModal] = useState(false);
    const [showPaymentModal, setShowPaymentModal] = useState(false);
    const [showTicketOptions, setShowTicketOptions] = useState(false);
    const [showParkedList, setShowParkedList] = useState(false);
@@ -1314,6 +1320,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const isAnyModalOpen = !!(
       showPaymentModal ||
+      showSplitModal ||
       showTicketOptions ||
       showParkedList ||
       showGlobalDiscount ||
@@ -1539,16 +1546,38 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }));
    }, [taxBreakdown]);
 
-   let cartTotal = 0;
+   const tipsConfig = config.tipsConfig;
+   const serviceCharge = tipsConfig?.serviceCharge;
+
+   const shouldApplyServiceCharge = useMemo(() => {
+      if (!isRestaurantMode || !serviceCharge?.enabled) return false;
+
+      const currentGross = grossLineTotal - discountAmount;
+      const totalOver = serviceCharge.applyIfTotalOver || 0;
+      const guestsOver = serviceCharge.applyIfGuestsOver || 0;
+
+      const guestMatch = guestsOver > 0 && (activeTable?.guests || 0) >= guestsOver;
+      const totalMatch = totalOver > 0 && currentGross >= totalOver;
+
+      if (totalOver === 0 && guestsOver === 0) return true;
+      return totalMatch || guestMatch;
+   }, [isRestaurantMode, serviceCharge, grossLineTotal, discountAmount, activeTable]);
+
+   const legalTipRate = shouldApplyServiceCharge ? (serviceCharge?.percentage || 0) / 100 : 0;
+   const cartTip = (grossLineTotal - discountAmount) * legalTipRate;
+
+   let cartTotalWithoutTip = 0;
    let netSubtotal = 0;
 
    if (isTaxIncluded) {
-      cartTotal = grossLineTotal - discountAmount;
-      netSubtotal = cartTotal - cartTax;
+      cartTotalWithoutTip = grossLineTotal - discountAmount;
+      netSubtotal = cartTotalWithoutTip - cartTax;
    } else {
       netSubtotal = grossLineTotal - discountAmount;
-      cartTotal = netSubtotal + cartTax;
+      cartTotalWithoutTip = netSubtotal + cartTax;
    }
+
+   const cartTotal = cartTotalWithoutTip + cartTip;
 
    // Alias for compatibility if needed, though netSubtotal is what we usually display as "Subtotal"
    const cartSubtotal = grossLineTotal; // This represents the sum of list prices
@@ -1801,7 +1830,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
 
-   const handlePaymentConfirm = async (payments: PaymentEntry[]): Promise<Transaction | null> => {
+   const handlePaymentConfirm = async (payments: PaymentEntry[], voluntaryTip?: number): Promise<Transaction | null> => {
       const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
          let timeoutHandle: number | undefined;
          try {
@@ -1983,7 +2012,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         documentType: 'TICKET' as const,
                         seriesId: assignedSequenceId,
                         items: saleItems,
-                        total: saleTotal,
+                        total: saleTotal + (voluntaryTip || 0),
+                        serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
+                        voluntaryTipAmount: voluntaryTip,
                         ...saleSettlement,
                         userId: currentUser.id,
                         userName: currentUser.name,
@@ -2018,6 +2049,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         ncf: refundNcf,
                         ncfType: refundNcf ? 'B04' : undefined,
                         walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
+                        walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined,
+                        serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
+                        voluntaryTipAmount: voluntaryTip,
                         authorizedById: refundAuthorizedBy?.id,
                         authorizedByName: refundAuthorizedBy?.name
                      },
@@ -2095,7 +2129,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
                const refundDocumentTotal = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
                const documentItems = isRefundOnly ? normalizedRefundItems : processedCart;
-               const documentTotal = isRefundOnly ? refundDocumentTotal : cartTotal;
+               const documentTotal = (isRefundOnly ? refundDocumentTotal : cartTotal) + (voluntaryTip || 0);
                const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, documentTotal, baseCurrency.code);
 
                const txn = await withTimeout(transactionService.createTransaction({
@@ -2137,7 +2171,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      ? creditAmount
                      : activeRecoveredReservation ? reservationBalanceDue : undefined,
                   walletDepositAmount: walletDepositAmount > 0 ? walletDepositAmount : undefined,
-                  walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined
+                  walletPaymentAmount: walletPaymentAmount > 0 ? walletPaymentAmount : undefined,
+                  serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
+                  voluntaryTipAmount: voluntaryTip
                }), 25000, 'TIMEOUT_CREATE_TRANSACTION');
 
                // Ensure seriesId is preserved (Backend might not return it in the root object)
@@ -2246,6 +2282,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    };
 
+   const handleSplitConfirm = (remainingItems: CartItem[], newTicketItems: CartItem[]) => {
+      onUpdateCart(remainingItems);
+      
+      const newTicket: ParkedTicket = {
+         id: `split-${Date.now()}`,
+         tableId: activeTable?.id || 'manual',
+         name: `${activeTable?.name || activeTable?.nombre || 'Mesa'} - Parte 2`,
+         alias: `${activeTable?.name || activeTable?.nombre || 'Mesa'} - Parte 2`,
+         items: newTicketItems,
+         total: newTicketItems.reduce((acc, item) => acc + (item.price * item.quantity), 0),
+         timestamp: new Date().toISOString()
+      };
+      
+      onUpdateParkedTickets([...parkedTickets, newTicket]);
+      setShowSplitModal(false);
+      setSuccessToast("Cuenta dividida: Parte movida a Tickets en Espera");
+   };
+
    const proceedToCheckout = () => {
       const threshold = activeTerminalConfig?.operational?.fiscalThreshold || 0;
       if (threshold > 0 && cartTotal > threshold && !selectedCustomer) {
@@ -2264,36 +2318,72 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const handleDispatchCommand = async () => {
       if (cart.length === 0) return;
 
+      const newItems = cart.filter(item => !item.dispatched);
+      if (newItems.length === 0) {
+         alert("Todos los ítems ya han sido enviados.");
+         return;
+      }
+
       const orderId = activeTable?.currentOrderId || `P-${Date.now()}`;
 
       try {
-         // 1. We must ensure the items are "parked" (saved to DB) before marchar
-         // in traditional POS systems, 'Marchar' implies saving the order state.
+         // 1. Group items by production area for separate tickets
+         const areas: Record<string, { title: string, items: CartItem[] }> = {};
+         newItems.forEach(item => {
+            const areaId = item.production_area_id || 'GENERAL';
+            const targetAreas = areaId === 'MIXTO' ? ['COCINA', 'BAR'] : [areaId];
+
+            targetAreas.forEach(tid => {
+               if (!areas[tid]) {
+                  areas[tid] = {
+                     title: tid === 'COCINA' ? 'COCINA' : tid === 'BAR' ? 'BAR' : tid === 'KDS' ? 'KDS / COCINA' : 'ORDEN',
+                     items: []
+                  };
+               }
+               areas[tid].items.push(item);
+            });
+         });
+
+         // 2. Print physical tickets per area
+         for (const [areaId, areaData] of Object.entries(areas)) {
+            await printComanda(config, {
+               items: areaData.items,
+               table: activeTable || undefined,
+               orderNumber: orderId,
+               customerName: selectedCustomer?.name,
+               areaTitle: areaData.title,
+               productionAreaId: areaId
+            });
+         }
+
+         // 3. Mark items as dispatched in state
+         const updatedCart = cart.map(item => ({ ...item, dispatched: true }));
+         onUpdateCart(updatedCart);
+
+         // 4. Save state to DB (Parking)
          if (activeTable) {
             await handleParkCurrentTicket();
-         } else {
-            // Non-table direct order: Simplified park or just proceed if server can handle it
-            // from the items in memory (but our server reads from transactions table usually)
-            // For now, only support dispatching for saved orders (Active Table).
-            if (!activeTable) {
-               alert("Para marchar a cocina, inicie un pedido en una mesa.");
-               return;
+         }
+
+         // 5. Send to KDS (If available)
+         try {
+            const response = await fetch(`http://localhost:8001/api/ordenes/enviar-comanda/${orderId}`, {
+               method: 'POST',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ items: newItems })
+            });
+            const result = await response.json();
+            if (result.status === 'success') {
+               setSuccessToast(`Comanda enviada a Cocina/Bar`);
             }
+         } catch (kdsError) {
+            console.warn("KDS Service not available, but physical tickets printed.");
+            setSuccessToast(`Tickets impresos (KDS Offline)`);
          }
 
-         const response = await fetch(`http://localhost:8001/api/ordenes/enviar-comanda/${orderId}`, {
-            method: 'POST'
-         });
-         const result = await response.json();
-
-         if (result.status === 'success') {
-            setSuccessToast(`Comanda enviada (${result.dispatched} ítems)`);
-         } else if (result.status === 'ignored') {
-            // Already sent or module disabled
-         }
       } catch (e) {
          console.error("Dispatch error:", e);
-         alert("Error de comunicación con el servicio de cocina");
+         alert("Error al procesar el envío a cocina");
       }
    };
 
@@ -3097,12 +3187,57 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
             </div >
 
-            {/* DESKTOP HEADER (HIDDEN ON MOBILE) */}
-            <div className="hidden md:flex px-5 pt-3 pb-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-4 shrink-0 flex-none" >
-               <div className={`flex items-center gap-4 ${isRetailMode ? 'justify-between' : 'justify-center'}`}>
-                  <div className="shrink-0 self-start pt-1">
+            <div className={`hidden md:flex px-5 pt-3 pb-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-4 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
+               <div className="flex items-center justify-between gap-4">
+                  <div className="shrink-0 pt-1">
                      {renderTicketBrand(false)}
                   </div>
+
+                  {activeTable && (
+                     <div className="flex flex-col items-end animate-in fade-in slide-in-from-right-4 duration-300">
+                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1 text-right">Mesa Activa</span>
+                        <div className="flex items-center gap-2">
+                           <Layout size={18} className="text-blue-600" />
+                           <span className="text-2xl font-black text-slate-900 tracking-tighter">
+                              {activeTable.nombre || activeTable.name}
+                           </span>
+                        </div>
+                        
+                        {/* Interactive Guest Selector */}
+                        <div className="flex items-center gap-1.5 mt-2 bg-white border border-slate-200 rounded-full px-2.5 py-1 shadow-sm hover:shadow-md transition-all">
+                           <button 
+                              onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
+                              className="w-5 h-5 flex items-center justify-center rounded-full bg-slate-50 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors"
+                              title="Reducir comensales"
+                           >
+                              <Minus size={10} strokeWidth={3} />
+                           </button>
+                           
+                           <div className="flex items-center gap-1 px-1">
+                              <Users size={12} className="text-blue-500" />
+                              <span className="text-xs font-black text-slate-700 min-w-[1rem] text-center">
+                                 {activeTable.guests || 1}
+                              </span>
+                           </div>
+
+                           <button 
+                              onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
+                              className="w-5 h-5 flex items-center justify-center rounded-full bg-slate-50 text-slate-400 hover:bg-blue-50 hover:text-blue-500 transition-colors"
+                              title="Aumentar comensales"
+                           >
+                              <Plus size={10} strokeWidth={3} />
+                           </button>
+                        </div>
+
+                        {shouldApplyServiceCharge && (
+                           <div className="flex items-center gap-1 mt-2.5 px-2 py-1 bg-blue-50 text-blue-600 rounded-lg text-[9px] font-black uppercase tracking-tighter border border-blue-100/50 animate-in fade-in slide-in-from-top-1">
+                              <Percent size={10} className="text-blue-500" />
+                              <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
+                           </div>
+                        )}
+                     </div>
+                  )}
+               </div>
                   {/* RETAIL MODE SEARCH BAR */}
                   {isRetailMode && (
                      <div className="flex-1 max-w-xl relative group">
@@ -3243,7 +3378,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </span>
                      </button>
                   </div>
-               </div>
+               
 
                {
                   selectedCustomer ? (
@@ -3646,7 +3781,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  }
                               }}
                               disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                              className={`h-14 min-w-[220px] px-6 rounded-2xl font-black text-lg shadow-xl hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 shrink-0 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
+                              className={`h-14 min-w-[220px] px-6 rounded-2xl font-black text-lg shadow-xl hover:scale-[1.05] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 shrink-0 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
                            >
                               <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
                               <ArrowRight size={24} />
@@ -3703,9 +3838,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </div>
                         ) : (
                            <>
-                              {/* --- BOTONES DE ACCIÓN MOVIDOS A PESTAÑAS (Tabs) --- */}
-
-
                               {/* --- BLOQUE DE TOTALES --- */}
                               <div className="space-y-1.5 pt-1 border-t border-dashed border-gray-200 mt-2">
                                  <div className="flex justify-between items-center text-xs font-bold text-gray-500">
@@ -3753,7 +3885,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  </div>
                               </div>
 
-                              <div className={`grid ${isRestaurantMode ? 'grid-cols-4' : 'grid-cols-[112px_minmax(0,1fr)]'} items-center gap-3 pt-5 px-2`}>
+                               <div className={`grid ${isRestaurantMode ? 'grid-cols-5' : 'grid-cols-[112px_minmax(0,1fr)]'} items-center gap-2 pt-5 px-2`}>
                                  {!isRestaurantMode ? (
                                     <>
                                        <button
@@ -3799,6 +3931,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        >
                                           <ChefHat size={20} />
                                           <span>Cocina</span>
+                                       </button>
+                                       <button
+                                          onClick={() => setShowSplitModal(true)}
+                                          className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl font-black text-[10px] uppercase border-2 border-purple-100 bg-purple-50 text-purple-600 hover:bg-purple-100 transition-all active:scale-95"
+                                       >
+                                          <Split size={20} />
+                                          <span>Dividir</span>
                                        </button>
                                        <button
                                           onClick={handlePrintPrecuenta}
@@ -3917,7 +4056,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                />
             )
          }
-         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} />}
+         {showSplitModal && (
+            <SplitTicketModal
+               originalItems={cart}
+               currencySymbol={baseCurrency.symbol}
+               onClose={() => setShowSplitModal(false)}
+               onConfirm={handleSplitConfirm}
+            />
+         )}
+         {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
          {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr) => { addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
@@ -4488,7 +4635,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                />
             )
          }
-      </div >
+      </div>
    );
 };
 

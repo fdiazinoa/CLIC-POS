@@ -1115,14 +1115,31 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                                  <div>
                                     <p className="font-black text-slate-800">{p.name}</p>
                                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">{p.connection} • {p.address}</p>
-                                    {printerTestFeedback[p.id] && (
+                     {printerTestFeedback[p.id] && (
                                        <p className={`mt-2 text-[11px] font-semibold ${printerTestFeedback[p.id].success ? 'text-green-600' : 'text-red-500'}`}>
                                           {printerTestFeedback[p.id].message}
                                        </p>
                                     )}
                                  </div>
                               </div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-4">
+                                 <div className="flex flex-col gap-1">
+                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Área de Producción</label>
+                                    <select
+                                       value={p.productionAreaId || 'GENERAL'}
+                                       onChange={(e) => {
+                                          const newArea = e.target.value;
+                                          setPrinters(printers.map(x => x.id === p.id ? { ...x, productionAreaId: newArea, type: newArea === 'GENERAL' ? 'TICKET' : 'KITCHEN' } : x));
+                                       }}
+                                       className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 outline-none focus:border-blue-400"
+                                    >
+                                       <option value="GENERAL">General / Caja</option>
+                                       <option value="COCINA">Cocina / KDS</option>
+                                       <option value="BAR">Bar / Bebidas</option>
+                                       <option value="LOGISTICS">Logística / Delivery</option>
+                                    </select>
+                                 </div>
+                                 <div className="flex items-center gap-2">
                                  <button
                                     onClick={() => handleTestPrinter(p)}
                                     className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-black hover:bg-slate-200 transition-colors flex items-center gap-2"
@@ -1131,6 +1148,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                                     Imprimir prueba
                                  </button>
                                  <button onClick={() => setPrinters(printers.filter(x => x.id !== p.id))} className="p-2 text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={20} /></button>
+                                 </div>
                               </div>
                            </div>
                         ))}
