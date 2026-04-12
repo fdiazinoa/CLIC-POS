@@ -177,6 +177,30 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [productionAreas, setProductionAreas] = useState<any[]>([]);
   const [productionAreasLoaded, setProductionAreasLoaded] = useState(false);
 
+  const resolveErpBaseUrl = () => {
+    const env = (import.meta as any)?.env || {};
+    const candidates = [
+      localStorage.getItem('CLIC_ERP_BASE_URL'),
+      localStorage.getItem('CLIC_POS_MASTER_URL'),
+      localStorage.getItem('CLIC_ERP_SYNC_URL'),
+      env.VITE_ERP_BASE_URL,
+      env.VITE_ERP_SYNC_API_URL
+    ].filter(Boolean) as string[];
+
+    for (const candidate of candidates) {
+      const normalized = candidate.replace(/\/$/, '');
+      if (normalized.includes('/api/sync')) {
+        return normalized.replace(/\/api\/sync$/, '');
+      }
+      if (normalized.endsWith('/api')) {
+        return normalized.replace(/\/api$/, '');
+      }
+      return normalized;
+    }
+
+    return null;
+  };
+
   useEffect(() => {
     const shouldLoadProductionAreas =
       config?.operational?.usa_modulos_cocina === true &&
@@ -185,14 +209,28 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
     if (!shouldLoadProductionAreas) return;
 
-    fetch('http://localhost:8001/api/produccion/areas')
-      .then(r => r.json())
-      .then(data => {
+    const baseUrl = resolveErpBaseUrl();
+    if (baseUrl) {
+      fetch(`${baseUrl}/api/produccion/areas`)
+        .then(r => r.json())
+        .then(data => {
+          setProductionAreas(Array.isArray(data) ? data : []);
+          setProductionAreasLoaded(true);
+        })
+        .catch((err) => {
+          console.warn('⚠️ Producción: servicio no disponible. No se cargaron áreas.', err);
+          setProductionAreasLoaded(true);
+        });
+      return;
+    }
+
+    db.get('productionAreas' as any)
+      .then((data: any) => {
         setProductionAreas(Array.isArray(data) ? data : []);
         setProductionAreasLoaded(true);
       })
-      .catch((err) => {
-        console.warn('⚠️ Producción: servicio no disponible. No se cargaron áreas.', err);
+      .catch((err: any) => {
+        console.warn('⚠️ Producción local: sin áreas guardadas.', err);
         setProductionAreasLoaded(true);
       });
   }, [config?.operational?.usa_modulos_cocina, activeTab, productionAreasLoaded]);
