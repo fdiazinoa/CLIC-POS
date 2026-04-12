@@ -88,12 +88,18 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                 ? (rawConfig.find((c: any) => c.id === 'current') || rawConfig[0])
                 : rawConfig;
             if (!configDoc) return;
+            const nextOperational = {
+                vertical_negocio: configDoc.vertical,
+                usa_mesas: false,
+                pantalla_inicio: 'VENTA_DIRECTA' as const,
+                bloqueo_meseros: false,
+                pedir_comensales: false,
+                ...configDoc.operational,
+                usa_modulos_cocina: val
+            };
             const nextConfig: BusinessConfig = {
                 ...configDoc,
-                operational: {
-                    ...(configDoc.operational || {}),
-                    usa_modulos_cocina: val
-                }
+                operational: nextOperational
             };
             await db.save('config' as any, nextConfig);
         } catch (e) {
