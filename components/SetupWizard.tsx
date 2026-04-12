@@ -311,6 +311,10 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
 
     return {
       ...config,
+      metadata: {
+        ...(config.metadata || {}),
+        seedMode
+      },
       currencySymbol: baseCurrency?.symbol || config.currencySymbol,
       taxRate: primaryVat?.rate ?? config.taxRate,
       taxes: normalizedTaxes,
@@ -477,7 +481,14 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
 
   const updateTax = (index: number, patch: Partial<TaxDefinition>) => {
     setTaxes(prev =>
-      prev.map((tax, i) => (i === index ? { ...tax, ...patch } : tax))
+      prev.map((tax, i) => {
+        if (i !== index) return tax;
+        const nextTax = { ...tax, ...patch };
+        if (typeof patch.rate === 'number') {
+          nextTax.rate = Math.max(0, Math.min(1, patch.rate));
+        }
+        return nextTax;
+      })
     );
   };
 
@@ -755,8 +766,11 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
               className="col-span-3 p-2 border rounded-lg text-sm"
               type="number"
               step="0.01"
-              value={tax.rate}
-              onChange={(e) => updateTax(index, { rate: Number(e.target.value) })}
+              value={Number.isFinite(tax.rate) ? tax.rate * 100 : 0}
+              onChange={(e) => {
+                const percentValue = Number(e.target.value || 0);
+                updateTax(index, { rate: percentValue / 100 });
+              }}
             />
             <select
               className="col-span-3 p-2 border rounded-lg text-sm"
@@ -1036,6 +1050,14 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
     </div>
   );
 
+  const buildSeriesWithStation = (seriesList: DocumentSeries[]) => {
+    const station = stationNumber.padStart(2, '0');
+    return seriesList.map((series) => ({
+      ...series,
+      prefix: series.prefix ? `${series.prefix}-${station}` : series.prefix
+    }));
+  };
+
   const renderSeriesStep = () => (
     <div className="space-y-6 animate-in slide-in-from-right-8 duration-500">
       <div className="flex items-center justify-between">
@@ -1045,7 +1067,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
         </div>
         <div className="flex gap-3">
           <button
-            onClick={() => setDocumentSeries(SUGGESTED_DOCUMENT_SERIES.map(series => ({ ...series })))}
+            onClick={() => setDocumentSeries(buildSeriesWithStation(SUGGESTED_DOCUMENT_SERIES.map(series => ({ ...series }))))}
             className="px-4 py-2 rounded-xl border border-blue-200 text-blue-600 text-sm font-bold"
           >
             Sugerir series

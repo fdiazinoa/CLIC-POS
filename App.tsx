@@ -2815,6 +2815,13 @@ const AppContent: React.FC = () => {
         ...finalConfig
       };
       const effectiveDeviceId = deviceId || localStorage.getItem('pos_device_id') || '';
+      const seedMode = nextConfig.metadata?.seedMode;
+      if (seedMode === 'BLANK') {
+        setCustomers([]);
+        setProducts([]);
+        setTransactions([]);
+        setProductStocks([]);
+      }
 
       localStorage.removeItem(TERMINAL_SETUP_PENDING_KEY);
       localStorage.setItem(TERMINAL_SETUP_MODE_KEY, 'SERVER_LOCAL');
