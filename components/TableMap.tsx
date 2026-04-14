@@ -12,7 +12,20 @@ import {
     Sparkles,
     Check,
     AlertTriangle,
-    ReceiptText
+    ReceiptText,
+    GitMerge,
+    Divide,
+    Move,
+    FileText,
+    Percent,
+    TrendingUp,
+    Search,
+    ChevronRight,
+    Map as MapIcon,
+    Circle,
+    Square as SquareIcon,
+    Layout as LayoutIcon,
+    Users
 } from 'lucide-react';
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from 'framer-motion';
 import TableOptionsModal from './TableOptionsModal';
@@ -70,10 +83,10 @@ interface ParkedOrderSummary {
     hasExplicitTotal: boolean;
 }
 
-const CANVAS_WIDTH = 1240;
-const CANVAS_HEIGHT = 860;
-const SCALE_MIN = 0.55;
-const SCALE_MAX = 2.2;
+const CANVAS_WIDTH = 1400;
+const CANVAS_HEIGHT = 1000;
+const SCALE_MIN = 0.45;
+const SCALE_MAX = 2.5;
 const DEFAULT_EXPECTED_STAY = 70;
 const NO_ORDER_TOTAL_THRESHOLD = 0.01;
 const EMPTY_TABLE_ALERT_AFTER_SECONDS = 18;
@@ -81,17 +94,17 @@ const EMPTY_TABLE_ALERT_AFTER_SECONDS = 18;
 const TABLE_ENTRY_VARIANTS = {
     hidden: {
         opacity: 0,
-        scale: 0.88,
-        y: 14
+        scale: 0.85,
+        y: 10
     },
     visible: (index: number) => ({
         opacity: 1,
         scale: 1,
         y: 0,
         transition: {
-            duration: 0.28,
-            delay: Math.min(index * 0.014, 0.42),
-            ease: [0.22, 1, 0.36, 1]
+            duration: 0.35,
+            delay: Math.min(index * 0.012, 0.4),
+            ease: [0.23, 1, 0.32, 1]
         }
     })
 };
@@ -149,7 +162,6 @@ const getSmartStatus = (table: Table, elapsedMinutes: number, hasDigitizedItems:
     const elapsedSeconds = elapsedMinutes * 60;
 
     if (!hasDigitizedItems) {
-        // Empty opened table: allow a short grace period, then mark as attention instead of occupied/red.
         if (!table.timeSeated || elapsedSeconds >= EMPTY_TABLE_ALERT_AFTER_SECONDS) {
             return 'ATTENTION';
         }
@@ -164,38 +176,50 @@ const computeLastOrderHint = (model: Pick<SmartTableModel, 'smartStatus' | 'serv
     return `${model.serviceStage.label} en curso`;
 };
 
-const statusPalette: Record<
-    SmartStatus,
-    {
-        shell: string;
-        badge: string;
-        icon: React.ReactNode;
-        label: string;
-    }
-> = {
+const statusConfig: Record<SmartStatus, {
+    border: string;
+    bg: string;
+    glow: string;
+    text: string;
+    label: string;
+    badgeBg: string;
+    icon: React.ReactNode;
+}> = {
     FREE: {
-        shell: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-50',
-        badge: 'text-emerald-200',
-        icon: <Check size={12} className="text-emerald-200" />,
-        label: 'Libre'
+        border: 'border-emerald-500/60',
+        bg: 'bg-emerald-500/10',
+        glow: 'shadow-[0_0_15px_rgba(16,185,129,0.2)]',
+        text: 'text-emerald-400',
+        label: 'Disponible',
+        badgeBg: 'bg-emerald-500/20',
+        icon: <Check size={14} className="text-emerald-400" />
     },
     ATTENTION: {
-        shell: 'border-amber-300/60 bg-amber-500/15 text-amber-50',
-        badge: 'text-amber-200',
-        icon: <AlertTriangle size={14} className="text-amber-200" />,
-        label: 'Atencion requerida'
+        border: 'border-amber-400/80',
+        bg: 'bg-amber-400/15',
+        glow: 'shadow-[0_0_20px_rgba(251,191,36,0.3)]',
+        text: 'text-amber-300',
+        label: 'Atención requerida',
+        badgeBg: 'bg-amber-400/20',
+        icon: <AlertTriangle size={14} className="text-amber-300" />
     },
     OCCUPIED: {
-        shell: 'border-rose-500/70 bg-gradient-to-br from-rose-600/85 via-red-600/80 to-red-700/85 text-white',
-        badge: 'text-rose-100',
-        icon: <Sparkles size={14} className="text-rose-100" />,
-        label: 'Ocupada'
+        border: 'border-rose-500/80',
+        bg: 'bg-rose-500/15',
+        glow: 'shadow-[0_0_20px_rgba(244,63,94,0.3)]',
+        text: 'text-rose-400',
+        label: 'Ocupada',
+        badgeBg: 'bg-rose-500/20',
+        icon: <Users size={14} className="text-rose-400" />
     },
     CHECK_REQUESTED: {
-        shell: 'border-fuchsia-400/70 bg-gradient-to-br from-violet-600/75 to-fuchsia-600/75 text-white',
-        badge: 'text-fuchsia-100',
-        icon: <ReceiptText size={14} className="text-fuchsia-100" />,
-        label: 'Cuenta solicitada'
+        border: 'border-cyan-400/80',
+        bg: 'bg-cyan-400/15',
+        glow: 'shadow-[0_0_20px_rgba(34,211,238,0.3)]',
+        text: 'text-cyan-300',
+        label: 'Cuenta solicitada',
+        badgeBg: 'bg-cyan-400/20',
+        icon: <ReceiptText size={14} className="text-cyan-300" />
     }
 };
 
@@ -218,7 +242,7 @@ const TableMap: React.FC<TableMapProps> = ({
     const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || rooms[0]?.id || '');
     const [selectedTable, setSelectedTable] = useState<Table | null>(null);
     const [tooltip, setTooltip] = useState<TooltipState | null>(null);
-    const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
+    const [viewport, setViewport] = useState({ scale: 0.85, x: 0, y: 0 });
     const [isFullscreen, setIsFullscreen] = useState(false);
     const reduceMotion = useReducedMotion();
 
@@ -247,7 +271,7 @@ const TableMap: React.FC<TableMapProps> = ({
     }, [rooms, activeRoomId, initialRoomId]);
 
     useEffect(() => {
-        setViewport({ scale: 1, x: 0, y: 0 });
+        setViewport({ scale: 0.8, x: 0, y: 0 });
     }, [activeRoomId]);
 
     useEffect(() => {
@@ -601,157 +625,97 @@ const TableMap: React.FC<TableMapProps> = ({
         <LazyMotion features={domAnimation}>
             <div
                 ref={mapShellRef}
-                className="relative h-full w-full overflow-hidden bg-slate-950 text-slate-100 select-none"
+                className="relative h-full w-full overflow-hidden bg-[#0a0f1d] text-slate-100 select-none font-sans"
             >
-                <div className="absolute inset-0 bg-gradient-to-br from-[#030712] via-[#07122a] to-[#040816]" />
-
-                <div
-                    className="absolute inset-0 pointer-events-none opacity-45"
+                {/* Background Grid */}
+                <div 
+                    className="absolute inset-0 pointer-events-none opacity-20"
                     style={{
-                        backgroundImage: [
-                            'linear-gradient(rgba(148,163,184,0.13) 1px, transparent 1px)',
-                            'linear-gradient(90deg, rgba(148,163,184,0.13) 1px, transparent 1px)',
-                            'radial-gradient(circle at 25% 25%, rgba(56,189,248,0.18), transparent 45%)',
-                            'radial-gradient(circle at 85% 12%, rgba(147,51,234,0.12), transparent 42%)'
-                        ].join(','),
-                        backgroundSize: `${34 * viewport.scale}px ${34 * viewport.scale}px, ${34 * viewport.scale}px ${34 * viewport.scale}px, 100% 100%, 100% 100%`,
-                        backgroundPosition: `${viewport.x * 0.06}px ${viewport.y * 0.06}px, ${viewport.x * 0.06}px ${viewport.y * 0.06}px, center, center`
+                        backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(255,255,255,0.08) 1px, transparent 0)',
+                        backgroundSize: '32px 32px'
                     }}
                 />
 
-                <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_18%,rgba(56,189,248,0.22),transparent_48%),radial-gradient(circle_at_82%_78%,rgba(168,85,247,0.16),transparent_42%)]" />
-
-                <aside className="absolute top-6 right-6 z-30 w-[318px] rounded-3xl border border-white/10 bg-white/[0.08] backdrop-blur-xl shadow-[0_26px_70px_rgba(2,6,23,0.65)] overflow-hidden">
-                    <div className="p-5 border-b border-white/10 bg-gradient-to-r from-white/[0.06] to-transparent">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <p className="text-[10px] uppercase tracking-[0.26em] font-black text-sky-200/70">Control de Sala</p>
-                                <h3 className="text-lg font-black tracking-tight text-white mt-1">Centro en tiempo real</h3>
+                {/* Top Header Bar */}
+                <header className="absolute top-0 inset-x-0 h-16 z-40 bg-[#0f172a]/80 backdrop-blur-md border-b border-white/5 flex items-center justify-between px-6">
+                    <div className="flex items-center gap-6">
+                        <div className="flex items-center gap-3">
+                            <div className="h-8 w-8 rounded-lg bg-sky-500/20 flex items-center justify-center border border-sky-500/30 shadow-[0_0_15px_rgba(14,165,233,0.15)]">
+                                <MapIcon size={18} className="text-sky-400" />
                             </div>
-                            <div className="flex items-center gap-1 text-emerald-300 text-[11px] font-bold">
-                                <span className="h-2 w-2 rounded-full bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.8)] animate-pulse" />
-                                LIVE
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="p-5 space-y-4">
-                        <div className="grid grid-cols-2 gap-3">
-                            <DonutMetric
-                                label="Ocupacion"
-                                value={stats.occupied}
-                                total={Math.max(stats.total, 1)}
-                                color="from-rose-500 to-fuchsia-500"
-                                caption={`${stats.free} libres`}
-                            />
-                            <DonutMetric
-                                label="Alertas"
-                                value={stats.attention + stats.checkRequested}
-                                total={Math.max(stats.total, 1)}
-                                color="from-amber-400 to-violet-500"
-                                caption={`${stats.attention} atencion`}
-                            />
+                            <h1 className="text-lg font-black tracking-tight text-white uppercase">Mapa de Mesas</h1>
                         </div>
 
-                        <MetricCard
-                            title="Ticket Promedio"
-                            hint="Real vs Minimo esperado"
-                            value={hasRoomFinancialAccess ? `${currencySymbol}${stats.averageTicket.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '••••'}
-                            subValue={hasRoomFinancialAccess
-                                ? `Min: ${currencySymbol}${minExpectedTicket.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-                                : 'Visible por rol'}
-                            accentClass="from-amber-300 via-orange-400 to-yellow-500"
-                        />
-
-                        <MetricCard
-                            title="Eficiencia de Rotacion"
-                            hint={`Objetivo base: ${expectedStayMinutes}m`}
-                            value={hasRoomFinancialAccess ? `${stats.rotationEfficiency}%` : '••••'}
-                            subValue={hasRoomFinancialAccess ? (stats.rotationEfficiency >= 75 ? 'Operacion saludable' : 'Requiere ajuste') : 'Visible por rol'}
-                            accentClass="from-cyan-300 via-blue-400 to-indigo-500"
-                        />
-
-                        <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 flex items-center justify-between">
-                            <div>
-                                <p className="text-[10px] uppercase tracking-[0.2em] text-slate-300/80 font-bold">Total Sala</p>
-                                <p className="text-xl font-black text-white mt-0.5">
-                                    {hasRoomFinancialAccess ? `${currencySymbol}${stats.amount.toLocaleString()}` : '••••'}
-                                </p>
-                            </div>
-                            <div className="text-right">
-                                <p className="text-[11px] text-slate-300">Mesas</p>
-                                <p className="font-bold text-sky-200">{stats.total}</p>
-                            </div>
-                        </div>
+                        {/* Room Tabs */}
+                        <nav className="flex items-center gap-1">
+                            {rooms.map(room => {
+                                const isActive = room.id === activeRoomId;
+                                return (
+                                    <button
+                                        key={room.id}
+                                        onClick={() => setActiveRoomId(room.id)}
+                                        className={`px-4 h-10 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${
+                                            isActive 
+                                                ? 'text-sky-400 bg-sky-500/10 border border-sky-500/20 shadow-[0_0_20px_rgba(14,165,233,0.08)]' 
+                                                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                                        }`}
+                                    >
+                                        <LayoutIcon size={14} className={isActive ? 'text-sky-400' : 'text-slate-500'} />
+                                        {room.name || room.nombre}
+                                        {isActive && <div className="ml-1 w-1 h-1 rounded-full bg-sky-400" />}
+                                    </button>
+                                );
+                            })}
+                        </nav>
                     </div>
-                </aside>
 
-                <div className="absolute bottom-6 right-6 z-30 flex flex-col gap-2">
-                    <GlassButton onClick={() => handleZoom(0.11)} title="Zoom +">
-                        <Plus size={18} />
-                    </GlassButton>
-                    <GlassButton onClick={toggleFullscreen} title="Pantalla completa">
-                        {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-                    </GlassButton>
-                    <GlassButton onClick={() => handleZoom(-0.11)} title="Zoom -">
-                        <Minus size={18} />
-                    </GlassButton>
-                </div>
-
-                <div className="absolute bottom-7 left-1/2 z-30 -translate-x-1/2 w-[min(92vw,860px)]">
-                    <div className="rounded-full border border-white/10 bg-white/[0.08] backdrop-blur-xl px-3 py-2 shadow-[0_16px_50px_rgba(2,6,23,0.5)] flex items-center gap-2 overflow-auto no-scrollbar">
-                        {rooms.map(room => {
-                            const isActive = room.id === activeRoomId;
-                            const roomOccupied = safeTables.filter(table => table.roomId === room.id && table.status === 'OCCUPIED').length;
-
-                            return (
-                                <button
-                                    key={room.id}
-                                    onClick={() => setActiveRoomId(room.id)}
-                                    className={`shrink-0 px-5 py-2 rounded-full border transition-all duration-200 text-sm font-bold flex items-center gap-2 ${
-                                        isActive
-                                            ? 'border-sky-300/60 bg-sky-400/20 text-sky-100 shadow-[0_0_24px_rgba(56,189,248,0.28)]'
-                                            : 'border-white/10 bg-white/[0.04] text-slate-300 hover:text-white hover:bg-white/[0.09]'
-                                    }`}
-                                >
-                                    <LayoutGrid size={14} />
-                                    {room.name || room.nombre}
-                                    {roomOccupied > 0 && (
-                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/70 text-white">{roomOccupied}</span>
-                                    )}
-                                </button>
-                            );
-                        })}
+                    <div className="flex items-center gap-4">
+                        <div className="h-9 w-[1px] bg-white/10" />
+                        <button
+                            onClick={() => window.location.reload()}
+                            className="h-10 px-6 rounded-xl bg-white/5 border border-white/10 text-sm font-bold text-slate-200 hover:bg-white/10 transition-all flex items-center gap-2"
+                        >
+                            Cerrar
+                        </button>
                     </div>
-                </div>
+                </header>
 
-                <div
-                    ref={viewportRef}
-                    className="absolute inset-0 z-10 touch-none"
-                    onWheel={handleWheel}
-                    onPointerDown={handleViewportPointerDown}
-                    onPointerMove={handleViewportPointerMove}
-                    onPointerUp={handleViewportPointerEnd}
-                    onPointerCancel={handleViewportPointerEnd}
-                >
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
-                        <div
-                            className="will-change-transform"
+                <div className="flex h-full pt-16">
+                    {/* Main Canvas Area */}
+                    <main 
+                        className="flex-1 relative overflow-hidden cursor-grab active:cursor-grabbing"
+                        ref={viewportRef}
+                        onWheel={handleWheel}
+                        onPointerDown={handleViewportPointerDown}
+                        onPointerMove={handleViewportPointerMove}
+                        onPointerUp={handleViewportPointerEnd}
+                        onPointerCancel={handleViewportPointerEnd}
+                    >
+                        <div 
+                            className="absolute will-change-transform"
                             style={{
                                 transform: `translate3d(${viewport.x}px, ${viewport.y}px, 0) scale(${viewport.scale})`,
-                                transformOrigin: 'center center'
+                                transformOrigin: '0 0',
+                                left: '50%',
+                                top: '50%',
+                                marginTop: -(CANVAS_HEIGHT / 2) * viewport.scale,
+                                marginLeft: -(CANVAS_WIDTH / 2) * viewport.scale
                             }}
                         >
-                            <div
-                                className="relative rounded-[2.2rem] border border-white/10 bg-white/[0.03] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_0_1px_rgba(2,6,23,0.6),0_30px_80px_rgba(2,6,23,0.65)] overflow-hidden"
+                            <div 
+                                className="relative rounded-[3rem] border border-white/5 bg-[#0f172a]/40 shadow-2xl"
                                 style={{ width: CANVAS_WIDTH, height: CANVAS_HEIGHT }}
                             >
-                                <div className="absolute inset-0 bg-[radial-gradient(circle_at_28%_14%,rgba(56,189,248,0.18),transparent_46%),radial-gradient(circle_at_77%_76%,rgba(250,204,21,0.12),transparent_42%)]" />
+                                {/* Canvas Decorative Elements */}
+                                <div className="absolute inset-0 rounded-[inherit] overflow-hidden pointer-events-none">
+                                    <div className="absolute top-0 left-0 w-64 h-64 bg-sky-500/5 blur-[100px]" />
+                                    <div className="absolute bottom-0 right-0 w-64 h-64 bg-rose-500/5 blur-[100px]" />
+                                </div>
 
                                 {obstacleTables.map(obstacle => (
                                     <div
                                         key={obstacle.id}
-                                        className="absolute bg-slate-900/70 border border-slate-700/80 rounded-lg"
+                                        className="absolute bg-[#1e293b]/50 border border-slate-700/50 rounded-xl"
                                         style={{
                                             left: obstacle.posX,
                                             top: obstacle.posY,
@@ -776,34 +740,121 @@ const TableMap: React.FC<TableMapProps> = ({
                                 ))}
                             </div>
                         </div>
-                    </div>
+
+                        {/* Zoom Controls */}
+                        <div className="absolute bottom-10 right-10 flex flex-col gap-2 z-30">
+                            <ControlBtn onClick={() => handleZoom(0.15)}><Plus size={20} /></ControlBtn>
+                            <ControlBtn onClick={() => handleZoom(-0.15)}><Minus size={20} /></ControlBtn>
+                            <div className="h-2" />
+                            <ControlBtn onClick={() => setViewport({ scale: 0.85, x: 0, y: 0 })}><Search size={20} /></ControlBtn>
+                        </div>
+                    </main>
+
+                    {/* Dashboard Sidebar */}
+                    <aside className="w-[380px] h-full bg-[#0f172a]/60 backdrop-blur-xl border-l border-white/5 overflow-y-auto no-scrollbar pb-10">
+                        <div className="p-8 space-y-8">
+                            {/* Control Panel Section */}
+                            <section>
+                                <div className="flex items-center justify-between mb-6">
+                                    <h3 className="text-xs uppercase tracking-[0.25em] font-black text-slate-500">Control de Sala</h3>
+                                    <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                        <span className="text-[10px] font-black text-emerald-500 uppercase">Live</span>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-3 gap-3">
+                                    <ActionBtn icon={<GitMerge size={20} />} label="Unir Mesas" />
+                                    <ActionBtn icon={<Divide size={20} />} label="Dividir Cuenta" />
+                                    <ActionBtn icon={<Move size={20} />} label="Mover Mesa" />
+                                    <ActionBtn icon={<LayoutIcon size={20} />} label="Editar Layout" />
+                                    <ActionBtn icon={<FileText size={20} />} label="SubTotal" />
+                                    <ActionBtn icon={<Percent size={20} />} label="Fraccionar" />
+                                </div>
+                            </section>
+
+                            <div className="h-[1px] bg-white/5" />
+
+                            {/* Gauges Section */}
+                            <section className="grid grid-cols-2 gap-4">
+                                <GaugeCard 
+                                    label="Ocupación" 
+                                    current={stats.occupied} 
+                                    total={stats.total} 
+                                    color="text-rose-500" 
+                                    bg="bg-rose-500/10"
+                                    percentage={Math.round((stats.occupied / (stats.total || 1)) * 100)}
+                                />
+                                <GaugeCard 
+                                    label="Alertas" 
+                                    current={stats.attention + stats.checkRequested} 
+                                    total={stats.total} 
+                                    color="text-amber-400" 
+                                    bg="bg-amber-400/10"
+                                    percentage={Math.round(((stats.attention + stats.checkRequested) / (stats.total || 1)) * 100)}
+                                />
+                            </section>
+
+                            {/* Metrics Section */}
+                            <section className="space-y-4">
+                                <MetricSection 
+                                    title="Ticket Promedio" 
+                                    value={`${currencySymbol}${stats.averageTicket.toLocaleString()}`} 
+                                    trend="+5.2%"
+                                    sparkline
+                                    subtitle={`Meta: ${currencySymbol}${minExpectedTicket}`}
+                                />
+                                <MetricSection 
+                                    title="Eficiencia de Rotación" 
+                                    value={`${stats.rotationEfficiency}%`} 
+                                    subtitle={`Objetivo: ${expectedStayMinutes}m`}
+                                />
+                                
+                                <div className="pt-4">
+                                    <div className="rounded-[2rem] bg-gradient-to-br from-sky-600 to-indigo-700 p-6 shadow-xl shadow-sky-900/20">
+                                        <p className="text-xs uppercase tracking-widest font-bold text-sky-100/70 mb-1">Total Sala</p>
+                                        <div className="flex items-end justify-between">
+                                            <h4 className="text-3xl font-black text-white">{currencySymbol}{stats.amount.toLocaleString()}</h4>
+                                            <div className="text-right">
+                                                <p className="text-xs font-bold text-sky-100/90">{stats.total} Mesas</p>
+                                                <p className="text-[10px] text-sky-200/60 uppercase">9 activas</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+                        </div>
+                    </aside>
                 </div>
 
+                {/* Tooltip rendering */}
                 <AnimatePresence>
                     {tooltip && tooltipPosition && (
                         <m.div
                             key={tooltip.model.table.id}
-                            initial={{ opacity: 0, y: 8, scale: 0.96 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 6, scale: 0.96 }}
-                            transition={{ duration: 0.16, ease: 'easeOut' }}
-                            className="absolute z-40 w-[260px] rounded-2xl border border-white/15 bg-slate-950/90 backdrop-blur-xl px-4 py-3 shadow-[0_20px_45px_rgba(2,6,23,0.72)] pointer-events-none"
+                            initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.9, y: 10 }}
+                            className="absolute z-[100] w-64 rounded-2xl border border-white/10 bg-[#1e293b]/90 backdrop-blur-xl p-4 shadow-2xl pointer-events-none"
                             style={{ left: tooltipPosition.x, top: tooltipPosition.y }}
                         >
-                            <div className="flex items-center justify-between">
-                                <p className="text-sm font-black text-white tracking-tight">{tooltip.model.table.nombre || tooltip.model.table.name}</p>
-                                <span className="text-[10px] uppercase tracking-[0.15em] text-slate-300">{statusPalette[tooltip.model.smartStatus].label}</span>
+                            <div className="flex items-center justify-between border-b border-white/5 pb-2 mb-3">
+                                <p className="font-black text-white">{tooltip.model.table.nombre || tooltip.model.table.name}</p>
+                                <div className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${statusConfig[tooltip.model.smartStatus].badgeBg} ${statusConfig[tooltip.model.smartStatus].text}`}>
+                                    {statusConfig[tooltip.model.smartStatus].label}
+                                </div>
                             </div>
-                            <div className="mt-2 space-y-1.5 text-xs text-slate-200/95">
-                                <p><span className="text-slate-400">Ultimo pedido:</span> {tooltip.model.lastOrderHint}</p>
-                                <p><span className="text-slate-400">Mesero:</span> {tooltip.model.table.waiterName || 'Sin asignar'}</p>
-                                <p><span className="text-slate-400">Total:</span> {currencySymbol}{tooltip.model.total.toLocaleString()}</p>
-                                <p><span className="text-slate-400">Tiempo:</span> {tooltip.model.elapsedLabel}</p>
+                            <div className="space-y-2 text-xs">
+                                <InfoRow label="Mesero" value={tooltip.model.table.waiterName || 'Sin asignar'} />
+                                <InfoRow label="Total" value={`${currencySymbol}${tooltip.model.total.toLocaleString()}`} />
+                                <InfoRow label="Tiempo" value={tooltip.model.elapsedLabel} />
+                                <InfoRow label="Servicio" value={tooltip.model.serviceStage.label} />
                             </div>
                         </m.div>
                     )}
                 </AnimatePresence>
 
+                {/* Table Options Modal */}
                 {selectedTable && (
                     <TableOptionsModal
                         table={selectedTable}
@@ -817,8 +868,6 @@ const TableMap: React.FC<TableMapProps> = ({
                         onPrintPrecheck={() => {
                             if (onPrintPrecheck) onPrintPrecheck(selectedTable);
                         }}
-                        onSplitItems={() => console.log('Split items')}
-                        onSplitPayment={() => console.log('Split payment')}
                         onMoveTable={async (targetTableId) => {
                             try {
                                 const res = await fetch('/api/mesas/mover', {
@@ -829,17 +878,10 @@ const TableMap: React.FC<TableMapProps> = ({
                                 const data = await res.json();
                                 if (data.success) {
                                     onRefreshTables?.();
-                                    alert('Mesa movida correctamente');
                                     setSelectedTable(null);
-                                } else {
-                                    alert('Error moviendo mesa: ' + data.message);
-                                }
-                            } catch (error) {
-                                console.error(error);
-                                alert('Error de conexion');
-                            }
+                                } else { alert('Error: ' + data.message); }
+                            } catch (e) { console.error(e); }
                         }}
-                        onMergeTables={() => console.log('Merge not implemented')}
                         onFree={async () => {
                             try {
                                 const res = await fetch('/api/mesas/liberar', {
@@ -851,13 +893,8 @@ const TableMap: React.FC<TableMapProps> = ({
                                 if (data.success) {
                                     onRefreshTables?.();
                                     setSelectedTable(null);
-                                } else {
-                                    alert('Error liberando mesa: ' + data.message);
-                                }
-                            } catch (error) {
-                                console.error(error);
-                                alert('Error de conexion');
-                            }
+                                } else { alert('Error: ' + data.message); }
+                            } catch (e) { console.error(e); }
                         }}
                     />
                 )}
@@ -865,6 +902,8 @@ const TableMap: React.FC<TableMapProps> = ({
         </LazyMotion>
     );
 };
+
+/* --- Sub-Components --- */
 
 const SmartTableNode = React.memo(({
     model,
@@ -883,27 +922,8 @@ const SmartTableNode = React.memo(({
     onTooltipMove: (modelId: string, x: number, y: number) => void;
     onTooltipClose: (modelId: string) => void;
 }) => {
-    const longPressTimeoutRef = useRef<number | null>(null);
-
-    const clearLongPress = useCallback(() => {
-        if (longPressTimeoutRef.current) {
-            window.clearTimeout(longPressTimeoutRef.current);
-            longPressTimeoutRef.current = null;
-        }
-    }, []);
-
-    useEffect(() => () => clearLongPress(), [clearLongPress]);
-
-    const ringRadius = 12;
-    const ringCircumference = 2 * Math.PI * ringRadius;
-    const ringOffset = ringCircumference * (1 - model.progress);
-    const shapeClass =
-        model.archetype === 'CIRCLE' || model.archetype === 'BAR'
-            ? 'rounded-full'
-            : model.archetype === 'BOOTH'
-                ? 'rounded-[1.3rem]'
-                : 'rounded-2xl';
-    const isFree = model.smartStatus === 'FREE';
+    const config = statusConfig[model.smartStatus];
+    const isOccupied = model.smartStatus !== 'FREE';
 
     return (
         <m.button
@@ -913,254 +933,173 @@ const SmartTableNode = React.memo(({
             variants={TABLE_ENTRY_VARIANTS}
             initial="hidden"
             animate="visible"
-            whileHover={reduceMotion ? undefined : { scale: 1.035, y: -2 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 25, mass: 0.6 }}
+            whileHover={{ scale: 1.05, y: -4 }}
             onClick={() => onSelect(model)}
-            onMouseEnter={(event) => onTooltipOpen(model, event.clientX, event.clientY)}
-            onMouseMove={(event) => onTooltipMove(model.table.id, event.clientX, event.clientY)}
-            onMouseLeave={() => {
-                clearLongPress();
-                onTooltipClose(model.table.id);
-            }}
-            onPointerDown={(event) => {
-                if (event.pointerType === 'touch') {
-                    clearLongPress();
-                    const { clientX, clientY } = event;
-                    longPressTimeoutRef.current = window.setTimeout(() => {
-                        onTooltipOpen(model, clientX, clientY);
-                    }, 320);
-                }
-            }}
-            onPointerUp={() => clearLongPress()}
-            onPointerCancel={() => clearLongPress()}
-            className={`absolute isolate overflow-hidden border text-left transition-[box-shadow,border-color,background-color] duration-300 ${shapeClass} ${statusPalette[model.smartStatus].shell}`}
+            onMouseEnter={(e) => onTooltipOpen(model, e.clientX, e.clientY)}
+            onMouseMove={(e) => onTooltipMove(model.table.id, e.clientX, e.clientY)}
+            onMouseLeave={() => onTooltipClose(model.table.id)}
+            className={`absolute group isolate transition-all duration-500 overflow-visible ${model.archetype === 'CIRCLE' ? 'rounded-full' : 'rounded-[2rem]'} border-2 ${config.border} ${config.bg} ${config.glow}`}
             style={{
                 left: model.table.posX,
                 top: model.table.posY,
                 width: model.table.width,
                 height: model.table.height,
                 transform: `rotate(${model.table.rotation || 0}deg)`,
-                willChange: 'transform, opacity'
             }}
         >
-            {model.needsRevenueGlow && (
-                <m.div
-                    className="pointer-events-none absolute -inset-2 rounded-[inherit]"
-                    style={{
-                        background: 'radial-gradient(circle, rgba(251,191,36,0.42) 0%, rgba(245,158,11,0.24) 40%, rgba(245,158,11,0) 74%)'
-                    }}
-                    animate={reduceMotion ? { opacity: 0.35 } : { opacity: [0.3, 0.65, 0.3], scale: [0.98, 1.04, 0.98] }}
-                    transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
-                />
-            )}
-
-            {model.smartStatus === 'ATTENTION' && (
-                <m.div
-                    className="pointer-events-none absolute inset-0 rounded-[inherit] border border-amber-300/80"
-                    animate={
-                        reduceMotion
-                            ? { opacity: 0.8 }
-                            : {
-                                opacity: [0.36, 1, 0.36],
-                                boxShadow: [
-                                    '0 0 0 rgba(251,191,36,0.2)',
-                                    '0 0 24px rgba(251,191,36,0.55)',
-                                    '0 0 0 rgba(251,191,36,0.2)'
-                                ]
-                            }
-                    }
-                    transition={{ duration: 1.65, repeat: Infinity, ease: 'easeInOut' }}
-                />
-            )}
-
-            {model.smartStatus === 'CHECK_REQUESTED' && (
-                <m.div
-                    className="pointer-events-none absolute -inset-[1px] rounded-[inherit] border border-fuchsia-300/80"
-                    animate={
-                        reduceMotion
-                            ? { opacity: 0.9 }
-                            : {
-                                opacity: [0.5, 0.95, 0.5],
-                                boxShadow: [
-                                    '0 0 8px rgba(217,70,239,0.25)',
-                                    '0 0 22px rgba(217,70,239,0.62)',
-                                    '0 0 8px rgba(217,70,239,0.25)'
-                                ]
-                            }
-                    }
-                    transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
-                />
-            )}
-
-            {model.archetype === 'BOOTH' && (
-                <>
-                    <div className="pointer-events-none absolute inset-y-2 left-1 w-1 rounded-full bg-white/20" />
-                    <div className="pointer-events-none absolute inset-y-2 right-1 w-1 rounded-full bg-white/20" />
-                </>
-            )}
-
-            {model.archetype === 'BAR' && (
-                <div className="pointer-events-none absolute bottom-1 left-1/2 -translate-x-1/2 flex gap-1 opacity-70">
-                    <span className="h-1.5 w-1.5 rounded-full bg-white/70" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-white/60" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-white/70" />
+            {/* Table Name Badge */}
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-slate-900 border border-white/10 shadow-xl z-20 transition-transform group-hover:scale-110">
+                <div className="flex items-center gap-1.5 whitespace-nowrap">
+                    {config.icon}
+                    <span className="text-[11px] font-black text-white uppercase tracking-tighter">
+                        {model.table.nombre || model.table.name}
+                    </span>
                 </div>
-            )}
+            </div>
 
-            <div className="absolute inset-0 p-2 flex flex-col justify-between">
-                {isFree ? (
-                    <>
-                        <div className="flex items-center justify-between">
-                            <span className="h-2 w-2 rounded-full bg-emerald-300/85" />
-                            <span className="inline-flex items-center justify-center h-5 w-5 rounded-full border border-emerald-300/30 bg-emerald-400/10">
-                                <Check size={10} className="text-emerald-200" />
-                            </span>
-                        </div>
+            {/* Capacity Indicators (Chairs) */}
+            <Chairs archetype={model.archetype} capacity={model.table.capacity || 4} color={config.text} bg={config.badgeBg} />
 
-                        <div className="text-center leading-none">
-                            <p className="text-base font-black tracking-tight truncate">
-                                {model.table.nombre || model.table.name}
-                            </p>
-                            <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-200">
-                                <Check size={10} />
-                                Disponible
-                            </div>
+            {/* Inner Content */}
+            <div className="flex flex-col items-center justify-center h-full p-4 gap-1">
+                <p className={`text-[10px] font-black uppercase tracking-widest ${config.text} opacity-80`}>
+                    {config.label}
+                </p>
+                
+                {isOccupied && (
+                    <div className="mt-2 flex flex-col items-center">
+                        <div className="flex items-center gap-2 text-white drop-shadow-md">
+                            <Clock size={12} className="opacity-60" />
+                            <span className="text-sm font-black">{model.elapsedLabel}</span>
                         </div>
-
-                        <div className="flex justify-center">
-                            <span className="text-[10px] text-emerald-100/80 font-semibold">Mesa lista</span>
-                        </div>
-                    </>
-                ) : (
-                    <>
-                        <div className="flex items-start justify-between gap-2">
-                            <div className="h-7 w-7 rounded-full border border-white/30 bg-black/20 backdrop-blur-md flex items-center justify-center text-[10px] font-black text-white overflow-hidden">
-                                {model.table.waiterName ? model.table.waiterName.trim().charAt(0).toUpperCase() : <User size={12} />}
-                            </div>
-
-                            <div className="relative h-8 w-8">
-                                <svg className="h-8 w-8 -rotate-90" viewBox="0 0 32 32">
-                                    <circle cx="16" cy="16" r={ringRadius} stroke="rgba(255,255,255,0.25)" strokeWidth="3" fill="none" />
-                                    <circle
-                                        cx="16"
-                                        cy="16"
-                                        r={ringRadius}
-                                        stroke="rgba(56,189,248,0.95)"
-                                        strokeWidth="3"
-                                        fill="none"
-                                        strokeLinecap="round"
-                                        strokeDasharray={ringCircumference}
-                                        strokeDashoffset={ringOffset}
-                                    />
-                                </svg>
-                                <span className="absolute inset-0 flex items-center justify-center text-[10px]">{model.serviceStage.icon}</span>
-                            </div>
-                        </div>
-
-                        <div className="text-center leading-none">
-                            <p className="text-base font-black tracking-tight drop-shadow-[0_2px_6px_rgba(2,6,23,0.5)] truncate">
-                                {model.table.nombre || model.table.name}
-                            </p>
-                            <div className={`mt-1 inline-flex items-center gap-1 text-[11px] font-bold ${statusPalette[model.smartStatus].badge}`}>
-                                {statusPalette[model.smartStatus].icon}
-                                {statusPalette[model.smartStatus].label}
-                            </div>
-                        </div>
-
-                        <div className="flex items-center justify-between text-[11px] font-semibold">
-                            <span className="inline-flex items-center gap-1">
-                                <Clock size={11} />
-                                {model.elapsedLabel}
-                            </span>
-                            <span className="font-black">{currencySymbol}{model.total.toLocaleString()}</span>
-                        </div>
-                    </>
+                        <p className="text-[14px] font-black text-white mt-1">
+                            {currencySymbol}{model.total.toLocaleString()}
+                        </p>
+                        
+                        {/* Progress ring/mini-indicator removed for design fidelity, using clean text instead */}
+                    </div>
                 )}
             </div>
 
+            {/* Lock Overlay */}
             {model.isLocked && (
-                <div className="absolute inset-0 rounded-[inherit] bg-slate-950/72 backdrop-blur-[1px] flex items-center justify-center">
-                    <Lock size={18} className="text-white" />
+                <div className="absolute inset-0 rounded-[inherit] bg-slate-950/60 backdrop-blur-[2px] flex items-center justify-center z-10">
+                    <Lock size={24} className="text-white drop-shadow-xl" />
                 </div>
             )}
         </m.button>
     );
 });
 
-SmartTableNode.displayName = 'SmartTableNode';
-
-const DonutMetric = React.memo(({
-    label,
-    value,
-    total,
-    color,
-    caption
-}: {
-    label: string;
-    value: number;
-    total: number;
-    color: string;
-    caption: string;
-}) => {
-    const normalized = clamp(value / Math.max(total, 1), 0, 1);
-    const percentage = Math.round(normalized * 100);
-
+const Chairs = ({ archetype, capacity, color, bg }: { archetype: string, capacity: number, color: string, bg: string }) => {
+    // Simplified chair visualization based on archetype
+    if (archetype === 'CIRCLE') {
+        return (
+            <div className="absolute inset-0 pointer-events-none overflow-visible">
+                {[...Array(Math.min(capacity, 8))].map((_, i) => (
+                    <div 
+                        key={i}
+                        className={`absolute w-3 h-3 rounded-full border border-white/20 ${bg} shadow-sm`}
+                        style={{
+                            left: '50%',
+                            top: '50%',
+                            transform: `translate(-50%, -50%) rotate(${(360/Math.min(capacity, 8)) * i}deg) translateY(-540%)`
+                        }}
+                    />
+                ))}
+            </div>
+        );
+    }
+    
     return (
-        <div className="rounded-2xl border border-white/10 bg-black/20 px-3 py-3 flex items-center gap-3">
-            <div
-                className="h-12 w-12 rounded-full p-[3px]"
-                style={{
-                    background: `conic-gradient(rgba(56,189,248,0.95) ${normalized * 360}deg, rgba(15,23,42,0.85) 0deg)`
-                }}
-            >
-                <div className={`h-full w-full rounded-full bg-gradient-to-br ${color} flex items-center justify-center text-[10px] font-black text-slate-950`}>
-                    {percentage}%
+        <div className="absolute inset-0 pointer-events-none flex items-center justify-between px-[-4px]">
+             <div className="flex flex-col gap-2 -ml-2">
+                 <div className={`w-2 h-4 rounded-full ${bg} border border-white/10`} />
+                 <div className={`w-2 h-4 rounded-full ${bg} border border-white/10`} />
+             </div>
+             <div className="flex flex-col gap-2 -mr-2">
+                 <div className={`w-2 h-4 rounded-full ${bg} border border-white/10`} />
+                 <div className={`w-2 h-4 rounded-full ${bg} border border-white/10`} />
+             </div>
+        </div>
+    );
+};
+
+const ActionBtn = ({ icon, label }: { icon: React.ReactNode, label: string }) => (
+    <button className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all group">
+        <div className="text-slate-400 group-hover:text-sky-400 transition-colors">
+            {icon}
+        </div>
+        <span className="text-[10px] font-bold text-slate-500 group-hover:text-slate-200 text-center leading-tight">
+            {label}
+        </span>
+    </button>
+);
+
+const GaugeCard = ({ label, current, total, color, bg, percentage }: any) => (
+    <div className="p-5 rounded-3xl bg-white/[0.03] border border-white/5 relative overflow-hidden group">
+        <div className="flex flex-col">
+            <span className="text-[10px] uppercase tracking-widest font-black text-slate-500 mb-2">{label}</span>
+            <div className="flex items-end gap-2">
+                <span className="text-2xl font-black text-white leading-none">{current}</span>
+                <span className="text-sm font-bold text-slate-600 leading-none mb-1">/ {total}</span>
+            </div>
+        </div>
+        
+        {/* Simple Progress Bar */}
+        <div className="mt-4 h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+            <m.div 
+                initial={{ width: 0 }}
+                animate={{ width: `${percentage}%` }}
+                className={`h-full rounded-full ${color.replace('text', 'bg')}`}
+            />
+        </div>
+        
+        <div className={`absolute top-0 right-0 w-24 h-24 ${bg} rounded-full -mr-12 -mt-12 blur-3xl opacity-0 group-hover:opacity-100 transition-opacity`} />
+    </div>
+);
+
+const MetricSection = ({ title, value, trend, subtitle, sparkline }: any) => (
+    <div className="p-6 rounded-3xl bg-white/[0.02] border border-white/5 hover:bg-white/[0.04] transition-all">
+        <div className="flex items-start justify-between mb-4">
+            <div>
+                <p className="text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-1">{title}</p>
+                <div className="flex items-center gap-3">
+                    <h4 className="text-2xl font-black text-white">{value}</h4>
+                    {trend && (
+                        <div className="flex items-center gap-1 text-[10px] font-black text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-emerald-500/20">
+                            <TrendingUp size={10} />
+                            {trend}
+                        </div>
+                    )}
                 </div>
             </div>
-            <div>
-                <p className="text-[10px] uppercase tracking-[0.18em] text-slate-300/80 font-bold">{label}</p>
-                <p className="text-sm font-black text-white">{value}/{total}</p>
-                <p className="text-[10px] text-slate-300/70">{caption}</p>
-            </div>
+            {sparkline && (
+                 <div className="w-16 h-8 flex items-end gap-0.5">
+                    {[10, 15, 8, 20, 12, 18, 25].map((h, i) => (
+                        <div key={i} className="flex-1 bg-sky-500/40 rounded-t-sm" style={{ height: `${h}%` }} />
+                    ))}
+                 </div>
+            )}
         </div>
-    );
-});
+        <p className="text-[11px] font-medium text-slate-500">{subtitle}</p>
+    </div>
+);
 
-DonutMetric.displayName = 'DonutMetric';
-
-const MetricCard = React.memo(({
-    title,
-    hint,
-    value,
-    subValue,
-    accentClass
-}: {
-    title: string;
-    hint: string;
-    value: string;
-    subValue: string;
-    accentClass: string;
-}) => {
-    return (
-        <div className="rounded-2xl border border-white/10 bg-black/20 p-4 relative overflow-hidden">
-            <div className={`absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r ${accentClass}`} />
-            <p className="text-[10px] uppercase tracking-[0.18em] text-slate-300/80 font-bold">{title}</p>
-            <p className="text-lg font-black text-white mt-1">{value}</p>
-            <p className="text-[11px] text-slate-300/80 mt-1">{subValue}</p>
-            <p className="text-[10px] text-slate-400 mt-2">{hint}</p>
-        </div>
-    );
-});
-
-MetricCard.displayName = 'MetricCard';
-
-const GlassButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ className = '', children, ...props }) => (
-    <button
-        {...props}
-        className={`h-12 w-12 rounded-2xl border border-white/15 bg-white/[0.08] backdrop-blur-xl text-slate-100 shadow-[0_12px_26px_rgba(2,6,23,0.5)] hover:bg-white/[0.16] active:scale-95 transition-all flex items-center justify-center ${className}`}
+const ControlBtn = ({ children, onClick }: any) => (
+    <button 
+        onClick={onClick}
+        className="w-12 h-12 rounded-2xl bg-[#1e293b]/80 backdrop-blur-md border border-white/10 shadow-lg flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700/80 transition-all active:scale-90"
     >
         {children}
     </button>
+);
+
+const InfoRow = ({ label, value }: { label: string, value: string }) => (
+    <div className="flex items-center justify-between">
+        <span className="text-slate-500 font-medium uppercase tracking-tighter text-[10px]">{label}</span>
+        <span className="text-slate-200 font-bold">{value}</span>
+    </div>
 );
 
 export default TableMap;
