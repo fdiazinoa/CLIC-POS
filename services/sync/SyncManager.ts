@@ -419,7 +419,11 @@ class SyncManager {
 
         // Initialize Realtime Notifications (WebSocket triggers)
         if (this.syncConfig && this.syncConfig.isEnabled && this.syncConfig.masterUrl) {
-            realtimeNotificationService.initialize(this.syncConfig.masterUrl, terminalId);
+            realtimeNotificationService
+                .initialize(this.syncConfig.masterUrl, terminalId)
+                .catch((error) => {
+                    console.warn('⚠️ RealtimeNotificationService init failed:', error);
+                });
         }
 
         // Performance: Purge old synced data on startup (Slave only)

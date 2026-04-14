@@ -1,125 +1,112 @@
-import { io, Socket } from 'socket.io-client';
+import { RealtimeChannel } from '@supabase/supabase-js';
 import { syncManager } from './SyncManager';
-import { buildTerminalConfigRefreshRequest } from '../../utils/terminalConfigPushScopes';
+import { ensureSupabaseSessionRestored, supabase } from '../../utils/supabase';
+import { getStoredErpSyncBinding } from '../../utils/erpSyncLifecycle';
 
-const TERMINAL_CONFIG_RESTART_NOTICE_KEY = 'clic_pos_terminal_config_restart_notice';
-
-type TerminalConfigRestartNotice = {
-    receivedAt: string;
-    eventId?: string | null;
-    terminalId?: string | null;
-};
+const FORCE_SYNC_NOTICE_KEY = 'clic_pos_force_sync_notice';
 
 const asObject = (value: unknown): Record<string, any> => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
     return value as Record<string, any>;
 };
 
-const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
-
-const extractConfigPushEventId = (value: unknown): string | null => {
-    const data = asObject(value);
-    const snapshot = asObject(data.terminal_config);
-
-    return (
-        asString(data.event_id) ||
-        asString(data.eventId) ||
-        asString(snapshot.event_id) ||
-        asString(snapshot.eventId) ||
-        null
-    );
+const resolveSupabaseConfig = () => {
+    const env = (import.meta as any).env || {};
+    const url = typeof env.VITE_SUPABASE_URL === 'string' ? env.VITE_SUPABASE_URL.trim() : '';
+    const anonKey = typeof env.VITE_SUPABASE_ANON_KEY === 'string' ? env.VITE_SUPABASE_ANON_KEY.trim() : '';
+    return { url, anonKey, isConfigured: Boolean(url && anonKey) };
 };
 
-const persistRestartNotice = (value: unknown) => {
-    const payload = asObject(value);
-    const notice: TerminalConfigRestartNotice = {
+const persistForceSyncNotice = (payload: unknown) => {
+    const eventPayload = asObject(payload);
+    const notice = {
         receivedAt: new Date().toISOString(),
-        eventId: extractConfigPushEventId(value),
-        terminalId: asString(payload.terminalId) || asString(asObject(payload.terminal_config).terminal_id) || null,
+        terminalId: eventPayload.terminal_id || null,
+        reason: eventPayload.reason || null,
+        timestamp: eventPayload.timestamp || null,
     };
 
-    localStorage.setItem(TERMINAL_CONFIG_RESTART_NOTICE_KEY, JSON.stringify(notice));
-    window.dispatchEvent(new CustomEvent('terminalConfigRestartRequired', { detail: notice }));
+    localStorage.setItem(FORCE_SYNC_NOTICE_KEY, JSON.stringify(notice));
 };
 
 class RealtimeNotificationService {
-    private socket: Socket | null = null;
-    private masterUrl: string = '';
+    private channel: RealtimeChannel | null = null;
+    private storeId: string | null = null;
 
-    initialize(masterUrl: string, terminalId: string) {
-        if (this.socket) {
-            this.socket.disconnect();
+    async initialize(_masterUrl: string, terminalId: string) {
+        await this.disconnect();
+
+        const { isConfigured } = resolveSupabaseConfig();
+        const binding = getStoredErpSyncBinding();
+        const storeId = binding.storeId || null;
+        if (!isConfigured || !storeId) {
+            console.warn('📡 RealtimeNotificationService: Supabase realtime disabled (missing config or storeId).');
+            return;
         }
 
-        this.masterUrl = masterUrl;
-        console.log(`📡 RealtimeNotificationService: Connecting to ${masterUrl}...`);
+        this.storeId = storeId;
+        console.log(`📡 RealtimeNotificationService: Connecting to Supabase Realtime store_${storeId}...`);
 
-        this.socket = io(masterUrl, {
-            query: { terminalId },
-            reconnectionAttempts: 10,
-            reconnectionDelay: 5000
+        await ensureSupabaseSessionRestored();
+
+        const channel = supabase.channel(`store_${storeId}`, {
+            config: { presence: { key: terminalId } },
         });
 
-        this.socket.on('connect', () => {
-            console.log(`📡 RealtimeNotificationService: Connected to Master (${masterUrl}) via WebSocket as ${terminalId}`);
-        });
+        channel.on('broadcast', { event: 'force_sync' }, async ({ payload }) => {
+            console.log('📡 RealtimeNotificationService: Received force_sync broadcast.', payload);
+            persistForceSyncNotice(payload);
 
-        this.socket.on('connect_error', (error) => {
-            console.error('📡 RealtimeNotificationService: Connection error:', error.message);
-        });
-
-        this.socket.on('reconnect', (attempt) => {
-            console.log(`📡 RealtimeNotificationService: Reconnected after ${attempt} attempts`);
-        });
-
-        this.socket.on('disconnect', (reason) => {
-            console.warn(`📡 RealtimeNotificationService: Disconnected from Master WebSocket. Reason: ${reason}`);
-        });
-
-        this.socket.on('CATALOG_UPDATED', async (data: { collection: string, _origin?: string }) => {
-            // const timestamp = new Date().toISOString();
-            // console.log(`[WS_RECIBIDO] ${timestamp} Notificación del Master: CATALOG_UPDATED for ${data.collection}`, data);
-
-            // 1. Recursive Loop Protection: Ignore if we are currently syncing
             if (syncManager.getIsInternalSyncing()) {
-                // console.warn(`[WS_IGNORED] ${timestamp} Ignored update for ${data.collection} (Sync in progress)`);
+                console.log('📡 RealtimeNotificationService: Sync already running, skipping force_sync.');
                 return;
             }
 
             try {
-                // Force an immediate pull, ignoring the auto-sync interval
-                await syncManager.pullCatalog(data.collection as any, true);
+                await syncManager.refreshTerminalResolvedConfig(undefined, {
+                    forceRemoteFetch: true,
+                    forceFullCatalog: false,
+                    dispatchEvent: true,
+                });
+                await syncManager.syncAllCatalogs();
             } catch (error) {
-                console.error(`❌ RealtimeNotificationService: Error pulling catalog for ${data.collection}:`, error);
+                console.error('❌ RealtimeNotificationService: Error during force_sync handling:', error);
             }
         });
 
-        this.socket.on('PRICE_CHANGED', async () => {
-            console.log('📡 RealtimeNotificationService: Received PRICE_CHANGED. Updating products...');
-            try {
-                await syncManager.pullCatalog('products', true);
-            } catch (error) {
-                console.error('❌ RealtimeNotificationService: Error updating prices:', error);
+        channel.subscribe(async (status) => {
+            if (status === 'SUBSCRIBED') {
+                console.log(`📡 RealtimeNotificationService: Subscribed to store_${storeId}.`);
+                await channel.track({
+                    terminal_id: terminalId,
+                    online_at: new Date().toISOString(),
+                });
+                return;
+            }
+
+            if (status === 'CHANNEL_ERROR') {
+                console.warn('📡 RealtimeNotificationService: Channel error.');
+            } else if (status === 'TIMED_OUT') {
+                console.warn('📡 RealtimeNotificationService: Channel timed out.');
+            } else if (status === 'CLOSED') {
+                console.warn('📡 RealtimeNotificationService: Channel closed.');
             }
         });
 
-        this.socket.on('CONFIG_PUSH', async (data: { terminal_config?: unknown; terminalId?: string }) => {
-            console.log('📡 RealtimeNotificationService: Received CONFIG_PUSH. Refreshing terminal snapshot...');
-            try {
-                await syncManager.refreshTerminalResolvedConfig(undefined, buildTerminalConfigRefreshRequest(data));
-                persistRestartNotice(data);
-            } catch (error) {
-                console.error('❌ RealtimeNotificationService: Error applying CONFIG_PUSH:', error);
-                persistRestartNotice(data);
-            }
-        });
+        this.channel = channel;
     }
 
-    disconnect() {
-        if (this.socket) {
-            this.socket.disconnect();
-            this.socket = null;
+    async disconnect() {
+        if (this.channel) {
+            const existing = this.channel;
+            this.channel = null;
+            try {
+                await existing.unsubscribe();
+            } catch (error) {
+                console.warn('📡 RealtimeNotificationService: Failed to unsubscribe channel.', error);
+            }
         }
+        this.storeId = null;
     }
 }
 
