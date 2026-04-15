@@ -3193,55 +3193,127 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             <div className={`hidden md:flex px-5 pt-3 pb-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-4 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
-               <div className={`flex gap-4 ${isRestaurantMode ? 'items-start justify-between' : 'items-center justify-between'}`}>
-                  <div className="shrink-0 pt-1">
-                     {renderTicketBrand(false)}
-                  </div>
+               {isRestaurantMode ? (
+                  <>
+                     <div className="flex items-start justify-between gap-4">
+                        <div className="flex flex-col items-start gap-3">
+                           <div className="shrink-0 pt-1">
+                              {renderTicketBrand(false)}
+                           </div>
 
-                  {activeTable && (
-                     <div className={`flex flex-col animate-in fade-in slide-in-from-right-4 duration-300 ${isRestaurantMode ? 'items-start pt-1' : 'items-end'}`}>
-                        <span className={`text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1 ${isRestaurantMode ? 'text-left' : 'text-right'}`}>Mesa Activa</span>
-                        <div className="flex items-center gap-2">
-                           <Layout size={18} className="text-blue-600" />
-                           <span className="text-2xl font-black text-slate-900 tracking-tighter">
-                              {activeTable.nombre || activeTable.name}
-                           </span>
+                           {activeTable && (
+                              <div className="flex flex-col items-start animate-in fade-in slide-in-from-right-4 duration-300">
+                                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1 text-left">Mesa Activa</span>
+                                 <div className="flex items-center gap-2">
+                                    <Layout size={18} className="text-blue-600" />
+                                    <span className="text-2xl font-black text-slate-900 tracking-tighter">
+                                       {activeTable.nombre || activeTable.name}
+                                    </span>
+                                 </div>
+
+                                 <div className="flex items-center gap-1.5 mt-2 bg-white border border-slate-200 rounded-full px-2.5 py-1 shadow-sm hover:shadow-md transition-all">
+                                    <button
+                                       onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
+                                       className="w-5 h-5 flex items-center justify-center rounded-full bg-slate-50 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors"
+                                       title="Reducir comensales"
+                                    >
+                                       <Minus size={10} strokeWidth={3} />
+                                    </button>
+
+                                    <div className="flex items-center gap-1 px-1">
+                                       <Users size={12} className="text-blue-500" />
+                                       <span className="text-xs font-black text-slate-700 min-w-[1rem] text-center">
+                                          {activeTable.guests || 1}
+                                       </span>
+                                    </div>
+
+                                    <button
+                                       onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
+                                       className="w-5 h-5 flex items-center justify-center rounded-full bg-slate-50 text-slate-400 hover:bg-blue-50 hover:text-blue-500 transition-colors"
+                                       title="Aumentar comensales"
+                                    >
+                                       <Plus size={10} strokeWidth={3} />
+                                    </button>
+                                 </div>
+
+                                 {shouldApplyServiceCharge && (
+                                    <div className="flex items-center gap-1 mt-2.5 px-2 py-1 bg-blue-50 text-blue-600 rounded-lg text-[9px] font-black uppercase tracking-tighter border border-blue-100/50 animate-in fade-in slide-in-from-top-1">
+                                       <Percent size={10} className="text-blue-500" />
+                                       <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
+                                    </div>
+                                 )}
+                              </div>
+                           )}
                         </div>
-                        
-                        <div className="flex items-center gap-1.5 mt-2 bg-white border border-slate-200 rounded-full px-2.5 py-1 shadow-sm hover:shadow-md transition-all">
-                           <button 
-                              onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
-                              className="w-5 h-5 flex items-center justify-center rounded-full bg-slate-50 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors"
-                              title="Reducir comensales"
+
+                        <div className="flex items-center shrink-0 justify-end gap-2 pt-1">
+                           <button
+                              onClick={() => setRightSidebarTab('CART')}
+                              aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
+                              title={`Carrito${cartQuantity > 0 ? ` (${cartQuantity})` : ''}`}
+                              className={`group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
+                                 rightSidebarTab === 'CART'
+                                    ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_14px_30px_rgba(248,113,113,0.18)]'
+                                    : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50/70 hover:text-red-600'
+                              }`}
                            >
-                              <Minus size={10} strokeWidth={3} />
+                              <span
+                                 className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                                    rightSidebarTab === 'CART'
+                                       ? 'border-red-200/80 bg-white/90 text-red-600 shadow-sm'
+                                       : 'border-red-100 bg-red-50 text-red-500 group-hover:border-red-200 group-hover:bg-white group-hover:text-red-600'
+                                 }`}
+                              >
+                                 <ShoppingBag size={18} strokeWidth={2.3} />
+                              </span>
+                              {cartQuantity > 0 && (
+                                 <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-7 items-center justify-center rounded-full border border-white bg-white px-2 py-1 text-[10px] font-black leading-none text-red-700 shadow-md">
+                                    {cartQuantity}
+                                 </span>
+                              )}
                            </button>
-                           
-                           <div className="flex items-center gap-1 px-1">
-                              <Users size={12} className="text-blue-500" />
-                              <span className="text-xs font-black text-slate-700 min-w-[1rem] text-center">
-                                 {activeTable.guests || 1}
+                           <button
+                              onClick={() => setRightSidebarTab('ACTIONS')}
+                              aria-label="Abrir acciones rápidas"
+                              title="Acciones"
+                              className={`group flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
+                                 rightSidebarTab === 'ACTIONS'
+                                    ? 'border-blue-200 bg-gradient-to-br from-blue-50 via-sky-50 to-blue-100 text-blue-700 shadow-[0_14px_30px_rgba(59,130,246,0.18)]'
+                                    : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50/70 hover:text-blue-600'
+                              }`}
+                           >
+                              <span
+                                 className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                                    rightSidebarTab === 'ACTIONS'
+                                       ? 'border-blue-200/80 bg-white/90 text-blue-600 shadow-sm'
+                                       : 'border-blue-100 bg-blue-50 text-blue-500 group-hover:border-blue-200 group-hover:bg-white group-hover:text-blue-600'
+                                 }`}
+                              >
+                                 <Layers size={18} strokeWidth={2.3} />
+                              </span>
+                           </button>
+                        </div>
+                     </div>
+                  </>
+               ) : (
+                  <div className="flex items-center justify-between gap-4">
+                     <div className="shrink-0 pt-1">
+                        {renderTicketBrand(false)}
+                     </div>
+
+                     {activeTable && (
+                        <div className="flex flex-col items-end animate-in fade-in slide-in-from-right-4 duration-300">
+                           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1 text-right">Mesa Activa</span>
+                           <div className="flex items-center gap-2">
+                              <Layout size={18} className="text-blue-600" />
+                              <span className="text-2xl font-black text-slate-900 tracking-tighter">
+                                 {activeTable.nombre || activeTable.name}
                               </span>
                            </div>
-
-                           <button 
-                              onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
-                              className="w-5 h-5 flex items-center justify-center rounded-full bg-slate-50 text-slate-400 hover:bg-blue-50 hover:text-blue-500 transition-colors"
-                              title="Aumentar comensales"
-                           >
-                              <Plus size={10} strokeWidth={3} />
-                           </button>
                         </div>
-
-                        {shouldApplyServiceCharge && (
-                           <div className="flex items-center gap-1 mt-2.5 px-2 py-1 bg-blue-50 text-blue-600 rounded-lg text-[9px] font-black uppercase tracking-tighter border border-blue-100/50 animate-in fade-in slide-in-from-top-1">
-                              <Percent size={10} className="text-blue-500" />
-                              <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
-                           </div>
-                        )}
-                     </div>
-                  )}
-               </div>
+                     )}
+                  </div>
+               )}
                   {/* RETAIL MODE SEARCH BAR */}
                   {isRetailMode && (
                      <div className="flex-1 max-w-xl relative group">
@@ -3335,6 +3407,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
+                  {!isRestaurantMode && (
                   <div className={`flex items-center shrink-0 w-full ${isRetailMode ? 'max-w-[180px] justify-end gap-2 ml-auto' : 'max-w-[180px] justify-end ml-auto gap-2'}`}>
                      <button
                         onClick={() => setRightSidebarTab('CART')}
@@ -3382,9 +3455,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </span>
                      </button>
                   </div>
-               
+                  )}
 
-               {
+               {!isRestaurantMode && (
                   selectedCustomer ? (
                      <div className="flex items-center gap-3 mb-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
                         {resolveCustomerImageSrc(selectedCustomer) ? (
@@ -3446,7 +3519,70 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         <ChevronRight size={16} className="shrink-0" />
                      </button>
                   )
-               }
+               )}
+
+               {isRestaurantMode && (
+                  selectedCustomer ? (
+                     <div className="flex items-center gap-3 -mt-1 mb-2 p-3 bg-blue-50/50 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
+                        {resolveCustomerImageSrc(selectedCustomer) ? (
+                           <img
+                              src={resolveCustomerImageSrc(selectedCustomer)}
+                              alt={selectedCustomer.name}
+                              className="w-10 h-10 rounded-full object-cover border border-blue-200 bg-white"
+                           />
+                        ) : (
+                           <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-black">
+                              {selectedCustomer.name.substring(0, 2).toUpperCase()}
+                           </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                           <div className="flex items-center gap-2">
+                              <p className="font-bold text-gray-800 truncate">{selectedCustomer.name}</p>
+                           </div>
+                           <div className="flex items-center gap-2 flex-wrap">
+                              {selectedCustomer.taxId && (
+                                 <span className="text-xs font-mono text-gray-500">{selectedCustomer.taxId}</span>
+                              )}
+                              {selectedCustomer.fiscalStatus === 'ACTIVO' && (
+                                 <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">FISCAL</span>
+                              )}
+                              {selectedCustomer.isTemporary && (
+                                 <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold">TEMP</span>
+                              )}
+                              {isDelinquent && (
+                                 <span className="text-[9px] bg-red-600 text-white px-1.5 py-0.5 rounded font-black animate-pulse shadow-lg shadow-red-200">
+                                    DEUDA VENCIDA / CRÉDITO BLOQUEADO
+                                 </span>
+                              )}
+                           </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                           <button
+                              onClick={openRecoverReservationForSelectedCustomer}
+                              title="Ver reservas activas del cliente"
+                              className="px-2.5 py-1.5 rounded-lg border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 transition-all flex items-center gap-1"
+                           >
+                              <QrCode size={14} />
+                              <span className="text-[10px] font-black uppercase">Res. {selectedCustomerActiveReservationsCount}</span>
+                           </button>
+                           <button onClick={() => onSelectCustomer(null)} className="p-2 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-lg transition-colors">
+                              <X size={16} />
+                           </button>
+                        </div>
+                     </div>
+                  ) : (
+                     <button
+                        onClick={onOpenCustomers}
+                        className="w-full -mt-1 mb-2 flex items-center justify-between gap-3 px-4 py-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 hover:border-blue-200 group"
+                     >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                           <UserPlus size={18} className="shrink-0" />
+                           <span className="text-xs font-bold uppercase tracking-wide">Asignar Cliente</span>
+                        </div>
+                        <ChevronRight size={16} className="shrink-0" />
+                     </button>
+                  )
+               )}
 
                <div className={`mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${fiscalStatus.hasNCF ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100 animate-pulse'}`}>
                   <Landmark size={12} />
