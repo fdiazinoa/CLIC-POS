@@ -31,7 +31,8 @@ import {
   Table,
   Collection,
   PaymentEntry,
-  RefundProcessingOptions
+  RefundProcessingOptions,
+  PaymentMethodDefinition
 } from './types';
 import {
   DEFAULT_ROLES,
@@ -90,7 +91,7 @@ import TableLayoutDesigner from './components/TableLayoutDesigner';
 // View imports for device roles
 import KioskWelcome from './components/kiosk/KioskWelcome';
 import KioskProductBrowser from './components/kiosk/KioskProductBrowser';
-import KioskPayment from './components/kiosk/KioskPayment';
+import KioskPayment, { KioskResolvedPaymentMethod } from './components/kiosk/KioskPayment';
 import { KioskSecurityProvider, useKioskSecurityContext } from './components/kiosk/KioskContext';
 import PriceCheckerDisplay from './components/price-checker/PriceCheckerDisplay';
 import InventoryHome from './components/inventory/InventoryHome';
@@ -114,7 +115,7 @@ import { inventorySyncService } from './services/sync/InventorySyncService';
 import { processInventoryDeduction } from './utils/inventoryEngine';
 import { useOfflineInventoryCountSync } from './hooks/useOfflineInventoryCountSync';
 import { printLabelsFromTemplate } from './utils/labelPrinter';
-import { printIntegratedPaymentArtifacts, printPrecuenta } from './utils/printer';
+import { printIntegratedPaymentArtifacts, printPrecuenta, printTicket } from './utils/printer';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { persistStandaloneRefundTransaction } from './services/localRefundPersistence';
@@ -427,6 +428,27 @@ const toPositiveNumber = (value: unknown): number => {
   const num = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(num) || num <= 0) return 0;
   return num;
+};
+
+const resolveKioskPaymentMethods = (config: BusinessConfig): KioskResolvedPaymentMethod[] => {
+  const enabledMethods = (config.paymentMethods || [])
+    .filter((method: PaymentMethodDefinition) => method.isEnabled)
+    .filter((method: PaymentMethodDefinition) => !['CREDIT', 'ADVANCE', 'STORE_CREDIT'].includes(String(method.type || '').toUpperCase()));
+
+  if (enabledMethods.length === 0) {
+    return [
+      { key: 'CARD', id: 'CARD', type: 'CARD', label: 'Tarjeta', iconName: 'CreditCard' },
+      { key: 'CASH', id: 'CASH', type: 'CASH', label: 'Efectivo', iconName: 'Banknote' },
+    ];
+  }
+
+  return enabledMethods.map((method) => ({
+    key: method.id || `${method.type}-${method.name}`,
+    id: method.id || method.type,
+    type: method.type,
+    label: method.name,
+    iconName: method.icon,
+  }));
 };
 
 const App: React.FC = () => {
@@ -5405,12 +5427,14 @@ const AppContent: React.FC = () => {
         );
 
       case 'KIOSK_PAYMENT':
+        const kioskPaymentMethods = resolveKioskPaymentMethods(config);
         return (
           <KioskPayment
             cart={cart}
+            paymentMethods={kioskPaymentMethods}
             onBack={() => handleViewChange('KIOSK_BROWSER')}
             onPaymentComplete={async (method) => {
-              console.log(`Payment completed with ${method}`);
+              console.log(`Payment completed with ${method.label} (${method.type})`);
 
               // Get current terminal and config
               const currentTerminal = getCurrentTerminal();
@@ -5427,6 +5451,7 @@ const AppContent: React.FC = () => {
               const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
               const tax = subtotal * 0.18; // TODO: Use real tax logic from config
               const total = subtotal + tax;
+              const baseCurrency = config.currencies?.find(currency => currency.isBase)?.code || 'DOP';
 
               // Get assigned sequence
               const seriesId = activeConfig.documentAssignments?.['TICKET'];
@@ -5444,8 +5469,14 @@ const AppContent: React.FC = () => {
                   items: cart,
                   total: total,
                   payments: [{
-                    method: method,
+                    id: `PAY-${Date.now()}`,
+                    method: method.type,
+                    methodId: method.id,
+                    methodLabel: method.label,
+                    methodIcon: method.iconName,
                     amount: total,
+                    timestamp: new Date(),
+                    currencyCode: baseCurrency,
                     currency: config.currencySymbol
                   }],
                   userId: currentUser.id,
@@ -5461,15 +5492,22 @@ const AppContent: React.FC = () => {
 
                 // Save and Sync
                 await handleTransactionComplete(txn);
-
-                // Clear cart and return
-                clearSecurityState();
-                setCart([]);
-                handleViewChange('KIOSK_WELCOME');
+                return txn;
               } catch (error) {
                 console.error("Error creating kiosk transaction:", error);
-                alert("Error al guardar la transacción. Por favor intente de nuevo.");
+                throw new Error("Error al guardar la transacción. Por favor intente de nuevo.");
               }
+            }}
+            onPrintReceipt={async (transaction) => {
+              if (!config) {
+                throw new Error('No hay configuración disponible para imprimir.');
+              }
+
+              const printed = await printTicket(transaction, config);
+              if (!printed) {
+                throw new Error('La impresora no respondió. Verifica el módulo de hardware.');
+              }
+              return printed;
             }}
             onCancel={() => {
               clearSecurityState();
