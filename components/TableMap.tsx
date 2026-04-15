@@ -636,51 +636,31 @@ const TableMap: React.FC<TableMapProps> = ({
                     }}
                 />
 
-                {/* Top Header Bar */}
-                <header className="absolute top-0 inset-x-0 h-16 z-40 bg-[#0f172a]/80 backdrop-blur-md border-b border-white/5 flex items-center justify-between px-6">
-                    <div className="flex items-center gap-6">
-                        <div className="flex items-center gap-3">
-                            <div className="h-8 w-8 rounded-lg bg-sky-500/20 flex items-center justify-center border border-sky-500/30 shadow-[0_0_15px_rgba(14,165,233,0.15)]">
-                                <MapIcon size={18} className="text-sky-400" />
-                            </div>
-                            <h1 className="text-lg font-black tracking-tight text-white uppercase">Mapa de Mesas</h1>
-                        </div>
+                {/* Compact Room Selector */}
+                <div className="absolute top-0 inset-x-0 min-h-12 z-40 bg-[#0f172a]/70 backdrop-blur-md border-b border-white/5 px-6 py-2.5">
+                    <nav className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                        {rooms.map(room => {
+                            const isActive = room.id === activeRoomId;
+                            return (
+                                <button
+                                    key={room.id}
+                                    onClick={() => setActiveRoomId(room.id)}
+                                    className={`px-4 h-9 rounded-lg text-sm font-bold transition-all flex items-center gap-2 whitespace-nowrap ${
+                                        isActive
+                                            ? 'text-sky-400 bg-sky-500/10 border border-sky-500/20 shadow-[0_0_20px_rgba(14,165,233,0.08)]'
+                                            : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                                    }`}
+                                >
+                                    <LayoutIcon size={14} className={isActive ? 'text-sky-400' : 'text-slate-500'} />
+                                    {room.name || room.nombre}
+                                    {isActive && <div className="ml-1 w-1 h-1 rounded-full bg-sky-400" />}
+                                </button>
+                            );
+                        })}
+                    </nav>
+                </div>
 
-                        {/* Room Tabs */}
-                        <nav className="flex items-center gap-1">
-                            {rooms.map(room => {
-                                const isActive = room.id === activeRoomId;
-                                return (
-                                    <button
-                                        key={room.id}
-                                        onClick={() => setActiveRoomId(room.id)}
-                                        className={`px-4 h-10 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${
-                                            isActive 
-                                                ? 'text-sky-400 bg-sky-500/10 border border-sky-500/20 shadow-[0_0_20px_rgba(14,165,233,0.08)]' 
-                                                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
-                                        }`}
-                                    >
-                                        <LayoutIcon size={14} className={isActive ? 'text-sky-400' : 'text-slate-500'} />
-                                        {room.name || room.nombre}
-                                        {isActive && <div className="ml-1 w-1 h-1 rounded-full bg-sky-400" />}
-                                    </button>
-                                );
-                            })}
-                        </nav>
-                    </div>
-
-                    <div className="flex items-center gap-4">
-                        <div className="h-9 w-[1px] bg-white/10" />
-                        <button
-                            onClick={() => window.location.reload()}
-                            className="h-10 px-6 rounded-xl bg-white/5 border border-white/10 text-sm font-bold text-slate-200 hover:bg-white/10 transition-all flex items-center gap-2"
-                        >
-                            Cerrar
-                        </button>
-                    </div>
-                </header>
-
-                <div className="flex h-full pt-16">
+                <div className="flex h-full pt-14">
                     {/* Main Canvas Area */}
                     <main 
                         className="flex-1 relative overflow-hidden cursor-grab active:cursor-grabbing"

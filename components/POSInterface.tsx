@@ -3193,14 +3193,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             <div className={`hidden md:flex px-5 pt-3 pb-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-4 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
-               <div className="flex items-center justify-between gap-4">
+               <div className={`flex gap-4 ${isRestaurantMode ? 'flex-col items-start' : 'items-center justify-between'}`}>
                   <div className="shrink-0 pt-1">
                      {renderTicketBrand(false)}
                   </div>
 
                   {activeTable && (
-                     <div className="flex flex-col items-end animate-in fade-in slide-in-from-right-4 duration-300">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1 text-right">Mesa Activa</span>
+                     <div className={`flex flex-col animate-in fade-in slide-in-from-right-4 duration-300 ${isRestaurantMode ? 'items-start' : 'items-end'}`}>
+                        <span className={`text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1 ${isRestaurantMode ? 'text-left' : 'text-right'}`}>Mesa Activa</span>
                         <div className="flex items-center gap-2">
                            <Layout size={18} className="text-blue-600" />
                            <span className="text-2xl font-black text-slate-900 tracking-tighter">
@@ -3208,7 +3208,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            </span>
                         </div>
                         
-                        {/* Interactive Guest Selector */}
                         <div className="flex items-center gap-1.5 mt-2 bg-white border border-slate-200 rounded-full px-2.5 py-1 shadow-sm hover:shadow-md transition-all">
                            <button 
                               onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
