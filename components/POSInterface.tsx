@@ -3193,13 +3193,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div >
 
             <div className={`hidden md:flex px-5 pt-3 pb-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-4 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
-               <div className={`flex gap-4 ${isRestaurantMode ? 'flex-col items-start' : 'items-center justify-between'}`}>
+               <div className={`flex gap-4 ${isRestaurantMode ? 'items-start justify-between' : 'items-center justify-between'}`}>
                   <div className="shrink-0 pt-1">
                      {renderTicketBrand(false)}
                   </div>
 
                   {activeTable && (
-                     <div className={`flex flex-col animate-in fade-in slide-in-from-right-4 duration-300 ${isRestaurantMode ? 'items-start' : 'items-end'}`}>
+                     <div className={`flex flex-col animate-in fade-in slide-in-from-right-4 duration-300 ${isRestaurantMode ? 'items-start pt-1' : 'items-end'}`}>
                         <span className={`text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1 ${isRestaurantMode ? 'text-left' : 'text-right'}`}>Mesa Activa</span>
                         <div className="flex items-center gap-2">
                            <Layout size={18} className="text-blue-600" />
@@ -3435,7 +3435,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </div>
                      </div>
                   ) : (
-                     <button onClick={onOpenCustomers} className="w-full flex items-center justify-between p-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 group"><div className="flex items-center gap-2"><UserPlus size={18} /><span className="text-xs font-bold uppercase">Asignar Cliente</span></div><ChevronRight size={16} /></button>
+                     <button
+                        onClick={onOpenCustomers}
+                        className="w-full flex items-center justify-between gap-3 px-4 py-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 hover:border-blue-200 group"
+                     >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                           <UserPlus size={18} className="shrink-0" />
+                           <span className="text-xs font-bold uppercase tracking-wide">Asignar Cliente</span>
+                        </div>
+                        <ChevronRight size={16} className="shrink-0" />
+                     </button>
                   )
                }
 
