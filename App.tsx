@@ -5326,6 +5326,18 @@ const AppContent: React.FC = () => {
               handleViewChange('KIOSK_BROWSER');
             }}
             storeName={config.companyInfo?.name}
+            onAdminAccess={() => {
+              const rawPin = prompt('Ingrese PIN de administrador:');
+              if (!rawPin) return;
+
+              const pin = rawPin.trim();
+              if (authLevelService.validateEscapeHatch(pin)) {
+                setIsAdminMode(true);
+                setCurrentView('SETTINGS');
+              } else {
+                alert('PIN incorrecto');
+              }
+            }}
           />
         );
 
