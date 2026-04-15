@@ -141,6 +141,7 @@ import {
   resolveCreditNoteFiscalCode
 } from './utils/fiscal/fiscalHelpers';
 import { getFiscalDocumentStatus, issueFiscalDocument } from './services/fiscal/fiscalService';
+import { azulMcmService } from './services/payments/AzulMcmService';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -449,6 +450,11 @@ const resolveKioskPaymentMethods = (config: BusinessConfig): KioskResolvedPaymen
     label: method.name,
     iconName: method.icon,
   }));
+};
+
+const createKioskGatewayOrderNumber = (): string => {
+  const base = `${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+  return base.slice(-8);
 };
 
 const App: React.FC = () => {
@@ -5452,6 +5458,15 @@ const AppContent: React.FC = () => {
               const tax = subtotal * 0.18; // TODO: Use real tax logic from config
               const total = subtotal + tax;
               const baseCurrency = config.currencies?.find(currency => currency.isBase)?.code || 'DOP';
+              const configuredMethod = (config.paymentMethods || []).find(paymentMethod => paymentMethod.id === method.id)
+                || (config.paymentMethods || []).find(paymentMethod => paymentMethod.type === method.type && paymentMethod.name === method.label)
+                || (config.paymentMethods || []).find(paymentMethod => paymentMethod.type === method.type);
+              const isIntegratedCard = configuredMethod?.type === 'CARD' && configuredMethod.integrationMode === 'INTEGRATED';
+              const assignedIntegration = configuredMethod?.integrationId
+                ? config.integrations?.find(integration => integration.id === configuredMethod.integrationId)
+                : (configuredMethod?.integration && configuredMethod.integration !== 'NONE'
+                    ? config.integrations?.find(integration => integration.provider === configuredMethod.integration)
+                    : undefined);
 
               // Get assigned sequence
               const seriesId = activeConfig.documentAssignments?.['TICKET'];
@@ -5461,6 +5476,53 @@ const AppContent: React.FC = () => {
               }
 
               try {
+                let gatewayPaymentFields: Partial<PaymentEntry> = {};
+
+                if (isIntegratedCard) {
+                  if (!assignedIntegration) {
+                    throw new Error(`El medio de pago ${method.label} no tiene una integración válida asignada.`);
+                  }
+
+                  if (assignedIntegration.provider !== 'AZUL') {
+                    throw new Error(`La integración ${assignedIntegration.provider} todavía no está soportada en self checkout.`);
+                  }
+
+                  const gatewayOrderNumber = createKioskGatewayOrderNumber();
+                  const azulResponse = await azulMcmService.sale(assignedIntegration, {
+                    amount: total,
+                    itbis: tax,
+                    orderNumber: gatewayOrderNumber,
+                    installment: '0',
+                  });
+
+                  gatewayPaymentFields = {
+                    gatewayProvider: 'AZUL',
+                    gatewayIntegrationId: assignedIntegration.id,
+                    gatewayTransactionType: 'SALE',
+                    gatewayStatus: azulResponse.approved ? 'APPROVED' : 'DECLINED',
+                    gatewayResponseCode: azulResponse.responseCode,
+                    gatewayResponseMessage: azulResponse.responseMessage,
+                    gatewayOrderNumber: azulResponse.orderNumber || gatewayOrderNumber,
+                    gatewayProcessedAmount: total,
+                    gatewayProcessedTaxAmount: tax,
+                    gatewayAuthorizationCode: azulResponse.authorizationCode,
+                    gatewayReference: azulResponse.referenceNumber,
+                    gatewaySequenceNumber: azulResponse.sequenceNumber,
+                    gatewayInvoiceNumber: azulResponse.invoiceNumber,
+                    gatewayBatchNumber: azulResponse.batchNumber,
+                    gatewayMerchantId: azulResponse.merchantId,
+                    gatewayTerminalId: azulResponse.terminalId,
+                    gatewayMaskedPan: azulResponse.maskedPan,
+                    gatewayCardBrand: azulResponse.cardBrand,
+                    gatewayEntryMode: azulResponse.entryMode,
+                    gatewayReceiptMerchant: azulResponse.receiptMerchant,
+                    gatewayReceiptClient: azulResponse.receiptClient,
+                    gatewaySignatureData: azulResponse.signatureData,
+                    gatewayRequireSignature: azulResponse.requireSignature,
+                    gatewayRawResponse: azulResponse.rawResponse,
+                  };
+                }
+
                 // Create Transaction
                 const txn = await transactionService.createTransaction({
                   documentType: 'TICKET',
@@ -5477,7 +5539,8 @@ const AppContent: React.FC = () => {
                     amount: total,
                     timestamp: new Date(),
                     currencyCode: baseCurrency,
-                    currency: config.currencySymbol
+                    currency: config.currencySymbol,
+                    ...gatewayPaymentFields,
                   }],
                   userId: currentUser.id,
                   userName: currentUser.name,
