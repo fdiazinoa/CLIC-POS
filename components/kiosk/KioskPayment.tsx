@@ -6,25 +6,107 @@
  * IMPROVED: Shows all items, promotions, and clear receipt-style summary.
  */
 
-import React, { useState } from 'react';
-import { CreditCard, Banknote, ArrowLeft, CheckCircle, User, Smartphone, Printer, Mail, XCircle } from 'lucide-react';
-import { CartItem } from '../../types';
+import React, { useMemo, useState } from 'react';
+import { CreditCard, Banknote, ArrowLeft, CheckCircle, User, Smartphone, Printer, Mail, XCircle, QrCode, Wallet, DollarSign, Zap } from 'lucide-react';
+import { CartItem, PaymentMethod, Transaction } from '../../types';
+
+export type KioskResolvedPaymentMethod = {
+    key: string;
+    id: string;
+    type: PaymentMethod;
+    label: string;
+    iconName?: string;
+};
 
 interface KioskPaymentProps {
     cart: CartItem[];
+    paymentMethods: KioskResolvedPaymentMethod[];
     onBack: () => void;
-    onPaymentComplete: (paymentMethod: 'CARD' | 'CASH') => void;
+    onPaymentComplete: (paymentMethod: KioskResolvedPaymentMethod) => Promise<Transaction | null>;
+    onPrintReceipt: (transaction: Transaction) => Promise<boolean>;
     onCancel: () => void;
 }
 
+const PAYMENT_ICON_BY_NAME = {
+    Banknote,
+    CreditCard,
+    QrCode,
+    Wallet,
+    DollarSign,
+    Smartphone,
+    Zap,
+    CardIcon: CreditCard
+} as const;
+
+const getPaymentIcon = (method: KioskResolvedPaymentMethod) => {
+    if (method.iconName && method.iconName in PAYMENT_ICON_BY_NAME) {
+        return PAYMENT_ICON_BY_NAME[method.iconName as keyof typeof PAYMENT_ICON_BY_NAME];
+    }
+
+    switch (method.type) {
+        case 'CASH':
+            return Banknote;
+        case 'CARD':
+        case 'CREDIT':
+            return CreditCard;
+        case 'QR':
+            return QrCode;
+        case 'WALLET':
+        case 'STORE_CREDIT':
+            return Wallet;
+        default:
+            return DollarSign;
+    }
+};
+
+const getPaymentAccent = (method: KioskResolvedPaymentMethod) => {
+    switch (method.type) {
+        case 'CASH':
+            return {
+                hoverBg: 'hover:bg-green-50',
+                border: 'border-green-100 hover:border-green-500',
+                text: 'text-green-600',
+                iconBg: 'bg-green-100',
+            };
+        case 'QR':
+            return {
+                hoverBg: 'hover:bg-violet-50',
+                border: 'border-violet-100 hover:border-violet-500',
+                text: 'text-violet-600',
+                iconBg: 'bg-violet-100',
+            };
+        case 'WALLET':
+        case 'STORE_CREDIT':
+            return {
+                hoverBg: 'hover:bg-amber-50',
+                border: 'border-amber-100 hover:border-amber-500',
+                text: 'text-amber-600',
+                iconBg: 'bg-amber-100',
+            };
+        case 'CARD':
+        case 'CREDIT':
+        default:
+            return {
+                hoverBg: 'hover:bg-blue-50',
+                border: 'border-blue-100 hover:border-blue-500',
+                text: 'text-blue-600',
+                iconBg: 'bg-blue-100',
+            };
+    }
+};
+
 const KioskPayment: React.FC<KioskPaymentProps> = ({
     cart,
+    paymentMethods,
     onBack,
     onPaymentComplete,
+    onPrintReceipt,
     onCancel
 }) => {
     const [step, setStep] = useState<'LOYALTY' | 'PAYMENT' | 'PROCESSING' | 'SUCCESS' | 'EMAIL_INPUT'>('LOYALTY');
-    const [selectedMethod, setSelectedMethod] = useState<'CARD' | 'CASH' | null>(null);
+    const [selectedMethod, setSelectedMethod] = useState<KioskResolvedPaymentMethod | null>(null);
+    const [completedTransaction, setCompletedTransaction] = useState<Transaction | null>(null);
+    const [isPrintingReceipt, setIsPrintingReceipt] = useState(false);
     const [email, setEmail] = useState('');
     const [sendingEmail, setSendingEmail] = useState(false);
     const [emailSent, setEmailSent] = useState(false);
@@ -37,20 +119,59 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
     const tax = subtotal * 0.18; // 18% ITBIS
     const total = subtotal + tax;
     const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
+    const availablePaymentMethods = useMemo(
+        () => paymentMethods.length > 0
+            ? paymentMethods
+            : [
+                { key: 'CARD', id: 'CARD', type: 'CARD' as PaymentMethod, label: 'Tarjeta' },
+                { key: 'CASH', id: 'CASH', type: 'CASH' as PaymentMethod, label: 'Efectivo' },
+            ],
+        [paymentMethods]
+    );
 
     // Handle payment
-    const handlePayment = async (method: 'CARD' | 'CASH') => {
+    const handlePayment = async (method: KioskResolvedPaymentMethod) => {
         setSelectedMethod(method);
         setStep('PROCESSING');
 
-        // Simulate payment processing
-        await new Promise(resolve => setTimeout(resolve, 3000));
-
-        setStep('SUCCESS');
+        try {
+            const transaction = await onPaymentComplete(method);
+            if (!transaction) {
+                throw new Error('No se pudo completar el pago.');
+            }
+            setCompletedTransaction(transaction);
+            setStep('SUCCESS');
+        } catch (error) {
+            console.error('Error processing kiosk payment:', error);
+            alert(error instanceof Error ? error.message : 'No se pudo completar el pago.');
+            setSelectedMethod(null);
+            setStep('PAYMENT');
+        }
     };
 
     const handleFinish = () => {
-        onPaymentComplete(selectedMethod || 'CARD');
+        onCancel();
+    };
+
+    const handlePrint = async () => {
+        if (!completedTransaction) {
+            alert('No hay transacción lista para imprimir.');
+            return;
+        }
+
+        setIsPrintingReceipt(true);
+        try {
+            const printed = await onPrintReceipt(completedTransaction);
+            if (!printed) {
+                throw new Error('No se pudo imprimir el recibo.');
+            }
+            handleFinish();
+        } catch (error) {
+            console.error('Error printing kiosk receipt:', error);
+            alert(error instanceof Error ? error.message : 'No se pudo imprimir el recibo.');
+        } finally {
+            setIsPrintingReceipt(false);
+        }
     };
 
     const handleSendEmail = async () => {
@@ -136,17 +257,17 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
     if (step === 'PROCESSING') {
         return (
             <div className="w-full h-full flex flex-col items-center justify-center bg-blue-50">
-                <div className="animate-pulse mb-8">
-                    <div className="w-32 h-32 bg-blue-600 rounded-full flex items-center justify-center shadow-2xl">
-                        {selectedMethod === 'CARD' ? (
+                    <div className="animate-pulse mb-8">
+                        <div className="w-32 h-32 bg-blue-600 rounded-full flex items-center justify-center shadow-2xl">
+                        {selectedMethod ? React.createElement(getPaymentIcon(selectedMethod), { size: 64, className: 'text-white', strokeWidth: 2.5 }) : (
                             <CreditCard size={64} className="text-white" strokeWidth={2.5} />
-                        ) : (
-                            <Banknote size={64} className="text-white" strokeWidth={2.5} />
                         )}
+                        </div>
                     </div>
-                </div>
                 <h2 className="text-3xl font-bold text-gray-800">Procesando pago...</h2>
-                <p className="text-gray-500 mt-2">Por favor no retires tu tarjeta</p>
+                <p className="text-gray-500 mt-2">
+                    {selectedMethod?.type === 'CARD' ? 'Por favor no retires tu tarjeta' : `Confirmando ${selectedMethod?.label || 'pago'}`}
+                </p>
 
                 <div className="flex gap-4 mt-8">
                     <div className="w-4 h-4 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
@@ -193,11 +314,12 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
                         </button>
 
                         <button
-                            onClick={handleFinish}
-                            className="flex flex-col items-center justify-center p-6 bg-white hover:bg-green-50 border-2 border-gray-200 hover:border-green-200 rounded-2xl transition-all shadow-sm hover:shadow-md"
+                            onClick={handlePrint}
+                            disabled={isPrintingReceipt || !completedTransaction}
+                            className="flex flex-col items-center justify-center p-6 bg-white hover:bg-green-50 border-2 border-gray-200 hover:border-green-200 rounded-2xl transition-all shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <Printer size={40} className="text-gray-600 mb-3" />
-                            <span className="font-bold text-gray-700">Imprimir</span>
+                            <span className="font-bold text-gray-700">{isPrintingReceipt ? 'Imprimiendo...' : 'Imprimir'}</span>
                         </button>
 
                         <button
@@ -361,37 +483,28 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
 
                     {/* Right Column: Payment Methods */}
                     <div className="space-y-4">
-                        <button
-                            onClick={() => handlePayment('CARD')}
-                            className="w-full p-8 bg-white hover:bg-blue-50 border-2 border-blue-100 hover:border-blue-500 rounded-3xl shadow-sm hover:shadow-xl transition-all group text-left relative overflow-hidden"
-                        >
-                            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                                <CreditCard size={120} className="text-blue-600" />
-                            </div>
-                            <div className="relative z-10">
-                                <div className="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center mb-4 text-blue-600 group-hover:scale-110 transition-transform">
-                                    <CreditCard size={32} />
-                                </div>
-                                <h3 className="text-2xl font-black text-gray-800 mb-1">Tarjeta de Crédito</h3>
-                                <p className="text-gray-500">Visa, Mastercard, Amex</p>
-                            </div>
-                        </button>
-
-                        <button
-                            onClick={() => handlePayment('CASH')}
-                            className="w-full p-8 bg-white hover:bg-green-50 border-2 border-green-100 hover:border-green-500 rounded-3xl shadow-sm hover:shadow-xl transition-all group text-left relative overflow-hidden"
-                        >
-                            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                                <Banknote size={120} className="text-green-600" />
-                            </div>
-                            <div className="relative z-10">
-                                <div className="w-16 h-16 bg-green-100 rounded-2xl flex items-center justify-center mb-4 text-green-600 group-hover:scale-110 transition-transform">
-                                    <Banknote size={32} />
-                                </div>
-                                <h3 className="text-2xl font-black text-gray-800 mb-1">Efectivo</h3>
-                                <p className="text-gray-500">Billetes y monedas</p>
-                            </div>
-                        </button>
+                        {availablePaymentMethods.map((method) => {
+                            const Icon = getPaymentIcon(method);
+                            const accent = getPaymentAccent(method);
+                            return (
+                                <button
+                                    key={method.key}
+                                    onClick={() => handlePayment(method)}
+                                    className={`w-full p-8 bg-white ${accent.hoverBg} border-2 ${accent.border} rounded-3xl shadow-sm hover:shadow-xl transition-all group text-left relative overflow-hidden`}
+                                >
+                                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                                        <Icon size={120} className={accent.text} />
+                                    </div>
+                                    <div className="relative z-10">
+                                        <div className={`w-16 h-16 ${accent.iconBg} rounded-2xl flex items-center justify-center mb-4 ${accent.text} group-hover:scale-110 transition-transform`}>
+                                            <Icon size={32} />
+                                        </div>
+                                        <h3 className="text-2xl font-black text-gray-800 mb-1">{method.label}</h3>
+                                        <p className="text-gray-500">Medio de pago configurado en ajustes</p>
+                                    </div>
+                                </button>
+                            );
+                        })}
 
                         <button
                             onClick={onCancel}
