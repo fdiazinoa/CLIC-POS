@@ -12,10 +12,10 @@ interface TableOptionsModalProps {
   onClose: () => void;
   onAddOrder: () => void;
   onPrintPrecheck: () => void;
-  onSplitItems: () => void;
-  onSplitPayment: () => void;
+  onSplitItems?: () => void;
+  onSplitPayment?: () => void;
   onMoveTable: (targetTableId: string) => void;
-  onMergeTables: (targetTableIds: string[]) => void;
+  onMergeTables?: (targetTableIds: string[]) => void;
   onFree?: () => void;
 }
 
@@ -141,32 +141,36 @@ const TableOptionsModal: React.FC<TableOptionsModalProps> = ({
             </div>
           </button>
 
-          <button onClick={() => {
-            const target = prompt('Ingrese ID de mesa a unir (Desarrollo: ID interna)');
-            if (target) onMergeTables([target]);
-          }} className="flex items-center gap-4 w-full p-3 rounded-xl hover:bg-gray-50 active:bg-gray-100 transition-all text-left group">
-            <div className="p-2.5 bg-gray-100 text-gray-500 rounded-lg group-hover:bg-gray-200 group-hover:text-gray-700 transition-colors">
-              <LinkIcon size={20} />
-            </div>
-            <div className="flex-1">
-              <div className="font-bold text-gray-700 group-hover:text-gray-900">Unir Mesas</div>
-              <div className="text-xs text-gray-400 font-medium">Combinar con otra cuenta</div>
-            </div>
-          </button>
+          {onMergeTables && (
+            <button onClick={() => {
+              const target = prompt('Ingrese ID de mesa a unir (Desarrollo: ID interna)');
+              if (target) onMergeTables([target]);
+            }} className="flex items-center gap-4 w-full p-3 rounded-xl hover:bg-gray-50 active:bg-gray-100 transition-all text-left group">
+              <div className="p-2.5 bg-gray-100 text-gray-500 rounded-lg group-hover:bg-gray-200 group-hover:text-gray-700 transition-colors">
+                <LinkIcon size={20} />
+              </div>
+              <div className="flex-1">
+                <div className="font-bold text-gray-700 group-hover:text-gray-900">Unir Mesas</div>
+                <div className="text-xs text-gray-400 font-medium">Combinar con otra cuenta</div>
+              </div>
+            </button>
+          )}
 
           {/* Grupo 3: Financiero (Solo si ocupada) */}
           {isOccupied && (
             <>
               <div className="h-px bg-gray-100 my-1 mx-4" />
-              <button onClick={onSplitItems} className="flex items-center gap-4 w-full p-3 rounded-xl hover:bg-gray-50 active:bg-gray-100 transition-all text-left group">
-                <div className="p-2.5 bg-purple-50 text-purple-600 rounded-lg group-hover:bg-purple-100 transition-colors">
-                  <Scissors size={20} />
-                </div>
-                <div className="flex-1">
-                  <div className="font-bold text-gray-700 group-hover:text-gray-900">Dividir Cuenta</div>
-                  <div className="text-xs text-gray-400 font-medium">Separar por items o personas</div>
-                </div>
-              </button>
+              {onSplitItems && (
+                <button onClick={onSplitItems} className="flex items-center gap-4 w-full p-3 rounded-xl hover:bg-gray-50 active:bg-gray-100 transition-all text-left group">
+                  <div className="p-2.5 bg-purple-50 text-purple-600 rounded-lg group-hover:bg-purple-100 transition-colors">
+                    <Scissors size={20} />
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-bold text-gray-700 group-hover:text-gray-900">Dividir Cuenta</div>
+                    <div className="text-xs text-gray-400 font-medium">Separar por items o personas</div>
+                  </div>
+                </button>
+              )}
 
               <button onClick={onPrintPrecheck} className="flex items-center gap-4 w-full p-3 rounded-xl hover:bg-gray-50 active:bg-gray-100 transition-all text-left group">
                 <div className="p-2.5 bg-orange-50 text-orange-600 rounded-lg group-hover:bg-orange-100 transition-colors">
