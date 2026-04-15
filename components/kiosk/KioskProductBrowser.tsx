@@ -335,12 +335,6 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
           </div>
         </header>
 
-        {lastScanned && (
-          <div className="bg-emerald-500 text-white px-6 py-4 text-center animate-in slide-in-from-top flex-shrink-0">
-            <p className="text-xl font-black">Producto agregado: {lastScanned}</p>
-          </div>
-        )}
-
         <div className="flex-1 overflow-y-auto p-6 pb-40">
           <div className="grid grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
             {filteredProducts.slice(0, 30).map(product => (
@@ -446,6 +440,14 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
           </div>
         </div>
       </section>
+
+      {lastScanned && (
+        <div className="pointer-events-none fixed left-1/2 top-[108px] z-30 -translate-x-1/2">
+          <div className="rounded-2xl bg-emerald-500/95 px-6 py-3 text-center text-white shadow-2xl shadow-emerald-500/25 animate-in fade-in zoom-in-95">
+            <p className="text-lg font-black">Producto agregado: {lastScanned}</p>
+          </div>
+        </div>
+      )}
 
       <aside className={`flex-[3] min-w-[360px] bg-white border-l border-slate-200 h-full flex flex-col shadow-2xl ${cartPulse ? 'animate-pulse' : ''}`}>
         <div className="bg-blue-700 text-white p-6">

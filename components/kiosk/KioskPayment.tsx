@@ -16,6 +16,8 @@ export type KioskResolvedPaymentMethod = {
     type: PaymentMethod;
     label: string;
     iconName?: string;
+    integrationProvider?: string;
+    integrationMode?: 'MANUAL' | 'INTEGRATED';
 };
 
 interface KioskPaymentProps {
@@ -93,6 +95,22 @@ const getPaymentAccent = (method: KioskResolvedPaymentMethod) => {
                 iconBg: 'bg-blue-100',
             };
     }
+};
+
+const getPaymentSupportText = (method: KioskResolvedPaymentMethod) => {
+    if (method.type === 'CARD' && method.integrationMode === 'INTEGRATED' && method.integrationProvider) {
+        return `Procesa con ${method.integrationProvider}`;
+    }
+
+    if (method.type === 'CARD') {
+        return 'Tarjeta configurada en Métodos de Pago';
+    }
+
+    if (method.type === 'CASH') {
+        return 'Efectivo configurado en Métodos de Pago';
+    }
+
+    return 'Método configurado en Métodos de Pago';
 };
 
 const KioskPayment: React.FC<KioskPaymentProps> = ({
@@ -266,7 +284,11 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
                     </div>
                 <h2 className="text-3xl font-bold text-gray-800">Procesando pago...</h2>
                 <p className="text-gray-500 mt-2">
-                    {selectedMethod?.type === 'CARD' ? 'Por favor no retires tu tarjeta' : `Confirmando ${selectedMethod?.label || 'pago'}`}
+                    {selectedMethod?.type === 'CARD' && selectedMethod.integrationMode === 'INTEGRATED'
+                        ? `Conectando con ${selectedMethod.integrationProvider || 'el procesador'}`
+                        : selectedMethod?.type === 'CARD'
+                            ? 'Por favor no retires tu tarjeta'
+                            : `Confirmando ${selectedMethod?.label || 'pago'}`}
                 </p>
 
                 <div className="flex gap-4 mt-8">
@@ -499,10 +521,10 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
                                         <div className={`w-16 h-16 ${accent.iconBg} rounded-2xl flex items-center justify-center mb-4 ${accent.text} group-hover:scale-110 transition-transform`}>
                                             <Icon size={32} />
                                         </div>
-                                        <h3 className="text-2xl font-black text-gray-800 mb-1">{method.label}</h3>
-                                        <p className="text-gray-500">Medio de pago configurado en ajustes</p>
-                                    </div>
-                                </button>
+                                <h3 className="text-2xl font-black text-gray-800 mb-1">{method.label}</h3>
+                                <p className="text-gray-500">{getPaymentSupportText(method)}</p>
+                            </div>
+                        </button>
                             );
                         })}
 

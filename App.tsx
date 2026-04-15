@@ -449,6 +449,8 @@ const resolveKioskPaymentMethods = (config: BusinessConfig): KioskResolvedPaymen
     type: method.type,
     label: method.name,
     iconName: method.icon,
+    integrationProvider: method.integration !== 'NONE' ? method.integration : undefined,
+    integrationMode: method.integrationMode || 'MANUAL',
   }));
 };
 

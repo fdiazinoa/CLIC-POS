@@ -3296,14 +3296,64 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   </>
                ) : (
-                  <div className="flex items-center justify-between gap-4">
-                     <div className="shrink-0 pt-1">
-                        {renderTicketBrand(false)}
+                  <div className="flex flex-col gap-3">
+                     <div className="flex items-start justify-between gap-4">
+                        <div className="shrink-0 pt-1">
+                           {renderTicketBrand(false)}
+                        </div>
+
+                        <div className="flex items-center shrink-0 justify-end gap-2 pt-1">
+                           <button
+                              onClick={() => setRightSidebarTab('CART')}
+                              aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
+                              title={`Carrito${cartQuantity > 0 ? ` (${cartQuantity})` : ''}`}
+                              className={`group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
+                                 rightSidebarTab === 'CART'
+                                    ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_14px_30px_rgba(248,113,113,0.18)]'
+                                    : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50/70 hover:text-red-600'
+                              }`}
+                           >
+                              <span
+                                 className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                                    rightSidebarTab === 'CART'
+                                       ? 'border-red-200/80 bg-white/90 text-red-600 shadow-sm'
+                                       : 'border-red-100 bg-red-50 text-red-500 group-hover:border-red-200 group-hover:bg-white group-hover:text-red-600'
+                                 }`}
+                              >
+                                 <ShoppingBag size={18} strokeWidth={2.3} />
+                              </span>
+                              {cartQuantity > 0 && (
+                                 <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-7 items-center justify-center rounded-full border border-white bg-white px-2 py-1 text-[10px] font-black leading-none text-red-700 shadow-md">
+                                    {cartQuantity}
+                                 </span>
+                              )}
+                           </button>
+                           <button
+                              onClick={() => setRightSidebarTab('ACTIONS')}
+                              aria-label="Abrir acciones rápidas"
+                              title="Acciones"
+                              className={`group flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
+                                 rightSidebarTab === 'ACTIONS'
+                                    ? 'border-blue-200 bg-gradient-to-br from-blue-50 via-sky-50 to-blue-100 text-blue-700 shadow-[0_14px_30px_rgba(59,130,246,0.18)]'
+                                    : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50/70 hover:text-blue-600'
+                              }`}
+                           >
+                              <span
+                                 className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                                    rightSidebarTab === 'ACTIONS'
+                                       ? 'border-blue-200/80 bg-white/90 text-blue-600 shadow-sm'
+                                       : 'border-blue-100 bg-blue-50 text-blue-500 group-hover:border-blue-200 group-hover:bg-white group-hover:text-blue-600'
+                                 }`}
+                              >
+                                 <Layers size={18} strokeWidth={2.3} />
+                              </span>
+                           </button>
+                        </div>
                      </div>
 
                      {activeTable && (
-                        <div className="flex flex-col items-end animate-in fade-in slide-in-from-right-4 duration-300">
-                           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1 text-right">Mesa Activa</span>
+                        <div className="flex flex-col items-start animate-in fade-in slide-in-from-right-4 duration-300">
+                           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1 text-left">Mesa Activa</span>
                            <div className="flex items-center gap-2">
                               <Layout size={18} className="text-blue-600" />
                               <span className="text-2xl font-black text-slate-900 tracking-tighter">
@@ -3407,59 +3457,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  {!isRestaurantMode && (
-                  <div className={`flex items-center shrink-0 w-full ${isRetailMode ? 'max-w-[180px] justify-end gap-2 ml-auto' : 'max-w-[180px] justify-end ml-auto gap-2'}`}>
-                     <button
-                        onClick={() => setRightSidebarTab('CART')}
-                        aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
-                        title={`Carrito${cartQuantity > 0 ? ` (${cartQuantity})` : ''}`}
-                        className={`group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
-                           rightSidebarTab === 'CART'
-                              ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_14px_30px_rgba(248,113,113,0.18)]'
-                              : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50/70 hover:text-red-600'
-                        }`}
-                     >
-                        <span
-                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
-                              rightSidebarTab === 'CART'
-                                 ? 'border-red-200/80 bg-white/90 text-red-600 shadow-sm'
-                                 : 'border-red-100 bg-red-50 text-red-500 group-hover:border-red-200 group-hover:bg-white group-hover:text-red-600'
-                           }`}
-                        >
-                           <ShoppingBag size={18} strokeWidth={2.3} />
-                        </span>
-                        {cartQuantity > 0 && (
-                           <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-7 items-center justify-center rounded-full border border-white bg-white px-2 py-1 text-[10px] font-black leading-none text-red-700 shadow-md">
-                              {cartQuantity}
-                           </span>
-                        )}
-                     </button>
-                     <button
-                        onClick={() => setRightSidebarTab('ACTIONS')}
-                        aria-label="Abrir acciones rápidas"
-                        title="Acciones"
-                        className={`group flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
-                           rightSidebarTab === 'ACTIONS'
-                              ? 'border-blue-200 bg-gradient-to-br from-blue-50 via-sky-50 to-blue-100 text-blue-700 shadow-[0_14px_30px_rgba(59,130,246,0.18)]'
-                              : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50/70 hover:text-blue-600'
-                        }`}
-                     >
-                        <span
-                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
-                              rightSidebarTab === 'ACTIONS'
-                                 ? 'border-blue-200/80 bg-white/90 text-blue-600 shadow-sm'
-                                 : 'border-blue-100 bg-blue-50 text-blue-500 group-hover:border-blue-200 group-hover:bg-white group-hover:text-blue-600'
-                           }`}
-                        >
-                           <Layers size={18} strokeWidth={2.3} />
-                        </span>
-                     </button>
-                  </div>
-                  )}
-
                {!isRestaurantMode && (
                   selectedCustomer ? (
-                     <div className="flex items-center gap-3 mb-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
+                     <div className="flex items-center gap-3 mb-3 p-3 bg-blue-50/50 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
                         {resolveCustomerImageSrc(selectedCustomer) ? (
                            <img
                               src={resolveCustomerImageSrc(selectedCustomer)}
@@ -3510,7 +3510,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   ) : (
                      <button
                         onClick={onOpenCustomers}
-                        className="w-full flex items-center justify-between gap-3 px-4 py-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 hover:border-blue-200 group"
+                        className="w-full flex items-center justify-between gap-3 px-4 py-2.5 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 hover:border-blue-200 group"
                      >
                         <div className="flex items-center gap-2.5 min-w-0">
                            <UserPlus size={18} className="shrink-0" />
