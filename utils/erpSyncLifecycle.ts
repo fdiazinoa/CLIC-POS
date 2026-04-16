@@ -22,6 +22,8 @@ type SyncActivationState = {
     company_ref?: string | null;
     mode?: string | null;
     erp_enabled?: boolean;
+    billing_status?: string | null;
+    kill_switch_active?: boolean;
 };
 
 type SyncTerminalRecord = {
@@ -178,6 +180,23 @@ const resolveAuthLevel = (value: unknown): AuthLevel | null => {
         return AuthLevel.USER_REQUIRED;
     }
     return null;
+};
+const isBlockedActivation = (activation?: SyncActivationState | null) => {
+    if (!activation) return false;
+
+    return (
+        normalizeOptional(activation.mode || null).toUpperCase() === 'LICENSE_BLOCKED'
+        || activation.kill_switch_active === true
+        || normalizeOptional(activation.billing_status || null).toUpperCase() === 'SUSPENDED'
+        || normalizeOptional(activation.billing_status || null).toUpperCase() === 'INACTIVE'
+        || normalizeOptional(activation.billing_status || null).toUpperCase() === 'BLOCKED'
+        || normalizeOptional(activation.billing_status || null).toUpperCase() === 'DISABLED'
+        || normalizeOptional(activation.billing_status || null).toUpperCase() === 'CANCELLED'
+        || normalizeOptional(activation.billing_status || null).toUpperCase() === 'CANCELED'
+        || normalizeOptional(activation.billing_status || null).toUpperCase() === 'PAST_DUE'
+        || normalizeOptional(activation.billing_status || null).toUpperCase() === 'EXPIRED'
+        || activation.erp_enabled === false
+    );
 };
 
 const normalizeSyncApiBase = (value?: string | null): string => {
@@ -980,6 +999,10 @@ export const ensureErpSyncLifecycle = async (params: EnsureLifecycleParams): Pro
     const bootstrap = storedBinding.terminalId ? null : await bootstrapErpSyncLifecycle(params.deviceId);
     const activation = bootstrap?.activation;
 
+    if (isBlockedActivation(activation)) {
+        return { bootstrap, registered: null, heartbeat: null };
+    }
+
     if (activation && activation.erp_enabled === false) {
         return { bootstrap, registered: null, heartbeat: null };
     }
@@ -1012,6 +1035,10 @@ export const ensureErpSyncLifecycle = async (params: EnsureLifecycleParams): Pro
 
         heartbeat = rebound.heartbeat;
         registered = rebound.registered || registered;
+    }
+
+    if (isBlockedActivation(registered?.activation) || isBlockedActivation(heartbeat?.activation)) {
+        return { bootstrap, registered, heartbeat, outbox: null };
     }
 
     const outbox = await processErpSyncOutbox(params);
