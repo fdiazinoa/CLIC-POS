@@ -127,7 +127,14 @@ import {
   publishMasterEndpointToCloud,
   resolveMasterEndpointFromCloud
 } from './utils/cloudMasterRegistry';
-import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, persistStoredErpSyncBinding } from './utils/erpSyncLifecycle';
+import {
+  clearStoredErpSyncBinding,
+  ensureErpSyncLifecycle,
+  getLifecycleActivationBlockMessage,
+  getLifecycleBlockingMessageFromError,
+  isLifecycleActivationBlocked,
+  persistStoredErpSyncBinding
+} from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 import { resolveCustomerImageSrc } from './utils/entityImage';
 import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
@@ -1022,6 +1029,12 @@ const AppContent: React.FC = () => {
           pendingEvents: 0,
         });
 
+        const blockingActivation = result?.heartbeat?.activation || result?.registered?.activation || result?.bootstrap?.activation;
+        if (!disposed && isLifecycleActivationBlocked(blockingActivation)) {
+          triggerLockdown(getLifecycleActivationBlockMessage(blockingActivation));
+          return;
+        }
+
         if (!disposed && result?.heartbeat?.terminal?.id) {
           console.log(`[ERP SYNC] Terminal ${terminalName} enlazada con ${result.heartbeat.terminal.id}`);
         }
@@ -1043,6 +1056,11 @@ const AppContent: React.FC = () => {
           lastManifestRefreshAt = now;
         }
       } catch (error) {
+        const blockingMessage = getLifecycleBlockingMessageFromError(error);
+        if (!disposed && blockingMessage) {
+          triggerLockdown(blockingMessage);
+          return;
+        }
         console.warn('[ERP SYNC] lifecycle registration skipped:', error);
       }
     };

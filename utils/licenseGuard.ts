@@ -153,6 +153,7 @@ const mapErpLicenseStatus = (status: ErpLicenseStatusResponse): LicenseStatus =>
 const buildLicenseQuery = (tenantId: string, deviceId: string) => {
     const params = new URLSearchParams();
     const normalizedTenantId = normalizeValue(tenantId) || normalizeValue(localStorage.getItem('clic_tenant_id'));
+    const normalizedDeviceId = normalizeValue(deviceId) || normalizeValue(localStorage.getItem('pos_device_id'));
     const normalizedBranchId =
         normalizeValue(localStorage.getItem('clic_branch_id'))
         || normalizeValue(localStorage.getItem('clic_store_id'))
@@ -162,6 +163,7 @@ const buildLicenseQuery = (tenantId: string, deviceId: string) => {
         || 'default';
 
     if (normalizedTenantId) params.set('tenantId', normalizedTenantId);
+    if (normalizedDeviceId) params.set('deviceId', normalizedDeviceId);
     params.set('branchId', normalizedBranchId);
     return params.toString();
 };

@@ -22,6 +22,10 @@ type SyncActivationState = {
     company_ref?: string | null;
     mode?: string | null;
     erp_enabled?: boolean;
+    billing_status?: string | null;
+    kill_switch_active?: boolean;
+    terminal_active?: boolean;
+    reason?: string | null;
 };
 
 type SyncTerminalRecord = {
@@ -140,6 +144,86 @@ const normalizeAllowedModules = (value: unknown): string[] => (
             : moduleName.toLowerCase()
     ))
 );
+
+const normalizeActivationMode = (value?: string | null) => normalizeOptional(value).toUpperCase();
+const normalizeActivationReason = (value?: string | null) => normalizeOptional(value).toUpperCase();
+const normalizeActivationBillingStatus = (value?: string | null) => normalizeOptional(value).toUpperCase();
+
+export const isLifecycleActivationBlocked = (activation?: SyncActivationState | null): boolean => {
+    if (!activation) return false;
+
+    const mode = normalizeActivationMode(activation.mode);
+    const reason = normalizeActivationReason(activation.reason);
+    const billingStatus = normalizeActivationBillingStatus(activation.billing_status);
+
+    return (
+        activation.erp_enabled === false
+        || activation.terminal_active === false
+        || activation.kill_switch_active === true
+        || mode === 'LICENSE_BLOCKED'
+        || mode === 'TERMINAL_BLOCKED'
+        || mode === 'ERP_DISABLED'
+        || reason === 'TERMINAL_DISABLED'
+        || (Boolean(billingStatus) && billingStatus !== 'ACTIVE')
+    );
+};
+
+export const getLifecycleActivationBlockMessage = (activation?: SyncActivationState | null): string => {
+    if (!activation) {
+        return 'Servicio Suspendido.';
+    }
+
+    const mode = normalizeActivationMode(activation.mode);
+    const reason = normalizeActivationReason(activation.reason);
+    const billingStatus = normalizeActivationBillingStatus(activation.billing_status);
+
+    if (mode === 'TERMINAL_BLOCKED' || reason === 'TERMINAL_DISABLED' || activation.terminal_active === false) {
+        return 'Esta terminal ha sido desactivada temporalmente desde el Panel de Control.';
+    }
+
+    if (mode === 'ERP_DISABLED' || activation.erp_enabled === false) {
+        return 'El tenant está activo solo para POS local; la integración ERP está deshabilitada.';
+    }
+
+    if (billingStatus && billingStatus !== 'ACTIVE') {
+        return billingStatus.replace(/_/g, ' ');
+    }
+
+    return normalizeOptional(activation.reason) || 'Servicio Suspendido.';
+};
+
+export const getLifecycleBlockingMessageFromError = (error: unknown): string | null => {
+    const requestError = error as SyncRequestError | null;
+    const code = normalizeActivationReason(requestError?.code || null);
+    const message = normalizeOptional(requestError?.message || null).toLowerCase();
+    const payloadActivation = asObject<{ activation?: SyncActivationState | null }>(requestError?.payload).activation || null;
+
+    if (payloadActivation && isLifecycleActivationBlocked(payloadActivation)) {
+        return getLifecycleActivationBlockMessage(payloadActivation);
+    }
+
+    if (
+        code === 'LICENSE_BLOCKED'
+        || code === 'TERMINAL_DISABLED'
+        || code === 'LICENSE_EXCEEDED_INACTIVE'
+        || message.includes('terminal ha sido desactivada')
+        || message.includes('licencia actual no permite')
+        || message.includes('integración erp está deshabilitada')
+        || message.includes('integracion erp esta deshabilitada')
+    ) {
+        if (code === 'TERMINAL_DISABLED' || code === 'LICENSE_EXCEEDED_INACTIVE' || message.includes('terminal ha sido desactivada')) {
+            return 'Esta terminal ha sido desactivada temporalmente desde el Panel de Control.';
+        }
+
+        if (message.includes('integración erp está deshabilitada') || message.includes('integracion erp esta deshabilitada')) {
+            return 'El tenant está activo solo para POS local; la integración ERP está deshabilitada.';
+        }
+
+        return 'Servicio Suspendido.';
+    }
+
+    return null;
+};
 const toFiniteNumber = (value: unknown): number | null => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
