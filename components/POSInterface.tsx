@@ -69,7 +69,12 @@ import VirtualKeyboard from './VirtualKeyboard';
 import SafetyGateModal from './SafetyGateModal';
 import { printReservation } from '../utils/printer';
 import MobileCartButton from './MobileCartButton';
-import { calculateTaxBreakdownFromItems, formatTaxLineLabel, resolveEffectiveTaxIds } from '../utils/fiscalBreakdown';
+import {
+   calculateLineFiscalValuesForTransaction,
+   calculateTaxBreakdownFromItems,
+   formatTaxLineLabel,
+   resolveEffectiveTaxIds
+} from '../utils/fiscalBreakdown';
 import { formatCurrency } from '../utils/format';
 import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from '../services/localRefundPersistence';
 import { resolveCustomerImageSrc } from '../utils/entityImage';
@@ -1595,6 +1600,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const cartTotal = cartTotalWithoutTip + cartTip;
 
+   const attachExplicitFiscalAmounts = useCallback((items: CartItem[], documentDiscountAmount = 0): CartItem[] => {
+      if (!Array.isArray(items) || items.length === 0) {
+         return [];
+      }
+
+      const lineAmounts = calculateLineFiscalValuesForTransaction(items, config, {
+         discountAmount: documentDiscountAmount,
+         isTaxIncluded,
+         terminalConfig: activeTerminalConfig,
+         fallbackTaxRate: config.taxRate || 0,
+      });
+
+      return items.map((item, index) => {
+         const lineAmount = lineAmounts[index];
+         if (!lineAmount) {
+            return item;
+         }
+
+         return {
+            ...item,
+            netAmount: lineAmount.netAmount,
+            taxAmount: lineAmount.taxAmount,
+            totalAmount: lineAmount.totalAmount,
+            taxRate: lineAmount.taxRate,
+         };
+      });
+   }, [activeTerminalConfig, config, isTaxIncluded]);
+
    // Alias for compatibility if needed, though netSubtotal is what we usually display as "Subtotal"
    const cartSubtotal = grossLineTotal; // This represents the sum of list prices
    const baseCurrency = (config.currencies || []).find(c => c.isBase) || (config.currencies || [])[0];
@@ -2006,10 +2039,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (hasReturns && hasSales) {
                const saleItems = processedCart.filter(i => i.quantity > 0);
                const returnItems = processedCart.filter(i => i.quantity < 0);
+               const saleItemsWithFiscalAmounts = attachExplicitFiscalAmounts(saleItems, discountAmount);
 
                // Calculate totals for each part
                const saleTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
                const normalizedSplitRefundItems = returnItems.map(item => ({ ...item, quantity: Math.abs(item.quantity) }));
+               const refundItemsWithFiscalAmounts = attachExplicitFiscalAmounts(normalizedSplitRefundItems);
                const returnTotal = normalizedSplitRefundItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
                const saleTaxBreakdown = calculateTaxBreakdownFromItems(saleItems, config, {
                   isTaxIncluded,
@@ -2046,7 +2081,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      saleTransaction: {
                         documentType: 'TICKET' as const,
                         seriesId: assignedSequenceId,
-                        items: saleItems,
+                        items: saleItemsWithFiscalAmounts,
                         total: saleTotal + (voluntaryTip || 0),
                         serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
                         voluntaryTipAmount: voluntaryTip,
@@ -2073,7 +2108,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      refundTransaction: {
                         documentType: 'REFUND' as const,
                         seriesId: refundSeriesId,
-                        items: normalizedSplitRefundItems,
+                        items: refundItemsWithFiscalAmounts,
                         total: returnTotal,
                         userId: currentUser.id,
                         userName: currentUser.name,
@@ -2112,7 +2147,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      await persistStandaloneRefundTransaction(
                         {
                            ...result.refund,
-                           items: normalizedSplitRefundItems,
+                           items: refundItemsWithFiscalAmounts,
                            total: returnTotal,
                            ncf: refundNcf,
                            ncfType: refundNcf ? 'B04' : undefined,
@@ -2163,7 +2198,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
                const refundDocumentTotal = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-               const documentItems = isRefundOnly ? normalizedRefundItems : processedCart;
+               const documentItems = isRefundOnly
+                  ? attachExplicitFiscalAmounts(normalizedRefundItems)
+                  : attachExplicitFiscalAmounts(processedCart, discountAmount);
                const documentTotal = (isRefundOnly ? refundDocumentTotal : cartTotal) + (voluntaryTip || 0);
                const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, documentTotal, baseCurrency.code);
 
@@ -2221,7 +2258,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   await persistStandaloneRefundTransaction(
                      {
                         ...finalTxn,
-                        items: normalizedRefundItems,
+                        items: documentItems,
                         total: refundDocumentTotal,
                         status: 'REFUNDED',
                         ncf: finalNcf,

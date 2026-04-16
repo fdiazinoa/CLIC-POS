@@ -1265,6 +1265,10 @@ export interface CartItem extends Product {
   originalPrice?: number; // Optional: track original product price for auditing
   discountAmount?: number;
   discountRate?: number;
+  netAmount?: number;
+  taxAmount?: number;
+  totalAmount?: number;
+  taxRate?: number;
   adjustmentSource?: 'PROMOTION' | 'MANUAL_DISCOUNT' | 'MANUAL_PRICE_OVERRIDE' | 'TARIFF';
   appliedPromotionCode?: string;
   appliedPromotionName?: string;

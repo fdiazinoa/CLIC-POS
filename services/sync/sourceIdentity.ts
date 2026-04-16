@@ -11,6 +11,10 @@ const normalizeString = (value: unknown): string | undefined => {
 
 const round4 = (value: number): number => Math.round((value + Number.EPSILON) * 10000) / 10000;
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+const normalizeNumber = (value: unknown): number | undefined => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+};
 
 const normalizeTransactionItems = (items: CartItem[]): CartItem[] => {
     return items.map((item) => {
@@ -29,6 +33,10 @@ const normalizeTransactionItems = (items: CartItem[]): CartItem[] => {
         const derivedDiscountRate = effectiveOriginalPrice && price < effectiveOriginalPrice && effectiveOriginalPrice > 0
             ? round4((effectiveOriginalPrice - price) / effectiveOriginalPrice)
             : undefined;
+        const netAmount = normalizeNumber(item?.netAmount);
+        const taxAmount = normalizeNumber(item?.taxAmount);
+        const totalAmount = normalizeNumber(item?.totalAmount);
+        const taxRate = normalizeNumber(item?.taxRate);
 
         return {
             ...item,
@@ -37,6 +45,10 @@ const normalizeTransactionItems = (items: CartItem[]): CartItem[] => {
             originalPrice: effectiveOriginalPrice,
             discountAmount: derivedDiscountAmount ?? item.discountAmount,
             discountRate: derivedDiscountRate ?? item.discountRate,
+            netAmount,
+            taxAmount,
+            totalAmount,
+            taxRate,
             appliedPromotionCode: item.appliedPromotionCode || item.appliedPromotionId,
             appliedPromotionName: item.appliedPromotionName
         };

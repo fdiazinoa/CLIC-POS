@@ -27,6 +27,15 @@ type TaxableLineItem = {
   appliedTaxIds?: string[];
 };
 
+export interface FiscalLineAmounts {
+  lineIndex: number;
+  netAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+  taxRate: number;
+  discountAmount: number;
+}
+
 export interface FiscalTaxBreakdownLine {
   id: string;
   name: string;
@@ -213,6 +222,64 @@ export const calculateTransactionFiscalSummary = (
     total,
     taxBreakdown,
   };
+};
+
+export const calculateLineFiscalValuesForTransaction = (
+  items: TaxableLineItem[],
+  config: BusinessConfig,
+  options: TaxBreakdownOptions = {}
+): FiscalLineAmounts[] => {
+  const {
+    discountAmount = 0,
+    isTaxIncluded = false,
+    terminalConfig,
+    fallbackTaxRate = 0,
+    fallbackTaxName = 'Impuesto',
+  } = options;
+
+  const normalizedItems = Array.isArray(items) ? items : [];
+  const grossLineTotal = normalizedItems.reduce((sum, item) => {
+    return sum + Math.abs(toNumber(item?.price) * toNumber(item?.quantity));
+  }, 0);
+
+  return normalizedItems.map((item, index) => {
+    const lineGross = Math.abs(toNumber(item?.price) * toNumber(item?.quantity));
+    const itemRatio = grossLineTotal > 0 ? lineGross / grossLineTotal : 0;
+    const lineDiscount = Math.max(0, toNumber(discountAmount)) * itemRatio;
+    const lineBaseAfterDiscount = Math.max(0, lineGross - lineDiscount);
+    const itemTaxes = resolveEffectiveTaxes(item, config, terminalConfig, fallbackTaxRate, fallbackTaxName);
+    const totalTaxRate = itemTaxes.reduce((sum, tax) => sum + Math.max(0, toNumber(tax.rate)), 0);
+
+    if (itemTaxes.length === 0 || totalTaxRate <= EPSILON) {
+      return {
+        lineIndex: index,
+        netAmount: round2(lineBaseAfterDiscount),
+        taxAmount: 0,
+        totalAmount: round2(lineBaseAfterDiscount),
+        taxRate: 0,
+        discountAmount: round2(lineDiscount),
+      };
+    }
+
+    const netAmount = isTaxIncluded
+      ? round2(lineBaseAfterDiscount / (1 + totalTaxRate))
+      : round2(lineBaseAfterDiscount);
+    const taxAmount = isTaxIncluded
+      ? round2(Math.max(0, lineBaseAfterDiscount - netAmount))
+      : round2(netAmount * totalTaxRate);
+    const totalAmount = isTaxIncluded
+      ? round2(lineBaseAfterDiscount)
+      : round2(netAmount + taxAmount);
+
+    return {
+      lineIndex: index,
+      netAmount,
+      taxAmount,
+      totalAmount,
+      taxRate: round2(totalTaxRate),
+      discountAmount: round2(lineDiscount),
+    };
+  });
 };
 
 export const formatTaxLineLabel = (tax: Pick<FiscalTaxBreakdownLine, 'name' | 'rate'>): string => {
