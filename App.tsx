@@ -127,7 +127,7 @@ import {
   publishMasterEndpointToCloud,
   resolveMasterEndpointFromCloud
 } from './utils/cloudMasterRegistry';
-import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, persistStoredErpSyncBinding } from './utils/erpSyncLifecycle';
+import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, isBlockedErpSyncActivation, persistStoredErpSyncBinding } from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 import { resolveCustomerImageSrc } from './utils/entityImage';
 import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
@@ -1022,6 +1022,17 @@ const AppContent: React.FC = () => {
           pendingEvents: 0,
         });
 
+        const blockedActivation =
+          result?.heartbeat?.activation
+          || result?.registered?.activation
+          || result?.bootstrap?.activation;
+
+        if (!disposed && isBlockedErpSyncActivation(blockedActivation)) {
+          console.warn('[ERP SYNC] bloqueo remoto detectado en lifecycle, activando lockdown visual.');
+          triggerLockdown('Servicio suspendido por el administrador.');
+          return;
+        }
+
         if (!disposed && result?.heartbeat?.terminal?.id) {
           console.log(`[ERP SYNC] Terminal ${terminalName} enlazada con ${result.heartbeat.terminal.id}`);
         }
@@ -1075,7 +1086,7 @@ const AppContent: React.FC = () => {
         window.clearTimeout(heartbeatTimeoutId);
       }
     };
-  }, [currentView, deviceId, getCurrentTerminal]);
+  }, [currentView, deviceId, getCurrentTerminal, triggerLockdown]);
 
   // --- RECONNECTION BANNER ---
   const renderReconnectionBanner = () => {

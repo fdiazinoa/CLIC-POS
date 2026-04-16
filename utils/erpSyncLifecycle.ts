@@ -22,6 +22,8 @@ type SyncActivationState = {
     company_ref?: string | null;
     mode?: string | null;
     erp_enabled?: boolean;
+    billing_status?: string | null;
+    kill_switch_active?: boolean;
 };
 
 type SyncTerminalRecord = {
@@ -126,6 +128,31 @@ const TERMINAL_CONFIG_PENDING_SNAPSHOT_KEY = 'clic_pos_terminal_config_pending_s
 let outboxProcessingPromise: Promise<{ processed: number; applied: number; failed: number } | null> | null = null;
 
 const normalizeOptional = (value?: string | null) => (typeof value === 'string' ? value.trim() : '');
+const BLOCKED_BILLING_STATUSES = new Set([
+    'SUSPENDED',
+    'INACTIVE',
+    'BLOCKED',
+    'DISABLED',
+    'CANCELLED',
+    'CANCELED',
+    'PAST_DUE',
+    'EXPIRED',
+]);
+
+export const isBlockedErpSyncActivation = (activation?: SyncActivationState | null): boolean => {
+    if (!activation) return false;
+
+    const mode = normalizeOptional(activation.mode || null).toUpperCase();
+    const billingStatus = normalizeOptional(activation.billing_status || null).toUpperCase();
+
+    return (
+        activation.erp_enabled === false
+        || activation.kill_switch_active === true
+        || mode === 'LICENSE_BLOCKED'
+        || BLOCKED_BILLING_STATUSES.has(billingStatus)
+    );
+};
+
 const asObject = <T extends Record<string, unknown>>(value: unknown): T =>
     (value && typeof value === 'object' && !Array.isArray(value) ? value as T : {} as T);
 const asStringList = (value: unknown) => (
@@ -980,7 +1007,7 @@ export const ensureErpSyncLifecycle = async (params: EnsureLifecycleParams): Pro
     const bootstrap = storedBinding.terminalId ? null : await bootstrapErpSyncLifecycle(params.deviceId);
     const activation = bootstrap?.activation;
 
-    if (activation && activation.erp_enabled === false) {
+    if (isBlockedErpSyncActivation(activation)) {
         return { bootstrap, registered: null, heartbeat: null };
     }
 
@@ -1012,6 +1039,10 @@ export const ensureErpSyncLifecycle = async (params: EnsureLifecycleParams): Pro
 
         heartbeat = rebound.heartbeat;
         registered = rebound.registered || registered;
+    }
+
+    if (isBlockedErpSyncActivation(registered?.activation) || isBlockedErpSyncActivation(heartbeat?.activation)) {
+        return { bootstrap, registered, heartbeat, outbox: null };
     }
 
     const outbox = await processErpSyncOutbox(params);
