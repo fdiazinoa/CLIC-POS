@@ -1,5 +1,8 @@
 import { CartItem, BusinessConfig, Promotion, Customer } from '../types';
 
+const round4 = (value: number): number => Math.round((value + Number.EPSILON) * 10000) / 10000;
+const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
 const productReferenceCandidates = (product: any): string[] => (
     [
         typeof product?.id === 'string' ? product.id.trim() : String(product?.id || '').trim(),
@@ -117,7 +120,7 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
     if (activePromotions.length === 0) return cart;
 
     // Clone cart to avoid mutation
-    let processedCart = cart.map(item => ({ ...item, originalPrice: item.originalPrice || item.price }));
+    let processedCart = cart.map(item => ({ ...item }));
 
     // Apply Promotions
     // Priority: We apply the first matching promotion for simplicity in this prototype.
@@ -146,7 +149,19 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
             return false;
         });
 
+        if (
+            item.adjustmentSource === 'MANUAL_DISCOUNT'
+            || item.adjustmentSource === 'MANUAL_PRICE_OVERRIDE'
+        ) {
+            return item;
+        }
+
         if (applicablePromos.length === 0) return item;
+
+        const promotionBasePrice =
+            item.adjustmentSource === 'TARIFF'
+                ? item.price
+                : (item.originalPrice || item.price);
 
         // Sort by Priority (Descending) -> Highest priority wins
         applicablePromos.sort((a, b) => (b.priority || 1) - (a.priority || 1));
@@ -163,7 +178,7 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
             let tempPrice = item.price;
             switch (promo.type) {
                 case 'DISCOUNT':
-                    tempPrice = item.originalPrice! * (1 - promo.benefitValue / 100);
+                    tempPrice = promotionBasePrice * (1 - promo.benefitValue / 100);
                     break;
                 case 'HAPPY_HOUR':
                     tempPrice = promo.benefitValue;
@@ -172,7 +187,7 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
                     if (item.quantity >= 2) {
                         const freeItems = Math.floor(item.quantity / 2);
                         const paidItems = item.quantity - freeItems;
-                        tempPrice = (item.originalPrice! * paidItems) / item.quantity;
+                        tempPrice = (promotionBasePrice * paidItems) / item.quantity;
                     }
                     break;
                 case 'CONDITIONAL_TARGET':
@@ -193,11 +208,11 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
         // If no promo lowers the price (e.g. BOGO with qty 1), we stick with original.
         const applicablePromo = bestPromo || topTierPromos[0]; // Fallback to first if none lower price (or all equal)
 
-        let newPrice = item.originalPrice!;
+        let newPrice = promotionBasePrice;
 
         switch (applicablePromo.type) {
             case 'DISCOUNT':
-                newPrice = item.originalPrice! * (1 - applicablePromo.benefitValue / 100);
+                newPrice = promotionBasePrice * (1 - applicablePromo.benefitValue / 100);
                 break;
             case 'HAPPY_HOUR':
                 // Fixed price
@@ -210,13 +225,16 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
                 if (item.quantity >= 2) {
                     const freeItems = Math.floor(item.quantity / 2);
                     const paidItems = item.quantity - freeItems;
-                    newPrice = (item.originalPrice! * paidItems) / item.quantity;
+                    newPrice = (promotionBasePrice * paidItems) / item.quantity;
                 }
                 break;
 
             case 'CONDITIONAL_TARGET':
                 // 1. Calculate Total Spend (based on original prices)
-                const totalSpend = processedCart.reduce((sum, i) => sum + (i.originalPrice! * i.quantity), 0);
+                const totalSpend = processedCart.reduce((sum, i) => {
+                    const basePrice = i.adjustmentSource === 'TARIFF' ? i.price : (i.originalPrice || i.price);
+                    return sum + (basePrice * i.quantity);
+                }, 0);
 
                 // 2. Check Trigger
                 if (applicablePromo.trigger && totalSpend >= applicablePromo.trigger.value) {
@@ -232,9 +250,13 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
                         // Sort candidates
                         candidates.sort((a, b) => {
                             if (applicablePromo.targetStrategy?.mode === 'MOST_EXPENSIVE_ITEM') {
-                                return b.originalPrice! - a.originalPrice!;
+                                const priceA = a.adjustmentSource === 'TARIFF' ? a.price : (a.originalPrice || a.price);
+                                const priceB = b.adjustmentSource === 'TARIFF' ? b.price : (b.originalPrice || b.price);
+                                return priceB - priceA;
                             }
-                            return a.originalPrice! - b.originalPrice!; // CHEAPEST
+                            const priceA = a.adjustmentSource === 'TARIFF' ? a.price : (a.originalPrice || a.price);
+                            const priceB = b.adjustmentSource === 'TARIFF' ? b.price : (b.originalPrice || b.price);
+                            return priceA - priceB; // CHEAPEST
                         });
 
                         const targetItem = candidates[0];
@@ -242,7 +264,7 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
                         // If this is the target item, apply discount
                         // Using 'id' as unique identifier for the line item (assuming 1 line per product)
                         if (item.id === targetItem.id) {
-                            newPrice = item.originalPrice! * (1 - applicablePromo.benefitValue / 100);
+                            newPrice = promotionBasePrice * (1 - applicablePromo.benefitValue / 100);
                         }
                     }
                 }
@@ -250,11 +272,20 @@ export const applyPromotions = (cart: CartItem[], config: BusinessConfig, termin
         }
 
         // Ensure we don't increase price (unless it's a weird happy hour)
-        if (newPrice < item.originalPrice!) {
+        if (newPrice < promotionBasePrice) {
+            const safeRate = promotionBasePrice > 0
+                ? round4((promotionBasePrice - newPrice) / promotionBasePrice)
+                : undefined;
             return {
                 ...item,
-                price: newPrice,
-                appliedPromotionId: applicablePromo.id
+                price: round2(newPrice),
+                originalPrice: round2(promotionBasePrice),
+                discountAmount: round2((promotionBasePrice - newPrice) * item.quantity),
+                discountRate: safeRate,
+                adjustmentSource: 'PROMOTION',
+                appliedPromotionId: applicablePromo.id,
+                appliedPromotionCode: applicablePromo.id,
+                appliedPromotionName: applicablePromo.name
             };
         }
 

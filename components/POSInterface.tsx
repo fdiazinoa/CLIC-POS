@@ -1139,6 +1139,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const finalPrice = priceOverride || getProductPrice(product);
+      const baseListPrice = typeof product.price === 'number' && Number.isFinite(product.price)
+         ? product.price
+         : finalPrice;
+      const hasTariffAdjustment = Math.abs(finalPrice - baseListPrice) > 0.01;
       const modifiersString = modifiers ? modifiers.sort().join('|') : '';
       const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
       const taxSignature = effectiveTaxIds.slice().sort().join('|');
@@ -1169,7 +1173,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             price: finalPrice,
             modifiers,
             appliedTaxIds: effectiveTaxIds,
-            originalPrice: getProductPrice(product),
+            originalPrice: hasTariffAdjustment ? baseListPrice : undefined,
+            discountAmount: hasTariffAdjustment && finalPrice < baseListPrice
+               ? Number((((baseListPrice - finalPrice) * quantity)).toFixed(2))
+               : undefined,
+            discountRate: hasTariffAdjustment && finalPrice < baseListPrice && baseListPrice > 0
+               ? Number((((baseListPrice - finalPrice) / baseListPrice)).toFixed(4))
+               : undefined,
+            adjustmentSource: hasTariffAdjustment ? ('TARIFF' as const) : undefined,
             trackingData
          };
          onUpdateCart(prev => [newItem, ...prev]);
@@ -1800,12 +1811,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // Update Check (Price Override / Discount)
          const originalItem = (cart || []).find(i => i.cartId === updatedItem.cartId);
 
+         const isManualCommercialChange =
+            updatedItem.adjustmentSource === 'MANUAL_DISCOUNT'
+            || updatedItem.adjustmentSource === 'MANUAL_PRICE_OVERRIDE';
+
          // Stock Check (Quantity Increase)
          if (originalItem && updatedItem.quantity > originalItem.quantity) {
             const diff = updatedItem.quantity - originalItem.quantity;
             if (!canAddItemToCart(updatedItem, diff)) return;
          }
-         newCart = cart.map(item => item.cartId === updatedItem.cartId ? updatedItem : item);
+         const mergedItem = originalItem && !isManualCommercialChange
+            ? {
+               ...originalItem,
+               quantity: updatedItem.quantity,
+               note: updatedItem.note,
+               salespersonId: updatedItem.salespersonId,
+               modifiers: updatedItem.modifiers,
+               trackingData: updatedItem.trackingData,
+               trackingId: updatedItem.trackingId,
+               trackingCode: updatedItem.trackingCode,
+               variantInfo: updatedItem.variantInfo,
+               variantSku: updatedItem.variantSku,
+               dispatched: updatedItem.dispatched
+            }
+            : updatedItem;
+         newCart = cart.map(item => item.cartId === updatedItem.cartId ? mergedItem : item);
       }
 
       onUpdateCart(newCart);
