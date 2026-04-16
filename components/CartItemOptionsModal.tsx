@@ -27,6 +27,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   canApplyDiscount,
   canVoidItem
 }) => {
+  const EPSILON = 0.01;
   const [quantity, setQuantity] = useState(item.quantity);
   const [price, setPrice] = useState(item.price);
   const [note, setNote] = useState(item.note || '');
@@ -37,6 +38,9 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
 
   const originalPrice = item.originalPrice || item.price;
+  const adjustmentBasePrice = (item.adjustmentSource === 'PROMOTION' || item.adjustmentSource === 'TARIFF')
+    ? item.price
+    : originalPrice;
 
   const salesUsers = useMemo(() => {
     const vendorRole = roles.find(r => ['vendedor', 'seller', 'sales', 'comercial'].includes(r.name.toLowerCase()));
@@ -55,15 +59,15 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   const handleApplyDiscount = () => {
     const val = parseFloat(discountValue);
     if (isNaN(val) || val <= 0) {
-      setPrice(originalPrice);
+      setPrice(adjustmentBasePrice);
       return;
     }
 
-    let newPrice = originalPrice;
+    let newPrice = adjustmentBasePrice;
     if (discountType === 'PERCENT') {
-      newPrice = originalPrice - (originalPrice * (val / 100));
+      newPrice = adjustmentBasePrice - (adjustmentBasePrice * (val / 100));
     } else {
-      newPrice = Math.max(0, originalPrice - val);
+      newPrice = Math.max(0, adjustmentBasePrice - val);
     }
     setPrice(parseFloat(newPrice.toFixed(2)));
   };
@@ -77,13 +81,65 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   };
 
   const handleSave = () => {
-    onUpdate({
+    const nextItem: CartItem = {
       ...item,
       quantity,
       price,
       note,
-      originalPrice,
       salespersonId
+    };
+
+    if (
+      Math.abs(price - item.price) <= EPSILON
+      && (item.adjustmentSource === 'MANUAL_DISCOUNT' || item.adjustmentSource === 'MANUAL_PRICE_OVERRIDE')
+    ) {
+      nextItem.originalPrice = item.originalPrice;
+      nextItem.discountAmount = item.discountAmount;
+      nextItem.discountRate = item.discountRate;
+      nextItem.adjustmentSource = item.adjustmentSource;
+    } else if (price < adjustmentBasePrice - EPSILON) {
+      nextItem.originalPrice = adjustmentBasePrice;
+      nextItem.discountAmount = Number(((adjustmentBasePrice - price) * quantity).toFixed(2));
+      nextItem.discountRate = adjustmentBasePrice > 0
+        ? Number((((adjustmentBasePrice - price) / adjustmentBasePrice)).toFixed(4))
+        : undefined;
+      nextItem.adjustmentSource = 'MANUAL_DISCOUNT';
+      delete nextItem.appliedPromotionId;
+      delete nextItem.appliedPromotionCode;
+      delete nextItem.appliedPromotionName;
+    } else if (Math.abs(price - adjustmentBasePrice) > EPSILON) {
+      nextItem.originalPrice = adjustmentBasePrice;
+      nextItem.discountAmount = undefined;
+      nextItem.discountRate = undefined;
+      nextItem.adjustmentSource = 'MANUAL_PRICE_OVERRIDE';
+      delete nextItem.appliedPromotionId;
+      delete nextItem.appliedPromotionCode;
+      delete nextItem.appliedPromotionName;
+    } else if (item.adjustmentSource === 'TARIFF') {
+      nextItem.originalPrice = item.originalPrice;
+      nextItem.discountAmount = item.discountAmount;
+      nextItem.discountRate = item.discountRate;
+      nextItem.adjustmentSource = 'TARIFF';
+    } else if (item.adjustmentSource === 'PROMOTION') {
+      nextItem.originalPrice = item.originalPrice;
+      nextItem.discountAmount = item.discountAmount;
+      nextItem.discountRate = item.discountRate;
+      nextItem.adjustmentSource = 'PROMOTION';
+      nextItem.appliedPromotionId = item.appliedPromotionId;
+      nextItem.appliedPromotionCode = item.appliedPromotionCode;
+      nextItem.appliedPromotionName = item.appliedPromotionName;
+    } else {
+      nextItem.originalPrice = originalPrice;
+      nextItem.discountAmount = undefined;
+      nextItem.discountRate = undefined;
+      nextItem.adjustmentSource = undefined;
+      delete nextItem.appliedPromotionId;
+      delete nextItem.appliedPromotionCode;
+      delete nextItem.appliedPromotionName;
+    }
+
+    onUpdate({
+      ...nextItem
     });
     onClose();
   };
@@ -126,7 +182,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
           <div>
             <h3 className="font-black text-lg text-gray-900 leading-tight mb-0.5">{item.name}</h3>
             <p className="text-sm text-gray-400 font-bold">
-              {config.currencySymbol}{originalPrice.toFixed(2)} / unidad
+              {config.currencySymbol}{adjustmentBasePrice.toFixed(2)} / unidad
             </p>
           </div>
           <button onClick={onClose} className="p-2.5 bg-gray-50 rounded-full hover:bg-gray-100 text-gray-400 transition-colors">

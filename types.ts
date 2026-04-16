@@ -1263,6 +1263,11 @@ export interface CartItem extends Product {
   modifiers?: string[];
   note?: string;
   originalPrice?: number; // Optional: track original product price for auditing
+  discountAmount?: number;
+  discountRate?: number;
+  adjustmentSource?: 'PROMOTION' | 'MANUAL_DISCOUNT' | 'MANUAL_PRICE_OVERRIDE' | 'TARIFF';
+  appliedPromotionCode?: string;
+  appliedPromotionName?: string;
   salespersonId?: string;
   ncf?: string; // NCF asignado a esta línea o al ticket
   appliedPromotionId?: string;
