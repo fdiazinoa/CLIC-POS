@@ -1292,7 +1292,7 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
         });
     };
 
-    const handleRunFiscalExport = () => {
+    const handleRunFiscalExport = async () => {
         if (!isFiscalView || !fiscalContext) return;
 
         setFiscalExportError('');
@@ -1333,8 +1333,8 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                 ? 'Todas las cajas'
                 : `Terminal ${normalizeTerminalId(fiscalTerminalFilter)}`;
 
-            selectedFormats.forEach((formatType) => {
-                const result = formatFiscalExcel({
+            for (const formatType of selectedFormats) {
+                const result = await formatFiscalExcel({
                     config,
                     transactions: txInRange,
                     transactionHistory: historyInRange,
@@ -1347,9 +1347,10 @@ const ReportViewer: React.FC<ReportViewerProps> = ({
                     suggestedFileName: `DGII_${formatType}_${period}_${terminalSuffix}.xlsx`
                 });
 
-                exportSummaries.push(`${formatType}: ${result.fileName} (${terminalScopeLabel})`);
+                const locationSuffix = result.locationDescription ? ` • ${result.locationDescription}` : '';
+                exportSummaries.push(`${formatType}: ${result.fileName} (${terminalScopeLabel})${locationSuffix}`);
                 allWarnings.push(...result.warnings.map(w => `[${formatType}] ${w}`));
-            });
+            }
 
             const warningsPreview = allWarnings.slice(0, 8);
             if (allWarnings.length > 8) {
