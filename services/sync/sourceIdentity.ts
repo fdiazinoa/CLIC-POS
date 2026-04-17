@@ -1,4 +1,4 @@
-import { CashMovement, InventoryLedgerEntry, PaymentEntry, Transaction, ZReport } from '../../types';
+import { CashMovement, CartItem, InventoryLedgerEntry, PaymentEntry, Transaction, ZReport } from '../../types';
 
 const SOURCE_CHANNEL = 'POS' as const;
 const DEFAULT_CURRENCY = 'DOP';
@@ -7,6 +7,52 @@ const normalizeString = (value: unknown): string | undefined => {
     if (typeof value !== 'string') return undefined;
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const round4 = (value: number): number => Math.round((value + Number.EPSILON) * 10000) / 10000;
+const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+const normalizeNumber = (value: unknown): number | undefined => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const normalizeTransactionItems = (items: CartItem[]): CartItem[] => {
+    return items.map((item) => {
+        const price = Number(item?.price || 0);
+        const quantity = Number(item?.quantity || 0);
+        const originalPriceRaw = item?.originalPrice;
+        const originalPrice = typeof originalPriceRaw === 'number' && Number.isFinite(originalPriceRaw)
+            ? originalPriceRaw
+            : undefined;
+        const effectiveOriginalPrice = (typeof originalPrice === 'number' && originalPrice > 0 && originalPrice !== price)
+            ? originalPrice
+            : undefined;
+        const derivedDiscountAmount = effectiveOriginalPrice && price < effectiveOriginalPrice
+            ? round2((effectiveOriginalPrice - price) * quantity)
+            : undefined;
+        const derivedDiscountRate = effectiveOriginalPrice && price < effectiveOriginalPrice && effectiveOriginalPrice > 0
+            ? round4((effectiveOriginalPrice - price) / effectiveOriginalPrice)
+            : undefined;
+        const netAmount = normalizeNumber(item?.netAmount);
+        const taxAmount = normalizeNumber(item?.taxAmount);
+        const totalAmount = normalizeNumber(item?.totalAmount);
+        const taxRate = normalizeNumber(item?.taxRate);
+
+        return {
+            ...item,
+            price,
+            quantity,
+            originalPrice: effectiveOriginalPrice,
+            discountAmount: derivedDiscountAmount ?? item.discountAmount,
+            discountRate: derivedDiscountRate ?? item.discountRate,
+            netAmount,
+            taxAmount,
+            totalAmount,
+            taxRate,
+            appliedPromotionCode: item.appliedPromotionCode || item.appliedPromotionId,
+            appliedPromotionName: item.appliedPromotionName
+        };
+    });
 };
 
 const resolveDeviceId = (): string | undefined => {
@@ -174,6 +220,7 @@ export const normalizeTransactionForSync = (transaction: Transaction): Transacti
         settlement_applied_base: settlementAppliedBase,
         settlement_change_base: settlementChangeBase,
         settlement_change_currency_code: settlementChangeCurrencyCode,
+        items: normalizeTransactionItems(Array.isArray(transaction.items) ? transaction.items : []),
         payments: normalizePaymentEntries(Array.isArray(transaction.payments) ? transaction.payments : [], {
             sourceTransactionId,
             sourceDisplayId,

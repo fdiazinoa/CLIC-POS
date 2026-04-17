@@ -31,7 +31,8 @@ import {
   Table,
   Collection,
   PaymentEntry,
-  RefundProcessingOptions
+  RefundProcessingOptions,
+  PaymentMethodDefinition
 } from './types';
 import {
   DEFAULT_ROLES,
@@ -90,7 +91,7 @@ import TableLayoutDesigner from './components/TableLayoutDesigner';
 // View imports for device roles
 import KioskWelcome from './components/kiosk/KioskWelcome';
 import KioskProductBrowser from './components/kiosk/KioskProductBrowser';
-import KioskPayment from './components/kiosk/KioskPayment';
+import KioskPayment, { KioskResolvedPaymentMethod } from './components/kiosk/KioskPayment';
 import { KioskSecurityProvider, useKioskSecurityContext } from './components/kiosk/KioskContext';
 import PriceCheckerDisplay from './components/price-checker/PriceCheckerDisplay';
 import InventoryHome from './components/inventory/InventoryHome';
@@ -114,7 +115,7 @@ import { inventorySyncService } from './services/sync/InventorySyncService';
 import { processInventoryDeduction } from './utils/inventoryEngine';
 import { useOfflineInventoryCountSync } from './hooks/useOfflineInventoryCountSync';
 import { printLabelsFromTemplate } from './utils/labelPrinter';
-import { printIntegratedPaymentArtifacts, printPrecuenta } from './utils/printer';
+import { printIntegratedPaymentArtifacts, printPrecuenta, printTicket } from './utils/printer';
 import { offlinePrintQueueService } from './services/printer/OfflinePrintQueueService';
 import { nativePrintBridge } from './services/printer/NativePrintBridge';
 import { persistStandaloneRefundTransaction } from './services/localRefundPersistence';
@@ -126,7 +127,14 @@ import {
   publishMasterEndpointToCloud,
   resolveMasterEndpointFromCloud
 } from './utils/cloudMasterRegistry';
-import { clearStoredErpSyncBinding, ensureErpSyncLifecycle, persistStoredErpSyncBinding } from './utils/erpSyncLifecycle';
+import {
+  clearStoredErpSyncBinding,
+  ensureErpSyncLifecycle,
+  getLifecycleActivationBlockMessage,
+  getLifecycleBlockingMessageFromError,
+  isLifecycleActivationBlocked,
+  persistStoredErpSyncBinding
+} from './utils/erpSyncLifecycle';
 import { clearPersistedSupabaseSession, supabase } from './utils/supabase';
 import { resolveCustomerImageSrc } from './utils/entityImage';
 import { posCatalogDebugElapsedMs, posCatalogDebugLog, posCatalogDebugLogDbRows, posCatalogDebugMatchesRaw, posCatalogDebugNow, posCatalogDebugSummarizeItem } from './utils/posCatalogDebugTrace';
@@ -140,6 +148,7 @@ import {
   resolveCreditNoteFiscalCode
 } from './utils/fiscal/fiscalHelpers';
 import { getFiscalDocumentStatus, issueFiscalDocument } from './services/fiscal/fiscalService';
+import { azulMcmService } from './services/payments/AzulMcmService';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -427,6 +436,34 @@ const toPositiveNumber = (value: unknown): number => {
   const num = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(num) || num <= 0) return 0;
   return num;
+};
+
+const resolveKioskPaymentMethods = (config: BusinessConfig): KioskResolvedPaymentMethod[] => {
+  const enabledMethods = (config.paymentMethods || [])
+    .filter((method: PaymentMethodDefinition) => method.isEnabled)
+    .filter((method: PaymentMethodDefinition) => !['CREDIT', 'ADVANCE', 'STORE_CREDIT'].includes(String(method.type || '').toUpperCase()));
+
+  if (enabledMethods.length === 0) {
+    return [
+      { key: 'CARD', id: 'CARD', type: 'CARD', label: 'Tarjeta', iconName: 'CreditCard' },
+      { key: 'CASH', id: 'CASH', type: 'CASH', label: 'Efectivo', iconName: 'Banknote' },
+    ];
+  }
+
+  return enabledMethods.map((method) => ({
+    key: method.id || `${method.type}-${method.name}`,
+    id: method.id || method.type,
+    type: method.type,
+    label: method.name,
+    iconName: method.icon,
+    integrationProvider: method.integration !== 'NONE' ? method.integration : undefined,
+    integrationMode: method.integrationMode || 'MANUAL',
+  }));
+};
+
+const createKioskGatewayOrderNumber = (): string => {
+  const base = `${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+  return base.slice(-8);
 };
 
 const App: React.FC = () => {
@@ -992,6 +1029,12 @@ const AppContent: React.FC = () => {
           pendingEvents: 0,
         });
 
+        const blockingActivation = result?.heartbeat?.activation || result?.registered?.activation || result?.bootstrap?.activation;
+        if (!disposed && isLifecycleActivationBlocked(blockingActivation)) {
+          triggerLockdown(getLifecycleActivationBlockMessage(blockingActivation));
+          return;
+        }
+
         if (!disposed && result?.heartbeat?.terminal?.id) {
           console.log(`[ERP SYNC] Terminal ${terminalName} enlazada con ${result.heartbeat.terminal.id}`);
         }
@@ -1013,6 +1056,11 @@ const AppContent: React.FC = () => {
           lastManifestRefreshAt = now;
         }
       } catch (error) {
+        const blockingMessage = getLifecycleBlockingMessageFromError(error);
+        if (!disposed && blockingMessage) {
+          triggerLockdown(blockingMessage);
+          return;
+        }
         console.warn('[ERP SYNC] lifecycle registration skipped:', error);
       }
     };
@@ -5363,6 +5411,18 @@ const AppContent: React.FC = () => {
               handleViewChange('KIOSK_BROWSER');
             }}
             storeName={config.companyInfo?.name}
+            onAdminAccess={() => {
+              const rawPin = prompt('Ingrese PIN de administrador:');
+              if (!rawPin) return;
+
+              const pin = rawPin.trim();
+              if (authLevelService.validateEscapeHatch(pin)) {
+                setIsAdminMode(true);
+                setCurrentView('SETTINGS');
+              } else {
+                alert('PIN incorrecto');
+              }
+            }}
           />
         );
 
@@ -5430,12 +5490,14 @@ const AppContent: React.FC = () => {
         );
 
       case 'KIOSK_PAYMENT':
+        const kioskPaymentMethods = resolveKioskPaymentMethods(config);
         return (
           <KioskPayment
             cart={cart}
+            paymentMethods={kioskPaymentMethods}
             onBack={() => handleViewChange('KIOSK_BROWSER')}
             onPaymentComplete={async (method) => {
-              console.log(`Payment completed with ${method}`);
+              console.log(`Payment completed with ${method.label} (${method.type})`);
 
               // Get current terminal and config
               const currentTerminal = getCurrentTerminal();
@@ -5452,6 +5514,16 @@ const AppContent: React.FC = () => {
               const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
               const tax = subtotal * 0.18; // TODO: Use real tax logic from config
               const total = subtotal + tax;
+              const baseCurrency = config.currencies?.find(currency => currency.isBase)?.code || 'DOP';
+              const configuredMethod = (config.paymentMethods || []).find(paymentMethod => paymentMethod.id === method.id)
+                || (config.paymentMethods || []).find(paymentMethod => paymentMethod.type === method.type && paymentMethod.name === method.label)
+                || (config.paymentMethods || []).find(paymentMethod => paymentMethod.type === method.type);
+              const isIntegratedCard = configuredMethod?.type === 'CARD' && configuredMethod.integrationMode === 'INTEGRATED';
+              const assignedIntegration = configuredMethod?.integrationId
+                ? config.integrations?.find(integration => integration.id === configuredMethod.integrationId)
+                : (configuredMethod?.integration && configuredMethod.integration !== 'NONE'
+                    ? config.integrations?.find(integration => integration.provider === configuredMethod.integration)
+                    : undefined);
 
               // Get assigned sequence
               const seriesId = activeConfig.documentAssignments?.['TICKET'];
@@ -5461,6 +5533,53 @@ const AppContent: React.FC = () => {
               }
 
               try {
+                let gatewayPaymentFields: Partial<PaymentEntry> = {};
+
+                if (isIntegratedCard) {
+                  if (!assignedIntegration) {
+                    throw new Error(`El medio de pago ${method.label} no tiene una integración válida asignada.`);
+                  }
+
+                  if (assignedIntegration.provider !== 'AZUL') {
+                    throw new Error(`La integración ${assignedIntegration.provider} todavía no está soportada en self checkout.`);
+                  }
+
+                  const gatewayOrderNumber = createKioskGatewayOrderNumber();
+                  const azulResponse = await azulMcmService.sale(assignedIntegration, {
+                    amount: total,
+                    itbis: tax,
+                    orderNumber: gatewayOrderNumber,
+                    installment: '0',
+                  });
+
+                  gatewayPaymentFields = {
+                    gatewayProvider: 'AZUL',
+                    gatewayIntegrationId: assignedIntegration.id,
+                    gatewayTransactionType: 'SALE',
+                    gatewayStatus: azulResponse.approved ? 'APPROVED' : 'DECLINED',
+                    gatewayResponseCode: azulResponse.responseCode,
+                    gatewayResponseMessage: azulResponse.responseMessage,
+                    gatewayOrderNumber: azulResponse.orderNumber || gatewayOrderNumber,
+                    gatewayProcessedAmount: total,
+                    gatewayProcessedTaxAmount: tax,
+                    gatewayAuthorizationCode: azulResponse.authorizationCode,
+                    gatewayReference: azulResponse.referenceNumber,
+                    gatewaySequenceNumber: azulResponse.sequenceNumber,
+                    gatewayInvoiceNumber: azulResponse.invoiceNumber,
+                    gatewayBatchNumber: azulResponse.batchNumber,
+                    gatewayMerchantId: azulResponse.merchantId,
+                    gatewayTerminalId: azulResponse.terminalId,
+                    gatewayMaskedPan: azulResponse.maskedPan,
+                    gatewayCardBrand: azulResponse.cardBrand,
+                    gatewayEntryMode: azulResponse.entryMode,
+                    gatewayReceiptMerchant: azulResponse.receiptMerchant,
+                    gatewayReceiptClient: azulResponse.receiptClient,
+                    gatewaySignatureData: azulResponse.signatureData,
+                    gatewayRequireSignature: azulResponse.requireSignature,
+                    gatewayRawResponse: azulResponse.rawResponse,
+                  };
+                }
+
                 // Create Transaction
                 const txn = await transactionService.createTransaction({
                   documentType: 'TICKET',
@@ -5469,9 +5588,16 @@ const AppContent: React.FC = () => {
                   items: cart,
                   total: total,
                   payments: [{
-                    method: method,
+                    id: `PAY-${Date.now()}`,
+                    method: method.type,
+                    methodId: method.id,
+                    methodLabel: method.label,
+                    methodIcon: method.iconName,
                     amount: total,
-                    currency: config.currencySymbol
+                    timestamp: new Date(),
+                    currencyCode: baseCurrency,
+                    currency: config.currencySymbol,
+                    ...gatewayPaymentFields,
                   }],
                   userId: currentUser.id,
                   userName: currentUser.name,
@@ -5486,15 +5612,22 @@ const AppContent: React.FC = () => {
 
                 // Save and Sync
                 await handleTransactionComplete(txn);
-
-                // Clear cart and return
-                clearSecurityState();
-                setCart([]);
-                handleViewChange('KIOSK_WELCOME');
+                return txn;
               } catch (error) {
                 console.error("Error creating kiosk transaction:", error);
-                alert("Error al guardar la transacción. Por favor intente de nuevo.");
+                throw new Error("Error al guardar la transacción. Por favor intente de nuevo.");
               }
+            }}
+            onPrintReceipt={async (transaction) => {
+              if (!config) {
+                throw new Error('No hay configuración disponible para imprimir.');
+              }
+
+              const printed = await printTicket(transaction, config);
+              if (!printed) {
+                throw new Error('La impresora no respondió. Verifica el módulo de hardware.');
+              }
+              return printed;
             }}
             onCancel={() => {
               clearSecurityState();

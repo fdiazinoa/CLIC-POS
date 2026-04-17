@@ -5,6 +5,8 @@ import {
     Supplier,
     Transaction
 } from '../types';
+import { Capacitor } from '@capacitor/core';
+import { Directory, Filesystem } from '@capacitor/filesystem';
 import * as XLSX from 'xlsx';
 
 type ExcelCellType = 'String' | 'Number';
@@ -106,6 +108,7 @@ export interface FiscalExcelOptions {
 export interface FiscalExcelResult {
     fileName: string;
     period: string;
+    locationDescription?: string;
     counts: {
         form607: number;
         form606: number;
@@ -954,6 +957,15 @@ const downloadWorkbookXml = (workbookXml: string, fileName: string): void => {
     URL.revokeObjectURL(url);
 };
 
+const encodeBase64 = (content: string): string => {
+    const bytes = new TextEncoder().encode(content);
+    let binary = '';
+    bytes.forEach((byte) => {
+        binary += String.fromCharCode(byte);
+    });
+    return btoa(binary);
+};
+
 const ensureXlsxFileName = (fileName: string): string => {
     if (fileName.toLowerCase().endsWith('.xlsx')) return fileName;
     return `${fileName.replace(/\.(xls|csv)$/i, '')}.xlsx`;
@@ -998,6 +1010,48 @@ const downloadWorkbookXlsx = (sheets: ExcelSheet[], fileName: string): void => {
         bookType: 'xlsx',
         compression: true
     });
+};
+
+const buildWorkbook = (sheets: ExcelSheet[]): XLSX.WorkBook => {
+    const workbook = XLSX.utils.book_new();
+    sheets.forEach(sheet => {
+        const ws = buildWorksheetFromSheet(sheet);
+        XLSX.utils.book_append_sheet(workbook, ws, sheet.name);
+    });
+    return workbook;
+};
+
+const saveWorkbookToAndroidDownloads = async (
+    workbook: XLSX.WorkBook,
+    fileName: string
+): Promise<{ fileName: string; locationDescription: string }> => {
+    const permissionStatus = await Filesystem.checkPermissions();
+    if (permissionStatus.publicStorage !== 'granted') {
+        const requested = await Filesystem.requestPermissions();
+        if (requested.publicStorage !== 'granted') {
+            throw new Error('La app no tiene permisos para guardar el archivo fiscal en el almacenamiento público.');
+        }
+    }
+
+    const safeFileName = ensureXlsxFileName(fileName);
+    const relativePath = `Download/${safeFileName}`;
+    const data = XLSX.write(workbook, {
+        bookType: 'xlsx',
+        type: 'base64',
+        compression: true,
+    });
+
+    await Filesystem.writeFile({
+        path: relativePath,
+        data,
+        directory: Directory.Documents,
+        recursive: true,
+    });
+
+    return {
+        fileName: safeFileName,
+        locationDescription: `Documents/Download/${safeFileName}`,
+    };
 };
 
 const to607DataRows = (rows: Form607Row[]): ExcelRow[] => rows.map(row => ({
@@ -1090,7 +1144,7 @@ const formatPreflightErrors = (errors: FiscalPreflightError[]): string => {
     return `Validacion fiscal fallida:\n${preview}${extra}`;
 };
 
-export const formatFiscalExcel = (options: FiscalExcelOptions): FiscalExcelResult => {
+export const formatFiscalExcel = async (options: FiscalExcelOptions): Promise<FiscalExcelResult> => {
     const period = derivePeriod(options.period);
     const warnings: string[] = [];
     const formatType = (options.formatType || 'ALL').toUpperCase() as '607' | '606' | '608' | 'ALL';
@@ -1242,20 +1296,44 @@ export const formatFiscalExcel = (options: FiscalExcelOptions): FiscalExcelResul
     const preferredFileName = ensureXlsxFileName(options.suggestedFileName || defaultFileName);
 
     let outputFileName = preferredFileName;
+    let locationDescription: string | undefined;
+    const workbook = buildWorkbook(sheets);
+
     try {
-        downloadWorkbookXlsx(sheets, preferredFileName);
+        if (Capacitor.getPlatform() === 'android') {
+            const saved = await saveWorkbookToAndroidDownloads(workbook, preferredFileName);
+            outputFileName = saved.fileName;
+            locationDescription = saved.locationDescription;
+        } else {
+            downloadWorkbookXlsx(sheets, preferredFileName);
+        }
     } catch (xlsxError) {
         console.error('Error generating native .xlsx, falling back to SpreadsheetML .xls:', xlsxError);
         const fallbackFileName = preferredFileName.replace(/\.xlsx$/i, '.xls');
         const workbookXml = buildWorkbookXml(sheets);
-        downloadWorkbookXml(workbookXml, fallbackFileName);
+
+        if (Capacitor.getPlatform() === 'android') {
+            const fallbackData = encodeBase64(workbookXml);
+            const relativePath = `Download/${fallbackFileName}`;
+            await Filesystem.writeFile({
+                path: relativePath,
+                data: fallbackData,
+                directory: Directory.Documents,
+                recursive: true,
+            });
+            locationDescription = `Documents/Download/${fallbackFileName}`;
+        } else {
+            downloadWorkbookXml(workbookXml, fallbackFileName);
+        }
+
         outputFileName = fallbackFileName;
-        warnings.push('No se pudo generar .xlsx nativo; se exporto .xls compatible.');
+        warnings.push('No se pudo generar .xlsx nativo; se exportó .xls compatible.');
     }
 
     return {
         fileName: outputFileName,
         period,
+        locationDescription,
         counts: {
             form607: rows607.length,
             form606: rows606.length,

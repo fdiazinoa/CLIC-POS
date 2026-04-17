@@ -6,22 +6,45 @@
  */
 
 import React from 'react';
-import { ShoppingCart, ArrowRight } from 'lucide-react';
+import { ShoppingCart, Settings } from 'lucide-react';
 
 interface KioskWelcomeProps {
     onStartShopping: () => void;
     storeName?: string;
+    onAdminAccess?: () => void;
 }
 
 const KioskWelcome: React.FC<KioskWelcomeProps> = ({
     onStartShopping,
-    storeName = 'CLIC POS'
+    storeName = 'CLIC POS',
+    onAdminAccess
 }) => {
+    const normalizedStoreName = storeName
+        .replace(/\bDEMO(S)?\b/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/^CLIC POS$/i, 'CLIC-POS') || 'CLIC-POS';
+
     return (
         <div
             onClick={onStartShopping}
             className="w-full h-full relative overflow-hidden cursor-pointer"
         >
+            {onAdminAccess && (
+                <button
+                    type="button"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onAdminAccess();
+                    }}
+                    className="absolute top-4 right-4 z-20 w-12 h-12 rounded-full bg-black/5 border border-white/10 flex items-center justify-center text-white/10 hover:text-white/35 hover:bg-black/20 active:bg-black/30 transition-all"
+                    title="Acceso administrativo"
+                    aria-label="Acceso administrativo"
+                >
+                    <Settings size={16} />
+                </button>
+            )}
+
             {/* Video Background */}
             <video
                 autoPlay
@@ -67,7 +90,7 @@ const KioskWelcome: React.FC<KioskWelcomeProps> = ({
                 {/* Store Info */}
                 <div className="absolute bottom-12 text-center">
                     <p className="text-xl font-medium text-white/80 tracking-widest uppercase">
-                        {storeName}
+                        {normalizedStoreName}
                     </p>
                 </div>
             </div>
