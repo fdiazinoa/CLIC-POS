@@ -3193,60 +3193,57 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
             </div >
 
+            {/* DESKTOP: marca + mesa/comensales bajo el logo; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
             <div className={`hidden md:flex px-5 pt-3 pb-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-4 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
-               <div className="flex items-center justify-between gap-4">
-                  <div className="shrink-0 pt-1">
+               <div className="flex w-full items-center justify-between gap-4">
+                  <div className="flex min-w-0 shrink-0 flex-col gap-2 self-start pt-1">
                      {renderTicketBrand(false)}
-                  </div>
-
-                  {activeTable && (
-                     <div className="flex flex-col items-end animate-in fade-in slide-in-from-right-4 duration-300">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1 text-right">Mesa Activa</span>
-                        <div className="flex items-center gap-2">
-                           <Layout size={18} className="text-blue-600" />
-                           <span className="text-2xl font-black text-slate-900 tracking-tighter">
-                              {activeTable.nombre || activeTable.name}
-                           </span>
-                        </div>
-                        
-                        {/* Interactive Guest Selector */}
-                        <div className="flex items-center gap-1.5 mt-2 bg-white border border-slate-200 rounded-full px-2.5 py-1 shadow-sm hover:shadow-md transition-all">
-                           <button 
-                              onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
-                              className="w-5 h-5 flex items-center justify-center rounded-full bg-slate-50 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors"
-                              title="Reducir comensales"
-                           >
-                              <Minus size={10} strokeWidth={3} />
-                           </button>
-                           
-                           <div className="flex items-center gap-1 px-1">
-                              <Users size={12} className="text-blue-500" />
-                              <span className="text-xs font-black text-slate-700 min-w-[1rem] text-center">
-                                 {activeTable.guests || 1}
+                     {activeTable && (
+                        <div className="flex max-w-[min(100%,20rem)] flex-col items-start animate-in fade-in slide-in-from-top-2 duration-300">
+                           <span className="mb-1 text-[10px] font-black uppercase leading-none tracking-widest text-slate-400">Mesa Activa</span>
+                           <div className="flex items-center gap-2">
+                              <Layout size={18} className="text-blue-600" />
+                              <span className="text-2xl font-black tracking-tighter text-slate-900">
+                                 {activeTable.nombre || activeTable.name}
                               </span>
                            </div>
 
-                           <button 
-                              onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
-                              className="w-5 h-5 flex items-center justify-center rounded-full bg-slate-50 text-slate-400 hover:bg-blue-50 hover:text-blue-500 transition-colors"
-                              title="Aumentar comensales"
-                           >
-                              <Plus size={10} strokeWidth={3} />
-                           </button>
-                        </div>
+                           <div className="mt-2 flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 shadow-sm transition-all hover:shadow-md">
+                              <button
+                                 onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
+                                 className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                                 title="Reducir comensales"
+                              >
+                                 <Minus size={10} strokeWidth={3} />
+                              </button>
 
-                        {shouldApplyServiceCharge && (
-                           <div className="flex items-center gap-1 mt-2.5 px-2 py-1 bg-blue-50 text-blue-600 rounded-lg text-[9px] font-black uppercase tracking-tighter border border-blue-100/50 animate-in fade-in slide-in-from-top-1">
-                              <Percent size={10} className="text-blue-500" />
-                              <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
+                              <div className="flex items-center gap-1 px-1">
+                                 <Users size={12} className="text-blue-500" />
+                                 <span className="min-w-[1rem] text-center text-xs font-black text-slate-700">{activeTable.guests || 1}</span>
+                              </div>
+
+                              <button
+                                 onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
+                                 className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-500"
+                                 title="Aumentar comensales"
+                              >
+                                 <Plus size={10} strokeWidth={3} />
+                              </button>
                            </div>
-                        )}
-                     </div>
-                  )}
-               </div>
+
+                           {shouldApplyServiceCharge && (
+                              <div className="mt-2.5 flex items-center gap-1 rounded-lg border border-blue-100/50 bg-blue-50 px-2 py-1 text-[9px] font-black uppercase tracking-tighter text-blue-600 animate-in fade-in slide-in-from-top-1">
+                                 <Percent size={10} className="text-blue-500" />
+                                 <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
+                              </div>
+                           )}
+                        </div>
+                     )}
+                  </div>
+
                   {/* RETAIL MODE SEARCH BAR */}
                   {isRetailMode && (
-                     <div className="flex-1 max-w-xl relative group">
+                     <div className="relative min-w-0 max-w-xl flex-1 group">
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                         <input
                            type="text"
@@ -3337,7 +3334,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-                  <div className={`flex items-center shrink-0 w-full ${isRetailMode ? 'max-w-[180px] justify-end gap-2 ml-auto' : 'max-w-[180px] justify-end ml-auto gap-2'}`}>
+                  <div className="ml-auto flex max-w-[180px] shrink-0 items-center justify-end gap-2">
                      <button
                         onClick={() => setRightSidebarTab('CART')}
                         aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
@@ -3384,7 +3381,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </span>
                      </button>
                   </div>
-               
+               </div>
 
                {
                   selectedCustomer ? (
