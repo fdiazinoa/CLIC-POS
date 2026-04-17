@@ -86,6 +86,11 @@ export interface NativePrinterBridge {
 
   getDeviceProfile?: () => Promise<{ profile?: string; integratedPrinter?: boolean }> | { profile?: string; integratedPrinter?: boolean };
   getDeviceInfo?: () => Promise<{ profile?: string; integratedPrinter?: boolean }> | { profile?: string; integratedPrinter?: boolean };
+
+  /** Enumeración de lectores biométricos USB/red (Android nativo). */
+  discoverFingerprintReaders?: (payload?: { connection?: ConnectionType }) => Promise<unknown>;
+  scanFingerprintReaders?: (payload?: { connection?: ConnectionType }) => Promise<unknown>;
+  testFingerprintReader?: (payload?: { address?: string; id?: string; connection?: string }) => Promise<unknown>;
 }
 
 export interface NativeBridgeContractStatus {

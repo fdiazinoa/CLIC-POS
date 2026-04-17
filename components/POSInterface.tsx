@@ -69,12 +69,7 @@ import VirtualKeyboard from './VirtualKeyboard';
 import SafetyGateModal from './SafetyGateModal';
 import { printReservation } from '../utils/printer';
 import MobileCartButton from './MobileCartButton';
-import {
-   calculateLineFiscalValuesForTransaction,
-   calculateTaxBreakdownFromItems,
-   formatTaxLineLabel,
-   resolveEffectiveTaxIds
-} from '../utils/fiscalBreakdown';
+import { calculateTaxBreakdownFromItems, formatTaxLineLabel, resolveEffectiveTaxIds } from '../utils/fiscalBreakdown';
 import { formatCurrency } from '../utils/format';
 import { persistStandaloneRefundTransaction, persistStandaloneSaleHistory } from '../services/localRefundPersistence';
 import { resolveCustomerImageSrc } from '../utils/entityImage';
@@ -494,18 +489,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
                console.log(`✅ Loaded ${ticket.items.length} items from active table.`);
             } else {
-               console.warn(`⚠️ Ticket ${activeTable.currentOrderId} not found in parked tickets. Falling back to empty.`);
-               // Ideally trigger a fetch here if missing?
-               // For now, allow manual recovery logic or leave as is to avoid overwriting with empty
-            }
-         } else {
-            // Free table opened directly? Should be empty.
-            // Only clear if cart has items to avoid unnecessary updates
-            if (cart.length > 0) {
-               console.log('🧹 Clearing cart for new table.');
+               // Nunca dejar el carrito de la mesa anterior: si el ticket aún no está en memoria, vaciar hasta que llegue el sync.
+               console.warn(`⚠️ Ticket ${activeTable.currentOrderId} not found in parked tickets. Clearing cart to avoid inheriting another table.`);
                onUpdateCart([]);
                onSelectCustomer(null);
             }
+         } else {
+            // Mesa sin orden activa: siempre carrito y cliente limpios (evita heredar la mesa previa).
+            onUpdateCart([]);
+            onSelectCustomer(null);
          }
       }
    }, [activeTable, parkedTickets]); // Re-run if table changes or tickets sync
@@ -662,13 +654,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [globalDiscount, setGlobalDiscount] = useState<{ type: 'PERCENT' | 'FIXED', value: number }>({ type: 'PERCENT', value: 0 });
 
    useEffect(() => {
-      if (activeTable?.currentOrderId && cart.length === 0) {
-         const ord = (transactions || []).find(t => t.id === activeTable.currentOrderId);
-         if (ord && ord.items) {
-            onUpdateCart(ord.items);
-         }
+      if (!activeTable?.currentOrderId || cart.length > 0) return;
+      const parked = parkedTickets.find(t => t.id === activeTable.currentOrderId);
+      if (parked?.items?.length) {
+         onUpdateCart(parked.items);
+         return;
       }
-   }, [activeTable, transactions, onUpdateCart, cart.length]);
+      const ord = (transactions || []).find(t => t.id === activeTable.currentOrderId);
+      if (ord?.items?.length) {
+         onUpdateCart(ord.items);
+      }
+   }, [activeTable, parkedTickets, transactions, onUpdateCart, cart.length]);
 
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
    const [activeCartItemId, setActiveCartItemId] = useState<string | null>(null);
@@ -1144,10 +1140,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const finalPrice = priceOverride || getProductPrice(product);
-      const baseListPrice = typeof product.price === 'number' && Number.isFinite(product.price)
-         ? product.price
-         : finalPrice;
-      const hasTariffAdjustment = Math.abs(finalPrice - baseListPrice) > 0.01;
       const modifiersString = modifiers ? modifiers.sort().join('|') : '';
       const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
       const taxSignature = effectiveTaxIds.slice().sort().join('|');
@@ -1178,14 +1170,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             price: finalPrice,
             modifiers,
             appliedTaxIds: effectiveTaxIds,
-            originalPrice: hasTariffAdjustment ? baseListPrice : undefined,
-            discountAmount: hasTariffAdjustment && finalPrice < baseListPrice
-               ? Number((((baseListPrice - finalPrice) * quantity)).toFixed(2))
-               : undefined,
-            discountRate: hasTariffAdjustment && finalPrice < baseListPrice && baseListPrice > 0
-               ? Number((((baseListPrice - finalPrice) / baseListPrice)).toFixed(4))
-               : undefined,
-            adjustmentSource: hasTariffAdjustment ? ('TARIFF' as const) : undefined,
+            originalPrice: getProductPrice(product),
             trackingData
          };
          onUpdateCart(prev => [newItem, ...prev]);
@@ -1600,34 +1585,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const cartTotal = cartTotalWithoutTip + cartTip;
 
-   const attachExplicitFiscalAmounts = useCallback((items: CartItem[], documentDiscountAmount = 0): CartItem[] => {
-      if (!Array.isArray(items) || items.length === 0) {
-         return [];
-      }
-
-      const lineAmounts = calculateLineFiscalValuesForTransaction(items, config, {
-         discountAmount: documentDiscountAmount,
-         isTaxIncluded,
-         terminalConfig: activeTerminalConfig,
-         fallbackTaxRate: config.taxRate || 0,
-      });
-
-      return items.map((item, index) => {
-         const lineAmount = lineAmounts[index];
-         if (!lineAmount) {
-            return item;
-         }
-
-         return {
-            ...item,
-            netAmount: lineAmount.netAmount,
-            taxAmount: lineAmount.taxAmount,
-            totalAmount: lineAmount.totalAmount,
-            taxRate: lineAmount.taxRate,
-         };
-      });
-   }, [activeTerminalConfig, config, isTaxIncluded]);
-
    // Alias for compatibility if needed, though netSubtotal is what we usually display as "Subtotal"
    const cartSubtotal = grossLineTotal; // This represents the sum of list prices
    const baseCurrency = (config.currencies || []).find(c => c.isBase) || (config.currencies || [])[0];
@@ -1844,31 +1801,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          // Update Check (Price Override / Discount)
          const originalItem = (cart || []).find(i => i.cartId === updatedItem.cartId);
 
-         const isManualCommercialChange =
-            updatedItem.adjustmentSource === 'MANUAL_DISCOUNT'
-            || updatedItem.adjustmentSource === 'MANUAL_PRICE_OVERRIDE';
-
          // Stock Check (Quantity Increase)
          if (originalItem && updatedItem.quantity > originalItem.quantity) {
             const diff = updatedItem.quantity - originalItem.quantity;
             if (!canAddItemToCart(updatedItem, diff)) return;
          }
-         const mergedItem = originalItem && !isManualCommercialChange
-            ? {
-               ...originalItem,
-               quantity: updatedItem.quantity,
-               note: updatedItem.note,
-               salespersonId: updatedItem.salespersonId,
-               modifiers: updatedItem.modifiers,
-               trackingData: updatedItem.trackingData,
-               trackingId: updatedItem.trackingId,
-               trackingCode: updatedItem.trackingCode,
-               variantInfo: updatedItem.variantInfo,
-               variantSku: updatedItem.variantSku,
-               dispatched: updatedItem.dispatched
-            }
-            : updatedItem;
-         newCart = cart.map(item => item.cartId === updatedItem.cartId ? mergedItem : item);
+         newCart = cart.map(item => item.cartId === updatedItem.cartId ? updatedItem : item);
       }
 
       onUpdateCart(newCart);
@@ -2039,12 +1977,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             if (hasReturns && hasSales) {
                const saleItems = processedCart.filter(i => i.quantity > 0);
                const returnItems = processedCart.filter(i => i.quantity < 0);
-               const saleItemsWithFiscalAmounts = attachExplicitFiscalAmounts(saleItems, discountAmount);
 
                // Calculate totals for each part
                const saleTotal = saleItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
                const normalizedSplitRefundItems = returnItems.map(item => ({ ...item, quantity: Math.abs(item.quantity) }));
-               const refundItemsWithFiscalAmounts = attachExplicitFiscalAmounts(normalizedSplitRefundItems);
                const returnTotal = normalizedSplitRefundItems.reduce((acc, i) => acc + (i.price * i.quantity), 0);
                const saleTaxBreakdown = calculateTaxBreakdownFromItems(saleItems, config, {
                   isTaxIncluded,
@@ -2081,7 +2017,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      saleTransaction: {
                         documentType: 'TICKET' as const,
                         seriesId: assignedSequenceId,
-                        items: saleItemsWithFiscalAmounts,
+                        items: saleItems,
                         total: saleTotal + (voluntaryTip || 0),
                         serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
                         voluntaryTipAmount: voluntaryTip,
@@ -2108,7 +2044,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      refundTransaction: {
                         documentType: 'REFUND' as const,
                         seriesId: refundSeriesId,
-                        items: refundItemsWithFiscalAmounts,
+                        items: normalizedSplitRefundItems,
                         total: returnTotal,
                         userId: currentUser.id,
                         userName: currentUser.name,
@@ -2147,7 +2083,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      await persistStandaloneRefundTransaction(
                         {
                            ...result.refund,
-                           items: refundItemsWithFiscalAmounts,
+                           items: normalizedSplitRefundItems,
                            total: returnTotal,
                            ncf: refundNcf,
                            ncfType: refundNcf ? 'B04' : undefined,
@@ -2198,9 +2134,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const walletDepositAmount = payments.filter(p => p.method === 'ADVANCE').reduce((acc, p) => acc + p.amount, 0);
                const walletPaymentAmount = payments.filter(p => p.method === 'WALLET').reduce((acc, p) => acc + p.amount, 0);
                const refundDocumentTotal = normalizedRefundItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-               const documentItems = isRefundOnly
-                  ? attachExplicitFiscalAmounts(normalizedRefundItems)
-                  : attachExplicitFiscalAmounts(processedCart, discountAmount);
+               const documentItems = isRefundOnly ? normalizedRefundItems : processedCart;
                const documentTotal = (isRefundOnly ? refundDocumentTotal : cartTotal) + (voluntaryTip || 0);
                const transactionSettlement = buildTransactionSettlementFields(paymentsForTransaction, documentTotal, baseCurrency.code);
 
@@ -2258,7 +2192,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   await persistStandaloneRefundTransaction(
                      {
                         ...finalTxn,
-                        items: documentItems,
+                        items: normalizedRefundItems,
                         total: refundDocumentTotal,
                         status: 'REFUNDED',
                         ncf: finalNcf,
@@ -3259,181 +3193,57 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
             </div >
 
+            {/* DESKTOP: marca + mesa/comensales bajo el logo; retail: busqueda al centro; botones carrito/acciones alineados a la derecha (como APK 1.0.300) */}
             <div className={`hidden md:flex px-5 pt-3 pb-5 border-b border-gray-100 bg-gray-50/50 flex-col gap-4 shrink-0 flex-none ${activeTable ? 'border-l-4 border-l-blue-500' : ''}`} >
-               {isRestaurantMode ? (
-                  <>
-                     <div className="flex items-start justify-between gap-4">
-                        <div className="flex flex-col items-start gap-3">
-                           <div className="shrink-0 pt-1">
-                              {renderTicketBrand(false)}
-                           </div>
-
-                           {activeTable && (
-                              <div className="flex flex-col items-start animate-in fade-in slide-in-from-right-4 duration-300">
-                                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1 text-left">Mesa Activa</span>
-                                 <div className="flex items-center gap-2">
-                                    <Layout size={18} className="text-blue-600" />
-                                    <span className="text-2xl font-black text-slate-900 tracking-tighter">
-                                       {activeTable.nombre || activeTable.name}
-                                    </span>
-                                 </div>
-
-                                 <div className="flex items-center gap-1.5 mt-2 bg-white border border-slate-200 rounded-full px-2.5 py-1 shadow-sm hover:shadow-md transition-all">
-                                    <button
-                                       onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
-                                       className="w-5 h-5 flex items-center justify-center rounded-full bg-slate-50 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors"
-                                       title="Reducir comensales"
-                                    >
-                                       <Minus size={10} strokeWidth={3} />
-                                    </button>
-
-                                    <div className="flex items-center gap-1 px-1">
-                                       <Users size={12} className="text-blue-500" />
-                                       <span className="text-xs font-black text-slate-700 min-w-[1rem] text-center">
-                                          {activeTable.guests || 1}
-                                       </span>
-                                    </div>
-
-                                    <button
-                                       onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
-                                       className="w-5 h-5 flex items-center justify-center rounded-full bg-slate-50 text-slate-400 hover:bg-blue-50 hover:text-blue-500 transition-colors"
-                                       title="Aumentar comensales"
-                                    >
-                                       <Plus size={10} strokeWidth={3} />
-                                    </button>
-                                 </div>
-
-                                 {shouldApplyServiceCharge && (
-                                    <div className="flex items-center gap-1 mt-2.5 px-2 py-1 bg-blue-50 text-blue-600 rounded-lg text-[9px] font-black uppercase tracking-tighter border border-blue-100/50 animate-in fade-in slide-in-from-top-1">
-                                       <Percent size={10} className="text-blue-500" />
-                                       <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
-                                    </div>
-                                 )}
-                              </div>
-                           )}
-                        </div>
-
-                        <div className="flex items-center shrink-0 justify-end gap-2 pt-1">
-                           <button
-                              onClick={() => setRightSidebarTab('CART')}
-                              aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
-                              title={`Carrito${cartQuantity > 0 ? ` (${cartQuantity})` : ''}`}
-                              className={`group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
-                                 rightSidebarTab === 'CART'
-                                    ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_14px_30px_rgba(248,113,113,0.18)]'
-                                    : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50/70 hover:text-red-600'
-                              }`}
-                           >
-                              <span
-                                 className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
-                                    rightSidebarTab === 'CART'
-                                       ? 'border-red-200/80 bg-white/90 text-red-600 shadow-sm'
-                                       : 'border-red-100 bg-red-50 text-red-500 group-hover:border-red-200 group-hover:bg-white group-hover:text-red-600'
-                                 }`}
-                              >
-                                 <ShoppingBag size={18} strokeWidth={2.3} />
-                              </span>
-                              {cartQuantity > 0 && (
-                                 <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-7 items-center justify-center rounded-full border border-white bg-white px-2 py-1 text-[10px] font-black leading-none text-red-700 shadow-md">
-                                    {cartQuantity}
-                                 </span>
-                              )}
-                           </button>
-                           <button
-                              onClick={() => setRightSidebarTab('ACTIONS')}
-                              aria-label="Abrir acciones rápidas"
-                              title="Acciones"
-                              className={`group flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
-                                 rightSidebarTab === 'ACTIONS'
-                                    ? 'border-blue-200 bg-gradient-to-br from-blue-50 via-sky-50 to-blue-100 text-blue-700 shadow-[0_14px_30px_rgba(59,130,246,0.18)]'
-                                    : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50/70 hover:text-blue-600'
-                              }`}
-                           >
-                              <span
-                                 className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
-                                    rightSidebarTab === 'ACTIONS'
-                                       ? 'border-blue-200/80 bg-white/90 text-blue-600 shadow-sm'
-                                       : 'border-blue-100 bg-blue-50 text-blue-500 group-hover:border-blue-200 group-hover:bg-white group-hover:text-blue-600'
-                                 }`}
-                              >
-                                 <Layers size={18} strokeWidth={2.3} />
-                              </span>
-                           </button>
-                        </div>
-                     </div>
-                  </>
-               ) : (
-                  <div className="flex flex-col gap-3">
-                     <div className="flex items-start justify-between gap-4">
-                        <div className="shrink-0 pt-1">
-                           {renderTicketBrand(false)}
-                        </div>
-
-                        <div className="flex items-center shrink-0 justify-end gap-2 pt-1">
-                           <button
-                              onClick={() => setRightSidebarTab('CART')}
-                              aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
-                              title={`Carrito${cartQuantity > 0 ? ` (${cartQuantity})` : ''}`}
-                              className={`group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
-                                 rightSidebarTab === 'CART'
-                                    ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_14px_30px_rgba(248,113,113,0.18)]'
-                                    : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50/70 hover:text-red-600'
-                              }`}
-                           >
-                              <span
-                                 className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
-                                    rightSidebarTab === 'CART'
-                                       ? 'border-red-200/80 bg-white/90 text-red-600 shadow-sm'
-                                       : 'border-red-100 bg-red-50 text-red-500 group-hover:border-red-200 group-hover:bg-white group-hover:text-red-600'
-                                 }`}
-                              >
-                                 <ShoppingBag size={18} strokeWidth={2.3} />
-                              </span>
-                              {cartQuantity > 0 && (
-                                 <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-7 items-center justify-center rounded-full border border-white bg-white px-2 py-1 text-[10px] font-black leading-none text-red-700 shadow-md">
-                                    {cartQuantity}
-                                 </span>
-                              )}
-                           </button>
-                           <button
-                              onClick={() => setRightSidebarTab('ACTIONS')}
-                              aria-label="Abrir acciones rápidas"
-                              title="Acciones"
-                              className={`group flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
-                                 rightSidebarTab === 'ACTIONS'
-                                    ? 'border-blue-200 bg-gradient-to-br from-blue-50 via-sky-50 to-blue-100 text-blue-700 shadow-[0_14px_30px_rgba(59,130,246,0.18)]'
-                                    : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50/70 hover:text-blue-600'
-                              }`}
-                           >
-                              <span
-                                 className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
-                                    rightSidebarTab === 'ACTIONS'
-                                       ? 'border-blue-200/80 bg-white/90 text-blue-600 shadow-sm'
-                                       : 'border-blue-100 bg-blue-50 text-blue-500 group-hover:border-blue-200 group-hover:bg-white group-hover:text-blue-600'
-                                 }`}
-                              >
-                                 <Layers size={18} strokeWidth={2.3} />
-                              </span>
-                           </button>
-                        </div>
-                     </div>
-
+               <div className="flex w-full items-center justify-between gap-4">
+                  <div className="flex min-w-0 shrink-0 flex-col gap-2 self-start pt-1">
+                     {renderTicketBrand(false)}
                      {activeTable && (
-                        <div className="flex flex-col items-start animate-in fade-in slide-in-from-right-4 duration-300">
-                           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1 text-left">Mesa Activa</span>
+                        <div className="flex max-w-[min(100%,20rem)] flex-col items-start animate-in fade-in slide-in-from-top-2 duration-300">
+                           <span className="mb-1 text-[10px] font-black uppercase leading-none tracking-widest text-slate-400">Mesa Activa</span>
                            <div className="flex items-center gap-2">
                               <Layout size={18} className="text-blue-600" />
-                              <span className="text-2xl font-black text-slate-900 tracking-tighter">
+                              <span className="text-2xl font-black tracking-tighter text-slate-900">
                                  {activeTable.nombre || activeTable.name}
                               </span>
                            </div>
+
+                           <div className="mt-2 flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 shadow-sm transition-all hover:shadow-md">
+                              <button
+                                 onClick={() => onUpdateActiveTableGuests?.(Math.max(1, (activeTable.guests || 1) - 1))}
+                                 className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                                 title="Reducir comensales"
+                              >
+                                 <Minus size={10} strokeWidth={3} />
+                              </button>
+
+                              <div className="flex items-center gap-1 px-1">
+                                 <Users size={12} className="text-blue-500" />
+                                 <span className="min-w-[1rem] text-center text-xs font-black text-slate-700">{activeTable.guests || 1}</span>
+                              </div>
+
+                              <button
+                                 onClick={() => onUpdateActiveTableGuests?.((activeTable.guests || 1) + 1)}
+                                 className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-500"
+                                 title="Aumentar comensales"
+                              >
+                                 <Plus size={10} strokeWidth={3} />
+                              </button>
+                           </div>
+
+                           {shouldApplyServiceCharge && (
+                              <div className="mt-2.5 flex items-center gap-1 rounded-lg border border-blue-100/50 bg-blue-50 px-2 py-1 text-[9px] font-black uppercase tracking-tighter text-blue-600 animate-in fade-in slide-in-from-top-1">
+                                 <Percent size={10} className="text-blue-500" />
+                                 <span>Propina Sugerida {serviceCharge?.percentage}% Activa</span>
+                              </div>
+                           )}
                         </div>
                      )}
                   </div>
-               )}
+
                   {/* RETAIL MODE SEARCH BAR */}
                   {isRetailMode && (
-                     <div className="flex-1 max-w-xl relative group">
+                     <div className="relative min-w-0 max-w-xl flex-1 group">
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                         <input
                            type="text"
@@ -3524,9 +3334,58 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      </div>
                   )}
 
-               {!isRestaurantMode && (
+                  <div className="ml-auto flex max-w-[180px] shrink-0 items-center justify-end gap-2">
+                     <button
+                        onClick={() => setRightSidebarTab('CART')}
+                        aria-label={`Abrir carrito${cartQuantity > 0 ? ` con ${cartQuantity} artículos` : ''}`}
+                        title={`Carrito${cartQuantity > 0 ? ` (${cartQuantity})` : ''}`}
+                        className={`group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
+                           rightSidebarTab === 'CART'
+                              ? 'border-red-200 bg-gradient-to-br from-red-50 via-rose-50 to-red-100 text-red-700 shadow-[0_14px_30px_rgba(248,113,113,0.18)]'
+                              : 'border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:bg-red-50/70 hover:text-red-600'
+                        }`}
+                     >
+                        <span
+                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                              rightSidebarTab === 'CART'
+                                 ? 'border-red-200/80 bg-white/90 text-red-600 shadow-sm'
+                                 : 'border-red-100 bg-red-50 text-red-500 group-hover:border-red-200 group-hover:bg-white group-hover:text-red-600'
+                           }`}
+                        >
+                           <ShoppingBag size={18} strokeWidth={2.3} />
+                        </span>
+                        {cartQuantity > 0 && (
+                           <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-7 items-center justify-center rounded-full border border-white bg-white px-2 py-1 text-[10px] font-black leading-none text-red-700 shadow-md">
+                              {cartQuantity}
+                           </span>
+                        )}
+                     </button>
+                     <button
+                        onClick={() => setRightSidebarTab('ACTIONS')}
+                        aria-label="Abrir acciones rápidas"
+                        title="Acciones"
+                        className={`group flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.15rem] border transition-all duration-200 ${
+                           rightSidebarTab === 'ACTIONS'
+                              ? 'border-blue-200 bg-gradient-to-br from-blue-50 via-sky-50 to-blue-100 text-blue-700 shadow-[0_14px_30px_rgba(59,130,246,0.18)]'
+                              : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:bg-blue-50/70 hover:text-blue-600'
+                        }`}
+                     >
+                        <span
+                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-all ${
+                              rightSidebarTab === 'ACTIONS'
+                                 ? 'border-blue-200/80 bg-white/90 text-blue-600 shadow-sm'
+                                 : 'border-blue-100 bg-blue-50 text-blue-500 group-hover:border-blue-200 group-hover:bg-white group-hover:text-blue-600'
+                           }`}
+                        >
+                           <Layers size={18} strokeWidth={2.3} />
+                        </span>
+                     </button>
+                  </div>
+               </div>
+
+               {
                   selectedCustomer ? (
-                     <div className="flex items-center gap-3 mb-3 p-3 bg-blue-50/50 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
+                     <div className="flex items-center gap-3 mb-4 p-3 bg-blue-50/50 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
                         {resolveCustomerImageSrc(selectedCustomer) ? (
                            <img
                               src={resolveCustomerImageSrc(selectedCustomer)}
@@ -3575,81 +3434,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </div>
                      </div>
                   ) : (
-                     <button
-                        onClick={onOpenCustomers}
-                        className="w-full flex items-center justify-between gap-3 px-4 py-2.5 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 hover:border-blue-200 group"
-                     >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                           <UserPlus size={18} className="shrink-0" />
-                           <span className="text-xs font-bold uppercase tracking-wide">Asignar Cliente</span>
-                        </div>
-                        <ChevronRight size={16} className="shrink-0" />
-                     </button>
+                     <button onClick={onOpenCustomers} className="w-full flex items-center justify-between p-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 group"><div className="flex items-center gap-2"><UserPlus size={18} /><span className="text-xs font-bold uppercase">Asignar Cliente</span></div><ChevronRight size={16} /></button>
                   )
-               )}
-
-               {isRestaurantMode && (
-                  selectedCustomer ? (
-                     <div className="flex items-center gap-3 -mt-1 mb-2 p-3 bg-blue-50/50 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
-                        {resolveCustomerImageSrc(selectedCustomer) ? (
-                           <img
-                              src={resolveCustomerImageSrc(selectedCustomer)}
-                              alt={selectedCustomer.name}
-                              className="w-10 h-10 rounded-full object-cover border border-blue-200 bg-white"
-                           />
-                        ) : (
-                           <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-black">
-                              {selectedCustomer.name.substring(0, 2).toUpperCase()}
-                           </div>
-                        )}
-                        <div className="flex-1 min-w-0">
-                           <div className="flex items-center gap-2">
-                              <p className="font-bold text-gray-800 truncate">{selectedCustomer.name}</p>
-                           </div>
-                           <div className="flex items-center gap-2 flex-wrap">
-                              {selectedCustomer.taxId && (
-                                 <span className="text-xs font-mono text-gray-500">{selectedCustomer.taxId}</span>
-                              )}
-                              {selectedCustomer.fiscalStatus === 'ACTIVO' && (
-                                 <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">FISCAL</span>
-                              )}
-                              {selectedCustomer.isTemporary && (
-                                 <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold">TEMP</span>
-                              )}
-                              {isDelinquent && (
-                                 <span className="text-[9px] bg-red-600 text-white px-1.5 py-0.5 rounded font-black animate-pulse shadow-lg shadow-red-200">
-                                    DEUDA VENCIDA / CRÉDITO BLOQUEADO
-                                 </span>
-                              )}
-                           </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                           <button
-                              onClick={openRecoverReservationForSelectedCustomer}
-                              title="Ver reservas activas del cliente"
-                              className="px-2.5 py-1.5 rounded-lg border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 transition-all flex items-center gap-1"
-                           >
-                              <QrCode size={14} />
-                              <span className="text-[10px] font-black uppercase">Res. {selectedCustomerActiveReservationsCount}</span>
-                           </button>
-                           <button onClick={() => onSelectCustomer(null)} className="p-2 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-lg transition-colors">
-                              <X size={16} />
-                           </button>
-                        </div>
-                     </div>
-                  ) : (
-                     <button
-                        onClick={onOpenCustomers}
-                        className="w-full -mt-1 mb-2 flex items-center justify-between gap-3 px-4 py-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 hover:border-blue-200 group"
-                     >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                           <UserPlus size={18} className="shrink-0" />
-                           <span className="text-xs font-bold uppercase tracking-wide">Asignar Cliente</span>
-                        </div>
-                        <ChevronRight size={16} className="shrink-0" />
-                     </button>
-                  )
-               )}
+               }
 
                <div className={`mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${fiscalStatus.hasNCF ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100 animate-pulse'}`}>
                   <Landmark size={12} />

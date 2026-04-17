@@ -116,6 +116,17 @@ export interface FingerprintReaderConfig {
   notes?: string;
 }
 
+/** Dispositivo USB/red detectado por el bridge nativo (misma familia que impresoras). */
+export interface FingerprintDiscoveredDevice {
+  id: string;
+  name: string;
+  connection: ConnectionType;
+  address: string;
+  vendorId?: number;
+  productId?: number;
+  status?: string;
+}
+
 // --- FISCAL NCF TYPES ---
 export type NCFType = 'B01' | 'B02' | 'B04' | 'B14' | 'B15';
 export type ElectronicNCFType = 'E31' | 'E32' | 'E34';

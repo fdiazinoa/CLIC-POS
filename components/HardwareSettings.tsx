@@ -9,7 +9,7 @@ import {
    Smartphone, Wallet, ShieldCheck, Database, HardDrive, Loader2, Wifi,
    Cpu, Keyboard, Activity, Layers, Activity as Wave, Barcode, Fingerprint
 } from 'lucide-react';
-import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech, PrinterDevice, ConnectionType, ScaleLabelConfig, FingerprintReaderConfig, FingerprintDriver } from '../types';
+import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech, PrinterDevice, ConnectionType, ScaleLabelConfig, FingerprintReaderConfig, FingerprintDriver, FingerprintDiscoveredDevice } from '../types';
 import { parseScaleBarcode } from '../utils/barcodeParser';
 import { nativePrintBridge } from '../services/printer/NativePrintBridge';
 import { biometricService } from '../services/BiometricAuthService';
@@ -118,6 +118,10 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    );
    const [biometricAvailable, setBiometricAvailable] = useState(false);
    const [biometricChecking, setBiometricChecking] = useState(true);
+   const [fpDiscovered, setFpDiscovered] = useState<FingerprintDiscoveredDevice[]>([]);
+   const [fpScanning, setFpScanning] = useState(false);
+   const [fpNotice, setFpNotice] = useState<string | null>(null);
+   const [fpTestFeedback, setFpTestFeedback] = useState<{ ok: boolean; message: string } | null>(null);
    const [previewMode, setPreviewMode] = useState<'IDLE' | 'CHECKOUT'>('CHECKOUT');
    const [currentPreviewAdIndex, setCurrentPreviewAdIndex] = useState(0);
 
@@ -166,6 +170,51 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       void checkBiometricAvailability();
       return () => { mounted = false; };
    }, []);
+
+   const handleDiscoverFingerprintReaders = async () => {
+      setFpScanning(true);
+      setFpNotice(null);
+      setFpTestFeedback(null);
+      try {
+         if (!nativePrintBridge.supportsFingerprintDiscovery()) {
+            setFpNotice('La detección automática de lectores requiere la app Android CLIC POS con el bridge nativo actualizado.');
+            setFpDiscovered([]);
+            return;
+         }
+         const found = await nativePrintBridge.discoverFingerprintReaders('USB');
+         setFpDiscovered(found);
+         if (found.length === 0) {
+            setFpNotice('No se encontraron lectores USB candidatos (HID/vendor típico). Revise cable u OTG, o use el puerto manual.');
+         } else {
+            setFpNotice(`${found.length} dispositivo(s) encontrado(s). Pulse «Usar» para cargar el puerto o «Probar» para validar permiso USB.`);
+         }
+      } catch (error) {
+         setFpNotice(error instanceof Error ? error.message : 'Error al buscar lectores USB.');
+         setFpDiscovered([]);
+      } finally {
+         setFpScanning(false);
+      }
+   };
+
+   const handleTestFingerprintDevice = async (device?: FingerprintDiscoveredDevice) => {
+      setFpTestFeedback(null);
+      const addr = device?.address?.trim() || fingerprintReader.port?.trim();
+      const id = device?.id?.trim() || '';
+      if (!addr && !id) {
+         setFpTestFeedback({ ok: false, message: 'Indique un puerto, seleccione un dispositivo detectado o use «Usar» primero.' });
+         return;
+      }
+      const status = await nativePrintBridge.testFingerprintReader({
+         address: addr || undefined,
+         id: id || undefined,
+         connection: 'USB'
+      });
+      const ok = status === 'ONLINE';
+      setFpTestFeedback({
+         ok,
+         message: ok ? 'El sistema puede abrir el lector USB (permiso concedido).' : 'No se pudo abrir el lector. Revise permiso USB o cable.'
+      });
+   };
 
    useEffect(() => {
       let cancelled = false;
@@ -358,6 +407,93 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                         />
                         <div className="w-14 h-7 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-blue-600"></div>
                      </label>
+                  </div>
+
+                  <div className="rounded-2xl border border-cyan-200 bg-gradient-to-br from-cyan-50/90 to-white p-5 space-y-4 shadow-sm">
+                     <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                           <p className="text-sm font-black text-slate-900">Detección automática (USB)</p>
+                           <p className="text-xs text-slate-600 mt-1">
+                              Misma ruta nativa que impresoras: el APK enumera USB y permite probar apertura del dispositivo (permiso OTG).
+                           </p>
+                        </div>
+                        <button
+                           type="button"
+                           disabled={fpScanning || !nativePrintBridge.supportsFingerprintDiscovery()}
+                           onClick={() => void handleDiscoverFingerprintReaders()}
+                           className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-45 disabled:pointer-events-none text-white font-bold text-sm shadow-md shadow-cyan-600/20"
+                        >
+                           {fpScanning ? <Loader2 className="animate-spin" size={18} /> : <RefreshCw size={18} />}
+                           Buscar lectores USB
+                        </button>
+                     </div>
+                     {!nativePrintBridge.supportsFingerprintDiscovery() && (
+                        <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-xl p-3 leading-relaxed">
+                           El bridge actual no expone <span className="font-mono">discoverFingerprintReaders</span>. Actualice la APK o configure el puerto manualmente abajo.
+                        </p>
+                     )}
+                     {fpNotice && (
+                        <p className="text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">{fpNotice}</p>
+                     )}
+                     {fpDiscovered.length > 0 && (
+                        <div className="space-y-2">
+                           {fpDiscovered.map(d => (
+                              <div
+                                 key={d.id}
+                                 className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-white border border-slate-200"
+                              >
+                                 <div className="min-w-0">
+                                    <p className="text-sm font-bold text-slate-900 truncate">{d.name}</p>
+                                    <p className="text-[11px] font-mono text-slate-500 truncate">
+                                       {d.address}
+                                       {typeof d.vendorId === 'number' && typeof d.productId === 'number'
+                                          ? ` · VID ${d.vendorId} · PID ${d.productId}`
+                                          : ''}
+                                    </p>
+                                 </div>
+                                 <div className="flex flex-wrap gap-2 shrink-0">
+                                    <button
+                                       type="button"
+                                       onClick={() => {
+                                          setFingerprintReader(prev => ({
+                                             ...prev,
+                                             connectionType: 'USB',
+                                             port: d.address,
+                                             isEnabled: true
+                                          }));
+                                          setFpNotice(`Puerto aplicado: ${d.address}`);
+                                       }}
+                                       className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold hover:bg-slate-800"
+                                    >
+                                       Usar
+                                    </button>
+                                    <button
+                                       type="button"
+                                       onClick={() => void handleTestFingerprintDevice(d)}
+                                       className="px-3 py-1.5 rounded-lg border border-cyan-300 text-cyan-800 text-xs font-bold hover:bg-cyan-50"
+                                    >
+                                       Probar
+                                    </button>
+                                 </div>
+                              </div>
+                           ))}
+                        </div>
+                     )}
+                     <div className="flex flex-wrap items-center gap-3">
+                        <button
+                           type="button"
+                           onClick={() => void handleTestFingerprintDevice()}
+                           className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border-2 border-slate-200 text-slate-800 text-xs font-bold hover:bg-slate-50"
+                        >
+                           <Activity size={16} />
+                           Probar puerto / ID actual
+                        </button>
+                        {fpTestFeedback && (
+                           <span className={`text-xs font-bold ${fpTestFeedback.ok ? 'text-emerald-700' : 'text-red-600'}`}>
+                              {fpTestFeedback.message}
+                           </span>
+                        )}
+                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

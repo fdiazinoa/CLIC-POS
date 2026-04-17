@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { Delete, Lock, Fingerprint } from 'lucide-react';
 import { User as UserType, TerminalConfig } from '../types';
 import { biometricService } from '../services/BiometricAuthService';
 import './ModernLoginScreen.css';
+
+/** En WebView/Capacitor, enfocar un input numérico abre el teclado virtual y desplaza la UI; el PIN se sigue pudiendo digitar con teclado físico vía `keydown` global. */
+const suppressNativeSoftKeyboardForPin = Capacitor.isNativePlatform();
 
 interface ModernLoginScreenProps {
   onLogin: (user: UserType) => void;
@@ -27,6 +31,7 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   const pinInputRef = useRef<HTMLInputElement>(null);
 
   const focusPinInput = useCallback(() => {
+    if (suppressNativeSoftKeyboardForPin) return;
     window.requestAnimationFrame(() => {
       pinInputRef.current?.focus();
     });
@@ -117,7 +122,8 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   }, [pin, checkLogin]);
 
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
-    if (document.activeElement === pinInputRef.current) {
+    // En web, con el input enfocado el propio campo recibe la entrada; en nativo no enfocamos (evita IME) pero si hubiera foco readonly, seguir capturando aquí.
+    if (document.activeElement === pinInputRef.current && !suppressNativeSoftKeyboardForPin) {
       return;
     }
 
@@ -147,6 +153,11 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
   useEffect(() => {
     focusPinInput();
   }, [focusPinInput]);
+
+  useEffect(() => {
+    if (!suppressNativeSoftKeyboardForPin) return;
+    pinInputRef.current?.blur();
+  }, []);
 
   const handleBiometricLogin = async () => {
     if (biometricFailCount >= 3) {
@@ -233,12 +244,16 @@ const ModernLoginScreen: React.FC<ModernLoginScreenProps> = ({
 
         {/* Right Side: PIN Entry & Keypad */}
         <div className="modern-login-right">
-          <div className="modern-pin-section" onClick={focusPinInput}>
+          <div
+            className="modern-pin-section"
+            onClick={suppressNativeSoftKeyboardForPin ? undefined : focusPinInput}
+          >
             <input
               ref={pinInputRef}
-              type="tel"
-              inputMode="numeric"
-              pattern="[0-9]*"
+              type={suppressNativeSoftKeyboardForPin ? 'text' : 'tel'}
+              inputMode={suppressNativeSoftKeyboardForPin ? 'none' : 'numeric'}
+              pattern={suppressNativeSoftKeyboardForPin ? undefined : '[0-9]*'}
+              readOnly={suppressNativeSoftKeyboardForPin}
               autoComplete="off"
               enterKeyHint="done"
               className="modern-pin-input"

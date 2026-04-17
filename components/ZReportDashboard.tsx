@@ -391,7 +391,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
    }
 
    return (
-      <div className="fixed inset-0 z-[120] bg-gray-50 flex flex-col overflow-hidden animate-in slide-in-from-bottom-5">
+      <div className="fixed inset-0 z-[120] bg-gray-50 flex flex-col min-h-0 overflow-hidden animate-in slide-in-from-bottom-5">
 
          {/* PROCESSING OVERLAY */}
          {isProcessing && (
@@ -440,7 +440,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
             </div>
          )}
 
-         <div className="relative bg-white pt-6 pb-6 px-6 shadow-sm border-b border-gray-200">
+         <div className="relative shrink-0 bg-white pt-6 pb-6 px-6 shadow-sm border-b border-gray-200">
             <div className="flex justify-between items-center mb-2">
                <div className="flex items-center gap-4">
                   <button onClick={onClose} className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors text-gray-500">
@@ -465,7 +465,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
             </div>
          </div>
 
-         <div className="flex-1 overflow-y-auto p-6 space-y-6 max-w-4xl mx-auto w-full">
+         <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y p-6 space-y-6 max-w-4xl mx-auto w-full">
 
             {/* Summary Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -690,7 +690,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
          </div>
 
          {/* Footer Action */}
-         <div className="p-6 bg-white border-t border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] flex flex-col items-center">
+         <div className="shrink-0 p-6 bg-white border-t border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] flex flex-col items-center">
             <SlideButton
                label="Desliza para Cerrar Caja"
                disabled={currenciesRequiringCashCount.length > 0 && !currenciesRequiringCashCount.some(currencyCode => {
