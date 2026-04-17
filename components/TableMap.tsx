@@ -85,6 +85,10 @@ const CANVAS_WIDTH = 1240;
 const CANVAS_HEIGHT = 860;
 const SCALE_MIN = 0.55;
 const SCALE_MAX = 2.2;
+/** Ancho del panel "Control de Sala" (w-[318px]) + márgenes; evita encimar mesas bajo el aside */
+const RESTAURANT_SIDEBAR_RESERVE_PX = 400;
+/** Zona inferior del selector de salas + margen */
+const RESTAURANT_BOTTOM_BAR_RESERVE_PX = 112;
 const DEFAULT_EXPECTED_STAY = 70;
 const NO_ORDER_TOTAL_THRESHOLD = 0.01;
 const EMPTY_TABLE_ALERT_AFTER_SECONDS = 18;
@@ -297,10 +301,16 @@ const TableMap: React.FC<TableMapProps> = ({
         const el = viewportRef.current;
         if (!el) return;
         const rect = el.getBoundingClientRect();
-        const sidebarReserve = 360;
-        const bottomBarReserve = 96;
-        const usableW = Math.max(280, rect.width - sidebarReserve - 24);
-        const usableH = Math.max(220, rect.height - bottomBarReserve - 24);
+        const sidebarReserve = RESTAURANT_SIDEBAR_RESERVE_PX;
+        const bottomBarReserve = RESTAURANT_BOTTOM_BAR_RESERVE_PX;
+        const edgePad = 28;
+        const usableW = Math.max(280, rect.width - sidebarReserve - edgePad);
+        const usableH = Math.max(220, rect.height - bottomBarReserve - edgePad);
+
+        // El mapa se centra en el viewport completo; el aside solo cubre la derecha. Desplazamos el
+        // encuadre hacia la izquierda y arriba para que el centro visual quede en la zona libre.
+        const panBiasX = sidebarReserve * 0.52;
+        const panBiasY = bottomBarReserve * 0.42 + 12;
 
         let minX = Infinity;
         let minY = Infinity;
@@ -315,7 +325,7 @@ const TableMap: React.FC<TableMapProps> = ({
 
         if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) {
             const s = clamp(Math.min(usableW / CANVAS_WIDTH, usableH / CANVAS_HEIGHT) * 0.94, SCALE_MIN, SCALE_MAX);
-            setViewport({ scale: s, x: 0, y: 0 });
+            setViewport({ scale: s, x: -panBiasX, y: -panBiasY });
             return;
         }
 
@@ -327,7 +337,9 @@ const TableMap: React.FC<TableMapProps> = ({
         const midY = (minY + maxY) / 2;
         const cx = CANVAS_WIDTH / 2;
         const cy = CANVAS_HEIGHT / 2;
-        setViewport({ scale: s, x: -s * (midX - cx), y: -s * (midY - cy) });
+        const baseX = -s * (midX - cx);
+        const baseY = -s * (midY - cy);
+        setViewport({ scale: s, x: baseX - panBiasX, y: baseY - panBiasY });
     }, [isRestaurantMode, roomTables]);
 
     useLayoutEffect(() => {
