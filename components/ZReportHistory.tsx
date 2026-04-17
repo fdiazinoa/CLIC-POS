@@ -140,9 +140,9 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
         const hasDiscrepancy = Math.abs(totalDiscrepancy) > 0.01;
 
         return (
-            <div className="fixed inset-0 z-50 bg-gray-50 flex flex-col animate-in slide-in-from-right duration-300">
+            <div className="fixed inset-0 z-50 bg-gray-50 flex flex-col min-h-0 animate-in slide-in-from-right duration-300">
                 {/* Header */}
-                <div className="bg-white border-b border-gray-200 p-4 flex items-center justify-between shadow-sm">
+                <div className="shrink-0 bg-white border-b border-gray-200 p-4 flex items-center justify-between shadow-sm">
                     <div className="flex items-center gap-4">
                         <button onClick={() => setSelectedReport(null)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
                             <ArrowLeft size={24} className="text-gray-600" />
@@ -213,7 +213,7 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
                 </div>
 
                 {/* Content */}
-                <div className="flex-1 overflow-y-auto p-6">
+                <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y p-6">
                     <div className="max-w-3xl mx-auto space-y-6">
 
                         {/* Summary Cards */}
@@ -331,9 +331,9 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
 
     // --- LIST VIEW ---
     return (
-        <div className="fixed inset-0 z-40 bg-gray-50 flex flex-col animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-40 bg-gray-50 flex flex-col min-h-0 animate-in fade-in duration-200">
             {/* Header */}
-            <div className="bg-white border-b border-gray-200 p-4 flex items-center justify-between shadow-sm">
+            <div className="shrink-0 bg-white border-b border-gray-200 p-4 flex items-center justify-between shadow-sm">
                 <div className="flex items-center gap-4">
                     <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
                         <ArrowLeft size={24} className="text-gray-600" />
@@ -426,7 +426,7 @@ const ZReportHistory: React.FC<ZReportHistoryProps> = ({ config, onClose }) => {
             </div>
 
             {/* List */}
-            <div className="flex-1 overflow-y-auto p-4 md:p-8">
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y p-4 md:p-8">
                 {isLoading ? (
                     <div className="flex justify-center items-center h-64">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>

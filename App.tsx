@@ -2944,6 +2944,38 @@ const AppContent: React.FC = () => {
     await db.save('parkedTickets', tickets); // Uses 'settings' table logic or collection
   };
 
+  const handleParkedOrderSplitFromMap = useCallback(
+    async (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[]) => {
+      const sumItems = (items: CartItem[]) =>
+        items.reduce((acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0), 0);
+      const source = parkedTickets.find(p => p.id === orderId);
+      if (!source) {
+        alert('No se encontró la orden en espera.');
+        return;
+      }
+      const others = parkedTickets.filter(t => t.id !== orderId);
+      const kept =
+        remainingItems.length > 0
+          ? [{ ...source, items: remainingItems, total: sumItems(remainingItems) }]
+          : [];
+      const tableLinked = tables.find(t => t.currentOrderId === orderId);
+      const labelBase = tableLinked?.nombre || tableLinked?.name || source.name || 'Mesa';
+      const newTicket: ParkedTicket = {
+        ...source,
+        id: `split-${Date.now()}`,
+        name: `${labelBase} - Parte 2`,
+        alias: `${labelBase} - Parte 2`,
+        items: newTicketItems,
+        total: sumItems(newTicketItems),
+        timestamp: new Date().toISOString(),
+        tableId: tableLinked?.id
+      };
+      await handleUpdateParkedTickets([...others, ...kept, newTicket]);
+      await fetchTables();
+    },
+    [parkedTickets, tables, fetchTables]
+  );
+
   const handleUpdateActiveTableGuests = async (guests: number) => {
     if (!activeTable) return;
     try {
@@ -4598,13 +4630,16 @@ const AppContent: React.FC = () => {
                   console.log('Mesa seleccionada:', table.name);
                   setActiveTable(table);
 
-                  // If table has an order, try to load it
+                  // Cargar ítems solo de ESTA mesa: órdenes abiertas viven en parkedTickets (no heredar carrito previo).
                   if (table.currentOrderId) {
-                    // The order might be in transactions or parkedTiles. 
-                    // In restaurant mode, we usually keep them 'ABIERTA'.
-                    const found = (transactions || []).find(t => t.id === table.currentOrderId);
-                    if (found && found.items) {
-                      setCart(found.items);
+                    const parked = (parkedTickets || []).find(p => p.id === table.currentOrderId);
+                    const fromTx = (transactions || []).find(t => t.id === table.currentOrderId);
+                    if (parked?.items?.length) {
+                      setCart(parked.items);
+                    } else if (fromTx?.items?.length) {
+                      setCart(fromTx.items);
+                    } else {
+                      setCart([]);
                     }
                   } else {
                     setCart([]);
@@ -4641,6 +4676,8 @@ const AppContent: React.FC = () => {
                     alert('No se encontró el pedido activo para esta mesa.');
                   }
                 }}
+                onParkedOrderSplitResult={handleParkedOrderSplitFromMap}
+                onOpenTableLayoutDesigner={() => handleViewChange('TABLE_DESIGNER')}
               />
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { ConnectionType, PrinterDevice } from '../../types';
+import { ConnectionType, FingerprintDiscoveredDevice, PrinterDevice } from '../../types';
 import { NativeBridgeContractStatus, NativePrinterBridge } from './NativePrintContract';
 
 export type NativePrintRuntime = 'WEB' | 'ANDROID' | 'WINDOWS' | 'ELECTRON';
@@ -105,6 +105,28 @@ const sanitizeConnection = (connection?: string): ConnectionType => {
   }
 };
 
+const normalizeDiscoveredFingerprints = (raw: any): FingerprintDiscoveredDevice[] => {
+  const list = Array.isArray(raw)
+    ? raw
+    : Array.isArray(raw?.devices)
+      ? raw.devices
+      : Array.isArray(raw?.fingerprints)
+        ? raw.fingerprints
+        : [];
+
+  return list
+    .filter((item: any) => item)
+    .map((item: any, index: number): FingerprintDiscoveredDevice => ({
+      id: String(item.id || item.deviceId || item.address || `fp-${index}`),
+      name: String(item.name || item.deviceName || `Lector ${index + 1}`),
+      connection: sanitizeConnection(item.connection || item.transport || 'USB'),
+      address: String(item.address || item.deviceName || item.id || ''),
+      vendorId: typeof item.vendorId === 'number' ? item.vendorId : undefined,
+      productId: typeof item.productId === 'number' ? item.productId : undefined,
+      status: item.status ? String(item.status) : undefined
+    }));
+};
+
 const normalizeDiscoveredPrinters = (raw: any): PrinterDevice[] => {
   const list = Array.isArray(raw)
     ? raw
@@ -192,6 +214,12 @@ export const nativePrintBridge = {
     ]);
   },
 
+  supportsFingerprintDiscovery(): boolean {
+    const resolved = resolveBridge();
+    if (!resolved) return false;
+    return hasMethod(resolved.bridge, ['discoverFingerprintReaders', 'scanFingerprintReaders']);
+  },
+
   getContractStatus(): NativeBridgeContractStatus {
     const resolved = resolveBridge();
     if (!resolved) {
@@ -207,6 +235,7 @@ export const nativePrintBridge = {
     const methodCandidates = [
       'printEscPos', 'printEscpos', 'printRaw', 'printHtml', 'print',
       'discoverPrinters', 'scanPrinters', 'listPrinters',
+      'discoverFingerprintReaders', 'scanFingerprintReaders', 'testFingerprintReader',
       'pairPrinter', 'connectPrinter', 'bindPrinter',
       'getDeviceProfile', 'getDeviceInfo'
     ] as const;
@@ -240,6 +269,34 @@ export const nativePrintBridge = {
     } catch (error) {
       console.warn('Native printer discovery failed:', error);
       return [];
+    }
+  },
+
+  async discoverFingerprintReaders(connection: ConnectionType = 'USB'): Promise<FingerprintDiscoveredDevice[]> {
+    const resolved = resolveBridge();
+    if (!resolved) return [];
+
+    try {
+      const result = await runBridgeMethod(resolved.bridge, ['discoverFingerprintReaders', 'scanFingerprintReaders'], {
+        connection
+      });
+      return normalizeDiscoveredFingerprints(result);
+    } catch (error) {
+      console.warn('Native fingerprint discovery failed:', error);
+      return [];
+    }
+  },
+
+  async testFingerprintReader(payload: { address?: string; id?: string; connection?: string }): Promise<'ONLINE' | 'OFFLINE' | 'UNKNOWN'> {
+    const resolved = resolveBridge();
+    if (!resolved) return 'UNKNOWN';
+
+    try {
+      const result = await runBridgeMethod(resolved.bridge, ['testFingerprintReader'], payload);
+      return normalizeConnectionHealth(result);
+    } catch (error) {
+      console.warn('Native fingerprint reader test failed:', error);
+      return 'OFFLINE';
     }
   },
 

@@ -92,7 +92,10 @@ class AndroidPrinterBridge(context: Context) {
                     getPrinterStatus: function (payload) { return call('getPrinterStatus', payload); },
                     checkStatus: function (payload) { return call('checkStatus', payload); },
                     getDeviceProfile: function () { return Promise.resolve(parseResult(window.AndroidPrinter.getDeviceProfile())); },
-                    getDeviceInfo: function () { return Promise.resolve(parseResult(window.AndroidPrinter.getDeviceInfo())); }
+                    getDeviceInfo: function () { return Promise.resolve(parseResult(window.AndroidPrinter.getDeviceInfo())); },
+                    discoverFingerprintReaders: function (payload) { return call('discoverFingerprintReaders', payload); },
+                    scanFingerprintReaders: function (payload) { return call('scanFingerprintReaders', payload); },
+                    testFingerprintReader: function (payload) { return call('testFingerprintReader', payload); }
                   };
                 })();
             """.trimIndent()
@@ -216,6 +219,78 @@ class AndroidPrinterBridge(context: Context) {
 
     @JavascriptInterface
     fun listPrinters(payloadJson: String?): String = discoverPrinters(payloadJson)
+
+    @JavascriptInterface
+    fun discoverFingerprintReaders(payloadJson: String?): String {
+        return try {
+            val payload = JSONObject(payloadJson ?: "{}")
+            val connection = payload.optString("connection", "USB").uppercase()
+            val devices = when (connection) {
+                "USB" -> discoverUsbFingerprintReaders()
+                else -> emptyList()
+            }
+            JSONObject()
+                .put("devices", JSONArray().apply { devices.forEach { put(it) } })
+                .toString()
+        } catch (e: Exception) {
+            JSONObject()
+                .put("devices", JSONArray())
+                .put("error", e.message ?: "FP_DISCOVERY_ERROR")
+                .toString()
+        }
+    }
+
+    @JavascriptInterface
+    fun scanFingerprintReaders(payloadJson: String?): String = discoverFingerprintReaders(payloadJson)
+
+    @JavascriptInterface
+    fun testFingerprintReader(payloadJson: String?): String {
+        return try {
+            val payload = JSONObject(payloadJson ?: "{}")
+            val address = payload.optString("address", "").trim()
+            val id = payload.optString("id", "").trim()
+            val device = findUsbFingerprintDeviceForTest(address, id)
+                ?: return JSONObject()
+                    .put("status", "OFFLINE")
+                    .put("success", false)
+                    .put("message", "Lector USB no encontrado. Verifique el cable, OTG y que el dispositivo aparezca en la búsqueda.")
+                    .toString()
+
+            val usbManager = appContext.getSystemService(Context.USB_SERVICE) as? UsbManager
+                ?: return JSONObject()
+                    .put("status", "OFFLINE")
+                    .put("success", false)
+                    .put("message", "USB host no disponible.")
+                    .toString()
+
+            if (!usbManager.hasPermission(device)) {
+                requestUsbPermission(usbManager, device)
+            }
+            if (!usbManager.hasPermission(device)) {
+                return JSONObject()
+                    .put("status", "OFFLINE")
+                    .put("success", false)
+                    .put("message", "Permiso USB pendiente. Acepte el diálogo del sistema y pulse Probar de nuevo.")
+                    .toString()
+            }
+
+            val usbConnection = usbManager.openDevice(device)
+            val ok = usbConnection != null
+            usbConnection?.close()
+
+            JSONObject()
+                .put("status", if (ok) "ONLINE" else "OFFLINE")
+                .put("success", ok)
+                .put("message", if (ok) "Dispositivo USB accesible (apertura correcta)." else "No se pudo abrir el dispositivo.")
+                .toString()
+        } catch (e: Exception) {
+            JSONObject()
+                .put("status", "OFFLINE")
+                .put("success", false)
+                .put("message", e.message ?: "FP_TEST_ERROR")
+                .toString()
+        }
+    }
 
     @JavascriptInterface
     fun debugLog(payloadJson: String?): String {
@@ -867,6 +942,97 @@ class AndroidPrinterBridge(context: Context) {
         } catch (_: Exception) {
             emptyList()
         }
+    }
+
+    private fun discoverUsbFingerprintReaders(): List<JSONObject> {
+        val usbManager = appContext.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return emptyList()
+        return usbManager.deviceList.values
+            .filter { !isUsbPrinterCandidate(it) && isLikelyFingerprintReader(it) }
+            .map { device ->
+                JSONObject()
+                    .put("id", usbDeviceId(device))
+                    .put("name", usbFingerprintDisplayName(device))
+                    .put("connection", "USB")
+                    .put("address", usbDeviceAddress(device))
+                    .put("vendorId", device.vendorId)
+                    .put("productId", device.productId)
+                    .put("status", "CONNECTED")
+            }
+            .sortedBy { it.optString("name", "USB") }
+    }
+
+    private fun usbFingerprintDisplayName(device: UsbDevice): String {
+        val manufacturer = device.manufacturerName?.takeIf { it.isNotBlank() }
+        val product = device.productName?.takeIf { it.isNotBlank() }
+        return when {
+            manufacturer != null && product != null -> "$manufacturer $product"
+            product != null -> product
+            manufacturer != null -> manufacturer
+            else -> "Lector USB ${device.deviceId}"
+        }
+    }
+
+    private fun isLikelyFingerprintReader(device: UsbDevice): Boolean {
+        if (device.deviceClass == UsbConstants.USB_CLASS_HUB) {
+            return false
+        }
+        val label = "${device.manufacturerName} ${device.productName}".lowercase()
+        if (listOf("keyboard", "teclado", "mouse", "ratón", "hub", "camera", "webcam", "audio", "headset")
+                .any { label.contains(it) }) {
+            return false
+        }
+        val keywordHit = listOf(
+            "finger", "biomet", "bio-id", "secugen", "digital persona", "digitalpersona",
+            "zkteco", "nitgen", "futronic", "suprema", "crossmatch", "mantra", "morpho",
+            "realscan", "u.are.u", "signotec", "lumidigm", "integrated", "touchchip"
+        ).any { label.contains(it) }
+
+        if (keywordHit) return true
+
+        var hidLike = false
+        var vendorLike = false
+        for (index in 0 until device.interfaceCount) {
+            val intf = device.getInterface(index)
+            when (intf.interfaceClass) {
+                UsbConstants.USB_CLASS_HID -> hidLike = true
+                UsbConstants.USB_CLASS_VENDOR_SPEC -> vendorLike = true
+            }
+        }
+        if (device.deviceClass == UsbConstants.USB_CLASS_HID) {
+            hidLike = true
+        }
+        return hidLike || vendorLike
+    }
+
+    private fun findUsbFingerprintDeviceForTest(address: String?, id: String?): UsbDevice? {
+        val usbManager = appContext.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return null
+        val wantId = id?.trim()?.takeIf { it.isNotBlank() }
+        val wantAddr = address?.trim()?.takeIf { it.isNotBlank() }
+
+        val fingerprintCandidates = usbManager.deviceList.values
+            .filter { !isUsbPrinterCandidate(it) && isLikelyFingerprintReader(it) }
+            .toList()
+
+        fun matchDevice(d: UsbDevice): Boolean {
+            if (wantId != null) {
+                if (usbDeviceId(d) == wantId) return true
+                if (d.deviceName == wantId) return true
+            }
+            if (wantAddr != null) {
+                if (usbDeviceAddress(d).equals(wantAddr, ignoreCase = true)) return true
+                if (usbDeviceId(d).equals(wantAddr, ignoreCase = true)) return true
+            }
+            return false
+        }
+
+        fingerprintCandidates.firstOrNull { matchDevice(it) }?.let { return it }
+
+        // Coincidencia laxa con cualquier USB (por si el usuario pegó la ruta manualmente)
+        for (d in usbManager.deviceList.values) {
+            if (wantId != null && (usbDeviceId(d) == wantId || d.deviceName == wantId)) return d
+            if (wantAddr != null && usbDeviceAddress(d).equals(wantAddr, ignoreCase = true)) return d
+        }
+        return null
     }
 
     private fun discoverUsbPrinters(): List<JSONObject> {

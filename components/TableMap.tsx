@@ -1,5 +1,5 @@
-import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Room, Table, User as UserType, ParkedTicket } from '../types';
+import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
+import { Room, Table, User as UserType, ParkedTicket, CartItem } from '../types';
 import {
     Clock,
     User,
@@ -12,10 +12,17 @@ import {
     Sparkles,
     Check,
     AlertTriangle,
-    ReceiptText
+    ReceiptText,
+    Link2,
+    Scissors,
+    ArrowRightLeft,
+    Pencil,
+    Sigma,
+    PieChart
 } from 'lucide-react';
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from 'framer-motion';
 import TableOptionsModal from './TableOptionsModal';
+import SplitTicketModal from './SplitTicketModal';
 
 interface TableMapProps {
     rooms: Room[];
@@ -32,6 +39,10 @@ interface TableMapProps {
     onRefreshTables?: () => void;
     canViewBusinessMetrics?: boolean;
     onPrintPrecheck?: (table: Table) => void;
+    /** Restaurante: persiste división de cuenta desde el mapa (órdenes en espera) */
+    onParkedOrderSplitResult?: (orderId: string, remainingItems: CartItem[], newTicketItems: CartItem[]) => void | Promise<void>;
+    /** Restaurante: abrir diseñador de plano de mesas */
+    onOpenTableLayoutDesigner?: () => void;
 }
 
 type SmartStatus = 'FREE' | 'ATTENTION' | 'OCCUPIED' | 'CHECK_REQUESTED';
@@ -97,6 +108,12 @@ const TABLE_ENTRY_VARIANTS = {
 };
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+
+const ensureCartIds = (items: CartItem[]): CartItem[] =>
+    items.map((it, idx) => ({
+        ...it,
+        cartId: it.cartId || `map-${idx}-${it.id || 'item'}`
+    }));
 
 const getElapsedMinutes = (timeSeated?: string): number => {
     if (!timeSeated) return 0;
@@ -213,13 +230,25 @@ const TableMap: React.FC<TableMapProps> = ({
     onOpenTable,
     onRefreshTables,
     canViewBusinessMetrics,
-    onPrintPrecheck
+    onPrintPrecheck,
+    onParkedOrderSplitResult,
+    onOpenTableLayoutDesigner
 }) => {
     const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || rooms[0]?.id || '');
     const [selectedTable, setSelectedTable] = useState<Table | null>(null);
     const [tooltip, setTooltip] = useState<TooltipState | null>(null);
     const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const [splitTicketForModal, setSplitTicketForModal] = useState<ParkedTicket | null>(null);
+    const [mergePickOpen, setMergePickOpen] = useState(false);
+    const [movePickOpen, setMovePickOpen] = useState(false);
+    const [subtotalPickOpen, setSubtotalPickOpen] = useState(false);
+    const [fractionPickOpen, setFractionPickOpen] = useState(false);
+    const [splitPickOpen, setSplitPickOpen] = useState(false);
+    const [mergePrimaryId, setMergePrimaryId] = useState('');
+    const [mergeSecondaryId, setMergeSecondaryId] = useState('');
+    const [moveFromId, setMoveFromId] = useState('');
+    const [moveToId, setMoveToId] = useState('');
     const reduceMotion = useReducedMotion();
 
     const mapShellRef = useRef<HTMLDivElement | null>(null);
@@ -247,10 +276,6 @@ const TableMap: React.FC<TableMapProps> = ({
     }, [rooms, activeRoomId, initialRoomId]);
 
     useEffect(() => {
-        setViewport({ scale: 1, x: 0, y: 0 });
-    }, [activeRoomId]);
-
-    useEffect(() => {
         const onFullscreenChange = () => {
             const active = Boolean(document.fullscreenElement && mapShellRef.current?.contains(document.fullscreenElement));
             setIsFullscreen(active);
@@ -267,6 +292,74 @@ const TableMap: React.FC<TableMapProps> = ({
         [safeTables, activeRoomId]
     );
 
+    const fitRestaurantViewport = useCallback(() => {
+        if (!isRestaurantMode) return;
+        const el = viewportRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        const sidebarReserve = 360;
+        const bottomBarReserve = 96;
+        const usableW = Math.max(280, rect.width - sidebarReserve - 24);
+        const usableH = Math.max(220, rect.height - bottomBarReserve - 24);
+
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        roomTables.forEach(t => {
+            minX = Math.min(minX, t.posX);
+            minY = Math.min(minY, t.posY);
+            maxX = Math.max(maxX, t.posX + t.width);
+            maxY = Math.max(maxY, t.posY + t.height);
+        });
+
+        if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) {
+            const s = clamp(Math.min(usableW / CANVAS_WIDTH, usableH / CANVAS_HEIGHT) * 0.94, SCALE_MIN, SCALE_MAX);
+            setViewport({ scale: s, x: 0, y: 0 });
+            return;
+        }
+
+        const pad = 72;
+        const bw = maxX - minX + pad * 2;
+        const bh = maxY - minY + pad * 2;
+        const s = clamp(Math.min(usableW / bw, usableH / bh) * 0.96, SCALE_MIN, SCALE_MAX);
+        const midX = (minX + maxX) / 2;
+        const midY = (minY + maxY) / 2;
+        const cx = CANVAS_WIDTH / 2;
+        const cy = CANVAS_HEIGHT / 2;
+        setViewport({ scale: s, x: -s * (midX - cx), y: -s * (midY - cy) });
+    }, [isRestaurantMode, roomTables]);
+
+    useLayoutEffect(() => {
+        if (!isRestaurantMode) {
+            setViewport({ scale: 1, x: 0, y: 0 });
+            return;
+        }
+        fitRestaurantViewport();
+    }, [activeRoomId, isRestaurantMode, fitRestaurantViewport]);
+
+    useEffect(() => {
+        if (!isRestaurantMode) return;
+        const el = viewportRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        let timer: number | undefined;
+        const ro = new ResizeObserver(() => {
+            if (timer) window.clearTimeout(timer);
+            timer = window.setTimeout(() => fitRestaurantViewport(), 80);
+        });
+        ro.observe(el);
+        return () => {
+            if (timer) window.clearTimeout(timer);
+            ro.disconnect();
+        };
+    }, [isRestaurantMode, fitRestaurantViewport]);
+
+    useEffect(() => {
+        if (!isRestaurantMode) return;
+        const id = window.requestAnimationFrame(() => fitRestaurantViewport());
+        return () => window.cancelAnimationFrame(id);
+    }, [roomTables, isRestaurantMode, fitRestaurantViewport]);
+
     const obstacleTables = useMemo(
         () => roomTables.filter(table => table.shape === 'OBSTACLE'),
         [roomTables]
@@ -275,6 +368,16 @@ const TableMap: React.FC<TableMapProps> = ({
     const serviceTables = useMemo(
         () => roomTables.filter(table => table.shape !== 'OBSTACLE'),
         [roomTables]
+    );
+
+    const occupiedForTools = useMemo(
+        () => serviceTables.filter(t => t.status === 'OCCUPIED' || t.status === 'RESERVED'),
+        [serviceTables]
+    );
+
+    const freeForTools = useMemo(
+        () => serviceTables.filter(t => !t.status || t.status === 'FREE'),
+        [serviceTables]
     );
 
     const occupiedLikeTables = useMemo(
@@ -636,6 +739,83 @@ const TableMap: React.FC<TableMapProps> = ({
                     </div>
 
                     <div className="p-5 space-y-4">
+                        {isRestaurantMode && (
+                            <div className="grid grid-cols-2 gap-2.5">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setMergePrimaryId(occupiedForTools[0]?.id || '');
+                                        setMergeSecondaryId(occupiedForTools.find(t => t.id !== occupiedForTools[0]?.id)?.id || '');
+                                        setMergePickOpen(true);
+                                    }}
+                                    className="rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors"
+                                >
+                                    <Link2 size={18} className="opacity-95" />
+                                    Unir mesas
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setSubtotalPickOpen(true)}
+                                    className="rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors"
+                                >
+                                    <Sigma size={18} className="opacity-95" />
+                                    Subtotal
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setMoveFromId(occupiedForTools[0]?.id || '');
+                                        setMoveToId(freeForTools[0]?.id || '');
+                                        setMovePickOpen(true);
+                                    }}
+                                    className="rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors"
+                                >
+                                    <ArrowRightLeft size={18} className="opacity-95" />
+                                    Mover mesa
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setFractionPickOpen(true)}
+                                    className="rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors"
+                                >
+                                    <PieChart size={18} className="opacity-95" />
+                                    Fraccionar
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        const withOrders = occupiedForTools.filter(t => t.currentOrderId);
+                                        if (withOrders.length === 0) {
+                                            alert('No hay mesas ocupadas con cuenta en esta sala.');
+                                            return;
+                                        }
+                                        if (withOrders.length === 1) {
+                                            const ticket = parkedTickets?.find(p => p.id === withOrders[0].currentOrderId);
+                                            if (ticket?.items?.length) {
+                                                setSplitTicketForModal(ticket);
+                                            } else {
+                                                alert('La cuenta no tiene ítems cargados.');
+                                            }
+                                            return;
+                                        }
+                                        setSplitPickOpen(true);
+                                    }}
+                                    className="rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors"
+                                >
+                                    <Scissors size={18} className="opacity-95" />
+                                    Dividir cuenta
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => onOpenTableLayoutDesigner?.()}
+                                    className="rounded-xl bg-slate-500/95 hover:bg-slate-400/95 active:scale-[0.98] text-white text-[11px] font-bold py-3 px-2 border border-white/25 shadow-md flex flex-col items-center justify-center gap-1 min-h-[72px] transition-colors"
+                                >
+                                    <Pencil size={18} className="opacity-95" />
+                                    Editar layout
+                                </button>
+                            </div>
+                        )}
+
                         <div className="grid grid-cols-2 gap-3">
                             <DonutMetric
                                 label="Ocupacion"
@@ -817,8 +997,24 @@ const TableMap: React.FC<TableMapProps> = ({
                         onPrintPrecheck={() => {
                             if (onPrintPrecheck) onPrintPrecheck(selectedTable);
                         }}
-                        onSplitItems={() => console.log('Split items')}
-                        onSplitPayment={() => console.log('Split payment')}
+                        onSplitItems={() => {
+                            const ticket = parkedTickets?.find(p => p.id === selectedTable.currentOrderId);
+                            if (ticket?.items?.length) {
+                                setSplitTicketForModal(ticket);
+                                setSelectedTable(null);
+                            } else {
+                                alert('Sin cuenta con ítems para dividir.');
+                            }
+                        }}
+                        onSplitPayment={() => {
+                            const ticket = parkedTickets?.find(p => p.id === selectedTable.currentOrderId);
+                            if (ticket?.items?.length) {
+                                setSplitTicketForModal(ticket);
+                                setSelectedTable(null);
+                            } else {
+                                alert('Sin cuenta activa para dividir pago.');
+                            }
+                        }}
                         onMoveTable={async (targetTableId) => {
                             try {
                                 const res = await fetch('/api/mesas/mover', {
@@ -839,7 +1035,29 @@ const TableMap: React.FC<TableMapProps> = ({
                                 alert('Error de conexion');
                             }
                         }}
-                        onMergeTables={() => console.log('Merge not implemented')}
+                        onMergeTables={async (targetTableIds) => {
+                            try {
+                                const res = await fetch('/api/mesas/unir', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        mainTableId: selectedTable.id,
+                                        secondaryTableIds: targetTableIds
+                                    })
+                                });
+                                const data = await res.json().catch(() => ({}));
+                                if (res.ok && data.success !== false) {
+                                    onRefreshTables?.();
+                                    setSelectedTable(null);
+                                    alert(typeof data.message === 'string' ? data.message : 'Mesas unidas.');
+                                } else {
+                                    alert(data?.message || 'No se pudo unir las mesas.');
+                                }
+                            } catch (error) {
+                                console.error(error);
+                                alert('Error de conexión al unir mesas.');
+                            }
+                        }}
                         onFree={async () => {
                             try {
                                 const res = await fetch('/api/mesas/liberar', {
@@ -860,6 +1078,315 @@ const TableMap: React.FC<TableMapProps> = ({
                             }
                         }}
                     />
+                )}
+
+                {isRestaurantMode && splitTicketForModal && (
+                    <SplitTicketModal
+                        originalItems={ensureCartIds(splitTicketForModal.items)}
+                        currencySymbol={currencySymbol}
+                        onClose={() => setSplitTicketForModal(null)}
+                        onConfirm={(remainingItems, newTicketItems) => {
+                            if (onParkedOrderSplitResult) {
+                                void onParkedOrderSplitResult(splitTicketForModal.id, remainingItems, newTicketItems);
+                            } else {
+                                alert('No se pudo guardar la división: falta el manejador en la aplicación.');
+                            }
+                            setSplitTicketForModal(null);
+                        }}
+                    />
+                )}
+
+                {isRestaurantMode && mergePickOpen && (
+                    <div
+                        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
+                        onClick={() => setMergePickOpen(false)}
+                    >
+                        <div
+                            className="bg-slate-900 border border-white/15 rounded-2xl p-6 max-w-md w-full shadow-2xl"
+                            onClick={e => e.stopPropagation()}
+                        >
+                            <h3 className="text-lg font-black text-white mb-1">Unir mesas</h3>
+                            <p className="text-xs text-slate-400 mb-4">Seleccione dos cuentas ocupadas en esta sala.</p>
+                            <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Mesa principal</label>
+                            <select
+                                value={mergePrimaryId}
+                                onChange={e => setMergePrimaryId(e.target.value)}
+                                className="w-full mb-3 bg-slate-800 text-white rounded-lg p-2.5 border border-white/10"
+                            >
+                                <option value="">—</option>
+                                {occupiedForTools.map(t => (
+                                    <option key={t.id} value={t.id}>
+                                        {t.nombre || t.name}
+                                    </option>
+                                ))}
+                            </select>
+                            <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Mesa a unir</label>
+                            <select
+                                value={mergeSecondaryId}
+                                onChange={e => setMergeSecondaryId(e.target.value)}
+                                className="w-full mb-4 bg-slate-800 text-white rounded-lg p-2.5 border border-white/10"
+                            >
+                                <option value="">—</option>
+                                {occupiedForTools
+                                    .filter(t => t.id !== mergePrimaryId)
+                                    .map(t => (
+                                        <option key={t.id} value={t.id}>
+                                            {t.nombre || t.name}
+                                        </option>
+                                    ))}
+                            </select>
+                            <div className="flex justify-end gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setMergePickOpen(false)}
+                                    className="px-4 py-2 rounded-xl text-slate-300 hover:bg-white/10"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={async () => {
+                                        if (!mergePrimaryId || !mergeSecondaryId || mergePrimaryId === mergeSecondaryId) {
+                                            alert('Seleccione dos mesas distintas.');
+                                            return;
+                                        }
+                                        try {
+                                            const res = await fetch('/api/mesas/unir', {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({
+                                                    mainTableId: mergePrimaryId,
+                                                    secondaryTableIds: [mergeSecondaryId]
+                                                })
+                                            });
+                                            const data = await res.json().catch(() => ({}));
+                                            if (res.ok && data.success !== false) {
+                                                onRefreshTables?.();
+                                                setMergePickOpen(false);
+                                                alert(typeof data.message === 'string' ? data.message : 'Mesas unidas.');
+                                            } else {
+                                                alert(data?.message || 'No se pudo unir.');
+                                            }
+                                        } catch (e) {
+                                            console.error(e);
+                                            alert('Error de conexión.');
+                                        }
+                                    }}
+                                    className="px-4 py-2 rounded-xl bg-sky-600 text-white font-bold hover:bg-sky-500"
+                                >
+                                    Unir
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {isRestaurantMode && movePickOpen && (
+                    <div
+                        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
+                        onClick={() => setMovePickOpen(false)}
+                    >
+                        <div
+                            className="bg-slate-900 border border-white/15 rounded-2xl p-6 max-w-md w-full shadow-2xl"
+                            onClick={e => e.stopPropagation()}
+                        >
+                            <h3 className="text-lg font-black text-white mb-1">Mover pedido</h3>
+                            <p className="text-xs text-slate-400 mb-4">De una mesa ocupada hacia una libre.</p>
+                            <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Origen (ocupada)</label>
+                            <select
+                                value={moveFromId}
+                                onChange={e => setMoveFromId(e.target.value)}
+                                className="w-full mb-3 bg-slate-800 text-white rounded-lg p-2.5 border border-white/10"
+                            >
+                                <option value="">—</option>
+                                {occupiedForTools.map(t => (
+                                    <option key={t.id} value={t.id}>
+                                        {t.nombre || t.name}
+                                    </option>
+                                ))}
+                            </select>
+                            <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Destino (libre)</label>
+                            <select
+                                value={moveToId}
+                                onChange={e => setMoveToId(e.target.value)}
+                                className="w-full mb-4 bg-slate-800 text-white rounded-lg p-2.5 border border-white/10"
+                            >
+                                <option value="">—</option>
+                                {freeForTools.map(t => (
+                                    <option key={t.id} value={t.id}>
+                                        {t.nombre || t.name}
+                                    </option>
+                                ))}
+                            </select>
+                            <div className="flex justify-end gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setMovePickOpen(false)}
+                                    className="px-4 py-2 rounded-xl text-slate-300 hover:bg-white/10"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={async () => {
+                                        if (!moveFromId || !moveToId) {
+                                            alert('Seleccione origen y destino.');
+                                            return;
+                                        }
+                                        try {
+                                            const res = await fetch('/api/mesas/mover', {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ fromTableId: moveFromId, toTableId: moveToId })
+                                            });
+                                            const data = await res.json();
+                                            if (data.success) {
+                                                onRefreshTables?.();
+                                                setMovePickOpen(false);
+                                                alert('Mesa movida correctamente');
+                                            } else {
+                                                alert('Error: ' + (data.message || 'No se pudo mover'));
+                                            }
+                                        } catch (error) {
+                                            console.error(error);
+                                            alert('Error de conexión');
+                                        }
+                                    }}
+                                    className="px-4 py-2 rounded-xl bg-sky-600 text-white font-bold hover:bg-sky-500"
+                                >
+                                    Mover
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {isRestaurantMode && subtotalPickOpen && (
+                    <div
+                        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
+                        onClick={() => setSubtotalPickOpen(false)}
+                    >
+                        <div
+                            className="bg-slate-900 border border-white/15 rounded-2xl p-6 max-w-md w-full shadow-2xl"
+                            onClick={e => e.stopPropagation()}
+                        >
+                            <h3 className="text-lg font-black text-white mb-4">Subtotal / Pre-cuenta</h3>
+                            <p className="text-xs text-slate-400 mb-3">Mesa con cuenta abierta:</p>
+                            <div className="space-y-2 max-h-64 overflow-y-auto">
+                                {occupiedForTools.filter(t => t.currentOrderId).length === 0 && (
+                                    <p className="text-sm text-slate-500">No hay mesas con orden activa.</p>
+                                )}
+                                {occupiedForTools
+                                    .filter(t => t.currentOrderId)
+                                    .map(t => (
+                                        <button
+                                            key={t.id}
+                                            type="button"
+                                            onClick={() => {
+                                                if (onPrintPrecheck) onPrintPrecheck(t);
+                                                setSubtotalPickOpen(false);
+                                            }}
+                                            className="w-full text-left px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-white/10"
+                                        >
+                                            {t.nombre || t.name}
+                                        </button>
+                                    ))}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setSubtotalPickOpen(false)}
+                                className="mt-4 w-full py-2 rounded-xl text-slate-400 hover:bg-white/5"
+                            >
+                                Cerrar
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {isRestaurantMode && splitPickOpen && (
+                    <div
+                        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
+                        onClick={() => setSplitPickOpen(false)}
+                    >
+                        <div
+                            className="bg-slate-900 border border-white/15 rounded-2xl p-6 max-w-md w-full shadow-2xl"
+                            onClick={e => e.stopPropagation()}
+                        >
+                            <h3 className="text-lg font-black text-white mb-4">Dividir cuenta — elegir mesa</h3>
+                            <div className="space-y-2 max-h-72 overflow-y-auto">
+                                {occupiedForTools
+                                    .filter(t => t.currentOrderId)
+                                    .map(t => {
+                                        const ticket = parkedTickets?.find(p => p.id === t.currentOrderId);
+                                        return (
+                                            <button
+                                                key={t.id}
+                                                type="button"
+                                                disabled={!ticket?.items?.length}
+                                                onClick={() => {
+                                                    if (ticket?.items?.length) {
+                                                        setSplitTicketForModal(ticket);
+                                                        setSplitPickOpen(false);
+                                                    }
+                                                }}
+                                                className="w-full text-left px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-white font-semibold border border-white/10"
+                                            >
+                                                {t.nombre || t.name}
+                                                {!ticket?.items?.length ? ' (sin ítems)' : ''}
+                                            </button>
+                                        );
+                                    })}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setSplitPickOpen(false)}
+                                className="mt-4 w-full py-2 rounded-xl text-slate-400 hover:bg-white/5"
+                            >
+                                Cancelar
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {isRestaurantMode && fractionPickOpen && (
+                    <div
+                        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
+                        onClick={() => setFractionPickOpen(false)}
+                    >
+                        <div
+                            className="bg-slate-900 border border-white/15 rounded-2xl p-6 max-w-md w-full shadow-2xl"
+                            onClick={e => e.stopPropagation()}
+                        >
+                            <h3 className="text-lg font-black text-white mb-2">Fraccionar cuenta</h3>
+                            <p className="text-sm text-slate-400 mb-4">
+                                Para dividir en partes iguales con cobro separado, abra la mesa en el POS y use la opción
+                                Fraccionar en el ticket. Aquí puede enviar pre-cuenta por mesa ocupada.
+                            </p>
+                            <div className="space-y-2 max-h-48 overflow-y-auto">
+                                {occupiedForTools
+                                    .filter(t => t.currentOrderId)
+                                    .map(t => (
+                                        <button
+                                            key={t.id}
+                                            type="button"
+                                            onClick={() => {
+                                                if (onPrintPrecheck) onPrintPrecheck(t);
+                                            }}
+                                            className="w-full text-left px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-white/10"
+                                        >
+                                            Pre-cuenta — {t.nombre || t.name}
+                                        </button>
+                                    ))}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setFractionPickOpen(false)}
+                                className="mt-4 w-full py-2 rounded-xl bg-white/10 text-white font-bold"
+                            >
+                                Cerrar
+                            </button>
+                        </div>
+                    </div>
                 )}
             </div>
         </LazyMotion>

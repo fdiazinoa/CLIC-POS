@@ -489,18 +489,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
                console.log(`✅ Loaded ${ticket.items.length} items from active table.`);
             } else {
-               console.warn(`⚠️ Ticket ${activeTable.currentOrderId} not found in parked tickets. Falling back to empty.`);
-               // Ideally trigger a fetch here if missing?
-               // For now, allow manual recovery logic or leave as is to avoid overwriting with empty
-            }
-         } else {
-            // Free table opened directly? Should be empty.
-            // Only clear if cart has items to avoid unnecessary updates
-            if (cart.length > 0) {
-               console.log('🧹 Clearing cart for new table.');
+               // Nunca dejar el carrito de la mesa anterior: si el ticket aún no está en memoria, vaciar hasta que llegue el sync.
+               console.warn(`⚠️ Ticket ${activeTable.currentOrderId} not found in parked tickets. Clearing cart to avoid inheriting another table.`);
                onUpdateCart([]);
                onSelectCustomer(null);
             }
+         } else {
+            // Mesa sin orden activa: siempre carrito y cliente limpios (evita heredar la mesa previa).
+            onUpdateCart([]);
+            onSelectCustomer(null);
          }
       }
    }, [activeTable, parkedTickets]); // Re-run if table changes or tickets sync
@@ -657,13 +654,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [globalDiscount, setGlobalDiscount] = useState<{ type: 'PERCENT' | 'FIXED', value: number }>({ type: 'PERCENT', value: 0 });
 
    useEffect(() => {
-      if (activeTable?.currentOrderId && cart.length === 0) {
-         const ord = (transactions || []).find(t => t.id === activeTable.currentOrderId);
-         if (ord && ord.items) {
-            onUpdateCart(ord.items);
-         }
+      if (!activeTable?.currentOrderId || cart.length > 0) return;
+      const parked = parkedTickets.find(t => t.id === activeTable.currentOrderId);
+      if (parked?.items?.length) {
+         onUpdateCart(parked.items);
+         return;
       }
-   }, [activeTable, transactions, onUpdateCart, cart.length]);
+      const ord = (transactions || []).find(t => t.id === activeTable.currentOrderId);
+      if (ord?.items?.length) {
+         onUpdateCart(ord.items);
+      }
+   }, [activeTable, parkedTickets, transactions, onUpdateCart, cart.length]);
 
    const [editingItem, setEditingItem] = useState<CartItem | null>(null);
    const [activeCartItemId, setActiveCartItemId] = useState<string | null>(null);
