@@ -60,6 +60,7 @@ interface IssueFiscalDocumentInput {
 }
 
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+const FISCAL_BACKEND_BASE_KEY = 'CLIC_POS_FISCAL_BASE_URL';
 
 const normalizeBaseUrl = (value?: string | null): string | null => {
     const raw = String(value || '').trim();
@@ -82,11 +83,22 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
 const uniqueStrings = (values: Array<string | null | undefined>) =>
     Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
 
+const extractBaseUrlFromEndpoint = (endpoint: string): string | null => {
+    try {
+        const url = new URL(endpoint, window.location.origin);
+        if (!/^https?:$/i.test(url.protocol)) return null;
+        return `${url.protocol}//${url.host}`;
+    } catch {
+        return null;
+    }
+};
+
 const buildFiscalEndpointCandidates = (path: string): string[] => {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const fiscalPath = `/api/fiscal${normalizedPath}`;
     const env = (import.meta as any)?.env || {};
 
+    const pinnedFiscalBase = normalizeBaseUrl(localStorage.getItem(FISCAL_BACKEND_BASE_KEY));
     const persistedMasterBase = normalizeBaseUrl(localStorage.getItem('CLIC_POS_MASTER_URL'));
     const persistedErpBase =
         normalizeBaseUrl(localStorage.getItem('CLIC_ERP_BASE_URL'))
@@ -98,6 +110,7 @@ const buildFiscalEndpointCandidates = (path: string): string[] => {
 
     if (isNativeAndroidRuntime()) {
         return uniqueStrings([
+            pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null,
             persistedMasterBase ? `${persistedMasterBase}${fiscalPath}` : null,
             runtimeMasterBase ? `${runtimeMasterBase}${fiscalPath}` : null,
             `${buildMasterUrlFromHost('127.0.0.1')}${fiscalPath}`,
@@ -110,6 +123,7 @@ const buildFiscalEndpointCandidates = (path: string): string[] => {
 
     return uniqueStrings([
         fiscalPath,
+        pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null,
         persistedMasterBase ? `${persistedMasterBase}${fiscalPath}` : null,
         persistedErpBase ? `${persistedErpBase}${fiscalPath}` : null,
     ]);
@@ -155,6 +169,10 @@ const requestFiscalJson = async <T extends Record<string, any>>(
             const { payload, rawText } = await readJsonPayload<T>(response);
 
             if (payload && typeof payload === 'object') {
+                const resolvedBase = extractBaseUrlFromEndpoint(endpoint);
+                if (resolvedBase) {
+                    localStorage.setItem(FISCAL_BACKEND_BASE_KEY, resolvedBase);
+                }
                 return { response, payload };
             }
 
