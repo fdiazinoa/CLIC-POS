@@ -129,7 +129,7 @@ export interface FingerprintDiscoveredDevice {
 
 // --- FISCAL NCF TYPES ---
 export type NCFType = 'B01' | 'B02' | 'B04' | 'B14' | 'B15';
-export type ElectronicNCFType = 'E31' | 'E32' | 'E34';
+export type ElectronicNCFType = 'E31' | 'E32' | 'E34' | 'E44' | 'E45';
 export type FiscalDocumentCode = NCFType | ElectronicNCFType;
 export type FiscalMode = 'LEGACY_B' | 'ECF';
 export type FiscalProviderId = 'NONE' | 'POLARIS';

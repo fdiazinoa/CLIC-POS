@@ -12,7 +12,7 @@ import {
 } from '../../types';
 
 export const LEGACY_FISCAL_CODES: NCFType[] = ['B01', 'B02', 'B04', 'B14', 'B15'];
-export const ELECTRONIC_FISCAL_CODES: ElectronicNCFType[] = ['E31', 'E32', 'E34'];
+export const ELECTRONIC_FISCAL_CODES: ElectronicNCFType[] = ['E31', 'E32', 'E34', 'E44', 'E45'];
 export const SUPPORTED_FISCAL_CODES: FiscalDocumentCode[] = [
   ...LEGACY_FISCAL_CODES,
   ...ELECTRONIC_FISCAL_CODES
@@ -55,7 +55,9 @@ export const FISCAL_DOCUMENT_LABELS: Record<FiscalDocumentCode, string> = {
   B15: 'Gubernamental',
   E31: 'e-CF Credito Fiscal',
   E32: 'e-CF Consumo',
-  E34: 'e-CF Nota de Credito'
+  E34: 'e-CF Nota de Credito',
+  E44: 'e-CF Regimenes Especiales',
+  E45: 'e-CF Gubernamental'
 };
 
 export const isLegacyFiscalCode = (value: unknown): value is NCFType =>
@@ -89,7 +91,7 @@ export const isCreditNoteNcf = (value: unknown): boolean => {
 
 export const isSaleFiscalCode = (value: unknown): boolean => {
   const code = normalizeFiscalCode(value);
-  return ['B01', 'B02', 'B14', 'B15', 'E31', 'E32'].includes(code);
+  return ['B01', 'B02', 'B14', 'B15', 'E31', 'E32', 'E44', 'E45'].includes(code);
 };
 
 export const isReportableFiscalNcf = (value: unknown): boolean =>
@@ -135,6 +137,10 @@ export const mapLegacyFiscalCodeToElectronic = (code: NCFType): FiscalDocumentCo
       return 'E32';
     case 'B04':
       return 'E34';
+    case 'B14':
+      return 'E44';
+    case 'B15':
+      return 'E45';
     default:
       return code;
   }
@@ -148,6 +154,10 @@ export const mapElectronicFiscalCodeToLegacy = (code: ElectronicNCFType): Fiscal
       return 'B02';
     case 'E34':
       return 'B04';
+    case 'E44':
+      return 'B14';
+    case 'E45':
+      return 'B15';
     default:
       return code;
   }
