@@ -546,14 +546,17 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                   </div>
 
                   <div className="flex-1 min-h-0 overflow-y-auto">
-                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-44 md:pb-32">
+                     <div
+                        className="grid gap-3 md:gap-4 pb-44 md:pb-32 auto-rows-fr"
+                        style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}
+                     >
                         {filteredProducts.map(product => {
                            const isSelected = selectedIds.has(product.id);
                            return (
                               <div
                                  key={product.id}
                                  onClick={() => selectedIds.size > 0 && toggleSelection(product.id)}
-                                 className={`bg-white rounded-2xl p-4 shadow-sm border-2 transition-all group flex flex-col h-[280px] relative ${isSelected ? 'border-blue-500 ring-4 ring-blue-50' : 'border-gray-200 hover:shadow-md hover:border-blue-300'}`}
+                                 className={`bg-white rounded-2xl p-3 md:p-4 shadow-sm border-2 transition-all group flex flex-col min-h-[214px] md:min-h-[228px] h-full relative ${isSelected ? 'border-blue-500 ring-4 ring-blue-50' : 'border-gray-200 hover:shadow-md hover:border-blue-300'}`}
                               >
                                  <button
                                     onClick={(e) => { e.stopPropagation(); toggleSelection(product.id); }}
@@ -562,8 +565,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                     {isSelected ? <CheckSquare size={16} strokeWidth={3} /> : <Square size={16} />}
                                  </button>
 
-                                 <div className="h-32 bg-gray-50 rounded-xl mb-4 relative overflow-hidden flex items-center justify-center">
-                                    {product.image ? <img src={product.image} alt={product.name} className="w-full h-full object-cover" /> : <ImageIcon className="text-gray-300" size={32} />}
+                                 <div className="h-24 sm:h-28 md:h-24 lg:h-28 bg-gray-50 rounded-xl mb-3 relative overflow-hidden flex items-center justify-center p-2">
+                                    {product.image ? <img src={product.image} alt={product.name} className="w-full h-full object-contain" /> : <ImageIcon className="text-gray-300" size={28} />}
                                     {canManage && (
                                        <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                           <button onClick={(e) => { e.stopPropagation(); setEditingProduct(product); }} className="p-2 bg-white/90 backdrop-blur rounded-lg shadow-sm hover:text-blue-600"><Edit2 size={16} /></button>
@@ -571,11 +574,11 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                     )}
                                  </div>
                                  <div className="flex-1 flex flex-col">
-                                    <span className="text-[10px] font-bold uppercase text-blue-600 bg-blue-50 px-2 py-0.5 rounded w-fit mb-1">{product.category}</span>
-                                    <h3 className="font-bold text-gray-800 leading-tight mb-1 line-clamp-2">{product.name}</h3>
-                                    <div className="mt-auto pt-3 border-t border-gray-100 flex justify-between items-end">
-                                       <span className="text-[10px] text-gray-400 font-mono">{product.barcode || '---'}</span>
-                                       <span className="text-lg font-black text-gray-900">{config.currencySymbol}{(product.price || 0).toFixed(2)}</span>
+                                    <span className="text-[10px] font-bold uppercase text-blue-600 bg-blue-50 px-2 py-0.5 rounded w-fit mb-1 line-clamp-1">{product.category}</span>
+                                    <h3 className="font-bold text-gray-800 leading-tight mb-1 line-clamp-2 text-sm md:text-[0.95rem] min-h-[2.5rem]">{product.name}</h3>
+                                    <div className="mt-auto pt-2 border-t border-gray-100 flex justify-between items-end gap-2">
+                                       <span className="text-[10px] text-gray-400 font-mono truncate">{product.barcode || '---'}</span>
+                                       <span className="text-base md:text-lg font-black text-gray-900 shrink-0">{config.currencySymbol}{(product.price || 0).toFixed(2)}</span>
                                     </div>
                                  </div>
                               </div>
