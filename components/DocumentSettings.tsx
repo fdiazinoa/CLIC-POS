@@ -742,7 +742,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
          );
          setCredentialMeta(response.meta || null);
          setCredentialDraft('');
-         setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial fiscal guardada.' });
+         setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial fiscal guardada localmente en SQLite.' });
       } catch (error: any) {
          console.error('❌ Error saving fiscal credential:', error);
          setFiscalFeedback({ kind: 'error', message: error?.message || 'No se pudo guardar la credencial fiscal.' });
@@ -1132,7 +1132,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                     <div>
                                        <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Credenciales del Proveedor</p>
                                        <p className="text-sm font-bold text-slate-700">
-                                          La precedencia activa es <span className="font-mono">SQLite -&gt; Supabase -&gt; ENV</span>. El token nunca vuelve al navegador una vez guardado.
+                                          En POS la credencial se guarda primero en <span className="font-mono">SQLite</span>. Si luego se configura, <span className="font-mono">Supabase</span> queda como sincronización opcional y <span className="font-mono">ENV</span> como respaldo.
                                        </p>
                                     </div>
                                     {credentialMeta?.hasCredential ? (
@@ -1185,7 +1185,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
 
                                  {credentialMeta?.supportsSupabaseWrite === false && (
                                     <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
-                                       El backend todavía no tiene `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`, así que por ahora solo se puede guardar localmente.
+                                       Este POS guardará la credencial localmente en <span className="font-mono">SQLite</span>. La opción de Supabase solo se habilita cuando el backend tenga `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`.
                                     </div>
                                  )}
 
@@ -1201,7 +1201,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                           disabled={isSavingCredential}
                                           className="px-5 py-3 rounded-2xl bg-emerald-600 text-white font-black shadow-lg hover:bg-emerald-700 disabled:opacity-60"
                                        >
-                                          {isSavingCredential ? 'Guardando local...' : 'Guardar Local'}
+                                          {isSavingCredential ? 'Guardando en SQLite...' : 'Guardar en SQLite'}
                                        </button>
                                        <button
                                           onClick={handleSaveSupabaseCredential}
