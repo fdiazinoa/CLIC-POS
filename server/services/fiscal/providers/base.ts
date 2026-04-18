@@ -1,5 +1,5 @@
 export type FiscalProviderId = 'POLARIS';
-export type ElectronicDocumentCode = 'E31' | 'E32' | 'E34';
+export type ElectronicDocumentCode = 'E31' | 'E32' | 'E34' | 'E44' | 'E45';
 export type FiscalCredentialSource = 'env' | 'sqlite' | 'supabase';
 
 export interface FiscalCompanyInfo {

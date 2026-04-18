@@ -166,7 +166,9 @@ const buildRecoveredFiscalRanges = (transactions: Transaction[]): FiscalRangeDGI
       B15: 0,
       E31: 0,
       E32: 0,
-      E34: 0
+      E34: 0,
+      E44: 0,
+      E45: 0
    };
 
    for (const tx of Array.isArray(transactions) ? transactions : []) {
@@ -438,7 +440,9 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
          B15: 0,
          E31: 0,
          E32: 0,
-         E34: 0
+         E34: 0,
+         E44: 0,
+         E45: 0
       };
 
       if (Array.isArray(transactions)) {
@@ -692,6 +696,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       }
    };
 
+   const persistFiscalConfigSnapshot = async () => {
+      if (!businessConfig) return;
+      await db.save('config', businessConfig);
+      window.dispatchEvent(new CustomEvent('configUpdated', { detail: businessConfig }));
+   };
+
    const handleTestProvider = async () => {
       if (fiscalCompliance.defaultProvider === 'NONE') {
          setFiscalFeedback({ kind: 'error', message: 'Selecciona un proveedor fiscal antes de probar la conexión.' });
@@ -733,6 +743,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       setIsSavingCredential(true);
       setFiscalFeedback(null);
       try {
+         await persistFiscalConfigSnapshot();
          const response = await saveLocalFiscalCredential(
             requestContext.providerId,
             credentialDraft,
@@ -763,6 +774,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       setIsSavingSupabaseCredential(true);
       setFiscalFeedback(null);
       try {
+         await persistFiscalConfigSnapshot();
          const response = await saveSupabaseFiscalCredential(
             requestContext.providerId,
             credentialDraft,
