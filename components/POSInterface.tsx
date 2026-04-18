@@ -1839,7 +1839,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
    const handlePaymentConfirm = async (payments: PaymentEntry[], voluntaryTip?: number): Promise<Transaction | null> => {
-      const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
+         const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
          let timeoutHandle: number | undefined;
          try {
             return await Promise.race([
@@ -1855,6 +1855,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       try {
          const terminalId = activeTerminalId || 't1';
+         const fiscalCompliance = getFiscalComplianceConfig(config);
          const customerForCheckout = effectiveSelectedCustomer;
          const hasReturns = processedCart.some(i => i.quantity < 0);
          const hasSales = processedCart.some(i => i.quantity > 0);
@@ -2032,6 +2033,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         customerName: customerForCheckout?.name,
                         ncf: finalNcf,
                         ncfType: fiscalStatus.type,
+                        legacyNcf: fiscalStatus.type.startsWith('E') ? undefined : finalNcf,
+                        electronicNcf: fiscalStatus.type.startsWith('E') ? finalNcf : undefined,
+                        fiscalMode: fiscalCompliance.mode,
+                        fiscalProvider: fiscalStatus.type.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
                         taxAmount: saleTaxAmount,
                         netAmount: saleNetAmount,
                         pendingBalance: creditAmount || undefined,
@@ -2159,6 +2164,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined, // Default 30 days
                   ncf: finalNcf,
                   ncfType: finalNcfType,
+                  legacyNcf: finalNcfType?.startsWith('E') ? undefined : finalNcf,
+                  electronicNcf: finalNcfType?.startsWith('E') ? finalNcf : undefined,
+                  fiscalMode: fiscalCompliance.mode,
+                  fiscalProvider: finalNcfType?.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
                   taxAmount: taxAmount,
                   netAmount: netAmount,
                   discountAmount: discountAmount,
