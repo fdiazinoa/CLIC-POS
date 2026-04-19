@@ -333,9 +333,19 @@ export const inspectFiscalProviderCredential = async (
 export const resolveFiscalProviderCredential = async (
     providerId: FiscalProviderId,
     companyInfo?: FiscalCompanyInfo,
-    credentialKey?: string
+    credentialKey?: string,
+    authTokenOverride?: string
 ): Promise<ResolvedFiscalCredential> => {
     const resolvedCredentialKey = deriveFiscalCredentialKey(companyInfo, credentialKey);
+    const normalizedOverride = cleanString(authTokenOverride);
+
+    if (normalizedOverride) {
+        return {
+            authToken: normalizedOverride,
+            source: 'sqlite',
+            resolvedCredentialKey
+        };
+    }
 
     const localCredential = getLocalFiscalCredential(providerId, resolvedCredentialKey);
     if (localCredential) return localCredential;

@@ -1546,17 +1546,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
                 <div className="grid grid-cols-1 gap-4">
                   {warehouses.map(wh => {
-                    // Try to get stock from detailed collection first, fallback to product embedded balances
-                    const detailedStock = detailedStocks.find(s => s.warehouseId === wh.id);
-
-                    // DEBUG: Log what the UI sees
-                    console.log(`UI Rendering Stocks for: ${formData.id} in ${wh.id}`, {
-                      detailedStock,
-                      allDetailedStocks: detailedStocks,
-                      fallback: formData.stockBalances?.[wh.id]
-                    });
-
-                    const stock = detailedStock ? detailedStock.quantity : getWarehouseScopedNumber(formData.stockBalances || {}, wh.id, warehouses, 0);
+                    // Guard against cross-product bleed: this tab must only read the detailed
+                    // stock row for the current product and warehouse combination.
+                    const detailedStock = detailedStocks.find(
+                      s => s.productId === formData.id && s.warehouseId === wh.id
+                    );
+                    const stock = detailedStock
+                      ? detailedStock.quantity
+                      : getWarehouseScopedNumber(formData.stockBalances || {}, wh.id, warehouses, 0);
                     const isActive = normalizedActiveWarehouseIds.includes(wh.id);
 
                     return (

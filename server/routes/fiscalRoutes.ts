@@ -72,11 +72,13 @@ router.post('/providers/test', async (req, res) => {
         const environment = normalizeEnvironment(req.body?.environment);
         const companyInfo = req.body?.companyInfo ? validateCompanyInfo(req.body?.companyInfo) : undefined;
         const options = (req.body?.options || {}) as FiscalIssueOptions;
+        const authToken = String(req.body?.authToken || '').trim() || undefined;
         const provider = getFiscalProvider(providerId);
         const result = await provider.testConnection({
             environment,
             companyInfo,
-            credentialKey: options?.credentialKey
+            credentialKey: options?.credentialKey,
+            authToken
         } satisfies FiscalProviderTestRequest);
         res.json(result);
     } catch (error: any) {
@@ -219,6 +221,7 @@ router.post('/documents/issue', async (req, res) => {
         const companyInfo = validateCompanyInfo(req.body?.companyInfo);
         const transaction = validateTransaction(req.body?.transaction);
         const options = (req.body?.options || {}) as FiscalIssueOptions;
+        const authToken = String(req.body?.authToken || '').trim() || undefined;
 
         const provider = getFiscalProvider(providerId);
         const result = await provider.issueDocument({
@@ -226,7 +229,10 @@ router.post('/documents/issue', async (req, res) => {
             documentCode,
             companyInfo,
             transaction,
-            options
+            options: {
+                ...options,
+                authToken
+            }
         });
 
         res.status(result.success ? 200 : 422).json(result);
@@ -246,6 +252,7 @@ router.get('/documents/status', async (req, res) => {
         const providerTransactionId = String(req.query.providerTransactionId || '').trim();
         const credentialKey = String(req.query.credentialKey || '').trim() || undefined;
         const companyRnc = String(req.query.companyRnc || '').trim() || undefined;
+        const authToken = String(req.header('x-fiscal-authtoken') || '').trim() || undefined;
         if (!providerTransactionId) {
             throw new Error('providerTransactionId es obligatorio.');
         }
@@ -255,7 +262,8 @@ router.get('/documents/status', async (req, res) => {
             environment,
             providerTransactionId,
             companyRnc,
-            credentialKey
+            credentialKey,
+            authToken
         });
         res.json(result);
     } catch (error: any) {

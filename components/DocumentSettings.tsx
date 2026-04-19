@@ -158,6 +158,35 @@ const extractConfig = (raw: any): BusinessConfig | null => {
    return null;
 };
 
+const pickRicherConfig = (primary?: BusinessConfig | null, secondary?: BusinessConfig | null): BusinessConfig | null => {
+   const left = primary && typeof primary === 'object' ? primary : null;
+   const right = secondary && typeof secondary === 'object' ? secondary : null;
+
+   if (left && !right) return left;
+   if (right && !left) return right;
+   if (!left && !right) return null;
+
+   const score = (config?: BusinessConfig | null) => {
+      if (!config) return 0;
+      let total = 0;
+      if (config.companyInfo?.name) total += 3;
+      if (config.companyInfo?.rnc) total += 4;
+      if (config.currencySymbol) total += 1;
+      if (Array.isArray(config.tariffs) && config.tariffs.length > 0) total += 2;
+      if (Array.isArray(config.productGroups) && config.productGroups.length > 0) total += 2;
+      if (Array.isArray(config.seasons) && config.seasons.length > 0) total += 2;
+      const fiscal = config.fiscalCompliance;
+      if (fiscal?.mode) total += 2;
+      if (fiscal?.defaultProvider && fiscal.defaultProvider !== 'NONE') total += 5;
+      if (Array.isArray(fiscal?.providers) && fiscal.providers.length > 0) {
+         total += fiscal.providers.reduce((acc, provider) => acc + (provider.credentialKey ? 3 : 0) + (provider.environment !== undefined ? 1 : 0), 0);
+      }
+      return total;
+   };
+
+   return score(right) > score(left) ? right : left;
+};
+
 const buildRecoveredFiscalRanges = (transactions: Transaction[]): FiscalRangeDGII[] => {
    const maxUsedByType: Record<FiscalDocumentCode, number> = {
       B01: 0,
@@ -252,7 +281,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             setTransactions(transactionsList);
 
             const localSeries = normalizeSequenceCollection(rawSequences as any[]);
-            const config = extractConfig(rawConfig) || configProp;
+            const config = pickRicherConfig(extractConfig(rawConfig), configProp) || extractConfig(rawConfig) || configProp || null;
             const terminalSeries = normalizeSequenceCollection(
                (config?.terminals || []).flatMap((terminal: any) =>
                   Array.isArray(terminal?.config?.documentSeries) ? terminal.config.documentSeries : []
@@ -395,6 +424,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
       if (active) return active;
       return '';
    }, [terminalId, activeTerminalId]);
+   const hasLockedLocalCredential = Boolean(credentialMeta?.hasLocalCredential);
 
    const terminalAllocations = useMemo(() => (
       (Array.isArray(fiscalAllocations) ? fiscalAllocations : []).filter((allocation) =>
@@ -766,6 +796,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             await refreshCredentialMeta();
          }
          setCredentialDraft('');
+         setShowCredentialDraft(false);
          setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial fiscal guardada.' });
       } catch (error: any) {
          console.error('❌ Error saving fiscal credential:', error);
@@ -1215,18 +1246,29 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                              type={showCredentialDraft ? 'text' : 'password'}
                                              value={credentialDraft}
                                              onChange={(e) => setCredentialDraft(e.target.value)}
-                                             className="w-full p-4 pr-14 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
-                                             placeholder="Pega aquí el token de Polaris"
+                                             disabled={hasLockedLocalCredential || isSavingCredential}
+                                             className={`w-full p-4 pr-14 rounded-2xl font-bold border transition-colors ${
+                                                hasLockedLocalCredential
+                                                   ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                                                   : 'bg-slate-50 border-slate-200 text-slate-800'
+                                             }`}
+                                             placeholder={hasLockedLocalCredential ? 'Credencial local activa. Usa Eliminar Local para reemplazarla.' : 'Pega aquí el token de Polaris'}
                                           />
                                           <button
                                              type="button"
+                                             disabled={hasLockedLocalCredential}
                                              onClick={() => setShowCredentialDraft((prev) => !prev)}
-                                             className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 transition-colors"
+                                             className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                              aria-label={showCredentialDraft ? 'Ocultar token' : 'Mostrar token'}
                                           >
                                              {showCredentialDraft ? <EyeOff size={18} /> : <Eye size={18} />}
                                           </button>
                                        </div>
+                                       {hasLockedLocalCredential && (
+                                          <p className="mt-2 text-xs font-bold text-slate-500">
+                                             La credencial ya está guardada en SQLite. Usa <span className="font-black">Eliminar Local</span> para ingresar un nuevo token.
+                                          </p>
+                                       )}
                                     </div>
                                  </div>
 
@@ -1245,10 +1287,10 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                     <div className="flex flex-wrap gap-3">
                                        <button
                                           onClick={handleSaveCredential}
-                                          disabled={isSavingCredential}
+                                          disabled={isSavingCredential || hasLockedLocalCredential}
                                           className="px-5 py-3 rounded-2xl bg-emerald-600 text-white font-black shadow-lg hover:bg-emerald-700 disabled:opacity-60"
                                        >
-                                          {isSavingCredential ? 'Guardando local...' : 'Guardar Local'}
+                                          {isSavingCredential ? 'Guardando local...' : hasLockedLocalCredential ? 'Guardado en SQLite' : 'Guardar Local'}
                                        </button>
                                        <button
                                           onClick={handleSaveSupabaseCredential}

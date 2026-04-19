@@ -490,12 +490,14 @@ export class PolarisFiscalProvider implements FiscalProvider {
 
     private async getAccessToken(
         companyRnc?: string,
-        credentialKey?: string
+        credentialKey?: string,
+        authTokenOverride?: string
     ): Promise<{ accessToken: string; raw: unknown; credentialSource: string; resolvedCredentialKey?: string }> {
         const credential = await resolveFiscalProviderCredential(
             this.id,
             companyRnc ? { name: '', rnc: companyRnc } : undefined,
-            credentialKey
+            credentialKey,
+            authTokenOverride
         );
 
         const cached = cachedAccessTokens.get(credential.authToken);
@@ -578,7 +580,8 @@ export class PolarisFiscalProvider implements FiscalProvider {
     async testConnection(request: FiscalProviderTestRequest): Promise<FiscalProviderTestResult> {
         const { raw, credentialSource, resolvedCredentialKey } = await this.getAccessToken(
             request.companyInfo?.rnc,
-            request.credentialKey
+            request.credentialKey,
+            request.authToken
         );
         return {
             success: true,
@@ -596,7 +599,8 @@ export class PolarisFiscalProvider implements FiscalProvider {
 
         const { accessToken, resolvedCredentialKey } = await this.getAccessToken(
             request.companyInfo?.rnc,
-            request.options?.credentialKey
+            request.options?.credentialKey,
+            request.options?.authToken
         );
         assertCompanyCredentialAlignment(request.companyInfo?.rnc, resolvedCredentialKey);
         const endpoint = this.resolveEndpoint(request.documentCode);
@@ -650,7 +654,8 @@ export class PolarisFiscalProvider implements FiscalProvider {
     async getStatus(request: FiscalStatusRequest): Promise<FiscalStatusResult> {
         const { accessToken, resolvedCredentialKey } = await this.getAccessToken(
             request.companyRnc,
-            request.credentialKey
+            request.credentialKey,
+            request.authToken
         );
         assertCompanyCredentialAlignment(request.companyRnc, resolvedCredentialKey);
         const response = await fetch(

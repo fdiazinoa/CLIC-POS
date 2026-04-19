@@ -722,6 +722,60 @@ class SyncManager {
         return { localById, localByBarcode, localByCode };
     }
 
+    private reconcileCatalogProductIds(config: BusinessConfig, localProducts: Product[]): BusinessConfig {
+        const hasGroups = Array.isArray(config?.productGroups) && config.productGroups.length > 0;
+        const hasSeasons = Array.isArray(config?.seasons) && config.seasons.length > 0;
+        if (!hasGroups && !hasSeasons) {
+            return config;
+        }
+
+        const { localById, localByBarcode, localByCode } = this.buildLocalProductLookupMaps(localProducts);
+        const resolveProductId = (value: unknown): string => {
+            const raw = typeof value === 'string' ? value.trim() : value != null ? String(value).trim() : '';
+            if (!raw) return '';
+            return localById.get(raw)?.id || localByCode.get(raw)?.id || localByBarcode.get(raw)?.id || raw;
+        };
+        const normalizeRefs = (values: unknown): string[] => Array.from(new Set(
+            (Array.isArray(values) ? values : [])
+                .map((entry) => resolveProductId(entry))
+                .filter(Boolean)
+        ));
+
+        let changed = false;
+
+        const nextGroups = hasGroups
+            ? (config.productGroups || []).map((group) => {
+                const normalizedProductIds = normalizeRefs(group?.productIds);
+                const same =
+                    normalizedProductIds.length === (group?.productIds || []).length &&
+                    normalizedProductIds.every((value, index) => value === (group?.productIds || [])[index]);
+                if (!same) changed = true;
+                return same ? group : { ...group, productIds: normalizedProductIds };
+            })
+            : config.productGroups;
+
+        const nextSeasons = hasSeasons
+            ? (config.seasons || []).map((season) => {
+                const normalizedProductIds = normalizeRefs(season?.productIds);
+                const same =
+                    normalizedProductIds.length === (season?.productIds || []).length &&
+                    normalizedProductIds.every((value, index) => value === (season?.productIds || [])[index]);
+                if (!same) changed = true;
+                return same ? season : { ...season, productIds: normalizedProductIds };
+            })
+            : config.seasons;
+
+        if (!changed) {
+            return config;
+        }
+
+        return {
+            ...config,
+            productGroups: nextGroups,
+            seasons: nextSeasons,
+        };
+    }
+
     private normalizeTerminalManifestPayload(payload: unknown): TerminalManifestPayload | null {
         if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
             return null;
@@ -1393,7 +1447,8 @@ class SyncManager {
             cachedSnapshot,
         });
 
-        const nextConfig = applied.config;
+        const localProducts = ((await db.get('products')) as Product[]) || [];
+        const nextConfig = this.reconcileCatalogProductIds(applied.config, localProducts);
         const operationalDocumentState = extractTerminalOperationalDocumentState(nextConfig, applied.terminalId);
         const changed =
             JSON.stringify(this.sanitizeConfig(baseConfig)) !==
