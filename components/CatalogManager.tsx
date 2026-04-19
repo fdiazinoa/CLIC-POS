@@ -207,12 +207,18 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    purchaseOrders = [],
    suppliers = []
 }) => {
+   const resolveViewportWidth = () => (typeof window !== 'undefined' ? window.innerWidth : 1440);
+   const resolvePointerCoarse = () => (typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(pointer: coarse)').matches
+      : false);
+
    const [viewMode, setViewMode] = useState<CatalogViewMode>('PRODUCTS');
    const [searchTerm, setSearchTerm] = useState('');
    const [categoryFilter, setCategoryFilter] = useState('ALL');
    const [editingProduct, setEditingProduct] = useState<Product | null | 'NEW'>(null);
    const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
-   const [isTablet, setIsTablet] = useState(window.innerWidth >= 1024);
+   const [viewportWidth, setViewportWidth] = useState(resolveViewportWidth());
+   const [hasCoarsePointer, setHasCoarsePointer] = useState(resolvePointerCoarse());
 
    // SELECTION & BULK STATE
    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -230,9 +236,15 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    };
 
    const canManage = hasPermission('CATALOG_MANAGE');
+   const isTablet = viewportWidth >= 1024 && hasCoarsePointer;
+   const isDesktop = viewportWidth >= 1024 && !hasCoarsePointer;
+   const isLargeCatalogLayout = isTablet || isDesktop;
 
    useEffect(() => {
-      const handleResize = () => setIsTablet(window.innerWidth >= 1024);
+      const handleResize = () => {
+         setViewportWidth(resolveViewportWidth());
+         setHasCoarsePointer(resolvePointerCoarse());
+      };
       window.addEventListener('resize', handleResize);
 
       const loadWatchlists = async () => {
@@ -515,7 +527,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
             {/* TOP BAR / Header */}
-            {!isTablet ? (
+            {!isLargeCatalogLayout ? (
                <div className="bg-white px-4 pt-4 pb-0 border-b border-gray-200 shrink-0">
                   <div className="flex flex-col gap-4 w-full">
                      <div className="flex justify-between items-center w-full">
@@ -538,7 +550,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                      </div>
                   </div>
                </div>
-            ) : (
+            ) : isTablet ? (
                <div className="bg-white p-8 border-b border-gray-100 flex items-center justify-between gap-8 shrink-0">
                   <div className="flex-1 max-w-2xl relative shadow-2xl shadow-gray-100">
                      <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400" size={24} />
@@ -561,6 +573,45 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         className="px-8 py-5 bg-blue-600 text-white rounded-[2rem] font-black text-lg shadow-[0_20px_40px_rgba(37,99,235,0.25)] hover:shadow-[0_25px_50px_rgba(37,99,235,0.35)] hover:-translate-y-1 active:translate-y-0.5 active:scale-95 transition-all flex items-center gap-3 group"
                      >
                         <Plus size={28} strokeWidth={4} className="group-hover:rotate-90 transition-transform duration-300" /> Nuevo Artículo
+                     </button>
+                  )}
+               </div>
+            ) : (
+               <div className="bg-white px-8 py-6 border-b border-gray-100 flex items-center gap-4 shrink-0">
+                  {canManage && viewMode === 'PRODUCTS' && (
+                     <button
+                        onClick={toggleAllSelection}
+                        className={`h-16 w-16 shrink-0 rounded-2xl border flex items-center justify-center transition-all shadow-sm ${
+                           selectedIds.size > 0
+                              ? 'bg-blue-600 border-blue-600 text-white'
+                              : 'bg-white border-gray-200 text-blue-600 hover:border-blue-200'
+                        }`}
+                        aria-label={selectedIds.size === filteredProducts.length && filteredProducts.length > 0 ? 'Quitar seleccion masiva' : 'Seleccionar articulos'}
+                     >
+                        <CheckSquare size={24} strokeWidth={2.5} />
+                     </button>
+                  )}
+                  <div className="relative flex-1 max-w-3xl">
+                     <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-300" size={22} />
+                     <input
+                        type="text"
+                        placeholder="Buscar productos..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="h-16 w-full rounded-3xl border border-gray-200 bg-white pl-14 pr-5 text-base font-semibold text-gray-700 outline-none transition-all focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                     />
+                  </div>
+                  {canManage && (
+                     <button
+                        onClick={() => {
+                           if (viewMode === 'PRODUCTS') setEditingProduct('NEW');
+                           else if (viewMode === 'TARIFFS') setEditingTariff('NEW');
+                           else if (viewMode === 'GROUPS') setEditingGroup('NEW');
+                           else if (viewMode === 'SEASONS') setEditingSeason('NEW');
+                        }}
+                        className="h-16 px-7 bg-blue-600 text-white rounded-2xl font-black text-base shadow-[0_20px_40px_rgba(37,99,235,0.22)] hover:shadow-[0_25px_50px_rgba(37,99,235,0.32)] hover:-translate-y-0.5 active:translate-y-0 active:scale-95 transition-all flex items-center gap-3"
+                     >
+                        <Plus size={22} strokeWidth={3} /> Nuevo
                      </button>
                   )}
                </div>
@@ -610,7 +661,23 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         </div>
                      )}
 
-                     {!isTablet && (
+                     {isDesktop && (
+                        <div className="mb-8">
+                           <div className="flex gap-4 overflow-x-auto no-scrollbar pb-2">
+                              {categories.map(c => (
+                                 <button
+                                    key={c}
+                                    onClick={() => setCategoryFilter(c)}
+                                    className={`px-8 py-3.5 rounded-full text-lg font-black transition-all whitespace-nowrap ${categoryFilter === c ? 'bg-blue-600 text-white shadow-[0_15px_30px_rgba(37,99,235,0.25)] scale-105' : 'bg-white text-gray-400 border-2 border-gray-50 hover:border-gray-100 hover:bg-gray-50'}`}
+                                 >
+                                    {c === 'ALL' ? 'Todos' : c}
+                                 </button>
+                              ))}
+                           </div>
+                        </div>
+                     )}
+
+                     {!isLargeCatalogLayout && (
                         <div className="mb-8 flex items-center gap-3">
                            {canManage && (
                               <button
@@ -638,22 +705,23 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         </div>
                      )}
 
-                     {/* Categories */}
-                     <div className="flex gap-4 overflow-x-auto no-scrollbar mb-14 pb-2">
-                        {categories.map(c => (
-                           <button
-                              key={c}
-                              onClick={() => setCategoryFilter(c)}
-                              className={`px-8 py-3.5 rounded-full text-lg font-black transition-all whitespace-nowrap ${categoryFilter === c ? 'bg-blue-600 text-white shadow-[0_15px_30px_rgba(37,99,235,0.25)] scale-105' : 'bg-white text-gray-400 border-2 border-gray-50 hover:border-gray-100 hover:bg-gray-50'}`}
-                           >
-                              {c === 'ALL' ? 'Todos' : c}
-                           </button>
-                        ))}
-                     </div>
+                     {!isDesktop && (
+                        <div className="flex gap-4 overflow-x-auto no-scrollbar mb-14 pb-2">
+                           {categories.map(c => (
+                              <button
+                                 key={c}
+                                 onClick={() => setCategoryFilter(c)}
+                                 className={`px-8 py-3.5 rounded-full text-lg font-black transition-all whitespace-nowrap ${categoryFilter === c ? 'bg-blue-600 text-white shadow-[0_15px_30px_rgba(37,99,235,0.25)] scale-105' : 'bg-white text-gray-400 border-2 border-gray-50 hover:border-gray-100 hover:bg-gray-50'}`}
+                              >
+                                 {c === 'ALL' ? 'Todos' : c}
+                              </button>
+                           ))}
+                        </div>
+                     )}
 
                      <div
                         className="grid gap-10 pb-60"
-                        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${isTablet ? '300px' : '180px'}, 1fr))` }}
+                        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${isLargeCatalogLayout ? '300px' : '180px'}, 1fr))` }}
                      >
                         {filteredProducts.map(product => {
                            const isSelected = selectedIds.has(product.id);
@@ -662,7 +730,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                  key={product.id}
                                  onClick={() => {
                                     if (selectedIds.size > 0) toggleSelection(product.id);
-                                    else if (isTablet) setEditingProduct(product);
+                                    else if (isLargeCatalogLayout) setEditingProduct(product);
                                  }}
                                  className={`bg-white rounded-[3rem] p-6 shadow-sm border-2 transition-all group flex flex-col relative h-full ${isSelected ? 'border-blue-600 bg-blue-50/10 ring-[12px] ring-blue-50' : 'border-transparent hover:shadow-[0_40px_80px_rgba(0,0,0,0.06)] hover:-translate-y-2'}`}
                               >
@@ -684,7 +752,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                     )}
 
                                     {/* Action Overlays for Tablet */}
-                                    {isTablet && !isSelected && selectedIds.size === 0 && (
+                                    {isLargeCatalogLayout && !isSelected && selectedIds.size === 0 && (
                                        <div className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 transition-all translate-y-2 group-hover:translate-y-0">
                                           <button
                                              onClick={(e) => { e.stopPropagation(); setEditingProduct(product); }}
@@ -793,7 +861,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          </div>
 
          {/* Floating Action Button for Mobile */}
-         {!isTablet && canManage && viewMode === 'PRODUCTS' && (
+         {!isLargeCatalogLayout && canManage && viewMode === 'PRODUCTS' && (
             <button
                onClick={() => setEditingProduct('NEW')}
                className="fixed bottom-8 right-8 w-20 h-20 bg-blue-600 text-white rounded-[2rem] shadow-[0_25px_50px_rgba(37,99,235,0.4)] flex items-center justify-center z-50 active:scale-90 transition-all"
