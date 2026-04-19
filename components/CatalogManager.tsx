@@ -56,6 +56,19 @@ const CATALOG_DESKTOP_VIEWS: Array<{ id: CatalogViewMode; label: string }> = [
    { id: 'TARIFFS', label: 'Tarifas' },
 ];
 
+const hasMeaningfulConfigPayload = (config?: BusinessConfig | null) => {
+   if (!config || typeof config !== 'object') return false;
+   return Boolean(
+      config.currencySymbol
+      || config.companyInfo?.name
+      || config.companyInfo?.rnc
+      || config.terminals?.length
+      || config.tariffs?.length
+      || config.productGroups?.length
+      || config.seasons?.length
+   );
+};
+
 // --- SUB-COMPONENT: STOCK ROW ---
 const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks: ProductStock[] }> = ({ product, warehouseId, productStocks }) => {
    const [isExpanded, setIsExpanded] = useState(false);
@@ -270,19 +283,37 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const isLargeCatalogLayout = isTablet || isDesktop;
 
    useEffect(() => {
-      setCatalogProducts(productsProp || []);
+      setCatalogProducts((previous) => {
+         const incoming = Array.isArray(productsProp) ? productsProp : [];
+         if (incoming.length === 0 && previous.length > 0) return previous;
+         return incoming;
+      });
    }, [productsProp]);
 
    useEffect(() => {
-      setCatalogConfig(configProp);
+      setCatalogConfig((previous) => {
+         const incoming = configProp;
+         if (!hasMeaningfulConfigPayload(incoming) && hasMeaningfulConfigPayload(previous)) {
+            return previous;
+         }
+         return incoming;
+      });
    }, [configProp]);
 
    useEffect(() => {
-      setCatalogWarehouses(Array.isArray(warehouses) ? warehouses : []);
+      setCatalogWarehouses((previous) => {
+         const incoming = Array.isArray(warehouses) ? warehouses : [];
+         if (incoming.length === 0 && previous.length > 0) return previous;
+         return incoming;
+      });
    }, [warehouses]);
 
    useEffect(() => {
-      setCatalogTransactions(Array.isArray(transactions) ? transactions : []);
+      setCatalogTransactions((previous) => {
+         const incoming = Array.isArray(transactions) ? transactions : [];
+         if (incoming.length === 0 && previous.length > 0) return previous;
+         return incoming;
+      });
    }, [transactions]);
 
    useEffect(() => {
