@@ -109,10 +109,26 @@ export const isRefundLikeTransaction = (tx?: Partial<Transaction> | null): boole
 
 export const isElectronicFiscalTransaction = (tx?: Partial<Transaction> | null): boolean => {
   if (!tx) return false;
-  const fiscalCode = tx.ncfType
-    || getFiscalCodeFromNcf(tx.electronicNcf || tx.ncf || tx.legacyNcf);
+  const fiscalCode = getFiscalDisplayCode(tx);
 
   return isElectronicFiscalCode(fiscalCode);
+};
+
+export const getFiscalDisplayNcf = (tx?: Partial<Transaction> | null): string => {
+  if (!tx) return '';
+  return normalizeFiscalCode(tx.electronicNcf || tx.ncf || tx.legacyNcf);
+};
+
+export const getFiscalDisplayCode = (
+  tx?: Partial<Transaction> | null
+): FiscalDocumentCode | null => {
+  if (!tx) return null;
+
+  return getFiscalCodeFromNcf(tx.electronicNcf)
+    || (isElectronicFiscalCode(tx.ncfType) ? tx.ncfType : null)
+    || getFiscalCodeFromNcf(tx.ncf)
+    || (tx.ncfType || null)
+    || getFiscalCodeFromNcf(tx.legacyNcf);
 };
 
 export const canRetryFiscalTransaction = (tx?: Partial<Transaction> | null): boolean => {

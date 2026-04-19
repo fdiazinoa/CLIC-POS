@@ -26,6 +26,8 @@ import FiscalSyncBadge from './FiscalSyncBadge';
 import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/fiscalBreakdown';
 import {
    canRetryFiscalTransaction,
+   getFiscalDisplayCode,
+   getFiscalDisplayNcf,
    getFiscalRetryActionLabel,
    isRefundLikeTransaction
 } from '../utils/fiscal/fiscalHelpers';
@@ -502,6 +504,7 @@ const SalesHistoryTable: React.FC<{
                   {transactions.map((tx) => {
                      const inferredZSeq = inferredZByTxId.get(tx.id);
                      const zSeq = tx.zReportSequence || (tx.zReportId ? zReportMap?.get(tx.zReportId) : null) || inferredZSeq;
+                     const displayNcf = getFiscalDisplayNcf(tx);
                      const openDetail = () => onRowClick(tx.id);
                      return (
                         <tr
@@ -518,7 +521,7 @@ const SalesHistoryTable: React.FC<{
                               <p className="text-xs font-medium text-gray-500">{tx.displayId || tx.id.slice(-8).toUpperCase()}</p>
                               <div className="mt-1 flex flex-wrap items-center gap-2">
                                  <span className="text-[10px] font-bold text-gray-400">
-                                    {(tx.ncf || tx.electronicNcf || tx.legacyNcf || '').toString().trim() || 'Sin NCF'}
+                                    {displayNcf || 'Sin NCF'}
                                  </span>
                                  <FiscalSyncBadge transaction={tx} compact />
                               </div>
@@ -612,6 +615,8 @@ const TicketDetailDrawer: React.FC<{
    const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
    const retryActionLabel = getFiscalRetryActionLabel(tx) || 'Reintentar envío';
    const canRequestAzulRefund = !isRefundDoc && tx.status !== 'REFUNDED' && canOfferAzulRefundAction(tx, config);
+   const displayNcf = getFiscalDisplayNcf(tx);
+   const displayFiscalCode = getFiscalDisplayCode(tx);
 
    const handleRetryFiscal = async () => {
       if (!tx || !onRetryFiscalDocument || !canRetryFiscal) return;
@@ -775,7 +780,7 @@ const TicketDetailDrawer: React.FC<{
                      </div>
                      <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
                         <p className="text-[10px] font-bold text-gray-400 uppercase">NCF</p>
-                        <p className="text-xs font-bold text-gray-800 truncate">{tx.ncf || 'Sin NCF'}</p>
+                        <p className="text-xs font-bold text-gray-800 truncate">{displayNcf || 'Sin NCF'}</p>
                      </div>
                      <div className="col-span-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
                         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -783,9 +788,9 @@ const TicketDetailDrawer: React.FC<{
                               <p className="text-[10px] font-bold text-slate-400 uppercase">Estado Fiscal</p>
                               <div className="mt-2 flex flex-wrap items-center gap-2">
                                  <FiscalSyncBadge transaction={tx} />
-                                 {tx.ncfType && (
+                                 {displayFiscalCode && (
                                     <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600">
-                                       {tx.ncfType}
+                                       {displayFiscalCode}
                                     </span>
                                  )}
                                  {tx.fiscalProvider && tx.fiscalProvider !== 'NONE' && (
