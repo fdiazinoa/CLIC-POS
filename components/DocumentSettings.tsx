@@ -7,6 +7,7 @@ import {
    ArrowRight, ArrowRightLeft, ArrowUpRight, Hash, Type, Landmark, Calendar,
    ShieldCheck, AlertOctagon, Plus, Trash2, ChevronRight,
    Save, AlignLeft, BarChart3, Activity, PieChart, ShoppingBag, Box
+   , Eye, EyeOff
 } from 'lucide-react';
 import { db } from '../utils/db';
 import { seriesSyncService } from '../services/sync/SeriesSyncService';
@@ -221,6 +222,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
    const [credentialDraft, setCredentialDraft] = useState('');
    const [credentialLabel, setCredentialLabel] = useState('');
    const [credentialMeta, setCredentialMeta] = useState<FiscalCredentialMetaResponse | null>(null);
+   const [showCredentialDraft, setShowCredentialDraft] = useState(false);
 
    const [editingSeries, setEditingSeries] = useState<DocumentSeries | null>(null);
 
@@ -1185,13 +1187,23 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                     </div>
                                     <div>
                                        <label className="block text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Authentication Token</label>
-                                       <input
-                                          type="password"
-                                          value={credentialDraft}
-                                          onChange={(e) => setCredentialDraft(e.target.value)}
-                                          className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
-                                          placeholder="Pega aquí el token de Polaris"
-                                       />
+                                       <div className="relative">
+                                          <input
+                                             type={showCredentialDraft ? 'text' : 'password'}
+                                             value={credentialDraft}
+                                             onChange={(e) => setCredentialDraft(e.target.value)}
+                                             className="w-full p-4 pr-14 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800"
+                                             placeholder="Pega aquí el token de Polaris"
+                                          />
+                                          <button
+                                             type="button"
+                                             onClick={() => setShowCredentialDraft((prev) => !prev)}
+                                             className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 transition-colors"
+                                             aria-label={showCredentialDraft ? 'Ocultar token' : 'Mostrar token'}
+                                          >
+                                             {showCredentialDraft ? <EyeOff size={18} /> : <Eye size={18} />}
+                                          </button>
+                                       </div>
                                     </div>
                                  </div>
 
