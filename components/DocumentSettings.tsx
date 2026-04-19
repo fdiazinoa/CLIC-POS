@@ -158,6 +158,35 @@ const extractConfig = (raw: any): BusinessConfig | null => {
    return null;
 };
 
+const pickRicherConfig = (primary?: BusinessConfig | null, secondary?: BusinessConfig | null): BusinessConfig | null => {
+   const left = primary && typeof primary === 'object' ? primary : null;
+   const right = secondary && typeof secondary === 'object' ? secondary : null;
+
+   if (left && !right) return left;
+   if (right && !left) return right;
+   if (!left && !right) return null;
+
+   const score = (config?: BusinessConfig | null) => {
+      if (!config) return 0;
+      let total = 0;
+      if (config.companyInfo?.name) total += 3;
+      if (config.companyInfo?.rnc) total += 4;
+      if (config.currencySymbol) total += 1;
+      if (Array.isArray(config.tariffs) && config.tariffs.length > 0) total += 2;
+      if (Array.isArray(config.productGroups) && config.productGroups.length > 0) total += 2;
+      if (Array.isArray(config.seasons) && config.seasons.length > 0) total += 2;
+      const fiscal = config.fiscalCompliance;
+      if (fiscal?.mode) total += 2;
+      if (fiscal?.defaultProvider && fiscal.defaultProvider !== 'NONE') total += 5;
+      if (Array.isArray(fiscal?.providers) && fiscal.providers.length > 0) {
+         total += fiscal.providers.reduce((acc, provider) => acc + (provider.credentialKey ? 3 : 0) + (provider.environment !== undefined ? 1 : 0), 0);
+      }
+      return total;
+   };
+
+   return score(right) > score(left) ? right : left;
+};
+
 const buildRecoveredFiscalRanges = (transactions: Transaction[]): FiscalRangeDGII[] => {
    const maxUsedByType: Record<FiscalDocumentCode, number> = {
       B01: 0,
@@ -252,7 +281,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             setTransactions(transactionsList);
 
             const localSeries = normalizeSequenceCollection(rawSequences as any[]);
-            const config = extractConfig(rawConfig) || configProp;
+            const config = pickRicherConfig(extractConfig(rawConfig), configProp) || extractConfig(rawConfig) || configProp || null;
             const terminalSeries = normalizeSequenceCollection(
                (config?.terminals || []).flatMap((terminal: any) =>
                   Array.isArray(terminal?.config?.documentSeries) ? terminal.config.documentSeries : []

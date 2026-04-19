@@ -108,6 +108,13 @@ const deriveCredentialKey = (companyInfo?: CompanyInfo, credentialKey?: string) 
 const buildLocalCredentialRecordId = (providerId: FiscalProviderId, credentialKey?: string) =>
     `${providerId}:${credentialKey || 'DEFAULT'}`;
 
+const pickNewestCredentialRecord = (records: LocalFiscalCredentialRecord[]): LocalFiscalCredentialRecord | null => {
+    if (!Array.isArray(records) || records.length === 0) return null;
+    return [...records].sort((left, right) =>
+        new Date(right.updatedAt || 0).getTime() - new Date(left.updatedAt || 0).getTime()
+    )[0] || null;
+};
+
 const readLocalFiscalCredentialRecords = async (): Promise<LocalFiscalCredentialRecord[]> => {
     const raw = await db.get(LOCAL_FISCAL_CREDENTIAL_COLLECTION as any);
     return (Array.isArray(raw) ? raw : []).filter((entry): entry is LocalFiscalCredentialRecord =>
@@ -130,6 +137,8 @@ const resolveLocalFiscalCredential = async (
     const normalizedCredentialKey = deriveCredentialKey(companyInfo, credentialKey);
     const scopedId = buildLocalCredentialRecordId(providerId, normalizedCredentialKey);
     const defaultId = buildLocalCredentialRecordId(providerId);
+    const providerRecords = records.filter((entry) => entry.providerId === providerId);
+
     const exactRecord = records.find((entry) => entry.id === scopedId);
     if (exactRecord) {
         return {
@@ -138,12 +147,41 @@ const resolveLocalFiscalCredential = async (
         };
     }
 
+    const matchingCredentialKey = normalizedCredentialKey
+        ? providerRecords.find((entry) => deriveCredentialKey(undefined, entry.credentialKey) === normalizedCredentialKey)
+        : null;
+    if (matchingCredentialKey) {
+        return {
+            record: matchingCredentialKey,
+            resolvedCredentialKey: deriveCredentialKey(undefined, matchingCredentialKey.credentialKey),
+        };
+    }
+
+    const normalizedCompanyRnc = normalizeCredentialKey(companyInfo?.rnc);
+    const matchingCompany = normalizedCompanyRnc
+        ? providerRecords.find((entry) => normalizeCredentialKey(entry.companyRnc) === normalizedCompanyRnc)
+        : null;
+    if (matchingCompany) {
+        return {
+            record: matchingCompany,
+            resolvedCredentialKey: deriveCredentialKey(undefined, matchingCompany.credentialKey),
+        };
+    }
+
     const defaultRecord = records.find((entry) => entry.id === defaultId);
-    if (!defaultRecord) return null;
+    if (defaultRecord) {
+        return {
+            record: defaultRecord,
+            resolvedCredentialKey: undefined,
+        };
+    }
+
+    const fallbackRecord = pickNewestCredentialRecord(providerRecords);
+    if (!fallbackRecord) return null;
 
     return {
-        record: defaultRecord,
-        resolvedCredentialKey: undefined,
+        record: fallbackRecord,
+        resolvedCredentialKey: deriveCredentialKey(undefined, fallbackRecord.credentialKey),
     };
 };
 
@@ -495,6 +533,9 @@ export const getFiscalCredentialMetadata = async (
     credentialKey?: string
 ): Promise<FiscalCredentialMetaResponse> => {
     const localMeta = await buildLocalCredentialMeta(providerId, companyInfo, credentialKey);
+    if (localMeta?.hasCredential) {
+        return localMeta;
+    }
     const params = new URLSearchParams({ providerId });
     if (companyInfo?.rnc) params.set('companyRnc', companyInfo.rnc);
     if (credentialKey) params.set('credentialKey', credentialKey);
@@ -537,7 +578,7 @@ export const saveLocalFiscalCredential = async (
     }
 
     const resolvedCredentialKey = deriveCredentialKey(companyInfo, credentialKey);
-    const record: LocalFiscalCredentialRecord = {
+    const baseRecord: LocalFiscalCredentialRecord = {
         id: buildLocalCredentialRecordId(providerId, resolvedCredentialKey),
         providerId,
         companyRnc: companyInfo?.rnc,
@@ -547,49 +588,25 @@ export const saveLocalFiscalCredential = async (
         updatedAt: new Date().toISOString(),
     };
 
-    await db.saveDocument(LOCAL_FISCAL_CREDENTIAL_COLLECTION as any, record);
-    const localMeta = await buildLocalCredentialMeta(providerId, companyInfo, credentialKey);
-
-    try {
-        const { response, payload } = await requestFiscalJson<FiscalCredentialMutationResponse>(
-            '/credentials/local',
-            {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    providerId,
-                    authToken: normalizedToken,
-                    companyInfo,
-                    label,
-                    options: {
-                        credentialKey
-                    }
-                })
-            },
-            (status) => buildInvalidFiscalPayload(status, {
-                success: false,
-                message: ''
-            })
-        );
-
-        if (!response.ok) {
-            throw new Error((payload as any)?.message || `Error guardando credencial fiscal (HTTP ${response.status})`);
+    const recordsToPersist: LocalFiscalCredentialRecord[] = [
+        baseRecord,
+        {
+            ...baseRecord,
+            id: buildLocalCredentialRecordId(providerId),
+            credentialKey: undefined,
         }
+    ];
 
-        return {
-            ...(payload as FiscalCredentialMutationResponse),
-            meta: mergeCredentialMeta((payload as FiscalCredentialMutationResponse).meta || ({} as FiscalCredentialMetaResponse), localMeta),
-        };
-    } catch (error) {
-        console.warn('[fiscalService] saveLocalFiscalCredential fallback SQLite only:', error);
-        return {
-            success: true,
-            message: 'Credencial fiscal guardada en SQLite.',
-            meta: localMeta || undefined,
-        };
+    for (const record of recordsToPersist) {
+        await db.saveDocument(LOCAL_FISCAL_CREDENTIAL_COLLECTION as any, record);
     }
+
+    const localMeta = await buildLocalCredentialMeta(providerId, companyInfo, credentialKey);
+    return {
+        success: true,
+        message: 'Credencial fiscal guardada en SQLite.',
+        meta: localMeta || undefined,
+    };
 };
 
 export const saveSupabaseFiscalCredential = async (
@@ -633,57 +650,21 @@ export const deleteLocalFiscalCredential = async (
     credentialKey?: string
 ): Promise<FiscalCredentialMutationResponse> => {
     const resolvedCredentialKey = deriveCredentialKey(companyInfo, credentialKey);
-    await db.deleteDocument(
-        LOCAL_FISCAL_CREDENTIAL_COLLECTION as any,
-        buildLocalCredentialRecordId(providerId, resolvedCredentialKey)
-    );
+    await db.deleteDocument(LOCAL_FISCAL_CREDENTIAL_COLLECTION as any, buildLocalCredentialRecordId(providerId, resolvedCredentialKey));
+    await db.deleteDocument(LOCAL_FISCAL_CREDENTIAL_COLLECTION as any, buildLocalCredentialRecordId(providerId));
     const localMetaAfterDelete = await buildLocalCredentialMeta(providerId, companyInfo, credentialKey);
-
-    try {
-        const { response, payload } = await requestFiscalJson<FiscalCredentialMutationResponse>(
-            '/credentials/local',
-            {
-                method: 'DELETE',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    providerId,
-                    companyInfo,
-                    options: {
-                        credentialKey
-                    }
-                })
-            },
-            (status) => buildInvalidFiscalPayload(status, {
-                success: false,
-                message: ''
-            })
-        );
-
-        if (!response.ok) {
-            throw new Error((payload as any)?.message || `Error eliminando credencial fiscal local (HTTP ${response.status})`);
-        }
-
-        return {
-            ...(payload as FiscalCredentialMutationResponse),
-            meta: localMetaAfterDelete ? mergeCredentialMeta((payload as FiscalCredentialMutationResponse).meta || ({} as FiscalCredentialMetaResponse), localMetaAfterDelete) : (payload as FiscalCredentialMutationResponse).meta,
-        };
-    } catch (error) {
-        console.warn('[fiscalService] deleteLocalFiscalCredential fallback SQLite only:', error);
-        return {
-            success: true,
-            message: 'Credencial fiscal local eliminada de SQLite.',
-            meta: localMetaAfterDelete || {
-                providerId,
-                hasCredential: false,
-                availableSources: [],
-                hasLocalCredential: false,
-                hasSupabaseCredential: false,
-                hasEnvCredential: false,
-            },
-        };
-    }
+    return {
+        success: true,
+        message: 'Credencial fiscal local eliminada de SQLite.',
+        meta: localMetaAfterDelete || {
+            providerId,
+            hasCredential: false,
+            availableSources: [],
+            hasLocalCredential: false,
+            hasSupabaseCredential: false,
+            hasEnvCredential: false,
+        },
+    };
 };
 
 export const deleteSupabaseFiscalCredential = async (

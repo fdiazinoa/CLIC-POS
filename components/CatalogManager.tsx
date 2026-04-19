@@ -20,6 +20,7 @@ import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
 import ClassificationManager from './ClassificationManager';
+import ErrorBoundary from './ErrorBoundary';
 import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
 
 interface CatalogManagerProps {
@@ -67,6 +68,39 @@ const hasMeaningfulConfigPayload = (config?: BusinessConfig | null) => {
       || config.productGroups?.length
       || config.seasons?.length
    );
+};
+
+const pickRicherBusinessConfig = (primary?: BusinessConfig | null, secondary?: BusinessConfig | null): BusinessConfig | null => {
+   const left = primary && typeof primary === 'object' ? primary : null;
+   const right = secondary && typeof secondary === 'object' ? secondary : null;
+
+   if (left && !right) return left;
+   if (right && !left) return right;
+   if (!left && !right) return null;
+
+   const score = (config?: BusinessConfig | null) => {
+      if (!config) return 0;
+      let total = 0;
+      if (config.companyInfo?.name) total += 3;
+      if (config.companyInfo?.rnc) total += 4;
+      if (config.currencySymbol) total += 1;
+      if (config.terminals?.length) total += 2;
+      if (config.tariffs?.length) total += 2;
+      if (config.productGroups?.length) total += 2;
+      if (config.seasons?.length) total += 2;
+      const fiscal = config.fiscalCompliance;
+      if (fiscal?.mode) total += 3;
+      if (fiscal?.defaultProvider && fiscal.defaultProvider !== 'NONE') total += 5;
+      if (Array.isArray(fiscal?.providers) && fiscal.providers.length > 0) {
+         total += fiscal.providers.reduce((acc, provider) => acc + (provider.environment !== undefined ? 1 : 0) + (provider.credentialKey ? 3 : 0), 0);
+      }
+      return total;
+   };
+
+   const leftScore = score(left);
+   const rightScore = score(right);
+   if (rightScore > leftScore) return right;
+   return left;
 };
 
 // --- SUB-COMPONENT: STOCK ROW ---
@@ -232,9 +266,6 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    suppliers = []
 }) => {
    const resolveViewportWidth = () => (typeof window !== 'undefined' ? window.innerWidth : 1440);
-   const resolvePointerCoarse = () => (typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia('(pointer: coarse)').matches
-      : false);
 
    const [catalogProducts, setCatalogProducts] = useState<Product[]>(productsProp || []);
    const [catalogConfig, setCatalogConfig] = useState<BusinessConfig>(configProp);
@@ -246,7 +277,6 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const [editingProduct, setEditingProduct] = useState<Product | null | 'NEW'>(null);
    const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
    const [viewportWidth, setViewportWidth] = useState(resolveViewportWidth());
-   const [hasCoarsePointer, setHasCoarsePointer] = useState(resolvePointerCoarse());
 
    // SELECTION & BULK STATE
    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -255,19 +285,37 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    // Watchlists State
    const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
 
-   const products = useMemo(
-      () => (Array.isArray(catalogProducts) ? catalogProducts.filter((entry): entry is Product => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
-      [catalogProducts]
+   const products = useMemo(() => {
+      const localProducts = Array.isArray(catalogProducts)
+         ? catalogProducts.filter((entry): entry is Product => Boolean(entry && typeof entry === 'object' && (entry as any).id))
+         : [];
+      const propProducts = Array.isArray(productsProp)
+         ? productsProp.filter((entry): entry is Product => Boolean(entry && typeof entry === 'object' && (entry as any).id))
+         : [];
+      return localProducts.length > 0 ? localProducts : propProducts;
+   }, [catalogProducts, productsProp]);
+   const config = useMemo(
+      () => pickRicherBusinessConfig(catalogConfig, configProp) || catalogConfig || configProp,
+      [catalogConfig, configProp]
    );
-   const config = catalogConfig;
-   const runtimeWarehouses = useMemo(
-      () => (Array.isArray(catalogWarehouses) ? catalogWarehouses.filter((entry): entry is Warehouse => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
-      [catalogWarehouses]
-   );
-   const runtimeTransactions = useMemo(
-      () => (Array.isArray(catalogTransactions) ? catalogTransactions.filter((entry): entry is Transaction => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
-      [catalogTransactions]
-   );
+   const runtimeWarehouses = useMemo(() => {
+      const localWarehouses = Array.isArray(catalogWarehouses)
+         ? catalogWarehouses.filter((entry): entry is Warehouse => Boolean(entry && typeof entry === 'object' && (entry as any).id))
+         : [];
+      const propWarehouses = Array.isArray(warehouses)
+         ? warehouses.filter((entry): entry is Warehouse => Boolean(entry && typeof entry === 'object' && (entry as any).id))
+         : [];
+      return localWarehouses.length > 0 ? localWarehouses : propWarehouses;
+   }, [catalogWarehouses, warehouses]);
+   const runtimeTransactions = useMemo(() => {
+      const localTransactions = Array.isArray(catalogTransactions)
+         ? catalogTransactions.filter((entry): entry is Transaction => Boolean(entry && typeof entry === 'object' && (entry as any).id))
+         : [];
+      const propTransactions = Array.isArray(transactions)
+         ? transactions.filter((entry): entry is Transaction => Boolean(entry && typeof entry === 'object' && (entry as any).id))
+         : [];
+      return localTransactions.length > 0 ? localTransactions : propTransactions;
+   }, [catalogTransactions, transactions]);
 
    const hasPermission = (permission: string): boolean => {
       if (!currentUser) return false;
@@ -278,8 +326,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    };
 
    const canManage = hasPermission('CATALOG_MANAGE');
-   const isTablet = viewportWidth >= 1024 && hasCoarsePointer;
-   const isDesktop = viewportWidth >= 1024 && !hasCoarsePointer;
+   const isTablet = viewportWidth >= 1024 && viewportWidth < 1280;
+   const isDesktop = viewportWidth >= 1280;
    const isLargeCatalogLayout = isTablet || isDesktop;
 
    useEffect(() => {
@@ -293,10 +341,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    useEffect(() => {
       setCatalogConfig((previous) => {
          const incoming = configProp;
-         if (!hasMeaningfulConfigPayload(incoming) && hasMeaningfulConfigPayload(previous)) {
-            return previous;
-         }
-         return incoming;
+         return pickRicherBusinessConfig(previous, incoming) || previous || incoming;
       });
    }, [configProp]);
 
@@ -319,7 +364,6 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    useEffect(() => {
       const handleResize = () => {
          setViewportWidth(resolveViewportWidth());
-         setHasCoarsePointer(resolvePointerCoarse());
       };
       window.addEventListener('resize', handleResize);
 
@@ -349,7 +393,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             : rawConfig;
 
          if (storedConfig && typeof storedConfig === 'object') {
-            setCatalogConfig(storedConfig as BusinessConfig);
+            setCatalogConfig((previous) => pickRicherBusinessConfig(previous, storedConfig as BusinessConfig) || previous || (storedConfig as BusinessConfig));
          }
 
          if (Array.isArray(rawWarehouses)) {
@@ -374,16 +418,24 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             ? (rawConfig.find((entry: any) => entry?.id === 'current') || rawConfig[0] || null)
             : rawConfig;
          if (storedConfig && typeof storedConfig === 'object') {
-            setCatalogConfig(storedConfig as BusinessConfig);
+            setCatalogConfig((previous) => pickRicherBusinessConfig(previous, storedConfig as BusinessConfig) || previous || (storedConfig as BusinessConfig));
          }
       };
       const handleProductsUpdate = async () => {
          const rawProducts = await db.get('products');
-         setCatalogProducts((Array.isArray(rawProducts) ? rawProducts : []) as Product[]);
+         setCatalogProducts((previous) => {
+            const nextProducts = (Array.isArray(rawProducts) ? rawProducts : []) as Product[];
+            if (nextProducts.length === 0 && previous.length > 0) return previous;
+            return nextProducts;
+         });
       };
       const handleTransactionsUpdate = async () => {
          const rawTransactions = await db.get('transactions');
-         setCatalogTransactions((Array.isArray(rawTransactions) ? rawTransactions : []) as Transaction[]);
+         setCatalogTransactions((previous) => {
+            const nextTransactions = (Array.isArray(rawTransactions) ? rawTransactions : []) as Transaction[];
+            if (nextTransactions.length === 0 && previous.length > 0) return previous;
+            return nextTransactions;
+         });
       };
       window.addEventListener('productStocksUpdated', handleStockUpdate);
       window.addEventListener('configUpdated', handleConfigUpdate as EventListener);
@@ -691,7 +743,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    }
 
    return (
-      <div className={`responsive-shell flex min-h-0 flex-col h-full bg-white animate-in fade-in slide-in-from-right-10 duration-300 relative ${isTablet ? 'flex-row' : ''}`}>
+      <div className={`responsive-shell flex min-h-0 h-full bg-white animate-in fade-in slide-in-from-right-10 duration-300 relative ${isTablet ? 'flex-row' : 'flex-col'}`}>
 
          {/* SIDEBAR - Tablet Only */}
          {isTablet && (
@@ -737,7 +789,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             </div>
          )}
 
-         <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+         <div className="flex-1 h-full min-h-0 min-w-0 flex flex-col overflow-hidden">
             {/* TOP BAR / Header */}
             {!isLargeCatalogLayout ? (
                <div className="bg-white px-4 pt-4 pb-0 border-b border-gray-200 shrink-0">
@@ -876,9 +928,11 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                </div>
             )}
 
-            <div className="flex-1 overflow-y-auto bg-white custom-scrollbar">
+            <div className="responsive-content flex-1 min-h-0 overflow-hidden bg-white">
+               <ErrorBoundary componentName="CatalogManager Content">
+                  <div className="h-full overflow-y-auto custom-scrollbar">
                {viewMode === 'PRODUCTS' && (
-                  <div className="p-10 md:p-16 max-w-[1600px] mx-auto w-full">
+                  <div className="min-h-full p-10 md:p-16 max-w-[1600px] mx-auto w-full">
                      {isTablet && (
                         <div className="flex justify-between items-start mb-14">
                            <div>
@@ -1215,6 +1269,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                      </div>
                   </div>
                )}
+                  </div>
+               </ErrorBoundary>
             </div>
          </div>
 
