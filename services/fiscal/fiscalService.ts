@@ -154,6 +154,24 @@ const buildInvalidFiscalPayload = <T extends Record<string, any>>(status: number
     message: `Respuesta inválida del backend fiscal (HTTP ${status}).`
 });
 
+const fetchFiscalWithTimeout = async (input: RequestInfo | URL, init: RequestInit, timeoutMs: number): Promise<Response> => {
+    if (typeof AbortController === 'undefined') {
+        return fetch(input, init);
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+        return await fetch(input, {
+            ...init,
+            signal: controller.signal,
+        });
+    } finally {
+        window.clearTimeout(timeoutId);
+    }
+};
+
 const requestFiscalJson = async <T extends Record<string, any>>(
     path: string,
     init: RequestInit,
@@ -162,10 +180,11 @@ const requestFiscalJson = async <T extends Record<string, any>>(
     const endpoints = buildFiscalEndpointCandidates(path);
     let lastInvalid: { response: Response; payload: T } | null = null;
     let lastError: Error | null = null;
+    const timeoutMs = isNativeAndroidRuntime() ? 2200 : 5000;
 
     for (const endpoint of endpoints) {
         try {
-            const response = await fetch(endpoint, init);
+            const response = await fetchFiscalWithTimeout(endpoint, init, timeoutMs);
             const { payload, rawText } = await readJsonPayload<T>(response);
 
             if (payload && typeof payload === 'object') {
