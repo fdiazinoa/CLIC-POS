@@ -35,10 +35,11 @@ interface TerminalSettingsProps {
    currentDeviceId?: string;
 }
 
-const resolveTerminalDisplayName = (terminal: TerminalConfig) => (
+type ConfiguredTerminal = BusinessConfig['terminals'][number];
+
+const resolveTerminalDisplayName = (terminal: ConfiguredTerminal) => (
    String(
       terminal.config?.terminalName
-      || terminal.name
       || terminal.config?.erpBinding?.terminalName
       || terminal.config?.stationNumber
       || terminal.config?.erpTerminalId
