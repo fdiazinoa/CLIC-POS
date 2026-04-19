@@ -148,6 +148,16 @@ const resolveTenantEmail = (): string | null => {
   return (localStorage.getItem('clic_tenant_email') || '').trim().toLowerCase() || null;
 };
 
+const resolveTenantDisplayName = (tenantId?: string | null): string => {
+  const slug = resolveTenantSlug();
+  if (slug) return slug;
+
+  const email = resolveTenantEmail();
+  if (email) return email;
+
+  return (tenantId || '').trim() || 'Tenant no identificado';
+};
+
 const DEFAULT_PUBLIC_ERP_BASE_URL = 'https://clic-erp.vercel.app';
 
 const resolveErpBaseUrl = (): string | null => {
@@ -742,6 +752,8 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     await fetchTerminals();
   };
 
+  const tenantDisplayName = useMemo(() => resolveTenantDisplayName(tenantId), [tenantId]);
+
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       <div className="rounded-[1.75rem] border border-white/60 bg-white/70 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:rounded-[2rem] sm:p-6">
@@ -755,7 +767,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           </div>
           <div className="w-full rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-left shadow-inner sm:w-auto sm:max-w-[18rem] sm:text-right">
             <p className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-400">Tenant</p>
-            <p className="text-sm font-bold text-blue-700 break-all sm:break-words">{tenantId}</p>
+            <p className="text-sm font-bold text-blue-700 break-all sm:break-words">{tenantDisplayName}</p>
           </div>
         </div>
       </div>
