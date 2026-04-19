@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { BusinessConfig, DocumentSeries, FiscalAllocation, FiscalDocumentCode, FiscalRangeDGII, LocalFiscalBuffer, Transaction } from '../types';
 import {
    FileText, Receipt, RotateCcw, FileSpreadsheet,
@@ -233,6 +233,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
    const [activeTerminalId, setActiveTerminalId] = useState('');
 
    const [transactions, setTransactions] = useState<Transaction[]>([]);
+   const credentialMetaRequestSeq = useRef(0);
 
    useEffect(() => {
       const loadData = async () => {
@@ -251,7 +252,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             setTransactions(transactionsList);
 
             const localSeries = normalizeSequenceCollection(rawSequences as any[]);
-            const config = configProp || extractConfig(rawConfig);
+            const config = extractConfig(rawConfig) || configProp;
             const terminalSeries = normalizeSequenceCollection(
                (config?.terminals || []).flatMap((terminal: any) =>
                   Array.isArray(terminal?.config?.documentSeries) ? terminal.config.documentSeries : []
@@ -334,9 +335,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
    );
 
    const refreshCredentialMeta = async () => {
+      const requestId = ++credentialMetaRequestSeq.current;
       if (!businessConfig || fiscalCompliance.defaultProvider === 'NONE') {
-         setCredentialMeta(null);
-         setCredentialLabel('');
+         if (requestId === credentialMetaRequestSeq.current) {
+            setCredentialMeta(null);
+            setCredentialLabel('');
+         }
          return null;
       }
 
@@ -345,8 +349,10 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
          businessConfig.companyInfo,
          selectedFiscalProviderConfig?.credentialKey
       );
-      setCredentialMeta(meta);
-      setCredentialLabel(meta.label || '');
+      if (requestId === credentialMetaRequestSeq.current) {
+         setCredentialMeta(meta);
+         setCredentialLabel(meta.label || '');
+      }
       return meta;
    };
 
@@ -753,7 +759,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             requestContext.credentialKey,
             credentialLabel
          );
-         setCredentialMeta(response.meta || null);
+         await refreshCredentialMeta();
          setCredentialDraft('');
          setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial fiscal guardada.' });
       } catch (error: any) {
@@ -783,8 +789,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             requestContext.companyInfo,
             requestContext.credentialKey
          );
-         setCredentialMeta(response.meta || null);
-         setCredentialLabel(response.meta?.label || '');
+         await refreshCredentialMeta();
          setCredentialDraft('');
          setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial fiscal guardada en Supabase.' });
       } catch (error: any) {
@@ -816,8 +821,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             requestContext.companyInfo,
             requestContext.credentialKey
          );
-         setCredentialMeta(response.meta || null);
-         setCredentialLabel(response.meta?.label || '');
+         await refreshCredentialMeta();
          setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial local eliminada.' });
       } catch (error: any) {
          console.error('❌ Error deleting local fiscal credential:', error);
@@ -848,8 +852,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             requestContext.companyInfo,
             requestContext.credentialKey
          );
-         setCredentialMeta(response.meta || null);
-         setCredentialLabel(response.meta?.label || '');
+         await refreshCredentialMeta();
          setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial en Supabase eliminada.' });
       } catch (error: any) {
          console.error('❌ Error deleting Supabase fiscal credential:', error);
