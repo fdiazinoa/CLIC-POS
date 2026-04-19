@@ -35,6 +35,18 @@ interface TerminalSettingsProps {
    currentDeviceId?: string;
 }
 
+const resolveTerminalDisplayName = (terminal: TerminalConfig) => (
+   String(
+      terminal.config?.terminalName
+      || terminal.name
+      || terminal.config?.erpBinding?.terminalName
+      || terminal.config?.stationNumber
+      || terminal.config?.erpTerminalId
+      || terminal.id
+      || 'Terminal'
+   ).trim()
+);
+
 const PRINTER_ROLES = [
    { id: 'TICKET', label: 'Ticket de Venta', icon: Receipt },
    { id: 'LABEL', label: 'Etiquetas', icon: Tag },
@@ -79,7 +91,12 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
 
    const [selectedTerminalId, setSelectedTerminalId] = useState<string>(() => {
       if (currentDeviceId) {
-         const current = terminals.find(t => t.config.currentDeviceId === currentDeviceId);
+         const activeTerminalId = localStorage.getItem('active_terminal_id') || localStorage.getItem('CLIC_POS_TERMINAL_ID') || '';
+         const currentCandidates = terminals.filter(t => t.config.currentDeviceId === currentDeviceId);
+         const current =
+            currentCandidates.find((terminal) => terminal.id === activeTerminalId || terminal.config?.erpTerminalId === activeTerminalId)
+            || currentCandidates.find((terminal) => resolveTerminalDisplayName(terminal) !== terminal.id)
+            || currentCandidates[0];
          if (current) return current.id;
       }
       return terminals[0]?.id || '';
@@ -258,7 +275,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                   </div>
                   <div>
                      <h2 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-                        Terminal: <span className="text-blue-600">{selectedTerminalId}</span>
+                        Terminal: <span className="text-blue-600">{activeTerminal ? resolveTerminalDisplayName(activeTerminal) : selectedTerminalId}</span>
                      </h2>
                      <p className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em] mt-1">Gestión de Estaciones</p>
                   </div>
@@ -279,7 +296,7 @@ const TerminalSettings: React.FC<TerminalSettingsProps> = ({ config, onUpdateCon
                      <div key={t.id} onClick={() => setSelectedTerminalId(t.id)} className={`min-w-[200px] p-4 rounded-3xl border-2 transition-all cursor-pointer ${selectedTerminalId === t.id ? 'bg-blue-600 border-blue-600 text-white shadow-xl' : 'bg-white border-slate-100'}`}>
                         <div className="flex items-center gap-3">
                            <Monitor size={20} />
-                           <span className="font-black">{t.id}</span>
+                           <span className="font-black">{resolveTerminalDisplayName(t)}</span>
                         </div>
                      </div>
                   ))}
