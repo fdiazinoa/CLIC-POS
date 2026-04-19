@@ -242,10 +242,19 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    // Watchlists State
    const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
 
-   const products = catalogProducts;
+   const products = useMemo(
+      () => (Array.isArray(catalogProducts) ? catalogProducts.filter((entry): entry is Product => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
+      [catalogProducts]
+   );
    const config = catalogConfig;
-   const runtimeWarehouses = Array.isArray(catalogWarehouses) ? catalogWarehouses : [];
-   const runtimeTransactions = Array.isArray(catalogTransactions) ? catalogTransactions : [];
+   const runtimeWarehouses = useMemo(
+      () => (Array.isArray(catalogWarehouses) ? catalogWarehouses.filter((entry): entry is Warehouse => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
+      [catalogWarehouses]
+   );
+   const runtimeTransactions = useMemo(
+      () => (Array.isArray(catalogTransactions) ? catalogTransactions.filter((entry): entry is Transaction => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
+      [catalogTransactions]
+   );
 
    const hasPermission = (permission: string): boolean => {
       if (!currentUser) return false;
@@ -285,7 +294,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
       const loadWatchlists = async () => {
          const lists = (await db.get('watchlists') || []) as Watchlist[];
-         setWatchlists(lists);
+         setWatchlists((Array.isArray(lists) ? lists.filter((entry): entry is Watchlist => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []));
       };
       const loadStocks = async () => {
          const stocks = (await db.get('productStocks') || []) as ProductStock[];
@@ -367,9 +376,18 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       };
    }, []);
 
-   const tariffs = config.tariffs || [];
-   const currentProductGroups = config.productGroups || [];
-   const currentSeasons = config.seasons || [];
+   const tariffs = useMemo(
+      () => (Array.isArray(config?.tariffs) ? config.tariffs.filter((entry): entry is Tariff => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
+      [config]
+   );
+   const currentProductGroups = useMemo(
+      () => (Array.isArray(config?.productGroups) ? config.productGroups.filter((entry): entry is ProductGroup => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
+      [config]
+   );
+   const currentSeasons = useMemo(
+      () => (Array.isArray(config?.seasons) ? config.seasons.filter((entry): entry is Season => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
+      [config]
+   );
    const [editingTariff, setEditingTariff] = useState<Tariff | null | 'NEW'>(null);
    const [editingGroup, setEditingGroup] = useState<ProductGroup | null | 'NEW'>(null);
    const [editingSeason, setEditingSeason] = useState<Season | null | 'NEW'>(null);
@@ -380,8 +398,11 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    );
    const filteredProducts = useMemo(() => {
       return products.filter(p => {
-         const matchesSearch = (p.name || '').toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
-         const matchesCategory = categoryFilter === 'ALL' || p.category === categoryFilter;
+         const normalizedName = typeof p.name === 'string' ? p.name : '';
+         const normalizedBarcode = typeof p.barcode === 'string' ? p.barcode : '';
+         const normalizedCategory = typeof p.category === 'string' ? p.category : 'Sin categoría';
+         const matchesSearch = normalizedName.toLowerCase().includes(searchTerm.toLowerCase()) || normalizedBarcode.includes(searchTerm);
+         const matchesCategory = categoryFilter === 'ALL' || normalizedCategory === categoryFilter;
          return matchesSearch && matchesCategory;
       });
    }, [products, searchTerm, categoryFilter]);
@@ -947,7 +968,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                  <div className="flex-1 flex flex-col px-2">
                                     <div className="flex items-center justify-between mb-4">
                                        <span className="text-[11px] font-black uppercase tracking-[0.15em] text-gray-400 bg-gray-100 px-4 py-1.5 rounded-full leading-none">
-                                          {product.category}
+                                          {typeof product.category === 'string' && product.category.trim() ? product.category : 'Sin categoría'}
                                        </span>
                                        <div className={`w-4 h-4 rounded-full shadow-sm ${(product.stockBalances?.[runtimeWarehouses[0]?.id || ''] || 0) > 0 ? 'bg-emerald-500 shadow-emerald-200' : 'bg-red-500 shadow-red-200'}`}></div>
                                     </div>
@@ -959,7 +980,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
                                     <div className="mt-auto flex justify-between items-center py-4 border-t border-gray-50">
                                        <span className="text-3xl font-black text-blue-600 tracking-tight">
-                                          {config.currencySymbol}{ (product.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2 }) }
+                                       {config.currencySymbol}{ (Number(product.price) || 0).toLocaleString(undefined, { minimumFractionDigits: 2 }) }
                                        </span>
                                     </div>
                                  </div>

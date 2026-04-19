@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import { CompanyInfo, FiscalProviderId, Transaction } from '../../types';
-import { buildMasterUrlFromHost } from '../../utils/cloudMasterRegistry';
+import { buildMasterUrlFromHost, resolveMasterEndpointFromCloud } from '../../utils/cloudMasterRegistry';
 
 export interface FiscalCredentialMetaResponse {
     providerId: FiscalProviderId;
@@ -93,7 +93,29 @@ const extractBaseUrlFromEndpoint = (endpoint: string): string | null => {
     }
 };
 
-const buildFiscalEndpointCandidates = (path: string): string[] => {
+const resolveCloudMasterBase = async (): Promise<string | null> => {
+    if (!isNativeAndroidRuntime()) return null;
+
+    try {
+        const endpoint = await resolveMasterEndpointFromCloud();
+        if (!endpoint) return null;
+
+        const directEndpoint = normalizeBaseUrl(endpoint.endpointUrl || null);
+        if (directEndpoint) return directEndpoint;
+
+        if (endpoint.localIp) {
+            return normalizeBaseUrl(
+                buildMasterUrlFromHost(endpoint.localIp, endpoint.port || 3001, endpoint.protocol || 'http')
+            );
+        }
+    } catch (error) {
+        console.warn('[fiscalService] No se pudo resolver el master desde cloud:', error);
+    }
+
+    return null;
+};
+
+const buildFiscalEndpointCandidates = async (path: string): Promise<string[]> => {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const fiscalPath = `/api/fiscal${normalizedPath}`;
     const env = (import.meta as any)?.env || {};
@@ -107,17 +129,18 @@ const buildFiscalEndpointCandidates = (path: string): string[] => {
         || normalizeBaseUrl(env.VITE_ERP_SYNC_API_URL)
         || normalizeBaseUrl(env.VITE_SYNC_API_URL);
     const runtimeMasterBase = normalizeBaseUrl(buildMasterUrlFromHost(window.location.hostname));
+    const cloudMasterBase = await resolveCloudMasterBase();
 
     if (isNativeAndroidRuntime()) {
         return uniqueStrings([
             pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null,
             persistedMasterBase ? `${persistedMasterBase}${fiscalPath}` : null,
+            cloudMasterBase ? `${cloudMasterBase}${fiscalPath}` : null,
             runtimeMasterBase ? `${runtimeMasterBase}${fiscalPath}` : null,
             `${buildMasterUrlFromHost('127.0.0.1')}${fiscalPath}`,
             `${buildMasterUrlFromHost('10.0.2.2')}${fiscalPath}`,
             `${buildMasterUrlFromHost('10.0.3.2')}${fiscalPath}`,
             persistedErpBase ? `${persistedErpBase}${fiscalPath}` : null,
-            fiscalPath,
         ]);
     }
 
@@ -177,7 +200,7 @@ const requestFiscalJson = async <T extends Record<string, any>>(
     init: RequestInit,
     invalidPayloadFactory: (status: number) => T,
 ): Promise<{ response: Response; payload: T }> => {
-    const endpoints = buildFiscalEndpointCandidates(path);
+    const endpoints = await buildFiscalEndpointCandidates(path);
     let lastInvalid: { response: Response; payload: T } | null = null;
     let lastError: Error | null = null;
     const timeoutMs = isNativeAndroidRuntime() ? 2200 : 5000;
