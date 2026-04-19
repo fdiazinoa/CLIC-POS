@@ -18,11 +18,11 @@ import {
 import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
-   Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType,
+   Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType, FiscalDocumentCode,
    PaymentEntry, Table, Reservation, ZReport, Room, Permission
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
-import { getFiscalComplianceConfig, getDefaultFiscalProvider, resolveCreditNoteFiscalCode } from '../utils/fiscal/fiscalHelpers';
+import { getFiscalComplianceConfig, getDefaultFiscalProvider, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
 import { calculateTransactionTaxSummary } from '../utils/taxSummary';
 import UnifiedPaymentModal from './PaymentModal';
 import {
@@ -679,7 +679,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showVirtualKeyboard, setShowVirtualKeyboard] = useState(false);
 
    const [fiscalStatus, setFiscalStatus] = useState<{
-      type: NCFType;
+      type: FiscalDocumentCode;
       number?: string;
       rangeExpiry?: string;
       hasNCF: boolean;
@@ -1355,10 +1355,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const checkFiscalStatus = async () => {
          const threshold = activeTerminalConfig?.operational?.fiscalThreshold || 0;
          const isOverThreshold = threshold > 0 && cartTotal > threshold;
+         const fiscalCompliance = getFiscalComplianceConfig(config);
 
-         const type: NCFType = isOverThreshold
+         const baseLegacyType: NCFType = isOverThreshold
             ? 'B01'
             : (selectedCustomer?.defaultNcfType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02'));
+         const type = resolveSaleFiscalCode(fiscalCompliance.mode, baseLegacyType);
          const [buffers, allocations, ranges] = await Promise.all([
             db.get('localFiscalBuffer'),
             db.get('fiscalAllocations'),
@@ -1837,7 +1839,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
    const handlePaymentConfirm = async (payments: PaymentEntry[], voluntaryTip?: number): Promise<Transaction | null> => {
-      const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
+         const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
          let timeoutHandle: number | undefined;
          try {
             return await Promise.race([
@@ -1853,6 +1855,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       try {
          const terminalId = activeTerminalId || 't1';
+         const fiscalCompliance = getFiscalComplianceConfig(config);
          const customerForCheckout = effectiveSelectedCustomer;
          const hasReturns = processedCart.some(i => i.quantity < 0);
          const hasSales = processedCart.some(i => i.quantity > 0);
@@ -1867,13 +1870,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          normalizedRefundItems.forEach(item => sellableConditions.set(item.cartId, 'SELLABLE'));
 
          // --- FISCAL COMPLIANCE CHECK (DGII RNC VALIDATION) ---
-         if (!isRefundOnly && fiscalStatus && fiscalStatus.type === 'B01' && customerForCheckout) {
+         if (!isRefundOnly && fiscalStatus && (fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31') && customerForCheckout) {
             if (customerForCheckout.fiscalStatus && customerForCheckout.fiscalStatus !== 'ACTIVO') {
                alert(
                   `⛔ COMPROBANTE BLOQUEADO\n\n` +
                   `El contribuyente ${customerForCheckout.name} tiene estatus: ${customerForCheckout.fiscalStatus || 'DESCONOCIDO'}.\n` +
-                  `No se puede emitir Crédito Fiscal (B01) según normas de la DGII.\n\n` +
-                  `Acción requerida: Cambie el tipo de comprobante a Consumo (B02) o seleccione otro cliente.`
+                  `No se puede emitir Crédito Fiscal (${fiscalStatus.type}) según normas de la DGII.\n\n` +
+                  `Acción requerida: Cambie el tipo de comprobante a Consumo (${fiscalStatus.type === 'E31' ? 'E32' : 'B02'}) o seleccione otro cliente.`
                );
                return null;
             }
@@ -1906,7 +1909,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          let finalNcf: string | undefined;
-         let finalNcfType: NCFType | undefined;
+         let finalNcfType: FiscalDocumentCode | undefined;
 
          if (isRefundOnly) {
             try {
@@ -1927,7 +1930,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             );
 
             if (!finalNcf) {
-               alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
+               alert(`CRÍTICO: No hay NCF de ${fiscalStatus.type === 'B01' || fiscalStatus.type === 'E31' ? 'Crédito Fiscal' : 'Consumo'} disponible. Pool DGII agotado.`);
                return null;
             }
 
@@ -2030,6 +2033,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         customerName: customerForCheckout?.name,
                         ncf: finalNcf,
                         ncfType: fiscalStatus.type,
+                        legacyNcf: fiscalStatus.type.startsWith('E') ? undefined : finalNcf,
+                        electronicNcf: fiscalStatus.type.startsWith('E') ? finalNcf : undefined,
+                        fiscalMode: fiscalCompliance.mode,
+                        fiscalProvider: fiscalStatus.type.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
                         taxAmount: saleTaxAmount,
                         netAmount: saleNetAmount,
                         pendingBalance: creditAmount || undefined,
@@ -2157,6 +2164,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   dueDate: creditAmount > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined, // Default 30 days
                   ncf: finalNcf,
                   ncfType: finalNcfType,
+                  legacyNcf: finalNcfType?.startsWith('E') ? undefined : finalNcf,
+                  electronicNcf: finalNcfType?.startsWith('E') ? finalNcf : undefined,
+                  fiscalMode: fiscalCompliance.mode,
+                  fiscalProvider: finalNcfType?.startsWith('E') ? getDefaultFiscalProvider(config) : 'NONE',
                   taxAmount: taxAmount,
                   netAmount: netAmount,
                   discountAmount: discountAmount,

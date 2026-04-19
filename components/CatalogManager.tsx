@@ -523,14 +523,18 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            <button onClick={onClose} className="p-2 bg-gray-100 rounded-full text-gray-600"><ArrowLeft size={20} /></button>
                            <h1 className="text-xl font-black text-gray-800">Catálogo</h1>
                         </div>
-                        {canManage && (
-                           <button onClick={() => setEditingProduct('NEW')} className="p-3 bg-blue-600 text-white rounded-xl shadow-lg"><Plus size={20} /></button>
-                        )}
                      </div>
-                     <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 overflow-x-auto whitespace-nowrap">
-                           <button onClick={() => setViewMode('PRODUCTS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-4 ${viewMode === 'PRODUCTS' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400'}`}>Productos</button>
-                           <button onClick={() => setViewMode('BI_MONITOR')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-4 ${viewMode === 'BI_MONITOR' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400'}`}>Monitor</button>
-                           <button onClick={() => setViewMode('STOCKS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-4 ${viewMode === 'STOCKS' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400'}`}>Stocks</button>
+                     <div className="mobile-tab-scroller no-scrollbar -mx-4 px-4 overflow-x-auto whitespace-nowrap bg-white">
+                        <div className="inline-flex items-center gap-2 min-w-max pb-1">
+                           <button onClick={() => setViewMode('PRODUCTS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'PRODUCTS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Productos</button>
+                           <button onClick={() => setViewMode('BI_MONITOR')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'BI_MONITOR' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Monitor</button>
+                           {canManage && <button onClick={() => setViewMode('VARIANTS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${(viewMode as string) === 'VARIANTS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Variantes</button>}
+                           <button onClick={() => setViewMode('CLASSIFICATIONS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${(viewMode as string) === 'CLASSIFICATIONS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Clasificaciones</button>
+                           <button onClick={() => setViewMode('GROUPS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'GROUPS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Grupos</button>
+                           <button onClick={() => setViewMode('SEASONS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'SEASONS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Temporadas</button>
+                           <button onClick={() => setViewMode('STOCKS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'STOCKS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Stocks</button>
+                           <button onClick={() => setViewMode('TARIFFS')} className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-bold rounded-t-2xl border-b-4 transition-colors ${viewMode === 'TARIFFS' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-400 bg-white'}`}>Tarifas</button>
+                        </div>
                      </div>
                   </div>
                </div>
@@ -602,6 +606,34 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            <div className="flex items-center gap-3 bg-[#f2f4f7] p-2 rounded-[2rem] border border-gray-100 shadow-inner">
                               <button className="p-3 bg-white text-gray-900 rounded-[1.25rem] shadow-xl border border-gray-100"><Grid size={28} strokeWidth={2.5} /></button>
                               <button className="p-3 text-gray-400 hover:text-gray-900 transition-all hover:bg-white/50 rounded-[1.25rem]"><MoreHorizontal size={28} strokeWidth={2.5} /></button>
+                           </div>
+                        </div>
+                     )}
+
+                     {!isTablet && (
+                        <div className="mb-8 flex items-center gap-3">
+                           {canManage && (
+                              <button
+                                 onClick={toggleAllSelection}
+                                 className={`h-14 w-14 shrink-0 rounded-2xl border flex items-center justify-center transition-all shadow-sm ${
+                                    selectedIds.size > 0
+                                       ? 'bg-blue-600 border-blue-600 text-white'
+                                       : 'bg-white border-gray-200 text-blue-600'
+                                 }`}
+                                 aria-label={selectedIds.size === filteredProducts.length && filteredProducts.length > 0 ? 'Quitar seleccion masiva' : 'Seleccionar articulos'}
+                              >
+                                 <CheckSquare size={22} strokeWidth={2.5} />
+                              </button>
+                           )}
+                           <div className="relative flex-1">
+                              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={20} />
+                              <input
+                                 type="text"
+                                 placeholder="Buscar productos..."
+                                 value={searchTerm}
+                                 onChange={(e) => setSearchTerm(e.target.value)}
+                                 className="h-14 w-full rounded-2xl border border-gray-200 bg-white pl-12 pr-4 text-base font-semibold text-gray-700 outline-none transition-all focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                              />
                            </div>
                         </div>
                      )}
