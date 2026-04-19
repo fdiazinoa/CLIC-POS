@@ -1,4 +1,4 @@
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { CompanyInfo, FiscalProviderId, Transaction } from '../../types';
 import { buildMasterUrlFromHost, resolveMasterEndpointFromCloud } from '../../utils/cloudMasterRegistry';
 import { db } from '../../utils/db';
@@ -63,6 +63,7 @@ interface IssueFiscalDocumentInput {
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
 const FISCAL_BACKEND_BASE_KEY = 'CLIC_POS_FISCAL_BASE_URL';
 const LOCAL_FISCAL_CREDENTIAL_COLLECTION = 'fiscalCredentials';
+const POLARIS_API_BASE = 'https://api.polarisedi.com';
 
 interface LocalFiscalCredentialRecord {
     id: string;
@@ -297,6 +298,8 @@ const buildFiscalEndpointCandidates = async (path: string): Promise<string[]> =>
         fiscalPath,
         pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null,
         persistedMasterBase ? `${persistedMasterBase}${fiscalPath}` : null,
+        cloudMasterBase ? `${cloudMasterBase}${fiscalPath}` : null,
+        runtimeMasterBase ? `${runtimeMasterBase}${fiscalPath}` : null,
         persistedErpBase ? `${persistedErpBase}${fiscalPath}` : null,
     ]);
 };
@@ -325,6 +328,25 @@ const buildInvalidFiscalPayload = <T extends Record<string, any>>(status: number
     success: false,
     message: `Respuesta inválida del backend fiscal (HTTP ${status}).`
 });
+
+const extractFiscalMessage = (payload: any): string => {
+    const candidates = [
+        payload?.message,
+        payload?.mensaje,
+        payload?.Message,
+        payload?.descripcion,
+        payload?.Description,
+        payload?.StatusDescription,
+        payload?.data?.message,
+        payload?.data?.mensaje,
+    ];
+
+    for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    }
+
+    return '';
+};
 
 const fetchFiscalWithTimeout = async (input: RequestInfo | URL, init: RequestInit, timeoutMs: number): Promise<Response> => {
     if (typeof AbortController === 'undefined') {
@@ -497,34 +519,89 @@ export const testFiscalProviderConnection = async (
     credentialKey?: string
 ) => {
     const localCredential = await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
-    const { response, payload } = await requestFiscalJson<{ success: boolean; message: string }>(
-        '/providers/test',
-        {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
+    const testDirectPolaris = async () => {
+        if (providerId !== 'POLARIS' || !localCredential?.record.authToken) {
+            throw new Error('No se pudo contactar el backend fiscal.');
+        }
+
+        if (!isNativeAndroidRuntime()) {
+            throw new Error('El token está guardado en SQLite, pero la prueba remota necesita acceso al backend fiscal en el puerto 3001.');
+        }
+
+        const response = await CapacitorHttp.get({
+            url: `${POLARIS_API_BASE}/autenticacion/token`,
+            params: {
+                authtoken: localCredential.record.authToken,
             },
-            body: JSON.stringify({
-                providerId,
-                environment,
-                authToken: localCredential?.record.authToken,
-                companyInfo,
-                options: {
-                    credentialKey
-                }
+            readTimeout: 6000,
+            connectTimeout: 6000,
+            headers: {
+                Accept: 'application/json',
+            },
+        });
+        const payload = response.data;
+        const accessToken = String(payload?.data || payload?.token || payload?.accessToken || '').trim();
+        const message = extractFiscalMessage(payload) || `Polaris auth HTTP ${response.status}`;
+
+        if (Number(response.status) >= 400) {
+            throw new Error(message);
+        }
+
+        if (!accessToken) {
+            throw new Error(message || 'Polaris no devolvió Access Token.');
+        }
+
+        return {
+            success: true,
+            message: 'Autenticación con Polaris completada correctamente.',
+            providerId,
+            environment,
+            credentialSource: 'sqlite',
+            resolvedCredentialKey: localCredential.resolvedCredentialKey,
+            raw: payload,
+        };
+    };
+
+    try {
+        const { response, payload } = await requestFiscalJson<{ success: boolean; message: string; providerId?: FiscalProviderId; environment?: number; credentialSource?: string; resolvedCredentialKey?: string; raw?: unknown }>(
+            '/providers/test',
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    providerId,
+                    environment,
+                    authToken: localCredential?.record.authToken,
+                    companyInfo,
+                    options: {
+                        credentialKey
+                    }
+                })
+            },
+            (status) => buildInvalidFiscalPayload(status, {
+                success: false,
+                message: ''
             })
-        },
-        (status) => buildInvalidFiscalPayload(status, {
-            success: false,
-            message: ''
-        })
-    );
+        );
 
-    if (!response.ok && payload?.success !== false) {
-        throw new Error(payload?.message || `Error fiscal HTTP ${response.status}`);
+        const backendLooksUnavailable = !response.ok || /backend fiscal/i.test(String(payload?.message || ''));
+        if (backendLooksUnavailable && providerId === 'POLARIS' && localCredential?.record.authToken) {
+            return await testDirectPolaris();
+        }
+
+        if (!response.ok && payload?.success !== false) {
+            throw new Error(payload?.message || `Error fiscal HTTP ${response.status}`);
+        }
+
+        return payload;
+    } catch (error) {
+        if (providerId === 'POLARIS' && localCredential?.record.authToken) {
+            return await testDirectPolaris();
+        }
+        throw error;
     }
-
-    return payload;
 };
 
 export const getFiscalCredentialMetadata = async (

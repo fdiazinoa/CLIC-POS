@@ -816,15 +816,23 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                </div>
             ) : isTablet ? (
                <div className="bg-white p-8 border-b border-gray-100 flex items-center justify-between gap-8 shrink-0">
-                  <div className="flex-1 max-w-2xl relative shadow-2xl shadow-gray-100">
-                     <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400" size={24} />
-                     <input
-                        type="text"
-                        placeholder="Buscar en catálogo..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full pl-16 pr-6 py-5 bg-[#f2f4f7] border-none rounded-3xl outline-none focus:ring-4 focus:ring-blue-500/10 transition-all font-bold text-lg text-gray-700 placeholder:text-gray-300"
-                     />
+                  <div className="flex items-center gap-4 flex-1 max-w-2xl">
+                     <button
+                        onClick={onClose}
+                        className="h-16 px-6 bg-white border border-gray-200 text-gray-700 rounded-[1.75rem] font-black shadow-sm hover:bg-gray-50 transition-all flex items-center gap-3 shrink-0"
+                     >
+                        <ArrowLeft size={22} strokeWidth={2.8} /> Salir
+                     </button>
+                     <div className="flex-1 relative shadow-2xl shadow-gray-100">
+                        <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400" size={24} />
+                        <input
+                           type="text"
+                           placeholder="Buscar en catálogo..."
+                           value={searchTerm}
+                           onChange={(e) => setSearchTerm(e.target.value)}
+                           className="w-full pl-16 pr-6 py-5 bg-[#f2f4f7] border-none rounded-3xl outline-none focus:ring-4 focus:ring-blue-500/10 transition-all font-bold text-lg text-gray-700 placeholder:text-gray-300"
+                        />
+                     </div>
                   </div>
                   {canManage && (
                      <button
@@ -843,6 +851,12 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             ) : (
                <div className="bg-white border-b border-gray-100 shrink-0">
                   <div className="px-8 py-6 flex items-center gap-4">
+                     <button
+                        onClick={onClose}
+                        className="h-16 px-6 shrink-0 bg-white border border-gray-200 text-gray-700 rounded-2xl font-black shadow-sm hover:bg-gray-50 transition-all flex items-center gap-3"
+                     >
+                        <ArrowLeft size={22} strokeWidth={2.8} /> Salir
+                     </button>
                      {canManage && viewMode === 'PRODUCTS' && (
                         <button
                            onClick={toggleAllSelection}
