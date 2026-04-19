@@ -12,6 +12,7 @@ import {
   Promotion,
   PromotionTargetType,
   PromotionType,
+  ProductGroup,
   Tariff,
   TaxDefinition,
   TerminalConfig,
@@ -436,6 +437,31 @@ const normalizePromotionFromErpPayload = (raw: unknown): Promotion | null => {
   };
 };
 
+const normalizeProductGroupFromErpPayload = (raw: unknown, index: number): ProductGroup | null => {
+  const data = asObject(raw);
+  const id = asString(data.id || data.groupId || data.group_id || `group-${index + 1}`);
+  if (!id) return null;
+
+  const productIds = asArray<any>(data.productIds ?? data.product_ids ?? data.items ?? data.products)
+    .map((entry) => {
+      if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+        const obj = asObject(entry);
+        return asString(obj.id || obj.productId || obj.product_id);
+      }
+      return asString(entry);
+    })
+    .filter(Boolean);
+
+  return {
+    id,
+    name: asString(data.name) || id,
+    code: asString(data.code) || id,
+    color: asString(data.color) || undefined,
+    description: asString(data.description) || undefined,
+    productIds,
+  };
+};
+
 const normalizeAssignments = (raw: unknown): Record<string, string> => {
   if (Array.isArray(raw)) {
     return raw.reduce<Record<string, string>>((acc, item) => {
@@ -618,6 +644,18 @@ export const applyTerminalConfigSnapshot = (
   const coupons = asArray(couponsSource)
     .map((item, index) => normalizeCoupon(item, index))
     .filter(Boolean) as Coupon[];
+  const hasIncomingProductGroups =
+    Object.prototype.hasOwnProperty.call(resolvedCatalog, 'product_groups') ||
+    Object.prototype.hasOwnProperty.call(resolvedCatalog, 'groups') ||
+    Object.prototype.hasOwnProperty.call(effectiveFallbackConfig, 'productGroups');
+  const productGroupsSource = Object.prototype.hasOwnProperty.call(resolvedCatalog, 'product_groups')
+    ? resolvedCatalog.product_groups
+    : Object.prototype.hasOwnProperty.call(resolvedCatalog, 'groups')
+      ? resolvedCatalog.groups
+      : effectiveFallbackConfig.productGroups;
+  const productGroups = asArray(productGroupsSource)
+    .map((item, index) => normalizeProductGroupFromErpPayload(item, index))
+    .filter(Boolean) as ProductGroup[];
   const documentAssignments = normalizeAssignments(resolvedDocuments.assignments);
 
   const terminalTemplate = resolveTerminalTemplate(nextConfig, terminalId);
@@ -877,6 +915,10 @@ export const applyTerminalConfigSnapshot = (
 
   if (hasIncomingCoupons) {
     nextConfig.coupons = coupons;
+  }
+
+  if (hasIncomingProductGroups) {
+    nextConfig.productGroups = productGroups;
   }
 
   if (!hasResolutionError && Object.prototype.hasOwnProperty.call(effectiveResolved, 'promotions')) {

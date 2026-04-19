@@ -45,6 +45,17 @@ interface CatalogManagerProps {
 
 type CatalogViewMode = 'PRODUCTS' | 'TARIFFS' | 'VARIANTS' | 'STOCKS' | 'GROUPS' | 'SEASONS' | 'BI_MONITOR' | 'CLASSIFICATIONS' | 'SPACES';
 
+const CATALOG_DESKTOP_VIEWS: Array<{ id: CatalogViewMode; label: string }> = [
+   { id: 'PRODUCTS', label: 'Productos' },
+   { id: 'BI_MONITOR', label: 'Monitor BI' },
+   { id: 'VARIANTS', label: 'Variantes' },
+   { id: 'CLASSIFICATIONS', label: 'Clasificaciones' },
+   { id: 'GROUPS', label: 'Grupos' },
+   { id: 'SEASONS', label: 'Temporadas' },
+   { id: 'STOCKS', label: 'Stocks' },
+   { id: 'TARIFFS', label: 'Tarifas' },
+];
+
 // --- SUB-COMPONENT: STOCK ROW ---
 const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks: ProductStock[] }> = ({ product, warehouseId, productStocks }) => {
    const [isExpanded, setIsExpanded] = useState(false);
@@ -577,43 +588,62 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                   )}
                </div>
             ) : (
-               <div className="bg-white px-8 py-6 border-b border-gray-100 flex items-center gap-4 shrink-0">
-                  {canManage && viewMode === 'PRODUCTS' && (
-                     <button
-                        onClick={toggleAllSelection}
-                        className={`h-16 w-16 shrink-0 rounded-2xl border flex items-center justify-center transition-all shadow-sm ${
-                           selectedIds.size > 0
-                              ? 'bg-blue-600 border-blue-600 text-white'
-                              : 'bg-white border-gray-200 text-blue-600 hover:border-blue-200'
-                        }`}
-                        aria-label={selectedIds.size === filteredProducts.length && filteredProducts.length > 0 ? 'Quitar seleccion masiva' : 'Seleccionar articulos'}
-                     >
-                        <CheckSquare size={24} strokeWidth={2.5} />
-                     </button>
-                  )}
-                  <div className="relative flex-1 max-w-3xl">
-                     <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-300" size={22} />
-                     <input
-                        type="text"
-                        placeholder="Buscar productos..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="h-16 w-full rounded-3xl border border-gray-200 bg-white pl-14 pr-5 text-base font-semibold text-gray-700 outline-none transition-all focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-                     />
+               <div className="bg-white border-b border-gray-100 shrink-0">
+                  <div className="px-8 py-6 flex items-center gap-4">
+                     {canManage && viewMode === 'PRODUCTS' && (
+                        <button
+                           onClick={toggleAllSelection}
+                           className={`h-16 w-16 shrink-0 rounded-2xl border flex items-center justify-center transition-all shadow-sm ${
+                              selectedIds.size > 0
+                                 ? 'bg-blue-600 border-blue-600 text-white'
+                                 : 'bg-white border-gray-200 text-blue-600 hover:border-blue-200'
+                           }`}
+                           aria-label={selectedIds.size === filteredProducts.length && filteredProducts.length > 0 ? 'Quitar seleccion masiva' : 'Seleccionar articulos'}
+                        >
+                           <CheckSquare size={24} strokeWidth={2.5} />
+                        </button>
+                     )}
+                     <div className="relative flex-1 max-w-3xl">
+                        <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-300" size={22} />
+                        <input
+                           type="text"
+                           placeholder="Buscar productos..."
+                           value={searchTerm}
+                           onChange={(e) => setSearchTerm(e.target.value)}
+                           className="h-16 w-full rounded-3xl border border-gray-200 bg-white pl-14 pr-5 text-base font-semibold text-gray-700 outline-none transition-all focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                        />
+                     </div>
+                     {canManage && (
+                        <button
+                           onClick={() => {
+                              if (viewMode === 'PRODUCTS') setEditingProduct('NEW');
+                              else if (viewMode === 'TARIFFS') setEditingTariff('NEW');
+                              else if (viewMode === 'GROUPS') setEditingGroup('NEW');
+                              else if (viewMode === 'SEASONS') setEditingSeason('NEW');
+                           }}
+                           className="h-16 px-7 bg-blue-600 text-white rounded-2xl font-black text-base shadow-[0_20px_40px_rgba(37,99,235,0.22)] hover:shadow-[0_25px_50px_rgba(37,99,235,0.32)] hover:-translate-y-0.5 active:translate-y-0 active:scale-95 transition-all flex items-center gap-3"
+                        >
+                           <Plus size={22} strokeWidth={3} /> Nuevo
+                        </button>
+                     )}
                   </div>
-                  {canManage && (
-                     <button
-                        onClick={() => {
-                           if (viewMode === 'PRODUCTS') setEditingProduct('NEW');
-                           else if (viewMode === 'TARIFFS') setEditingTariff('NEW');
-                           else if (viewMode === 'GROUPS') setEditingGroup('NEW');
-                           else if (viewMode === 'SEASONS') setEditingSeason('NEW');
-                        }}
-                        className="h-16 px-7 bg-blue-600 text-white rounded-2xl font-black text-base shadow-[0_20px_40px_rgba(37,99,235,0.22)] hover:shadow-[0_25px_50px_rgba(37,99,235,0.32)] hover:-translate-y-0.5 active:translate-y-0 active:scale-95 transition-all flex items-center gap-3"
-                     >
-                        <Plus size={22} strokeWidth={3} /> Nuevo
-                     </button>
-                  )}
+                  <div className="px-8 pb-4 overflow-x-auto no-scrollbar">
+                     <div className="inline-flex items-center gap-3 min-w-max">
+                        {CATALOG_DESKTOP_VIEWS.map((item) => (
+                           <button
+                              key={item.id}
+                              onClick={() => setViewMode(item.id)}
+                              className={`px-5 py-3 rounded-2xl text-sm font-black transition-all whitespace-nowrap ${
+                                 viewMode === item.id
+                                    ? 'bg-blue-600 text-white shadow-[0_15px_30px_rgba(37,99,235,0.2)]'
+                                    : 'bg-white text-gray-500 border border-gray-200 hover:border-blue-200 hover:text-blue-600'
+                              }`}
+                           >
+                              {item.label}
+                           </button>
+                        ))}
+                     </div>
+                  </div>
                </div>
             )}
 
