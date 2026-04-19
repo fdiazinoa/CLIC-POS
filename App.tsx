@@ -775,6 +775,44 @@ const AppContent: React.FC = () => {
     window.location.reload();
   }, [dismissTerminalConfigRestartNotice]);
 
+  const syncConfigToLocalServer = useCallback(async (
+    nextConfig: BusinessConfig,
+    options?: { surfaceErrors?: boolean }
+  ) => {
+    const serverUrl = buildConfigSyncUrl();
+    const shouldSurfaceSyncErrors = options?.surfaceErrors ?? !isNativeAndroidRuntime();
+
+    if (!serverUrl) {
+      console.log('ℹ️ Skipping remote config sync: native standalone runtime without remote master.');
+      return;
+    }
+
+    console.log(`Attempting to sync to: ${serverUrl}`);
+
+    try {
+      const res = await fetch(serverUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nextConfig)
+      });
+
+      if (res.ok) {
+        console.log('Sync success: Config pushed to server.');
+      } else {
+        const errorText = await res.text();
+        console.error('Sync failed:', res.status, res.statusText, errorText);
+        if (shouldSurfaceSyncErrors) {
+          alert(`Error al sincronizar: El servidor respondió ${res.status}\nDetalle: ${errorText}`);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not sync config to local server', e);
+      if (shouldSurfaceSyncErrors) {
+        alert(`Error de conexión con ${serverUrl}. Asegúrate de que 'npm run server' esté corriendo.`);
+      }
+    }
+  }, []);
+
   const triggerLockdown = React.useCallback((message: string) => {
     if (lockdownHandledRef.current) return;
     lockdownHandledRef.current = true;
@@ -2681,6 +2719,8 @@ const AppContent: React.FC = () => {
             }
           }
         }
+
+        await syncConfigToLocalServer(incomingConfig, { surfaceErrors: false });
       } catch (error) {
         console.error('❌ Failed to apply synced config at runtime:', error);
       }
@@ -2690,7 +2730,7 @@ const AppContent: React.FC = () => {
     return () => {
       window.removeEventListener('configUpdated', handleConfigUpdated as EventListener);
     };
-  }, [deviceId]);
+  }, [config, deviceId, syncConfigToLocalServer]);
 
   // --- GLOBAL KEYBOARD SHORTCUT FOR ADMIN ACCESS ---
   useEffect(() => {
@@ -3102,40 +3142,7 @@ const AppContent: React.FC = () => {
       }
     }
 
-    // REAL SYNC: Push to json-server on the same host (via proxy to avoid Mixed Content)
-    // We use the current protocol/port because the frontend proxies /api to the backend
-    const serverUrl = buildConfigSyncUrl();
-    const shouldSurfaceSyncErrors = !isNativeAndroidRuntime();
-
-    if (!serverUrl) {
-      console.log('ℹ️ Skipping remote config sync: native standalone runtime without remote master.');
-      return;
-    }
-
-    console.log(`Attempting to sync to: ${serverUrl}`);
-
-    try {
-      const res = await fetch(serverUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newConfig)
-      });
-
-      if (res.ok) {
-        console.log("Sync success: Config pushed to server.");
-      } else {
-        const errorText = await res.text();
-        console.error("Sync failed:", res.status, res.statusText, errorText);
-        if (shouldSurfaceSyncErrors) {
-          alert(`Error al sincronizar: El servidor respondió ${res.status}\nDetalle: ${errorText}`);
-        }
-      }
-    } catch (e) {
-      console.warn("Could not sync config to local server", e);
-      if (shouldSurfaceSyncErrors) {
-        alert(`Error de conexión con ${serverUrl}. Asegúrate de que 'npm run server' esté corriendo.`);
-      }
-    }
+    await syncConfigToLocalServer(newConfig);
   };
 
   const handleUsersUpdate = async (newUsers: User[]) => {
