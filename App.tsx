@@ -225,6 +225,110 @@ const persistSetupErpBaseUrls = (value?: string | null) => {
   localStorage.setItem('CLIC_ERP_SYNC_URL', `${normalized}/api/sync`);
 };
 
+const resolveFriendlyTerminalName = (terminal: any): string => {
+  const candidates = [
+    terminal?.config?.terminalName,
+    terminal?.config?.erpBinding?.terminalName,
+    terminal?.name,
+    terminal?.config?.stationNumber,
+    terminal?.config?.erpBinding?.stationNumber,
+    terminal?.config?.erpTerminalId,
+    terminal?.id,
+  ];
+
+  return candidates
+    .map((value) => String(value || '').trim())
+    .find(Boolean) || 'Terminal';
+};
+
+const resolvePreferredTerminalForDevice = (
+  terminals: any[],
+  deviceId: string,
+  options?: {
+    activeTerminalId?: string | null;
+    bindingTerminalId?: string | null;
+    bindingLocalTerminalId?: string | null;
+  }
+) => {
+  const candidates = terminals.filter((terminal) => terminal?.config?.currentDeviceId === deviceId);
+  if (candidates.length === 0) return null;
+
+  const activeTerminalId = String(options?.activeTerminalId || '').trim();
+  const bindingTerminalId = String(options?.bindingTerminalId || '').trim();
+  const bindingLocalTerminalId = String(options?.bindingLocalTerminalId || '').trim();
+
+  const scoreTerminal = (terminal: any) => {
+    let score = 0;
+    const localId = String(terminal?.id || '').trim();
+    const erpTerminalId = String(terminal?.config?.erpTerminalId || '').trim();
+    const terminalName = String(terminal?.config?.terminalName || '').trim();
+    const stationNumber = String(terminal?.config?.stationNumber || '').trim();
+
+    if (activeTerminalId && (localId === activeTerminalId || erpTerminalId === activeTerminalId)) score += 100;
+    if (bindingLocalTerminalId && localId === bindingLocalTerminalId) score += 80;
+    if (bindingTerminalId && erpTerminalId === bindingTerminalId) score += 70;
+    if (terminalName) score += 20;
+    if (stationNumber) score += 10;
+    if (erpTerminalId) score += 8;
+
+    return score;
+  };
+
+  return [...candidates].sort((left, right) => scoreTerminal(right) - scoreTerminal(left))[0] || candidates[0];
+};
+
+const clearDuplicateDeviceAssignments = (
+  config: BusinessConfig,
+  deviceId: string,
+  options?: {
+    activeTerminalId?: string | null;
+    bindingTerminalId?: string | null;
+    bindingLocalTerminalId?: string | null;
+  }
+): { config: BusinessConfig; changed: boolean; preferredTerminalId: string | null } => {
+  if (!Array.isArray(config.terminals) || !deviceId) {
+    return { config, changed: false, preferredTerminalId: null };
+  }
+
+  const preferred = resolvePreferredTerminalForDevice(config.terminals, deviceId, options);
+  if (!preferred) {
+    return { config, changed: false, preferredTerminalId: null };
+  }
+
+  let changed = false;
+  const nextTerminals = config.terminals.map((terminal) => {
+    if (terminal?.config?.currentDeviceId !== deviceId) {
+      return terminal;
+    }
+
+    if (terminal.id === preferred.id) {
+      return terminal;
+    }
+
+    changed = true;
+    return {
+      ...terminal,
+      config: {
+        ...terminal.config,
+        currentDeviceId: undefined,
+      },
+    };
+  });
+
+  if (!changed) {
+    return { config, changed: false, preferredTerminalId: preferred.id || null };
+  }
+
+  return {
+    config: {
+      ...config,
+      terminals: nextTerminals,
+    },
+    changed: true,
+    preferredTerminalId: preferred.id || null,
+  };
+};
+
 const resolvePersistedBusinessConfig = (rawConfig: unknown): BusinessConfig | null => {
   if (!rawConfig) return null;
 
@@ -754,13 +858,28 @@ const AppContent: React.FC = () => {
   // Helper: Get current terminal configuration
   const getCurrentTerminal = React.useCallback(() => {
     const terminals = config.terminals || [];
-    const byDeviceId = terminals.find(t => t.config?.currentDeviceId === deviceId);
-    if (byDeviceId) return byDeviceId;
-
     const activeTerminalId =
       localStorage.getItem('active_terminal_id')
       || localStorage.getItem('CLIC_POS_TERMINAL_ID')
       || '';
+
+    const bindingTerminalId = localStorage.getItem('clic_erp_sync_terminal_id') || '';
+    const bindingLocalTerminalId = localStorage.getItem('clic_erp_sync_local_terminal_id') || '';
+
+    const byActiveId = activeTerminalId
+      ? terminals.find((terminal) =>
+          terminal.id === activeTerminalId
+          || terminal.config?.erpTerminalId === activeTerminalId
+        )
+      : null;
+    if (byActiveId) return byActiveId;
+
+    const byBinding = resolvePreferredTerminalForDevice(terminals, deviceId, {
+      activeTerminalId,
+      bindingTerminalId,
+      bindingLocalTerminalId,
+    });
+    if (byBinding) return byBinding;
 
     if (!activeTerminalId) return undefined;
 
@@ -769,6 +888,29 @@ const AppContent: React.FC = () => {
       || terminal.config?.erpTerminalId === activeTerminalId
     );
   }, [config.terminals, deviceId]);
+
+  useEffect(() => {
+    const activeTerminalId = localStorage.getItem('active_terminal_id');
+    const bindingTerminalId = localStorage.getItem('clic_erp_sync_terminal_id');
+    const bindingLocalTerminalId = localStorage.getItem('clic_erp_sync_local_terminal_id');
+    const sanitized = clearDuplicateDeviceAssignments(config, deviceId, {
+      activeTerminalId,
+      bindingTerminalId,
+      bindingLocalTerminalId,
+    });
+
+    if (!sanitized.changed) return;
+
+    const nextConfig = sanitized.config;
+    setConfig(nextConfig);
+    if (sanitized.preferredTerminalId) {
+      localStorage.setItem('active_terminal_id', sanitized.preferredTerminalId);
+      localStorage.setItem('CLIC_POS_TERMINAL_ID', sanitized.preferredTerminalId);
+    }
+    void db.save('config', nextConfig).catch((error) => {
+      console.warn('Failed to persist duplicate terminal assignment cleanup', error);
+    });
+  }, [config, deviceId]);
 
   // Helper: Get current device role
   const getCurrentDeviceRole = React.useCallback((): DeviceRole => {
@@ -2620,7 +2762,11 @@ const AppContent: React.FC = () => {
       if (!setupResult?.boundConfig) {
         throw new Error('La vinculación debe provenir del backend central de setup. No se recibió configuración enlazada.');
       }
-      const updatedConfig = setupResult.boundConfig;
+      const updatedConfig = clearDuplicateDeviceAssignments(setupResult.boundConfig, deviceId, {
+        activeTerminalId: terminalId,
+        bindingTerminalId: setupResult?.erpTerminalId || terminalId,
+        bindingLocalTerminalId: terminalId,
+      }).config;
       const selectedTerminal = (updatedConfig.terminals || []).find(t => t.id === terminalId);
       const resolvedTerminalName =
         setupResult?.terminalName
