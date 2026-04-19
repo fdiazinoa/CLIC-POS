@@ -40,6 +40,7 @@ type ConfiguredTerminal = BusinessConfig['terminals'][number];
 const resolveTerminalDisplayName = (terminal: ConfiguredTerminal) => (
    String(
       terminal.config?.terminalName
+      || (terminal as any)?.name
       || terminal.config?.erpBinding?.terminalName
       || terminal.config?.stationNumber
       || terminal.config?.erpTerminalId
