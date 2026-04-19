@@ -1,6 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { CompanyInfo, FiscalProviderId, Transaction } from '../../types';
 import { buildMasterUrlFromHost, resolveMasterEndpointFromCloud } from '../../utils/cloudMasterRegistry';
+import { db } from '../../utils/db';
 
 export interface FiscalCredentialMetaResponse {
     providerId: FiscalProviderId;
@@ -61,6 +62,17 @@ interface IssueFiscalDocumentInput {
 
 const isNativeAndroidRuntime = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
 const FISCAL_BACKEND_BASE_KEY = 'CLIC_POS_FISCAL_BASE_URL';
+const LOCAL_FISCAL_CREDENTIAL_COLLECTION = 'fiscalCredentials';
+
+interface LocalFiscalCredentialRecord {
+    id: string;
+    providerId: FiscalProviderId;
+    companyRnc?: string;
+    credentialKey?: string;
+    authToken: string;
+    label?: string;
+    updatedAt: string;
+}
 
 const normalizeBaseUrl = (value?: string | null): string | null => {
     const raw = String(value || '').trim();
@@ -82,6 +94,105 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
 
 const uniqueStrings = (values: Array<string | null | undefined>) =>
     Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+
+const normalizeCredentialKey = (value?: string | null) =>
+    String(value || '').trim().replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+const deriveCredentialKey = (companyInfo?: CompanyInfo, credentialKey?: string) => {
+    const explicit = normalizeCredentialKey(credentialKey);
+    if (explicit) return explicit;
+    const companyKey = normalizeCredentialKey(companyInfo?.rnc);
+    return companyKey || undefined;
+};
+
+const buildLocalCredentialRecordId = (providerId: FiscalProviderId, credentialKey?: string) =>
+    `${providerId}:${credentialKey || 'DEFAULT'}`;
+
+const readLocalFiscalCredentialRecords = async (): Promise<LocalFiscalCredentialRecord[]> => {
+    const raw = await db.get(LOCAL_FISCAL_CREDENTIAL_COLLECTION as any);
+    return (Array.isArray(raw) ? raw : []).filter((entry): entry is LocalFiscalCredentialRecord =>
+        Boolean(
+            entry
+            && typeof entry === 'object'
+            && typeof (entry as any).id === 'string'
+            && typeof (entry as any).providerId === 'string'
+            && typeof (entry as any).authToken === 'string'
+        )
+    );
+};
+
+const resolveLocalFiscalCredential = async (
+    providerId: FiscalProviderId,
+    companyInfo?: CompanyInfo,
+    credentialKey?: string
+): Promise<{ record: LocalFiscalCredentialRecord; resolvedCredentialKey?: string } | null> => {
+    const records = await readLocalFiscalCredentialRecords();
+    const normalizedCredentialKey = deriveCredentialKey(companyInfo, credentialKey);
+    const scopedId = buildLocalCredentialRecordId(providerId, normalizedCredentialKey);
+    const defaultId = buildLocalCredentialRecordId(providerId);
+    const exactRecord = records.find((entry) => entry.id === scopedId);
+    if (exactRecord) {
+        return {
+            record: exactRecord,
+            resolvedCredentialKey: normalizedCredentialKey,
+        };
+    }
+
+    const defaultRecord = records.find((entry) => entry.id === defaultId);
+    if (!defaultRecord) return null;
+
+    return {
+        record: defaultRecord,
+        resolvedCredentialKey: undefined,
+    };
+};
+
+const buildLocalCredentialMeta = async (
+    providerId: FiscalProviderId,
+    companyInfo?: CompanyInfo,
+    credentialKey?: string
+): Promise<FiscalCredentialMetaResponse | null> => {
+    const resolved = await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
+    if (!resolved) return null;
+
+    return {
+        providerId,
+        hasCredential: true,
+        source: 'sqlite',
+        resolvedCredentialKey: resolved.resolvedCredentialKey,
+        updatedAt: resolved.record.updatedAt,
+        label: resolved.record.label,
+        availableSources: ['sqlite'],
+        hasLocalCredential: true,
+        hasSupabaseCredential: false,
+        hasEnvCredential: false,
+    };
+};
+
+const mergeCredentialMeta = (
+    remote: FiscalCredentialMetaResponse,
+    local: FiscalCredentialMetaResponse | null
+): FiscalCredentialMetaResponse => {
+    if (!local?.hasCredential) return remote;
+
+    const availableSources = Array.from(new Set([
+        ...(Array.isArray(local.availableSources) ? local.availableSources : []),
+        ...(Array.isArray(remote.availableSources) ? remote.availableSources : []),
+    ])) as Array<'env' | 'sqlite' | 'supabase'>;
+
+    return {
+        ...remote,
+        hasCredential: remote.hasCredential || local.hasCredential,
+        source: local.source || remote.source,
+        resolvedCredentialKey: local.resolvedCredentialKey || remote.resolvedCredentialKey,
+        updatedAt: local.updatedAt || remote.updatedAt,
+        label: local.label || remote.label,
+        availableSources,
+        hasLocalCredential: true,
+        hasSupabaseCredential: Boolean(remote.hasSupabaseCredential),
+        hasEnvCredential: Boolean(remote.hasEnvCredential),
+    };
+};
 
 const extractBaseUrlFromEndpoint = (endpoint: string): string | null => {
     try {
@@ -251,6 +362,12 @@ export const issueFiscalDocument = async (
         throw new Error('Solo se pueden emitir documentos electrónicos con esta ruta.');
     }
 
+    const localCredential = await resolveLocalFiscalCredential(
+        input.providerId,
+        input.companyInfo,
+        input.credentialKey
+    );
+
     const { response, payload } = await requestFiscalJson<FiscalIssueResponse>(
         '/documents/issue',
         {
@@ -262,6 +379,7 @@ export const issueFiscalDocument = async (
                 providerId: input.providerId,
                 environment: input.environment,
                 documentCode: input.transaction.ncfType,
+                authToken: localCredential?.record.authToken,
                 companyInfo: input.companyInfo,
                 transaction: input.transaction,
                 options: {
@@ -298,6 +416,7 @@ export const getFiscalDocumentStatus = async (
     companyInfo?: CompanyInfo,
     credentialKey?: string
 ): Promise<FiscalStatusResponse> => {
+    const localCredential = await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
     const params = new URLSearchParams({
         providerId,
         environment: String(environment),
@@ -310,6 +429,9 @@ export const getFiscalDocumentStatus = async (
         `/documents/status?${params.toString()}`,
         {
             method: 'GET',
+            headers: localCredential?.record.authToken
+                ? { 'X-Fiscal-AuthToken': localCredential.record.authToken }
+                : undefined,
         },
         (status) => buildInvalidFiscalPayload(status, {
             success: false,
@@ -336,6 +458,7 @@ export const testFiscalProviderConnection = async (
     companyInfo?: CompanyInfo,
     credentialKey?: string
 ) => {
+    const localCredential = await resolveLocalFiscalCredential(providerId, companyInfo, credentialKey);
     const { response, payload } = await requestFiscalJson<{ success: boolean; message: string }>(
         '/providers/test',
         {
@@ -346,6 +469,7 @@ export const testFiscalProviderConnection = async (
             body: JSON.stringify({
                 providerId,
                 environment,
+                authToken: localCredential?.record.authToken,
                 companyInfo,
                 options: {
                     credentialKey
@@ -370,26 +494,34 @@ export const getFiscalCredentialMetadata = async (
     companyInfo?: CompanyInfo,
     credentialKey?: string
 ): Promise<FiscalCredentialMetaResponse> => {
+    const localMeta = await buildLocalCredentialMeta(providerId, companyInfo, credentialKey);
     const params = new URLSearchParams({ providerId });
     if (companyInfo?.rnc) params.set('companyRnc', companyInfo.rnc);
     if (credentialKey) params.set('credentialKey', credentialKey);
 
-    const { response, payload } = await requestFiscalJson<FiscalCredentialMetaResponse>(
-        `/credentials/meta?${params.toString()}`,
-        {
-            method: 'GET',
-        },
-        (status) => buildInvalidFiscalPayload(status, {
-            providerId,
-            hasCredential: false
-        } as FiscalCredentialMetaResponse)
-    );
+    try {
+        const { response, payload } = await requestFiscalJson<FiscalCredentialMetaResponse>(
+            `/credentials/meta?${params.toString()}`,
+            {
+                method: 'GET',
+            },
+            (status) => buildInvalidFiscalPayload(status, {
+                providerId,
+                hasCredential: false
+            } as FiscalCredentialMetaResponse)
+        );
 
-    if (!response.ok) {
-        throw new Error((payload as any)?.message || `Error consultando credencial fiscal (HTTP ${response.status})`);
+        if (!response.ok) {
+            throw new Error((payload as any)?.message || `Error consultando credencial fiscal (HTTP ${response.status})`);
+        }
+
+        return mergeCredentialMeta(payload as FiscalCredentialMetaResponse, localMeta);
+    } catch (error) {
+        if (localMeta?.hasCredential) {
+            return localMeta;
+        }
+        throw error;
     }
-
-    return payload as FiscalCredentialMetaResponse;
 };
 
 export const saveLocalFiscalCredential = async (
@@ -399,34 +531,65 @@ export const saveLocalFiscalCredential = async (
     credentialKey?: string,
     label?: string
 ): Promise<FiscalCredentialMutationResponse> => {
-    const { response, payload } = await requestFiscalJson<FiscalCredentialMutationResponse>(
-        '/credentials/local',
-        {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                providerId,
-                authToken,
-                companyInfo,
-                label,
-                options: {
-                    credentialKey
-                }
-            })
-        },
-        (status) => buildInvalidFiscalPayload(status, {
-            success: false,
-            message: ''
-        })
-    );
-
-    if (!response.ok) {
-        throw new Error((payload as any)?.message || `Error guardando credencial fiscal (HTTP ${response.status})`);
+    const normalizedToken = String(authToken || '').trim();
+    if (!normalizedToken) {
+        throw new Error('Ingresa un Authentication Token válido.');
     }
 
-    return payload as FiscalCredentialMutationResponse;
+    const resolvedCredentialKey = deriveCredentialKey(companyInfo, credentialKey);
+    const record: LocalFiscalCredentialRecord = {
+        id: buildLocalCredentialRecordId(providerId, resolvedCredentialKey),
+        providerId,
+        companyRnc: companyInfo?.rnc,
+        credentialKey: resolvedCredentialKey,
+        authToken: normalizedToken,
+        label: String(label || '').trim() || undefined,
+        updatedAt: new Date().toISOString(),
+    };
+
+    await db.saveDocument(LOCAL_FISCAL_CREDENTIAL_COLLECTION as any, record);
+    const localMeta = await buildLocalCredentialMeta(providerId, companyInfo, credentialKey);
+
+    try {
+        const { response, payload } = await requestFiscalJson<FiscalCredentialMutationResponse>(
+            '/credentials/local',
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    providerId,
+                    authToken: normalizedToken,
+                    companyInfo,
+                    label,
+                    options: {
+                        credentialKey
+                    }
+                })
+            },
+            (status) => buildInvalidFiscalPayload(status, {
+                success: false,
+                message: ''
+            })
+        );
+
+        if (!response.ok) {
+            throw new Error((payload as any)?.message || `Error guardando credencial fiscal (HTTP ${response.status})`);
+        }
+
+        return {
+            ...(payload as FiscalCredentialMutationResponse),
+            meta: mergeCredentialMeta((payload as FiscalCredentialMutationResponse).meta || ({} as FiscalCredentialMetaResponse), localMeta),
+        };
+    } catch (error) {
+        console.warn('[fiscalService] saveLocalFiscalCredential fallback SQLite only:', error);
+        return {
+            success: true,
+            message: 'Credencial fiscal guardada en SQLite.',
+            meta: localMeta || undefined,
+        };
+    }
 };
 
 export const saveSupabaseFiscalCredential = async (
@@ -469,32 +632,58 @@ export const deleteLocalFiscalCredential = async (
     companyInfo?: CompanyInfo,
     credentialKey?: string
 ): Promise<FiscalCredentialMutationResponse> => {
-    const { response, payload } = await requestFiscalJson<FiscalCredentialMutationResponse>(
-        '/credentials/local',
-        {
-            method: 'DELETE',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                providerId,
-                companyInfo,
-                options: {
-                    credentialKey
-                }
-            })
-        },
-        (status) => buildInvalidFiscalPayload(status, {
-            success: false,
-            message: ''
-        })
+    const resolvedCredentialKey = deriveCredentialKey(companyInfo, credentialKey);
+    await db.deleteDocument(
+        LOCAL_FISCAL_CREDENTIAL_COLLECTION as any,
+        buildLocalCredentialRecordId(providerId, resolvedCredentialKey)
     );
+    const localMetaAfterDelete = await buildLocalCredentialMeta(providerId, companyInfo, credentialKey);
 
-    if (!response.ok) {
-        throw new Error((payload as any)?.message || `Error eliminando credencial fiscal local (HTTP ${response.status})`);
+    try {
+        const { response, payload } = await requestFiscalJson<FiscalCredentialMutationResponse>(
+            '/credentials/local',
+            {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    providerId,
+                    companyInfo,
+                    options: {
+                        credentialKey
+                    }
+                })
+            },
+            (status) => buildInvalidFiscalPayload(status, {
+                success: false,
+                message: ''
+            })
+        );
+
+        if (!response.ok) {
+            throw new Error((payload as any)?.message || `Error eliminando credencial fiscal local (HTTP ${response.status})`);
+        }
+
+        return {
+            ...(payload as FiscalCredentialMutationResponse),
+            meta: localMetaAfterDelete ? mergeCredentialMeta((payload as FiscalCredentialMutationResponse).meta || ({} as FiscalCredentialMetaResponse), localMetaAfterDelete) : (payload as FiscalCredentialMutationResponse).meta,
+        };
+    } catch (error) {
+        console.warn('[fiscalService] deleteLocalFiscalCredential fallback SQLite only:', error);
+        return {
+            success: true,
+            message: 'Credencial fiscal local eliminada de SQLite.',
+            meta: localMetaAfterDelete || {
+                providerId,
+                hasCredential: false,
+                availableSources: [],
+                hasLocalCredential: false,
+                hasSupabaseCredential: false,
+                hasEnvCredential: false,
+            },
+        };
     }
-
-    return payload as FiscalCredentialMutationResponse;
 };
 
 export const deleteSupabaseFiscalCredential = async (

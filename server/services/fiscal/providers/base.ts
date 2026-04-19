@@ -62,6 +62,7 @@ export interface FiscalIssueOptions {
     taxRate?: number;
     sequenceExpiryDate?: string;
     credentialKey?: string;
+    authToken?: string;
     tipoIngreso?: number;
     modificationCode?: number;
     unitCodeGoods?: number;
@@ -90,6 +91,7 @@ export interface FiscalProviderTestRequest {
     environment: number;
     companyInfo?: FiscalCompanyInfo;
     credentialKey?: string;
+    authToken?: string;
 }
 
 export interface FiscalDocumentIssueResult {
@@ -119,6 +121,7 @@ export interface FiscalStatusRequest {
     providerTransactionId: string;
     companyRnc?: string;
     credentialKey?: string;
+    authToken?: string;
 }
 
 export interface FiscalProvider {
