@@ -471,6 +471,7 @@ export interface TerminalConfigSnapshot {
     items?: Record<string, any>[];
     customers?: Customer[];
     suppliers?: Supplier[];
+    sellers?: Array<Record<string, any>>;
     purchaseOrders?: PurchaseOrder[];
     transfers?: StockTransfer[];
     [key: string]: any;

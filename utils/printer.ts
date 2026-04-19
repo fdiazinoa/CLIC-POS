@@ -5,6 +5,7 @@ import { shouldSuppressBrowserPrintFallback } from '../services/printer/PrintRun
 import { dbAdapter } from '../services/db';
 import { calculateTaxBreakdownFromItems, calculateTransactionFiscalSummary, formatTaxLineLabel } from './fiscalBreakdown';
 import { buildPaymentSettlementSummary, resolveCurrencySymbol } from './paymentSettlement';
+import { getTerminalSnapshotSellers, resolveTerminalSellerName } from './terminalSnapshotSellers';
 
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -162,6 +163,7 @@ export const printGatewayReceipt = async (
 export const printTicket = async (transaction: Transaction, config: BusinessConfig): Promise<boolean> => {
     const { companyInfo, currencySymbol, receiptConfig, currencies } = config;
     const users = ((await dbAdapter.getCollection('users')) || []) as any[];
+    const salesUsers = getTerminalSnapshotSellers(config, transaction.terminalId);
     const dateStr = new Date(transaction.date).toLocaleDateString();
     const timeStr = new Date(transaction.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const terminalConfig = config.terminals?.find(t => t.id === transaction.terminalId)?.config;
@@ -366,8 +368,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
             const hasTrackingHtml = trackingHtml.length > 0;
             let sellerNameHtml = '';
             if (item.salespersonId) {
-                const sellerUser = users.find((u: any) => u.id === item.salespersonId);
-                const sellerName = sellerUser ? sellerUser.name.split(' ')[0] : 'Vendedor';
+                const sellerName = resolveTerminalSellerName(item.salespersonId, config, transaction.terminalId, users) || 'Vendedor';
                 sellerNameHtml = `<br/>Vendedor: ${sellerName}`;
             }
 
@@ -560,7 +561,7 @@ export const printTicket = async (transaction: Transaction, config: BusinessConf
         ''
     );
 
-    const escPosBase64 = buildEscPosTicketPayload(transaction, config, users);
+    const escPosBase64 = buildEscPosTicketPayload(transaction, config, salesUsers.length > 0 ? salesUsers : users);
     let printedSilently = false;
 
     if (escPosBase64) {
