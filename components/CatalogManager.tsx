@@ -225,6 +225,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
    const [catalogProducts, setCatalogProducts] = useState<Product[]>(productsProp || []);
    const [catalogConfig, setCatalogConfig] = useState<BusinessConfig>(configProp);
+   const [catalogWarehouses, setCatalogWarehouses] = useState<Warehouse[]>(Array.isArray(warehouses) ? warehouses : []);
+   const [catalogTransactions, setCatalogTransactions] = useState<Transaction[]>(Array.isArray(transactions) ? transactions : []);
    const [viewMode, setViewMode] = useState<CatalogViewMode>('PRODUCTS');
    const [searchTerm, setSearchTerm] = useState('');
    const [categoryFilter, setCategoryFilter] = useState('ALL');
@@ -240,8 +242,19 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    // Watchlists State
    const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
 
-   const products = catalogProducts;
+   const products = useMemo(
+      () => (Array.isArray(catalogProducts) ? catalogProducts.filter((entry): entry is Product => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
+      [catalogProducts]
+   );
    const config = catalogConfig;
+   const runtimeWarehouses = useMemo(
+      () => (Array.isArray(catalogWarehouses) ? catalogWarehouses.filter((entry): entry is Warehouse => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
+      [catalogWarehouses]
+   );
+   const runtimeTransactions = useMemo(
+      () => (Array.isArray(catalogTransactions) ? catalogTransactions.filter((entry): entry is Transaction => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
+      [catalogTransactions]
+   );
 
    const hasPermission = (permission: string): boolean => {
       if (!currentUser) return false;
@@ -265,6 +278,14 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    }, [configProp]);
 
    useEffect(() => {
+      setCatalogWarehouses(Array.isArray(warehouses) ? warehouses : []);
+   }, [warehouses]);
+
+   useEffect(() => {
+      setCatalogTransactions(Array.isArray(transactions) ? transactions : []);
+   }, [transactions]);
+
+   useEffect(() => {
       const handleResize = () => {
          setViewportWidth(resolveViewportWidth());
          setHasCoarsePointer(resolvePointerCoarse());
@@ -273,16 +294,18 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
       const loadWatchlists = async () => {
          const lists = (await db.get('watchlists') || []) as Watchlist[];
-         setWatchlists(lists);
+         setWatchlists((Array.isArray(lists) ? lists.filter((entry): entry is Watchlist => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []));
       };
       const loadStocks = async () => {
          const stocks = (await db.get('productStocks') || []) as ProductStock[];
          setProductStocks(stocks);
       };
       const loadCatalogRuntime = async () => {
-         const [rawProducts, rawConfig] = await Promise.all([
+         const [rawProducts, rawConfig, rawWarehouses, rawTransactions] = await Promise.all([
             db.get('products'),
             db.get('config'),
+            db.get('warehouses'),
+            db.get('transactions'),
          ]);
 
          const storedProducts = (Array.isArray(rawProducts) ? rawProducts : []) as Product[];
@@ -296,6 +319,14 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          if (storedConfig && typeof storedConfig === 'object') {
             setCatalogConfig(storedConfig as BusinessConfig);
+         }
+
+         if (Array.isArray(rawWarehouses)) {
+            setCatalogWarehouses(rawWarehouses as Warehouse[]);
+         }
+
+         if (Array.isArray(rawTransactions)) {
+            setCatalogTransactions(rawTransactions as Transaction[]);
          }
       };
       loadWatchlists();
@@ -319,9 +350,14 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          const rawProducts = await db.get('products');
          setCatalogProducts((Array.isArray(rawProducts) ? rawProducts : []) as Product[]);
       };
+      const handleTransactionsUpdate = async () => {
+         const rawTransactions = await db.get('transactions');
+         setCatalogTransactions((Array.isArray(rawTransactions) ? rawTransactions : []) as Transaction[]);
+      };
       window.addEventListener('productStocksUpdated', handleStockUpdate);
       window.addEventListener('configUpdated', handleConfigUpdate as EventListener);
       window.addEventListener('productsUpdated', handleProductsUpdate as EventListener);
+      window.addEventListener('transactionsUpdated', handleTransactionsUpdate as EventListener);
 
       // --- INITIAL PRODUCT DEEP LINKING ---
       if (initialProductId) {
@@ -336,24 +372,74 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          window.removeEventListener('productStocksUpdated', handleStockUpdate);
          window.removeEventListener('configUpdated', handleConfigUpdate as EventListener);
          window.removeEventListener('productsUpdated', handleProductsUpdate as EventListener);
+         window.removeEventListener('transactionsUpdated', handleTransactionsUpdate as EventListener);
       };
    }, []);
 
-   const tariffs = config.tariffs || [];
-   const currentProductGroups = config.productGroups || [];
-   const currentSeasons = config.seasons || [];
+   const tariffs = useMemo(
+      () => (Array.isArray(config?.tariffs) ? config.tariffs.filter((entry): entry is Tariff => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
+      [config]
+   );
+   const currentProductGroups = useMemo(
+      () => (Array.isArray(config?.productGroups) ? config.productGroups.filter((entry): entry is ProductGroup => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
+      [config]
+   );
+   const currentSeasons = useMemo(
+      () => (Array.isArray(config?.seasons) ? config.seasons.filter((entry): entry is Season => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
+      [config]
+   );
    const [editingTariff, setEditingTariff] = useState<Tariff | null | 'NEW'>(null);
    const [editingGroup, setEditingGroup] = useState<ProductGroup | null | 'NEW'>(null);
    const [editingSeason, setEditingSeason] = useState<Season | null | 'NEW'>(null);
 
-   const categories = useMemo(() => ['ALL', ...Array.from(new Set(products.map(p => p.category)))], [products]);
+   const categories = useMemo(
+      () => ['ALL', ...Array.from(new Set(products.map((p) => p?.category || 'Sin categoría').filter(Boolean)))],
+      [products]
+   );
    const filteredProducts = useMemo(() => {
       return products.filter(p => {
-         const matchesSearch = (p.name || '').toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
-         const matchesCategory = categoryFilter === 'ALL' || p.category === categoryFilter;
+         const normalizedName = typeof p.name === 'string' ? p.name : '';
+         const normalizedBarcode = typeof p.barcode === 'string' ? p.barcode : '';
+         const normalizedCategory = typeof p.category === 'string' ? p.category : 'Sin categoría';
+         const matchesSearch = normalizedName.toLowerCase().includes(searchTerm.toLowerCase()) || normalizedBarcode.includes(searchTerm);
+         const matchesCategory = categoryFilter === 'ALL' || normalizedCategory === categoryFilter;
          return matchesSearch && matchesCategory;
       });
    }, [products, searchTerm, categoryFilter]);
+
+   const emptyStateByView: Record<'PRODUCTS' | 'BI_MONITOR' | 'STOCKS' | 'TARIFFS' | 'GROUPS' | 'SEASONS', { title: string; description: string }> = {
+      PRODUCTS: {
+         title: 'Todavía no hay artículos visibles.',
+         description: 'Seguimos mostrando el buscador, las categorías y el acceso de creación para que esta vista no quede en blanco.',
+      },
+      BI_MONITOR: {
+         title: 'Aún no hay tableros BI.',
+         description: 'Crea una lista de seguimiento para empezar a monitorear rotación, dormancia y cobertura.',
+      },
+      STOCKS: {
+         title: 'No hay almacenes cargados.',
+         description: 'Cuando la terminal tenga almacenes sincronizados, aquí verás existencias y valorización.',
+      },
+      TARIFFS: {
+         title: 'No hay tarifas disponibles.',
+         description: 'Puedes crear una lista nueva o esperar el próximo refresh del snapshot de terminal.',
+      },
+      GROUPS: {
+         title: 'No hay grupos configurados.',
+         description: 'Los grupos sirven para promociones, filtros y edición por conjunto.',
+      },
+      SEASONS: {
+         title: 'No hay temporadas configuradas.',
+         description: 'Las temporadas permiten reglas comerciales y cálculo de demanda por calendario.',
+      },
+   };
+
+   const renderEmptyState = (mode: keyof typeof emptyStateByView) => (
+      <div className="rounded-[2.5rem] border border-dashed border-gray-200 bg-gray-50/70 px-8 py-10 text-center">
+         <h3 className="text-2xl font-black text-gray-800 mb-3">{emptyStateByView[mode].title}</h3>
+         <p className="text-base font-medium text-gray-500 max-w-2xl mx-auto">{emptyStateByView[mode].description}</p>
+      </div>
+   );
 
    const toggleSelection = (id: string) => {
       const newSet = new Set(selectedIds);
@@ -426,7 +512,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          if (isProductInSeason || isCategoryAffected) {
             try {
-               const baselineWhId = warehouses[0]?.id || 'wh_central';
+               const baselineWhId = runtimeWarehouses[0]?.id || 'wh_central';
                const calc = await calculateOptimalInventoryLevels(p, baselineWhId, config.seasons || [], suppliers);
                p.minStock = calc.suggestedMin;
                // We also update warehouse-specific mins if they exist
@@ -443,7 +529,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    };
 
    if (viewMode === 'VARIANTS') return <VariantManager onClose={() => setViewMode('PRODUCTS')} />;
-   if (editingProduct) return <ProductForm key={editingProduct === 'NEW' ? 'NEW' : editingProduct.id} initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={warehouses} availableTariffs={tariffs} hasHistory={transactions?.some(t => t.items?.some(item => item.id === (editingProduct as any).id)) ?? false} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} transfers={transfers} purchaseOrders={purchaseOrders} suppliers={suppliers} seasons={config.seasons || []} initialTab={initialTab} allProducts={products} />
+   if (editingProduct) return <ProductForm key={editingProduct === 'NEW' ? 'NEW' : editingProduct.id} initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={runtimeWarehouses} availableTariffs={tariffs} hasHistory={runtimeTransactions?.some(t => t.items?.some(item => item.id === (editingProduct as any).id)) ?? false} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} transfers={transfers} purchaseOrders={purchaseOrders} suppliers={suppliers} seasons={config.seasons || []} initialTab={initialTab} allProducts={products} />
    if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={products} config={config} availableTariffs={tariffs} onSave={handleSaveTariff} onUpdateProducts={onUpdateProducts} onClose={() => setEditingTariff(null)} />;
    if (editingGroup) return <GroupForm initialData={editingGroup === 'NEW' ? null : editingGroup} products={products} onSave={handleSaveGroup} onClose={() => setEditingGroup(null)} />;
    if (editingSeason) return <SeasonForm initialData={editingSeason === 'NEW' ? null : editingSeason} products={products} onSave={handleSaveSeason} onClose={() => setEditingSeason(null)} />;
@@ -833,6 +919,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         </div>
                      )}
 
+                     {filteredProducts.length === 0 ? renderEmptyState('PRODUCTS') : (
                      <div
                         className="grid gap-10 pb-60"
                         style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${isLargeCatalogLayout ? '300px' : '180px'}, 1fr))` }}
@@ -881,9 +968,9 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                  <div className="flex-1 flex flex-col px-2">
                                     <div className="flex items-center justify-between mb-4">
                                        <span className="text-[11px] font-black uppercase tracking-[0.15em] text-gray-400 bg-gray-100 px-4 py-1.5 rounded-full leading-none">
-                                          {product.category}
+                                          {typeof product.category === 'string' && product.category.trim() ? product.category : 'Sin categoría'}
                                        </span>
-                                       <div className={`w-4 h-4 rounded-full shadow-sm ${(product.stockBalances?.[warehouses[0]?.id] || 0) > 0 ? 'bg-emerald-500 shadow-emerald-200' : 'bg-red-500 shadow-red-200'}`}></div>
+                                       <div className={`w-4 h-4 rounded-full shadow-sm ${(product.stockBalances?.[runtimeWarehouses[0]?.id || ''] || 0) > 0 ? 'bg-emerald-500 shadow-emerald-200' : 'bg-red-500 shadow-red-200'}`}></div>
                                     </div>
 
                                     <h3 className="font-black text-gray-900 leading-[1.25] mb-2 text-2xl line-clamp-2 min-h-[4rem] group-hover:text-blue-600 transition-colors">
@@ -893,7 +980,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
                                     <div className="mt-auto flex justify-between items-center py-4 border-t border-gray-50">
                                        <span className="text-3xl font-black text-blue-600 tracking-tight">
-                                          {config.currencySymbol}{ (product.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2 }) }
+                                       {config.currencySymbol}{ (Number(product.price) || 0).toLocaleString(undefined, { minimumFractionDigits: 2 }) }
                                        </span>
                                     </div>
                                  </div>
@@ -901,20 +988,21 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            )
                         })}
                      </div>
+                     )}
                   </div>
                )}
 
                {viewMode === 'BI_MONITOR' && (
-                  <WatchlistMonitor
+                  (watchlists.length === 0 ? renderEmptyState('BI_MONITOR') : <WatchlistMonitor
                      products={products}
-                     transactions={transactions}
+                     transactions={runtimeTransactions}
                      watchlists={watchlists}
                      config={config}
-                     warehouses={warehouses}
+                     warehouses={runtimeWarehouses}
                      onUpdateWatchlists={handleUpdateWatchlists}
                      onOpenKardex={(p) => setEditingProduct(p)}
                      onOpenPromo={(p) => alert(`Abriendo diseñador de ofertas para: ${p.name}`)}
-                  />
+                  />)
                )}
 
                {viewMode === 'STOCKS' && (
@@ -929,13 +1017,14 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         </span>
                      </div>
                      <div className="flex-1 space-y-12 pb-40 custom-scrollbar overflow-y-auto pr-4">
-                        {warehouses.map(warehouse => <WarehouseStockCard key={warehouse.id} warehouse={warehouse} filteredProducts={filteredProducts} productStocks={productStocks} />)}
+                        {runtimeWarehouses.length === 0 ? renderEmptyState('STOCKS') : runtimeWarehouses.map(warehouse => <WarehouseStockCard key={warehouse.id} warehouse={warehouse} filteredProducts={filteredProducts} productStocks={productStocks} />)}
                      </div>
                   </div>
                )}
 
                {viewMode === 'TARIFFS' && (
                   <div className="p-16 max-w-[1600px] mx-auto w-full flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-10 pb-40">
+                     {tariffs.length === 0 && !canManage ? renderEmptyState('TARIFFS') : null}
                      {tariffs.map(tariff => (
                         <div key={tariff.id} className="bg-white rounded-[3rem] p-10 shadow-sm border-2 border-transparent hover:border-blue-500/20 hover:shadow-2xl hover:shadow-blue-500/5 transition-all relative overflow-hidden group">
                            <div className="flex justify-between items-start mb-10">
@@ -983,7 +1072,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            {currentProductGroups.length} grupo{currentProductGroups.length === 1 ? '' : 's'}
                         </span>
                      </div>
-                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+                        {currentProductGroups.length === 0 && !canManage ? renderEmptyState('GROUPS') : null}
                         {currentProductGroups.map((group) => (
                            <div key={group.id} className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm hover:shadow-xl transition-all">
                               <div className="flex items-start justify-between gap-4 mb-6">
@@ -1033,7 +1123,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                            {currentSeasons.length} temporada{currentSeasons.length === 1 ? '' : 's'}
                         </span>
                      </div>
-                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+                        {currentSeasons.length === 0 && !canManage ? renderEmptyState('SEASONS') : null}
                         {currentSeasons.map((season) => (
                            <div key={season.id} className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm hover:shadow-xl transition-all">
                               <div className="flex items-start justify-between gap-4 mb-6">
@@ -1109,7 +1200,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          {showBulkModal && (
             <BulkEditModal
                config={config}
-               warehouses={warehouses}
+               warehouses={runtimeWarehouses}
                products={products}
                seasons={config.seasons || []}
                groups={config.productGroups || []}

@@ -759,7 +759,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             requestContext.credentialKey,
             credentialLabel
          );
-         await refreshCredentialMeta();
+         if (response.meta) {
+            setCredentialMeta(response.meta);
+            setCredentialLabel(response.meta.label || credentialLabel);
+         } else {
+            await refreshCredentialMeta();
+         }
          setCredentialDraft('');
          setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial fiscal guardada.' });
       } catch (error: any) {
@@ -789,7 +794,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             requestContext.companyInfo,
             requestContext.credentialKey
          );
-         await refreshCredentialMeta();
+         if (response.meta) {
+            setCredentialMeta(response.meta);
+            setCredentialLabel(response.meta.label || credentialLabel);
+         } else {
+            await refreshCredentialMeta();
+         }
          setCredentialDraft('');
          setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial fiscal guardada en Supabase.' });
       } catch (error: any) {
@@ -821,7 +831,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             requestContext.companyInfo,
             requestContext.credentialKey
          );
-         await refreshCredentialMeta();
+         if (response.meta) {
+            setCredentialMeta(response.meta);
+            setCredentialLabel(response.meta.label || '');
+         } else {
+            await refreshCredentialMeta();
+         }
          setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial local eliminada.' });
       } catch (error: any) {
          console.error('❌ Error deleting local fiscal credential:', error);
@@ -852,7 +867,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
             requestContext.companyInfo,
             requestContext.credentialKey
          );
-         await refreshCredentialMeta();
+         if (response.meta) {
+            setCredentialMeta(response.meta);
+            setCredentialLabel(response.meta.label || '');
+         } else {
+            await refreshCredentialMeta();
+         }
          setFiscalFeedback({ kind: 'success', message: response.message || 'Credencial en Supabase eliminada.' });
       } catch (error: any) {
          console.error('❌ Error deleting Supabase fiscal credential:', error);
