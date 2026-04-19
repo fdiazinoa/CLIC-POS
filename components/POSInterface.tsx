@@ -76,6 +76,7 @@ import { resolveCustomerImageSrc } from '../utils/entityImage';
 import { resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
 import SplitTicketModal from './SplitTicketModal';
+import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 
 // ... existing imports
 
@@ -211,6 +212,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTerminal = (config.terminals || []).find(t => t.id === activeTerminalId) || (config.terminals || [])[0];
    const activeTerminalConfig = activeTerminal?.config;
    const terminalId = activeTerminal?.id || 'T1';
+   const salesUsers = useMemo(() => getTerminalSnapshotSellers(config, terminalId), [config, terminalId]);
+   const resolveSalespersonLabel = useCallback((salespersonId?: string | null) => {
+      return resolveTerminalSellerName(salespersonId, config, terminalId, users) || 'Vendedor';
+   }, [config, terminalId, users]);
    const terminalDisplaySource = activeTerminalConfig?.terminalName || activeTerminalConfig?.stationNumber || terminalId;
    const terminalDisplayLabel = useMemo(() => {
       const normalized = String(terminalDisplaySource || terminalId).trim();
@@ -3529,7 +3534,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                        {item.salespersonId && (
                                           <div className="mt-1 flex items-center gap-1 text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-md w-fit">
                                              <User size={10} />
-                                             <span>{users?.find(u => u.id === item.salespersonId)?.name || 'Vendedor'}</span>
+                                             <span>{resolveSalespersonLabel(item.salespersonId)}</span>
                                           </div>
                                        )}
                                     </div>
@@ -3642,7 +3647,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           {item.salespersonId && (
                                              <div className="flex items-center gap-1 text-[9px] text-gray-400 mt-0.5">
                                                 <User size={10} />
-                                                <span className="truncate max-w-[80px]">{users?.find(u => u.id === item.salespersonId)?.name || '...'}</span>
+                                                <span className="truncate max-w-[80px]">{resolveSalespersonLabel(item.salespersonId) || '...'}</span>
                                              </div>
                                           )}
                                        </div>
@@ -4077,7 +4082,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          )}
          {showPaymentModal && <UnifiedPaymentModal total={amountDueNow} items={cart} taxAmount={cartTax} currencySymbol={baseCurrency.symbol} config={config} onClose={() => setShowPaymentModal(false)} onConfirm={handlePaymentConfirm} themeColor={config.themeColor} customer={effectiveSelectedCustomer} isDelinquent={isDelinquent} users={users} roles={roles} isMaster={isMaster} currentUser={currentUser} isRestaurantMode={isRestaurantMode} />}
          {showLoyaltyModal && <LoyaltyScanModal onClose={() => setShowLoyaltyModal(false)} onScan={handleLoyaltyScan} />}
-         {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
+         {editingItem && <CartItemOptionsModal item={editingItem} config={config} users={users} salesUsers={salesUsers} roles={roles} onClose={() => setEditingItem(null)} onUpdate={updateCartItem} canApplyDiscount={true} canVoidItem={true} />}
          {selectedProductForVariants && <ProductVariantSelector product={selectedProductForVariants} currencySymbol={baseCurrency.symbol} onClose={() => setSelectedProductForVariants(null)} onConfirm={(p, m, pr) => { addToCart(p, 1, pr, m); setSelectedProductForVariants(null); }} />}
          {productForScale && <ScaleModal product={productForScale} currencySymbol={baseCurrency.symbol} onClose={() => setProductForScale(null)} onConfirm={(w) => { addToCart(productForScale, w); setProductForScale(null); }} />}
          {

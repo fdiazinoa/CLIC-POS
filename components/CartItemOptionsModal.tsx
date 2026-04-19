@@ -5,11 +5,13 @@ import {
   DollarSign, Tag, User, Package, ChevronRight
 } from 'lucide-react';
 import { CartItem, BusinessConfig, User as UserType, RoleDefinition } from '../types';
+import { TerminalSnapshotSeller } from '../utils/terminalSnapshotSellers';
 
 interface CartItemOptionsModalProps {
   item: CartItem;
   config: BusinessConfig;
   users: UserType[];
+  salesUsers?: TerminalSnapshotSeller[];
   roles?: RoleDefinition[];
   onClose: () => void;
   onUpdate: (updatedItem: CartItem | null, cartIdToDelete?: string) => void;
@@ -21,6 +23,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
   item,
   config,
   users,
+  salesUsers: incomingSalesUsers = [],
   roles = [],
   onClose,
   onUpdate,
@@ -43,13 +46,17 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
     : originalPrice;
 
   const salesUsers = useMemo(() => {
+    if (incomingSalesUsers.length > 0) {
+      return incomingSalesUsers;
+    }
+
     const vendorRole = roles.find(r => ['vendedor', 'seller', 'sales', 'comercial'].includes(r.name.toLowerCase()));
     if (vendorRole) {
       const filtered = users.filter(u => u.role === vendorRole.id);
       return filtered.length > 0 ? filtered : users;
     }
     return users;
-  }, [users, roles]);
+  }, [incomingSalesUsers, users, roles]);
 
   const handleQuantityChange = (delta: number) => {
     const newQty = Math.max(0.001, quantity + delta);
