@@ -21,6 +21,16 @@ const PRESET_COLORS = [
    'bg-gray-500', 'bg-teal-500'
 ];
 
+const productReferenceCandidates = (product: Product): string[] => (
+   [
+      typeof product?.id === 'string' ? product.id.trim() : String(product?.id || '').trim(),
+      typeof product?.barcode === 'string' ? product.barcode.trim() : String(product?.barcode || '').trim(),
+      typeof (product as any)?.sku === 'string' ? (product as any).sku.trim() : String((product as any)?.sku || '').trim(),
+      typeof (product as any)?.item_code === 'string' ? (product as any).item_code.trim() : String((product as any)?.item_code || '').trim(),
+      typeof (product as any)?.code === 'string' ? (product as any).code.trim() : String((product as any)?.code || '').trim(),
+   ].filter(Boolean)
+);
+
 const GroupForm: React.FC<GroupFormProps> = ({
    initialData, products, onSave, onClose
 }) => {
@@ -62,16 +72,23 @@ const GroupForm: React.FC<GroupFormProps> = ({
 
    // --- LOGIC ---
 
-   const toggleProductSelection = (productId: string) => {
+   const toggleProductSelection = (product: Product) => {
       setFormData(prev => {
          const currentIds = new Set(prev.productIds);
-         if (currentIds.has(productId)) {
-            currentIds.delete(productId);
+         const candidates = productReferenceCandidates(product);
+         const alreadySelected = candidates.some((candidate) => currentIds.has(candidate));
+         if (alreadySelected) {
+            candidates.forEach((candidate) => currentIds.delete(candidate));
          } else {
-            currentIds.add(productId);
+            currentIds.add(product.id);
          }
          return { ...prev, productIds: Array.from(currentIds) };
       });
+   };
+
+   const isProductSelected = (product: Product) => {
+      const selectedIds = new Set(formData.productIds || []);
+      return productReferenceCandidates(product).some((candidate) => selectedIds.has(candidate));
    };
 
    const handleSelectAll = () => {
@@ -79,7 +96,9 @@ const GroupForm: React.FC<GroupFormProps> = ({
          // Deselect all visible
          setFormData(prev => ({
             ...prev,
-            productIds: prev.productIds.filter(id => !filteredProducts.find(p => p.id === id))
+            productIds: prev.productIds.filter(id =>
+               !filteredProducts.some((product) => productReferenceCandidates(product).includes(id))
+            )
          }));
       } else {
          // Select all visible
@@ -247,11 +266,11 @@ const GroupForm: React.FC<GroupFormProps> = ({
                      <div className="flex-1 overflow-y-auto pb-20">
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                            {filteredProducts.map(product => {
-                              const isSelected = formData.productIds.includes(product.id);
+                              const isSelected = isProductSelected(product);
                               return (
                                  <div
                                     key={product.id}
-                                    onClick={() => toggleProductSelection(product.id)}
+                                    onClick={() => toggleProductSelection(product)}
                                     className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex items-center justify-between ${isSelected
                                           ? 'bg-orange-50 border-orange-500 shadow-sm'
                                           : 'bg-white border-gray-200 hover:border-orange-200'
