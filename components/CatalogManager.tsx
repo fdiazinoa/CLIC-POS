@@ -208,7 +208,7 @@ const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Pro
 
 // --- MAIN CATALOG COMPONENT ---
 const CatalogManager: React.FC<CatalogManagerProps> = ({
-   products, config, warehouses, transactions, currentUser, roles, onUpdateProducts, onUpdateConfig,
+   products: productsProp, config: configProp, warehouses, transactions, currentUser, roles, onUpdateProducts, onUpdateConfig,
    onClose,
    isAdminMode,
    terminalId,
@@ -223,6 +223,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       ? window.matchMedia('(pointer: coarse)').matches
       : false);
 
+   const [catalogProducts, setCatalogProducts] = useState<Product[]>(productsProp || []);
+   const [catalogConfig, setCatalogConfig] = useState<BusinessConfig>(configProp);
    const [viewMode, setViewMode] = useState<CatalogViewMode>('PRODUCTS');
    const [searchTerm, setSearchTerm] = useState('');
    const [categoryFilter, setCategoryFilter] = useState('ALL');
@@ -238,6 +240,9 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    // Watchlists State
    const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
 
+   const products = catalogProducts;
+   const config = catalogConfig;
+
    const hasPermission = (permission: string): boolean => {
       if (!currentUser) return false;
       const userRole = roles.find(r => r.id === currentUser.role);
@@ -250,6 +255,14 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const isTablet = viewportWidth >= 1024 && hasCoarsePointer;
    const isDesktop = viewportWidth >= 1024 && !hasCoarsePointer;
    const isLargeCatalogLayout = isTablet || isDesktop;
+
+   useEffect(() => {
+      setCatalogProducts(productsProp || []);
+   }, [productsProp]);
+
+   useEffect(() => {
+      setCatalogConfig(configProp);
+   }, [configProp]);
 
    useEffect(() => {
       const handleResize = () => {
@@ -266,14 +279,49 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          const stocks = (await db.get('productStocks') || []) as ProductStock[];
          setProductStocks(stocks);
       };
+      const loadCatalogRuntime = async () => {
+         const [rawProducts, rawConfig] = await Promise.all([
+            db.get('products'),
+            db.get('config'),
+         ]);
+
+         const storedProducts = (Array.isArray(rawProducts) ? rawProducts : []) as Product[];
+         if (storedProducts.length > 0) {
+            setCatalogProducts(storedProducts);
+         }
+
+         const storedConfig = Array.isArray(rawConfig)
+            ? (rawConfig.find((entry: any) => entry?.id === 'current') || rawConfig[0] || null)
+            : rawConfig;
+
+         if (storedConfig && typeof storedConfig === 'object') {
+            setCatalogConfig(storedConfig as BusinessConfig);
+         }
+      };
       loadWatchlists();
       loadStocks();
+      loadCatalogRuntime().catch((error) => console.warn('[CatalogManager] loadCatalogRuntime', error));
 
       const handleStockUpdate = async () => {
          const stocks = (await db.get('productStocks') || []) as ProductStock[];
          setProductStocks(stocks);
       };
+      const handleConfigUpdate = async () => {
+         const rawConfig = await db.get('config');
+         const storedConfig = Array.isArray(rawConfig)
+            ? (rawConfig.find((entry: any) => entry?.id === 'current') || rawConfig[0] || null)
+            : rawConfig;
+         if (storedConfig && typeof storedConfig === 'object') {
+            setCatalogConfig(storedConfig as BusinessConfig);
+         }
+      };
+      const handleProductsUpdate = async () => {
+         const rawProducts = await db.get('products');
+         setCatalogProducts((Array.isArray(rawProducts) ? rawProducts : []) as Product[]);
+      };
       window.addEventListener('productStocksUpdated', handleStockUpdate);
+      window.addEventListener('configUpdated', handleConfigUpdate as EventListener);
+      window.addEventListener('productsUpdated', handleProductsUpdate as EventListener);
 
       // --- INITIAL PRODUCT DEEP LINKING ---
       if (initialProductId) {
@@ -286,6 +334,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       return () => {
          window.removeEventListener('resize', handleResize);
          window.removeEventListener('productStocksUpdated', handleStockUpdate);
+         window.removeEventListener('configUpdated', handleConfigUpdate as EventListener);
+         window.removeEventListener('productsUpdated', handleProductsUpdate as EventListener);
       };
    }, []);
 
@@ -335,6 +385,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          // Force refresh from database to ensure UI is in sync with server/IndexedDB
          const refreshedProducts = await db.get('products') as Product[];
+         setCatalogProducts(refreshedProducts || products);
          onUpdateProducts(refreshedProducts);
 
          for (const id of touchedIds) {
@@ -441,6 +492,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
             // Reload from DB to get the correct stock values after movement recording (which updates products again)
             const freshProducts = await db.get('products') as Product[];
+            setCatalogProducts(freshProducts || products);
             onUpdateProducts(freshProducts || products);
          } else {
             // New product with initial stock
@@ -460,6 +512,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
             // For new products, reload to get accurate stock after movement recording
             const freshProducts = await db.get('products') as Product[];
+            setCatalogProducts(freshProducts || products);
             onUpdateProducts(freshProducts || products);
          }
          setEditingProduct(null);
@@ -474,19 +527,25 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
    function handleSaveTariff(savedTariff: Tariff) {
       const exists = tariffs.some(t => t.id === savedTariff.id);
-      onUpdateConfig({ ...config, tariffs: exists ? tariffs.map(t => t.id === savedTariff.id ? savedTariff : t) : [...tariffs, savedTariff] });
+      const nextConfig = { ...config, tariffs: exists ? tariffs.map(t => t.id === savedTariff.id ? savedTariff : t) : [...tariffs, savedTariff] };
+      setCatalogConfig(nextConfig);
+      onUpdateConfig(nextConfig);
       setEditingTariff(null);
    }
 
    function handleSaveGroup(savedGroup: ProductGroup) {
       const exists = currentProductGroups.some(g => g.id === savedGroup.id);
-      onUpdateConfig({ ...config, productGroups: exists ? currentProductGroups.map(g => g.id === savedGroup.id ? savedGroup : g) : [...currentProductGroups, savedGroup] });
+      const nextConfig = { ...config, productGroups: exists ? currentProductGroups.map(g => g.id === savedGroup.id ? savedGroup : g) : [...currentProductGroups, savedGroup] };
+      setCatalogConfig(nextConfig);
+      onUpdateConfig(nextConfig);
       setEditingGroup(null);
    }
 
    function handleSaveSeason(savedSeason: Season) {
       const exists = currentSeasons.some(s => s.id === savedSeason.id);
-      onUpdateConfig({ ...config, seasons: exists ? currentSeasons.map(s => s.id === savedSeason.id ? savedSeason : s) : [...currentSeasons, savedSeason] });
+      const nextConfig = { ...config, seasons: exists ? currentSeasons.map(s => s.id === savedSeason.id ? savedSeason : s) : [...currentSeasons, savedSeason] };
+      setCatalogConfig(nextConfig);
+      onUpdateConfig(nextConfig);
       setEditingSeason(null);
    }
 
@@ -494,20 +553,24 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       const group = currentProductGroups.find((entry) => entry.id === groupId);
       if (!group) return;
       if (!confirm(`¿Eliminar el grupo "${group.name}"?`)) return;
-      onUpdateConfig({
+      const nextConfig = {
          ...config,
          productGroups: currentProductGroups.filter((entry) => entry.id !== groupId),
-      });
+      };
+      setCatalogConfig(nextConfig);
+      onUpdateConfig(nextConfig);
    }
 
    function handleDeleteSeason(seasonId: string) {
       const season = currentSeasons.find((entry) => entry.id === seasonId);
       if (!season) return;
       if (!confirm(`¿Eliminar la temporada "${season.name}"?`)) return;
-      onUpdateConfig({
+      const nextConfig = {
          ...config,
          seasons: currentSeasons.filter((entry) => entry.id !== seasonId),
-      });
+      };
+      setCatalogConfig(nextConfig);
+      onUpdateConfig(nextConfig);
    }
 
    return (
@@ -529,6 +592,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                   <SidebarItem label="Productos" icon={<Package size={22} />} active={viewMode === 'PRODUCTS'} onClick={() => setViewMode('PRODUCTS')} />
                   <SidebarItem label="Monitor BI" icon={<Activity size={22} />} active={viewMode === 'BI_MONITOR'} onClick={() => setViewMode('BI_MONITOR')} />
                   {canManage && <SidebarItem label="Variantes" icon={<Layers size={22} />} active={(viewMode as string) === 'VARIANTS'} onClick={() => setViewMode('VARIANTS')} />}
+                  <SidebarItem label="Clasificaciones" icon={<Grid size={22} />} active={(viewMode as string) === 'CLASSIFICATIONS'} onClick={() => setViewMode('CLASSIFICATIONS')} />
                   <SidebarItem label="Grupos" icon={<Grid size={22} />} active={viewMode === 'GROUPS'} onClick={() => setViewMode('GROUPS')} />
                   <SidebarItem label="Temporadas" icon={<Sun size={22} />} active={viewMode === 'SEASONS'} onClick={() => setViewMode('SEASONS')} />
                   <SidebarItem label="Stocks" icon={<ClipboardList size={22} />} active={viewMode === 'STOCKS'} onClick={() => setViewMode('STOCKS')} />
