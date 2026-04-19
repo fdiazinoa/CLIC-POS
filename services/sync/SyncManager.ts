@@ -34,6 +34,7 @@ import {
     posCatalogDebugNow,
     posCatalogDebugSummarizeItem,
 } from '../../utils/posCatalogDebugTrace';
+import { productReferenceCandidates } from '../../utils/productReferences';
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities';
 
@@ -720,6 +721,11 @@ class SyncManager {
         }
 
         return { localById, localByBarcode, localByCode };
+    }
+
+    private collectSnapshotProductAliasIds(product: Product): string[] {
+        const canonicalProductId = typeof product?.id === 'string' ? product.id.trim() : String(product?.id || '').trim();
+        return productReferenceCandidates(product).filter((candidate) => candidate !== canonicalProductId);
     }
 
     private reconcileCatalogProductIds(config: BusinessConfig, localProducts: Product[]): BusinessConfig {
@@ -1647,7 +1653,8 @@ class SyncManager {
     private collectSnapshotProductWarehouseIds(
         product: Product,
         runtimeWarehouses: Warehouse[],
-        existingStocksByProductWarehouse: Map<string, ProductStock>
+        existingStocksByProductWarehouse: Map<string, ProductStock>,
+        aliasProductIds: string[] = []
     ): string[] {
         const runtimeWarehouseIds = Array.isArray(runtimeWarehouses)
             ? runtimeWarehouses
@@ -1677,7 +1684,61 @@ class SyncManager {
             }
         }
 
+        for (const aliasProductId of aliasProductIds) {
+            const aliasKeyPrefix = `${String(aliasProductId || '').trim()}::`;
+            for (const lookupKey of existingStocksByProductWarehouse.keys()) {
+                if (lookupKey.startsWith(aliasKeyPrefix)) {
+                    productWarehouseIds.push(lookupKey.slice(aliasKeyPrefix.length));
+                }
+            }
+        }
+
         return Array.from(new Set(productWarehouseIds.filter(Boolean)));
+    }
+
+    private resolveExistingSnapshotProductStock(
+        productId: string,
+        warehouseId: string,
+        aliasProductIds: string[],
+        existingStocksByProductWarehouse: Map<string, ProductStock>
+    ): ProductStock | undefined {
+        const candidateProductIds = [productId, ...aliasProductIds].filter(Boolean);
+        for (const candidateProductId of candidateProductIds) {
+            const lookupKey = this.buildSnapshotProductStockLookupKey(candidateProductId, warehouseId);
+            const existingStock = existingStocksByProductWarehouse.get(lookupKey);
+            if (existingStock) {
+                return existingStock;
+            }
+        }
+        return undefined;
+    }
+
+    private async reconcileSnapshotProductStockAliases(
+        canonicalProductId: string,
+        aliasProductIds: string[],
+        existingStocksByProductWarehouse: Map<string, ProductStock>
+    ): Promise<void> {
+        const aliases = Array.from(new Set(aliasProductIds.filter(Boolean).filter((alias) => alias !== canonicalProductId)));
+        if (aliases.length === 0) {
+            return;
+        }
+
+        for (const aliasProductId of aliases) {
+            const aliasKeyPrefix = `${aliasProductId}::`;
+            for (const [lookupKey, stock] of Array.from(existingStocksByProductWarehouse.entries())) {
+                if (!lookupKey.startsWith(aliasKeyPrefix)) continue;
+
+                existingStocksByProductWarehouse.delete(lookupKey);
+
+                try {
+                    if (stock?.id) {
+                        await db.deleteDocument('productStocks', stock.id);
+                    }
+                } catch (error) {
+                    console.warn(`⚠️ SyncManager: could not delete remapped duplicate stock row ${stock?.id}:`, error);
+                }
+            }
+        }
     }
 
     private async syncSnapshotProductStocks(
@@ -1693,7 +1754,8 @@ class SyncManager {
         const stockBalances = product?.stockBalances && typeof product.stockBalances === 'object'
             ? product.stockBalances
             : {};
-        const warehouseIds = this.collectSnapshotProductWarehouseIds(product, runtimeWarehouses, existingStocksByProductWarehouse);
+        const aliasProductIds = this.collectSnapshotProductAliasIds(product);
+        const warehouseIds = this.collectSnapshotProductWarehouseIds(product, runtimeWarehouses, existingStocksByProductWarehouse, aliasProductIds);
         if (warehouseIds.length === 0) {
             return;
         }
@@ -1702,7 +1764,7 @@ class SyncManager {
 
         for (const warehouseId of warehouseIds) {
             const lookupKey = this.buildSnapshotProductStockLookupKey(productId, warehouseId);
-            const existingStock = existingStocksByProductWarehouse.get(lookupKey);
+            const existingStock = this.resolveExistingSnapshotProductStock(productId, warehouseId, aliasProductIds, existingStocksByProductWarehouse);
             const qtyPhysical = Number((stockBalances as Record<string, unknown>)?.[warehouseId] ?? 0);
             const qtyCommitted = Number(existingStock?.qtyCommitted ?? 0);
             const nextStock: ProductStock = {
@@ -1719,6 +1781,8 @@ class SyncManager {
             await db.saveDocument('productStocks', nextStock);
             existingStocksByProductWarehouse.set(lookupKey, nextStock);
         }
+
+        await this.reconcileSnapshotProductStockAliases(productId, aliasProductIds, existingStocksByProductWarehouse);
     }
 
     private snapshotMasterRows(

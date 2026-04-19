@@ -9,6 +9,7 @@ import {
   deriveWarehouseIdsFromStockBalances,
   deriveWarehouseIdsFromSettings,
 } from '../../utils/masterIdentity';
+import { extractWarehouseStockBalances } from '../../utils/productReferences';
 
 type IncomingProduct = Partial<Product> & Record<string, any>;
 
@@ -370,8 +371,22 @@ class ProductImageCacheService {
             : (localProduct?.warehouseSettings || {})),
       context.warehouses || []
     );
-    const incomingStockBalances = asObject(item.stockBalances);
-    const metadataStockBalances = asObject(metadata.stockBalances);
+    const incomingStockBalances = extractWarehouseStockBalances(
+      item.stockBalances,
+      item.stock_balances,
+      item.stockBalancesByWarehouse,
+      item.stock_balances_by_warehouse,
+      item.warehouseStockBalances,
+      item.warehouse_stock_balances,
+    );
+    const metadataStockBalances = extractWarehouseStockBalances(
+      metadata.stockBalances,
+      metadata.stock_balances,
+      metadata.stockBalancesByWarehouse,
+      metadata.stock_balances_by_warehouse,
+      metadata.warehouseStockBalances,
+      metadata.warehouse_stock_balances,
+    );
     const normalizedStockBalances = canonicalizeWarehouseRecord(
       Object.keys(incomingStockBalances).length > 0
         ? incomingStockBalances
@@ -408,7 +423,7 @@ class ProductImageCacheService {
       derivedActiveWarehouseIds = deriveWarehouseIdsFromStockBalances(normalizedStockBalances);
     }
     if (derivedActiveWarehouseIds.length === 0) {
-      derivedActiveWarehouseIds = deriveWarehouseIdsFromStockBalances(metadata.stockBalances);
+      derivedActiveWarehouseIds = deriveWarehouseIdsFromStockBalances(metadataStockBalances);
     }
     if (derivedActiveWarehouseIds.length === 0) {
       derivedActiveWarehouseIds = deriveWarehouseIdsFromSettings(localProduct?.warehouseSettings);

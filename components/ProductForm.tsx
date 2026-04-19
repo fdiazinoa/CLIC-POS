@@ -35,6 +35,7 @@ import {
   resolveWarehouseId,
   tariffMatchesIdentifier,
 } from '../utils/masterIdentity';
+import { resolveLinkedProductIds, resolveProductStockRow } from '../utils/productReferences';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -176,6 +177,15 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [detailedStocks, setDetailedStocks] = useState<ProductStock[]>([]);
   const [productionAreas, setProductionAreas] = useState<any[]>([]);
   const [productionAreasLoaded, setProductionAreasLoaded] = useState(false);
+  const linkedProductIds = useMemo(
+    () => resolveLinkedProductIds(formData, allProducts),
+    [formData, allProducts]
+  );
+  const stockBalanceSource = useMemo(() => {
+    const linkedProductIdSet = new Set(linkedProductIds);
+    const freshestLinkedProduct = allProducts.find((product) => linkedProductIdSet.has(String(product?.id || '').trim()));
+    return freshestLinkedProduct?.stockBalances || formData.stockBalances || {};
+  }, [linkedProductIds, allProducts, formData.stockBalances]);
 
   const resolveErpBaseUrl = () => {
     const env = (import.meta as any)?.env || {};
@@ -291,7 +301,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     // Listen for productStocks updates
     const handleStockSync = async () => {
       const allStocks = await db.get('productStocks') as ProductStock[] || [];
-      const myStocks = allStocks.filter(s => s.productId === formData.id);
+      const myStocks = allStocks.filter((stock) => linkedProductIds.includes(String(stock?.productId || '').trim()));
       setDetailedStocks(myStocks);
     };
     window.addEventListener('productStocksUpdated', handleStockSync);
@@ -304,7 +314,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       window.removeEventListener('transactionSynced', handleSync);
       window.removeEventListener('productStocksUpdated', handleStockSync);
     };
-  }, [formData.id, kardexWarehouse, kardexTerminal]);
+  }, [formData.id, linkedProductIds, kardexWarehouse, kardexTerminal]);
 
   // --- DYNAMIC LEDGER SUMMARY (For Cards & Table) ---
   const { entriesWithDynamicBalance, currentViewStock, currentViewCost } = useMemo(() => {
@@ -1546,14 +1556,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
                 <div className="grid grid-cols-1 gap-4">
                   {warehouses.map(wh => {
-                    // Guard against cross-product bleed: this tab must only read the detailed
-                    // stock row for the current product and warehouse combination.
-                    const detailedStock = detailedStocks.find(
-                      s => s.productId === formData.id && s.warehouseId === wh.id
-                    );
+                    const detailedStock = resolveProductStockRow(formData, wh.id, detailedStocks, allProducts);
                     const stock = detailedStock
                       ? detailedStock.quantity
-                      : getWarehouseScopedNumber(formData.stockBalances || {}, wh.id, warehouses, 0);
+                      : getWarehouseScopedNumber(stockBalanceSource, wh.id, warehouses, 0);
                     const isActive = normalizedActiveWarehouseIds.includes(wh.id);
 
                     return (
