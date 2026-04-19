@@ -1281,6 +1281,19 @@ const AppContent: React.FC = () => {
   const renderTerminalConfigRestartBanner = () => {
     if (!terminalConfigRestartNotice) return null;
 
+    const tenantIdentity = getStoredTenantIdentity();
+    const restartTargetName =
+      config.companyInfo?.name?.trim()
+      || tenantIdentity.tenantSlug
+      || tenantIdentity.tenantEmail
+      || null;
+    const currentTerminal = getCurrentTerminal();
+    const restartTerminalName =
+      currentTerminal?.config?.terminalName
+      || currentTerminal?.config?.stationNumber
+      || terminalConfigRestartNotice.terminalId
+      || null;
+
     const bannerStyle: React.CSSProperties = {
       position: 'fixed',
       top: reconnectionStatus === 'idle' ? 0 : 44,
@@ -1301,10 +1314,13 @@ const AppContent: React.FC = () => {
     return (
       <div style={bannerStyle}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 800 }}>Nueva configuración recibida desde ERP</div>
+          <div style={{ fontWeight: 800 }}>
+            Nueva configuración recibida desde ERP
+            {restartTargetName ? ` · ${restartTargetName}` : ''}
+          </div>
           <div style={{ fontSize: '13px', opacity: 0.92 }}>
             Reinicia el POS para aplicar por completo cambios de tarifa, catálogo y configuración operativa.
-            {terminalConfigRestartNotice.eventId ? ` Evento ${terminalConfigRestartNotice.eventId}.` : ''}
+            {restartTerminalName ? ` Terminal ${restartTerminalName}.` : ''}
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
