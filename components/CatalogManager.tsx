@@ -290,6 +290,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    }, []);
 
    const tariffs = config.tariffs || [];
+   const currentProductGroups = config.productGroups || [];
+   const currentSeasons = config.seasons || [];
    const [editingTariff, setEditingTariff] = useState<Tariff | null | 'NEW'>(null);
    const [editingGroup, setEditingGroup] = useState<ProductGroup | null | 'NEW'>(null);
    const [editingSeason, setEditingSeason] = useState<Season | null | 'NEW'>(null);
@@ -477,17 +479,35 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    }
 
    function handleSaveGroup(savedGroup: ProductGroup) {
-      const currentGroups = config.productGroups || [];
-      const exists = currentGroups.some(g => g.id === savedGroup.id);
-      onUpdateConfig({ ...config, productGroups: exists ? currentGroups.map(g => g.id === savedGroup.id ? savedGroup : g) : [...currentGroups, savedGroup] });
+      const exists = currentProductGroups.some(g => g.id === savedGroup.id);
+      onUpdateConfig({ ...config, productGroups: exists ? currentProductGroups.map(g => g.id === savedGroup.id ? savedGroup : g) : [...currentProductGroups, savedGroup] });
       setEditingGroup(null);
    }
 
    function handleSaveSeason(savedSeason: Season) {
-      const currentSeasons = config.seasons || [];
       const exists = currentSeasons.some(s => s.id === savedSeason.id);
       onUpdateConfig({ ...config, seasons: exists ? currentSeasons.map(s => s.id === savedSeason.id ? savedSeason : s) : [...currentSeasons, savedSeason] });
       setEditingSeason(null);
+   }
+
+   function handleDeleteGroup(groupId: string) {
+      const group = currentProductGroups.find((entry) => entry.id === groupId);
+      if (!group) return;
+      if (!confirm(`¿Eliminar el grupo "${group.name}"?`)) return;
+      onUpdateConfig({
+         ...config,
+         productGroups: currentProductGroups.filter((entry) => entry.id !== groupId),
+      });
+   }
+
+   function handleDeleteSeason(seasonId: string) {
+      const season = currentSeasons.find((entry) => entry.id === seasonId);
+      if (!season) return;
+      if (!confirm(`¿Eliminar la temporada "${season.name}"?`)) return;
+      onUpdateConfig({
+         ...config,
+         seasons: currentSeasons.filter((entry) => entry.id !== seasonId),
+      });
    }
 
    return (
@@ -885,6 +905,128 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         <div className="p-8 bg-white rounded-full shadow-2xl text-blue-600 group-hover:scale-110 transition-transform duration-500"><Plus size={60} strokeWidth={4} /></div>
                         <span className="text-2xl font-black">Nueva Lista</span>
                      </button>
+                  </div>
+               )}
+
+               {viewMode === 'GROUPS' && (
+                  <div className="p-16 max-w-[1600px] mx-auto w-full pb-40">
+                     <div className="mb-12 flex flex-wrap items-end justify-between gap-6">
+                        <div>
+                           <h2 className="text-5xl font-black text-gray-900 mb-4 tracking-tight">Grupos de Artículos</h2>
+                           <p className="text-xl text-gray-400 font-bold">Colecciones para promociones, filtros y edición por conjunto.</p>
+                        </div>
+                        <span className="text-sm bg-orange-50 text-orange-700 px-6 py-3 rounded-full font-black border-2 border-orange-100">
+                           {currentProductGroups.length} grupo{currentProductGroups.length === 1 ? '' : 's'}
+                        </span>
+                     </div>
+                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+                        {currentProductGroups.map((group) => (
+                           <div key={group.id} className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm hover:shadow-xl transition-all">
+                              <div className="flex items-start justify-between gap-4 mb-6">
+                                 <div className="flex items-center gap-4">
+                                    <div className={`w-5 h-5 rounded-full ${group.color || 'bg-blue-500'} shadow-sm`} />
+                                    <div>
+                                       <p className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">{group.code}</p>
+                                       <h3 className="text-2xl font-black text-gray-900">{group.name}</h3>
+                                    </div>
+                                 </div>
+                                 {canManage && (
+                                    <div className="flex items-center gap-2">
+                                       <button onClick={() => setEditingGroup(group)} className="p-3 rounded-2xl bg-gray-50 text-gray-500 hover:text-blue-600 hover:bg-white hover:shadow-lg transition-all">
+                                          <Edit2 size={18} />
+                                       </button>
+                                       <button onClick={() => handleDeleteGroup(group.id)} className="p-3 rounded-2xl bg-gray-50 text-gray-400 hover:text-red-600 hover:bg-white hover:shadow-lg transition-all">
+                                          <Trash2 size={18} />
+                                       </button>
+                                    </div>
+                                 )}
+                              </div>
+                              <p className="text-sm text-gray-500 font-medium min-h-[3rem] mb-6">{group.description || 'Sin descripción registrada.'}</p>
+                              <div className="flex items-center justify-between pt-6 border-t border-gray-100">
+                                 <span className="text-sm font-black text-gray-400 uppercase tracking-[0.18em]">Productos vinculados</span>
+                                 <span className="text-3xl font-black text-blue-600">{group.productIds.length}</span>
+                              </div>
+                           </div>
+                        ))}
+                        {canManage && (
+                           <button onClick={() => setEditingGroup('NEW')} className="bg-gray-50 rounded-[2.5rem] p-8 border-4 border-dashed border-gray-100 hover:border-blue-200 hover:bg-white transition-all flex flex-col items-center justify-center text-gray-300 hover:text-blue-600 gap-6 min-h-[260px]">
+                              <div className="p-6 bg-white rounded-full shadow-xl text-blue-600"><Plus size={42} strokeWidth={3.5} /></div>
+                              <span className="text-xl font-black">Nuevo Grupo</span>
+                           </button>
+                        )}
+                     </div>
+                  </div>
+               )}
+
+               {viewMode === 'SEASONS' && (
+                  <div className="p-16 max-w-[1600px] mx-auto w-full pb-40">
+                     <div className="mb-12 flex flex-wrap items-end justify-between gap-6">
+                        <div>
+                           <h2 className="text-5xl font-black text-gray-900 mb-4 tracking-tight">Temporadas</h2>
+                           <p className="text-xl text-gray-400 font-bold">Calendarios comerciales para demanda, promociones y reglas por categoría.</p>
+                        </div>
+                        <span className="text-sm bg-yellow-50 text-yellow-700 px-6 py-3 rounded-full font-black border-2 border-yellow-100">
+                           {currentSeasons.length} temporada{currentSeasons.length === 1 ? '' : 's'}
+                        </span>
+                     </div>
+                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+                        {currentSeasons.map((season) => (
+                           <div key={season.id} className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm hover:shadow-xl transition-all">
+                              <div className="flex items-start justify-between gap-4 mb-6">
+                                 <div>
+                                    <div className="flex items-center gap-3 mb-3">
+                                       <span className={`px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-[0.16em] ${season.isActive ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                                          {season.isActive ? 'Activa' : 'Inactiva'}
+                                       </span>
+                                       <span className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">{season.code}</span>
+                                    </div>
+                                    <h3 className="text-2xl font-black text-gray-900">{season.name}</h3>
+                                 </div>
+                                 {canManage && (
+                                    <div className="flex items-center gap-2">
+                                       <button onClick={() => setEditingSeason(season)} className="p-3 rounded-2xl bg-gray-50 text-gray-500 hover:text-blue-600 hover:bg-white hover:shadow-lg transition-all">
+                                          <Edit2 size={18} />
+                                       </button>
+                                       <button onClick={() => handleDeleteSeason(season.id)} className="p-3 rounded-2xl bg-gray-50 text-gray-400 hover:text-red-600 hover:bg-white hover:shadow-lg transition-all">
+                                          <Trash2 size={18} />
+                                       </button>
+                                    </div>
+                                 )}
+                              </div>
+                              <div className="grid grid-cols-2 gap-4 mb-6">
+                                 <div className="rounded-2xl bg-gray-50 p-4">
+                                    <p className="text-xs font-black uppercase tracking-[0.16em] text-gray-400 mb-2">Vigencia</p>
+                                    <p className="text-sm font-bold text-gray-700">{new Date(season.startDate).toLocaleDateString()} - {new Date(season.endDate).toLocaleDateString()}</p>
+                                 </div>
+                                 <div className="rounded-2xl bg-gray-50 p-4">
+                                    <p className="text-xs font-black uppercase tracking-[0.16em] text-gray-400 mb-2">Multiplicador</p>
+                                    <p className="text-2xl font-black text-blue-600">{season.multiplier.toFixed(1)}x</p>
+                                 </div>
+                              </div>
+                              <div className="flex items-center justify-between gap-4 pt-6 border-t border-gray-100">
+                                 <div>
+                                    <p className="text-xs font-black uppercase tracking-[0.16em] text-gray-400 mb-1">Productos</p>
+                                    <p className="text-2xl font-black text-gray-900">{season.productIds.length}</p>
+                                 </div>
+                                 <div>
+                                    <p className="text-xs font-black uppercase tracking-[0.16em] text-gray-400 mb-1">Categorías</p>
+                                    <p className="text-2xl font-black text-gray-900">{season.affectedCategories?.length || 0}</p>
+                                 </div>
+                                 {canManage && (
+                                    <button onClick={() => handleBulkRecalculate(season)} className="px-5 py-3 rounded-2xl bg-yellow-50 text-yellow-700 font-black hover:bg-yellow-100 transition-all flex items-center gap-2">
+                                       <RefreshCw size={16} /> Recalcular
+                                    </button>
+                                 )}
+                              </div>
+                           </div>
+                        ))}
+                        {canManage && (
+                           <button onClick={() => setEditingSeason('NEW')} className="bg-gray-50 rounded-[2.5rem] p-8 border-4 border-dashed border-gray-100 hover:border-blue-200 hover:bg-white transition-all flex flex-col items-center justify-center text-gray-300 hover:text-blue-600 gap-6 min-h-[300px]">
+                              <div className="p-6 bg-white rounded-full shadow-xl text-blue-600"><Plus size={42} strokeWidth={3.5} /></div>
+                              <span className="text-xl font-black">Nueva Temporada</span>
+                           </button>
+                        )}
+                     </div>
                   </div>
                )}
             </div>
