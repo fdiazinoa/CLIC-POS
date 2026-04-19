@@ -47,7 +47,7 @@ interface SyncStatus {
     error?: string;
 }
 
-type TerminalManifestMasterScope = 'items' | 'customers' | 'suppliers' | 'purchase_orders' | 'transfers';
+type TerminalManifestMasterScope = 'items' | 'customers' | 'suppliers' | 'sellers' | 'purchase_orders' | 'transfers';
 type TerminalManifestResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions' | 'loyalty';
 type TerminalManifestScope = 'terminal' | TerminalManifestMasterScope;
 
@@ -895,7 +895,7 @@ class SyncManager {
                 return null;
             }
 
-            const changedMasterScopes: TerminalManifestMasterScope[] = (['items', 'customers', 'suppliers', 'purchase_orders', 'transfers'] as TerminalManifestMasterScope[])
+            const changedMasterScopes: TerminalManifestMasterScope[] = (['items', 'customers', 'suppliers', 'sellers', 'purchase_orders', 'transfers'] as TerminalManifestMasterScope[])
                 .filter((scope) => manifest.changed?.[scope]);
             const terminalChanged = Boolean(manifest.changed.terminal);
 

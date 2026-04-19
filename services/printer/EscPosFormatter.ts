@@ -1,6 +1,7 @@
 import { BusinessConfig, Reservation, Transaction, ZReport } from '../../types';
 import { findTaxByIdentifier } from '../../utils/taxIdentity';
 import { buildPaymentSettlementSummary } from '../../utils/paymentSettlement';
+import { resolveTerminalSellerName } from '../../utils/terminalSnapshotSellers';
 
 export interface EscPosLabelRecord {
   productId: string;
@@ -372,9 +373,9 @@ export const buildEscPosTicketPayload = (
       pushTextLines(chunks, splitLines(`Nota: ${item.note}`, width));
     }
     if (item.salespersonId) {
-      const seller = users.find(user => user.id === item.salespersonId);
-      if (seller?.name) {
-        pushTextLines(chunks, splitLines(`Vendedor: ${seller.name}`, width));
+      const sellerName = resolveTerminalSellerName(item.salespersonId, config, transaction.terminalId, users);
+      if (sellerName) {
+        pushTextLines(chunks, splitLines(`Vendedor: ${sellerName}`, width));
       }
     }
   });

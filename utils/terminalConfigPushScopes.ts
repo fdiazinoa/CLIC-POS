@@ -1,4 +1,4 @@
-export type TerminalConfigPushMasterScope = 'items' | 'customers' | 'suppliers';
+export type TerminalConfigPushMasterScope = 'items' | 'customers' | 'suppliers' | 'sellers';
 export type TerminalConfigPushResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions';
 
 export type TerminalConfigSyncRequestDetail = {
@@ -11,7 +11,7 @@ export type TerminalConfigSyncRequestDetail = {
     selective?: boolean;
 };
 
-const TERMINAL_CONFIG_MASTER_SCOPE_SET = new Set<TerminalConfigPushMasterScope>(['items', 'customers', 'suppliers']);
+const TERMINAL_CONFIG_MASTER_SCOPE_SET = new Set<TerminalConfigPushMasterScope>(['items', 'customers', 'suppliers', 'sellers']);
 const TERMINAL_CONFIG_RESOLVED_SCOPE_SET = new Set<TerminalConfigPushResolvedScope>(['pricing', 'inventory', 'documents', 'catalog', 'promotions']);
 
 const asObject = (value: unknown): Record<string, unknown> => (
