@@ -13,6 +13,7 @@ import {
   PromotionTargetType,
   PromotionType,
   ProductGroup,
+  Season,
   Tariff,
   TaxDefinition,
   TerminalConfig,
@@ -462,6 +463,44 @@ const normalizeProductGroupFromErpPayload = (raw: unknown, index: number): Produ
   };
 };
 
+const normalizeSeasonFromErpPayload = (raw: unknown, index: number): Season | null => {
+  const data = asObject(raw);
+  const id = asString(data.id || data.seasonId || data.season_id || `season-${index + 1}`);
+  if (!id) return null;
+
+  const productIds = asArray<any>(data.productIds ?? data.product_ids ?? data.items ?? data.products)
+    .map((entry) => {
+      if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+        const obj = asObject(entry);
+        return asString(obj.id || obj.productId || obj.product_id);
+      }
+      return asString(entry);
+    })
+    .filter(Boolean);
+
+  const affectedCategories = asArray<any>(data.affectedCategories ?? data.affected_categories ?? data.categories)
+    .map((entry) => {
+      if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+        const obj = asObject(entry);
+        return asString(obj.id || obj.code || obj.name);
+      }
+      return asString(entry);
+    })
+    .filter(Boolean);
+
+  return {
+    id,
+    name: asString(data.name) || id,
+    code: asString(data.code) || id,
+    startDate: asString(data.startDate ?? data.start_date) || new Date().toISOString().split('T')[0],
+    endDate: asString(data.endDate ?? data.end_date) || new Date().toISOString().split('T')[0],
+    isActive: asBoolean(data.isActive ?? data.is_active, true),
+    productIds,
+    multiplier: asNumber(data.multiplier, 1),
+    affectedCategories,
+  };
+};
+
 const normalizeAssignments = (raw: unknown): Record<string, string> => {
   if (Array.isArray(raw)) {
     return raw.reduce<Record<string, string>>((acc, item) => {
@@ -646,16 +685,31 @@ export const applyTerminalConfigSnapshot = (
     .filter(Boolean) as Coupon[];
   const hasIncomingProductGroups =
     Object.prototype.hasOwnProperty.call(resolvedCatalog, 'product_groups') ||
+    Object.prototype.hasOwnProperty.call(resolvedCatalog, 'productGroups') ||
     Object.prototype.hasOwnProperty.call(resolvedCatalog, 'groups') ||
     Object.prototype.hasOwnProperty.call(effectiveFallbackConfig, 'productGroups');
   const productGroupsSource = Object.prototype.hasOwnProperty.call(resolvedCatalog, 'product_groups')
     ? resolvedCatalog.product_groups
+    : Object.prototype.hasOwnProperty.call(resolvedCatalog, 'productGroups')
+      ? resolvedCatalog.productGroups
     : Object.prototype.hasOwnProperty.call(resolvedCatalog, 'groups')
       ? resolvedCatalog.groups
       : effectiveFallbackConfig.productGroups;
   const productGroups = asArray(productGroupsSource)
     .map((item, index) => normalizeProductGroupFromErpPayload(item, index))
     .filter(Boolean) as ProductGroup[];
+  const hasIncomingSeasons =
+    Object.prototype.hasOwnProperty.call(resolvedCatalog, 'seasons') ||
+    Object.prototype.hasOwnProperty.call(resolvedCatalog, 'seasonality') ||
+    Object.prototype.hasOwnProperty.call(effectiveFallbackConfig, 'seasons');
+  const seasonsSource = Object.prototype.hasOwnProperty.call(resolvedCatalog, 'seasons')
+    ? resolvedCatalog.seasons
+    : Object.prototype.hasOwnProperty.call(resolvedCatalog, 'seasonality')
+      ? resolvedCatalog.seasonality
+      : effectiveFallbackConfig.seasons;
+  const seasons = asArray(seasonsSource)
+    .map((item, index) => normalizeSeasonFromErpPayload(item, index))
+    .filter(Boolean) as Season[];
   const documentAssignments = normalizeAssignments(resolvedDocuments.assignments);
 
   const terminalTemplate = resolveTerminalTemplate(nextConfig, terminalId);
@@ -919,6 +973,10 @@ export const applyTerminalConfigSnapshot = (
 
   if (hasIncomingProductGroups) {
     nextConfig.productGroups = productGroups;
+  }
+
+  if (hasIncomingSeasons) {
+    nextConfig.seasons = seasons;
   }
 
   if (!hasResolutionError && Object.prototype.hasOwnProperty.call(effectiveResolved, 'promotions')) {
