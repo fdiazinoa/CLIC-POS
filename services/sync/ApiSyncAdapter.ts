@@ -301,6 +301,10 @@ class ApiSyncAdapter {
         return /\/api\/sync$/i.test(trimmed) ? trimmed : `${trimmed}/api/sync`;
     }
 
+    isUsingErpOperationalTarget(): boolean {
+        return this.resolveOperationalTarget()?.useLocalTarget === false;
+    }
+
     private resolveOperationalTarget(): { baseUrl: string; terminalId: string; useLocalTarget: boolean } | null {
         const boundErpTerminalId =
             localStorage.getItem('clic_erp_sync_terminal_id') ||
@@ -458,6 +462,42 @@ class ApiSyncAdapter {
         if (!response.ok) {
             throw new Error(`Operational sync failed: ${response.status} ${response.statusText}`);
         }
+    }
+
+    private async getOperationalPayload<T = any>(path: string): Promise<T> {
+        const target = await this.authenticateOperationalTarget();
+        const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
+            headers: {
+                'X-Sync-Token': target.token
+            }
+        });
+
+        if (response.status === 401) {
+            if (target.useLocalTarget) {
+                this.authToken = null;
+            } else {
+                this.erpAuthToken = null;
+            }
+
+            const retriedTarget = await this.authenticateOperationalTarget(true);
+            const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}${path}`, {
+                headers: {
+                    'X-Sync-Token': retriedTarget.token
+                }
+            });
+
+            if (!retryResponse.ok) {
+                throw new Error(`Operational fetch failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}`);
+            }
+
+            return await retryResponse.json();
+        }
+
+        if (!response.ok) {
+            throw new Error(`Operational fetch failed: ${response.status} ${response.statusText}`);
+        }
+
+        return await response.json();
     }
 
     /**
@@ -1454,13 +1494,29 @@ class ApiSyncAdapter {
         }
     }
 
+    async pullOperationalStockBalances(productId?: string): Promise<any[]> {
+        try {
+            const query = productId ? `?product_id=${encodeURIComponent(productId)}` : '';
+            const data = await this.getOperationalPayload<{ balances?: any[] }>(`/inventory/stock-balances${query}`);
+            return Array.isArray(data?.balances) ? data.balances : [];
+        } catch (error) {
+            console.error('❌ ApiSyncAdapter: Error pulling operational stock balances:', error);
+            return [];
+        }
+    }
+
     /**
      * Pull Kardex for a specific product on-demand
      */
     async pullKardexOnDemand(productId: string): Promise<any[]> {
-        if (!this.config || !this.isOnline) return [];
-
         try {
+            if (this.isUsingErpOperationalTarget()) {
+                const data = await this.getOperationalPayload<{ items?: any[] }>(`/inventory/kardex/${encodeURIComponent(productId)}`);
+                return data.items || [];
+            }
+
+            if (!this.config || !this.isOnline) return [];
+
             const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/inventory/kardex/${productId}`, {
                 headers: { 'X-Sync-Token': this.authToken || '' }
             });

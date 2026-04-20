@@ -19,6 +19,7 @@ import WatchlistMonitor from './WatchlistMonitor';
 import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
+import { inventorySyncService } from '../services/sync/InventorySyncService';
 import ClassificationManager from './ClassificationManager';
 import ErrorBoundary from './ErrorBoundary';
 import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
@@ -388,6 +389,34 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          setWatchlists((Array.isArray(lists) ? lists.filter((entry): entry is Watchlist => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []));
       };
       const loadStocks = async () => {
+         if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
+            const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
+            const nextStocks: ProductStock[] = [];
+
+            for (const product of products) {
+               const matchedBalance = remoteBalances.find((entry) => productIdMatchesProductReference(entry?.id, product, products));
+               const stockBalances = matchedBalance?.stockBalances && typeof matchedBalance.stockBalances === 'object'
+                  ? matchedBalance.stockBalances as Record<string, number>
+                  : {};
+
+               for (const [warehouseId, quantity] of Object.entries(stockBalances)) {
+                  nextStocks.push({
+                     id: `${product.id}_${warehouseId}`,
+                     productId: product.id,
+                     warehouseId,
+                     quantity: Number(quantity || 0),
+                     qtyPhysical: Number(quantity || 0),
+                     qtyCommitted: 0,
+                     qtyAvailable: Number(quantity || 0),
+                     updatedAt: new Date().toISOString(),
+                  });
+               }
+            }
+
+            setProductStocks(nextStocks);
+            return;
+         }
+
          const stocks = (await db.get('productStocks') || []) as ProductStock[];
          setProductStocks(stocks);
       };
@@ -425,6 +454,34 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       loadCatalogRuntime().catch((error) => console.warn('[CatalogManager] loadCatalogRuntime', error));
 
       const handleStockUpdate = async () => {
+         if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
+            const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
+            const nextStocks: ProductStock[] = [];
+
+            for (const product of products) {
+               const matchedBalance = remoteBalances.find((entry) => productIdMatchesProductReference(entry?.id, product, products));
+               const stockBalances = matchedBalance?.stockBalances && typeof matchedBalance.stockBalances === 'object'
+                  ? matchedBalance.stockBalances as Record<string, number>
+                  : {};
+
+               for (const [warehouseId, quantity] of Object.entries(stockBalances)) {
+                  nextStocks.push({
+                     id: `${product.id}_${warehouseId}`,
+                     productId: product.id,
+                     warehouseId,
+                     quantity: Number(quantity || 0),
+                     qtyPhysical: Number(quantity || 0),
+                     qtyCommitted: 0,
+                     qtyAvailable: Number(quantity || 0),
+                     updatedAt: new Date().toISOString(),
+                  });
+               }
+            }
+
+            setProductStocks(nextStocks);
+            return;
+         }
+
          const stocks = (await db.get('productStocks') || []) as ProductStock[];
          setProductStocks(stocks);
       };
@@ -473,7 +530,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          window.removeEventListener('productsUpdated', handleProductsUpdate as EventListener);
          window.removeEventListener('transactionsUpdated', handleTransactionsUpdate as EventListener);
       };
-   }, []);
+   }, [products]);
 
    const tariffs = useMemo(
       () => (Array.isArray(config?.tariffs) ? config.tariffs.filter((entry): entry is Tariff => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),

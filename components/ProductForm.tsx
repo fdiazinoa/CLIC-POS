@@ -35,7 +35,7 @@ import {
   resolveWarehouseId,
   tariffMatchesIdentifier,
 } from '../utils/masterIdentity';
-import { resolveLinkedProductIds, resolveProductStockRow } from '../utils/productReferences';
+import { productIdMatchesProductReference, resolveLinkedProductIds, resolveProductStockRow } from '../utils/productReferences';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -177,6 +177,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [detailedStocks, setDetailedStocks] = useState<ProductStock[]>([]);
   const [productionAreas, setProductionAreas] = useState<any[]>([]);
   const [productionAreasLoaded, setProductionAreasLoaded] = useState(false);
+  const [remoteStockBalances, setRemoteStockBalances] = useState<Record<string, number>>({});
   const linkedProductIds = useMemo(
     () => resolveLinkedProductIds(formData, allProducts),
     [formData, allProducts]
@@ -184,8 +185,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const stockBalanceSource = useMemo(() => {
     const linkedProductIdSet = new Set(linkedProductIds);
     const freshestLinkedProduct = allProducts.find((product) => linkedProductIdSet.has(String(product?.id || '').trim()));
-    return freshestLinkedProduct?.stockBalances || formData.stockBalances || {};
-  }, [linkedProductIds, allProducts, formData.stockBalances]);
+    return Object.keys(remoteStockBalances).length > 0
+      ? remoteStockBalances
+      : (freshestLinkedProduct?.stockBalances || formData.stockBalances || {});
+  }, [linkedProductIds, allProducts, formData.stockBalances, remoteStockBalances]);
 
   const resolveErpBaseUrl = () => {
     const env = (import.meta as any)?.env || {};
@@ -276,7 +279,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     const loadLedger = async () => {
       let allEntries: InventoryLedgerEntry[] = [];
 
-      if (permissionService.isMasterTerminal()) {
+      if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
+        allEntries = await inventorySyncService.fetchKardexOnDemand(formData.id);
+      } else if (permissionService.isMasterTerminal()) {
         allEntries = (await db.get('inventoryLedger') || []) as InventoryLedgerEntry[];
       } else {
         allEntries = await inventorySyncService.fetchKardexOnDemand(formData.id);
@@ -300,8 +305,31 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
     // Listen for productStocks updates
     const handleStockSync = async () => {
+      if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
+        const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand(formData.id);
+        const matchedBalance = remoteBalances.find((entry) => productIdMatchesProductReference(entry?.id, formData, allProducts));
+        const nextRemoteStockBalances = matchedBalance?.stockBalances && typeof matchedBalance.stockBalances === 'object'
+          ? canonicalizeWarehouseRecord(matchedBalance.stockBalances as Record<string, number>, warehouses)
+          : {};
+        setRemoteStockBalances(nextRemoteStockBalances);
+
+        const synthesizedStocks: ProductStock[] = Object.entries(nextRemoteStockBalances).map(([warehouseId, quantity]) => ({
+          id: `${formData.id}_${warehouseId}`,
+          productId: formData.id,
+          warehouseId,
+          quantity: Number(quantity || 0),
+          qtyPhysical: Number(quantity || 0),
+          qtyCommitted: 0,
+          qtyAvailable: Number(quantity || 0),
+          updatedAt: new Date().toISOString(),
+        }));
+        setDetailedStocks(synthesizedStocks);
+        return;
+      }
+
       const allStocks = await db.get('productStocks') as ProductStock[] || [];
       const myStocks = allStocks.filter((stock) => linkedProductIds.includes(String(stock?.productId || '').trim()));
+      setRemoteStockBalances({});
       setDetailedStocks(myStocks);
     };
     window.addEventListener('productStocksUpdated', handleStockSync);
