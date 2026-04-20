@@ -13,6 +13,12 @@ import { BusinessConfig, Product, CustomerDisplayConfig, ScaleDevice, ScaleTech,
 import { parseScaleBarcode } from '../utils/barcodeParser';
 import { nativePrintBridge } from '../services/printer/NativePrintBridge';
 import { biometricService } from '../services/BiometricAuthService';
+import {
+   launchCustomerDisplay,
+   normalizeCustomerDisplayConfig,
+   normalizeCustomerDisplayConnectionType,
+   resetCustomerDisplayAutoLaunch,
+} from '../utils/customerDisplay';
 
 // Perfiles predefinidos de balanzas populares
 const SCALE_PRESETS = [
@@ -30,7 +36,7 @@ const DEFAULT_DISPLAY_CONFIG: CustomerDisplayConfig = {
    showItemImages: true,
    showQrPayment: true,
    layout: 'SPLIT',
-   connectionType: 'VIRTUAL',
+   connectionType: 'HDMI',
    ads: [
       { id: 'ad1', url: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=600&auto=format&fit=crop', active: true },
       { id: 'ad2', url: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?q=80&w=600&auto=format&fit=crop', active: true }
@@ -108,8 +114,10 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
    }, [globalConfig.terminals, terminalId]);
 
    const [displayConfig, setDisplayConfig] = useState<CustomerDisplayConfig>(
-      currentTerminalConfig?.config?.hardware?.customerDisplay || DEFAULT_DISPLAY_CONFIG
+      normalizeCustomerDisplayConfig(currentTerminalConfig?.config?.hardware?.customerDisplay || DEFAULT_DISPLAY_CONFIG)
    );
+   const [displayLaunchFeedback, setDisplayLaunchFeedback] = useState<string | null>(null);
+   const [isLaunchingDisplay, setIsLaunchingDisplay] = useState(false);
    const [allowBiometrics, setAllowBiometrics] = useState<boolean>(
       currentTerminalConfig?.config?.security?.allowBiometrics || false
    );
@@ -136,6 +144,11 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          setCurrentPreviewAdIndex(0);
       }
    }, [previewMode, displayConfig.ads?.length]);
+
+   useEffect(() => {
+      setDisplayConfig(normalizeCustomerDisplayConfig(currentTerminalConfig?.config?.hardware?.customerDisplay || DEFAULT_DISPLAY_CONFIG));
+      setDisplayLaunchFeedback(null);
+   }, [currentTerminalConfig?.config?.hardware?.customerDisplay]);
 
    useEffect(() => {
       setAllowBiometrics(currentTerminalConfig?.config?.security?.allowBiometrics || false);
@@ -299,7 +312,45 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       }
    };
 
-   const handleSaveAllHardware = () => {
+   const launchConfiguredCustomerDisplay = async (nextConfig: CustomerDisplayConfig = displayConfig) => {
+      const normalizedConfig = normalizeCustomerDisplayConfig(nextConfig);
+      const connectionType = normalizeCustomerDisplayConnectionType(normalizedConfig.connectionType);
+
+      if (!normalizedConfig.isEnabled) {
+         setDisplayLaunchFeedback('Activa el visor para lanzar una segunda pantalla.');
+         return null;
+      }
+
+      if (connectionType === 'NETWORK' && !normalizedConfig.ipAddress?.trim()) {
+         setDisplayLaunchFeedback('Indica la IP o URL del visor remoto para abrir la vista del cliente.');
+         return null;
+      }
+
+      setIsLaunchingDisplay(true);
+      setDisplayLaunchFeedback(null);
+
+      try {
+         resetCustomerDisplayAutoLaunch(selectedTerminalId);
+         const launched = await launchCustomerDisplay(normalizedConfig, { contextKey: selectedTerminalId });
+         setDisplayLaunchFeedback(
+            launched.mode === 'NETWORK'
+               ? `Visor remoto abierto en ${launched.url}.`
+               : launched.usedSecondScreen
+                  ? `Visor lanzado automáticamente en la segunda pantalla ${launched.mode === 'USB' ? 'USB' : 'HDMI'}.`
+                  : 'Visor lanzado. Si no cambió de pantalla, el sistema abrió la vista sin detectar una secundaria disponible.',
+         );
+         return launched;
+      } catch (error) {
+         const message = error instanceof Error ? error.message : 'No se pudo lanzar el visor del cliente.';
+         setDisplayLaunchFeedback(message);
+         return null;
+      } finally {
+         setIsLaunchingDisplay(false);
+      }
+   };
+
+   const handleSaveAllHardware = async () => {
+      const normalizedDisplayConfig = normalizeCustomerDisplayConfig(displayConfig);
       const newConfig = { ...globalConfig, scales, availablePrinters: printers, scaleLabelConfig };
       if (newConfig.terminals) {
          // Update the specific terminal config
@@ -311,7 +362,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                      ...t.config,
                      hardware: {
                         ...t.config.hardware,
-                        customerDisplay: displayConfig,
+                        customerDisplay: normalizedDisplayConfig,
                         fingerprintReader
                      },
                      security: {
@@ -325,7 +376,10 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          });
       }
       onUpdateConfig(newConfig);
-      alert("Configuración de hardware sincronizada con éxito.");
+      const launchResult = normalizedDisplayConfig.isEnabled
+         ? await launchConfiguredCustomerDisplay(normalizedDisplayConfig)
+         : null;
+      alert(launchResult ? 'Configuración de hardware sincronizada y visor preparado con éxito.' : 'Configuración de hardware sincronizada con éxito.');
    };
 
    const renderFingerprintSettings = () => {
@@ -876,8 +930,14 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       }));
    };
 
-   const renderCustomerDisplay = () => (
-      <div className="space-y-6 animate-in slide-in-from-right-4 duration-300 pb-32">
+   const renderCustomerDisplay = () => {
+      const activeDisplayConnection = normalizeCustomerDisplayConnectionType(displayConfig.connectionType);
+      const launchButtonLabel = activeDisplayConnection === 'NETWORK'
+         ? 'Lanzar visor por IP'
+         : `Auto detectar y lanzar visor ${activeDisplayConnection === 'USB' ? 'USB' : 'HDMI'}`;
+
+      return (
+         <div className="space-y-6 animate-in slide-in-from-right-4 duration-300 pb-32">
          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <div className="space-y-6">
                <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-200">
@@ -901,49 +961,18 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                   {displayConfig.isEnabled && (
                      <div className="mt-6 pt-6 border-t border-slate-50">
                         <button
-                           onClick={async () => {
-                              try {
-                                 let left = window.screen.width; // Default heuristic: Move to the right
-                                 let top = 0;
-                                 let width = 1024;
-                                 let height = 768;
-
-                                 // Advanced API: Multi-Screen Window Placement
-                                 if ('getScreenDetails' in window) {
-                                    try {
-                                       const screenDetails = await (window as any).getScreenDetails();
-                                       const screens = screenDetails.screens;
-
-                                       // Find a screen that is NOT the current one (Primary usually)
-                                       // ideally we look for an external one or just the second one
-                                       const externalScreen = screens.find((s: any) => s !== screenDetails.currentScreen);
-
-                                       if (externalScreen) {
-                                          left = externalScreen.left;
-                                          top = externalScreen.top;
-                                          width = externalScreen.width;
-                                          height = externalScreen.height;
-                                          console.log("Found external screen:", externalScreen);
-                                       }
-                                    } catch (err) {
-                                       console.warn("Permission denied or API error for screen details:", err);
-                                    }
-                                 }
-
-                                 // Launch the window
-                                 const features = `left=${left},top=${top},width=${width},height=${height},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=no`;
-                                 window.open('/?view=VISOR', 'clic_pos_visor', features);
-
-                              } catch (e) {
-                                 console.error("Error launching visor:", e);
-                                 // Fallback simple launch
-                                 window.open('/?view=VISOR', 'clic_pos_visor', 'width=1024,height=768');
-                              }
-                           }}
+                           onClick={() => void launchConfiguredCustomerDisplay()}
                            className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-sm uppercase tracking-widest flex items-center justify-center gap-3 hover:bg-slate-800 transition-all shadow-xl active:scale-95 shadow-slate-200"
+                           disabled={isLaunchingDisplay}
                         >
-                           <MonitorPlay size={20} /> Lanzar Visor HDMI
+                           {isLaunchingDisplay ? <RefreshCw size={20} className="animate-spin" /> : <MonitorPlay size={20} />}
+                           {launchButtonLabel}
                         </button>
+                        {displayLaunchFeedback && (
+                           <p className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600">
+                              {displayLaunchFeedback}
+                           </p>
+                        )}
                      </div>
                   )}
                </div>
@@ -951,15 +980,16 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                <div className={`bg-white p-8 rounded-3xl shadow-sm border border-gray-200 space-y-6 transition-all ${displayConfig.isEnabled ? 'opacity-100' : 'opacity-60 grayscale cursor-not-allowed'}`}>
                   <div>
                      <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Método de Conexión</label>
-                     <div className="grid grid-cols-2 gap-3">
+                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         {[
-                           { id: 'VIRTUAL', label: 'Monitor HDMI', icon: MonitorPlay },
+                           { id: 'HDMI', label: 'HDMI', icon: MonitorPlay },
+                           { id: 'USB', label: 'USB / DisplayLink', icon: Usb },
                            { id: 'NETWORK', label: 'Tablet por IP', icon: Network },
                         ].map(conn => (
                            <button
                               key={conn.id}
                               onClick={() => setDisplayConfig({ ...displayConfig, connectionType: conn.id as any })}
-                              className={`p-4 rounded-2xl border-2 flex items-center gap-3 transition-all ${displayConfig.connectionType === conn.id ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
+                              className={`p-4 rounded-2xl border-2 flex items-center gap-3 transition-all ${activeDisplayConnection === conn.id ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
                            >
                               <conn.icon size={20} />
                               <span className="text-xs font-bold">{conn.label}</span>
@@ -967,6 +997,29 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                         ))}
                      </div>
                   </div>
+
+                  {activeDisplayConnection === 'NETWORK' ? (
+                     <div>
+                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2">IP o URL del visor remoto</label>
+                        <input
+                           type="text"
+                           value={displayConfig.ipAddress || ''}
+                           onChange={(e) => setDisplayConfig({ ...displayConfig, ipAddress: e.target.value })}
+                           className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 outline-none focus:bg-white focus:ring-2 focus:ring-blue-100"
+                           placeholder="Ej. 192.168.1.44:3000 o https://visor.local"
+                        />
+                        <p className="mt-2 text-xs font-medium text-gray-500">
+                           Se abrirá la vista del cliente usando esa dirección y quedará lista para el segundo display remoto.
+                        </p>
+                     </div>
+                  ) : (
+                     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                        <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-500">Detección automática</p>
+                        <p className="mt-2 text-sm font-medium text-slate-600">
+                           El APK intentará detectar una pantalla secundaria conectada por {activeDisplayConnection === 'USB' ? 'USB / DisplayLink' : 'HDMI'} y mover el visor automáticamente.
+                        </p>
+                     </div>
+                  )}
 
                   <div>
                      <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Mensaje de Bienvenida</label>
@@ -1099,6 +1152,7 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
          </div>
       </div>
    );
+   };
 
    return (
       <div className="flex flex-col h-full bg-gray-50 animate-in fade-in slide-in-from-right-10 duration-300">

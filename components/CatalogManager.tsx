@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
    Package, Search, Plus, Edit2, Trash2, ArrowLeft,
    Filter, Tag, Image as ImageIcon, DollarSign,
@@ -19,9 +19,15 @@ import WatchlistMonitor from './WatchlistMonitor';
 import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
+import { inventorySyncService } from '../services/sync/InventorySyncService';
 import ClassificationManager from './ClassificationManager';
 import ErrorBoundary from './ErrorBoundary';
 import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
+import {
+   extractWarehouseStockBalances,
+   productIdMatchesInventoryReference,
+   resolveInventoryProductStockRow,
+} from '../utils/productReferences';
 
 interface CatalogManagerProps {
    products: Product[];
@@ -104,12 +110,12 @@ const pickRicherBusinessConfig = (primary?: BusinessConfig | null, secondary?: B
 };
 
 // --- SUB-COMPONENT: STOCK ROW ---
-const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks: ProductStock[] }> = ({ product, warehouseId, productStocks }) => {
+const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks: ProductStock[]; allProducts: Product[] }> = ({ product, warehouseId, productStocks, allProducts }) => {
    const [isExpanded, setIsExpanded] = useState(false);
    const hasVariants = product.variants && product.variants.length > 0;
 
    // Get stock from detailed collection
-   const detailedStock = productStocks.find(s => s.productId === product.id && s.warehouseId === warehouseId);
+   const detailedStock = resolveInventoryProductStockRow(product, warehouseId, productStocks, allProducts);
    const warehouseStock = detailedStock ? detailedStock.quantity : getWarehouseScopedNumber(product.stockBalances || {}, warehouseId, [], 0);
 
    const getStatusBadge = (qty: number) => {
@@ -195,12 +201,12 @@ const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks:
 };
 
 // --- WAREHOUSE CARD CONTAINER ---
-const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Product[]; productStocks: ProductStock[] }> = ({ warehouse, filteredProducts, productStocks }) => {
+const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Product[]; productStocks: ProductStock[]; allProducts: Product[] }> = ({ warehouse, filteredProducts, productStocks, allProducts }) => {
    const [isCardExpanded, setIsCardExpanded] = useState(false);
    const warehouseProducts = filteredProducts.filter(p => isProductWarehouseActive(p, warehouse.id, [warehouse]));
 
    const totalValue = warehouseProducts.reduce((acc, p) => {
-      const detailedStock = productStocks.find(s => s.productId === p.id && s.warehouseId === warehouse.id);
+      const detailedStock = resolveInventoryProductStockRow(p, warehouse.id, productStocks, allProducts);
       const qty = detailedStock ? detailedStock.quantity : getWarehouseScopedNumber(p.stockBalances || {}, warehouse.id, [warehouse], 0);
       return acc + (qty * (p.cost || 0));
    }, 0);
@@ -243,7 +249,7 @@ const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Pro
                         <tr><th className="p-4 w-[40%]">Artículo</th><th className="p-4">Variante / Atributo</th><th className="p-4 text-center">Stock Físico</th><th className="p-4 text-right">Estado</th></tr>
                      </thead>
                      <tbody className="divide-y divide-gray-100">
-                        {warehouseProducts.map(product => <StockRow key={product.id} product={product} warehouseId={warehouse.id} productStocks={productStocks} />)}
+                        {warehouseProducts.map(product => <StockRow key={product.id} product={product} warehouseId={warehouse.id} productStocks={productStocks} allProducts={allProducts} />)}
                      </tbody>
                   </table>
                </div>
@@ -277,6 +283,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const [editingProduct, setEditingProduct] = useState<Product | null | 'NEW'>(null);
    const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
    const [viewportWidth, setViewportWidth] = useState(resolveViewportWidth());
+   const consumedInitialProductIdRef = useRef<string | null>(null);
 
    // SELECTION & BULK STATE
    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -362,6 +369,21 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    }, [transactions]);
 
    useEffect(() => {
+      if (!editingProduct || editingProduct === 'NEW') return;
+
+      const refreshedProduct = products.find((product) =>
+         productIdMatchesInventoryReference(product, editingProduct, products)
+      );
+      if (!refreshedProduct) return;
+
+      const currentMarker = `${editingProduct.id || 'NO_ID'}::${editingProduct.updatedAt || (editingProduct as any).createdAt || 'NO_TS'}`;
+      const nextMarker = `${refreshedProduct.id || 'NO_ID'}::${refreshedProduct.updatedAt || (refreshedProduct as any).createdAt || 'NO_TS'}`;
+      if (currentMarker !== nextMarker) {
+         setEditingProduct(refreshedProduct);
+      }
+   }, [editingProduct, products]);
+
+   useEffect(() => {
       const handleResize = () => {
          setViewportWidth(resolveViewportWidth());
       };
@@ -372,6 +394,43 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          setWatchlists((Array.isArray(lists) ? lists.filter((entry): entry is Watchlist => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []));
       };
       const loadStocks = async () => {
+         if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
+            const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
+            const nextStocks: ProductStock[] = [];
+
+            for (const product of products) {
+               const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, product, products));
+               const stockBalances = extractWarehouseStockBalances(
+                  matchedBalances,
+                  ...matchedBalances.flatMap((entry: any) => [
+                     entry?.stockBalances,
+                     entry?.stock_balances,
+                     entry?.balances,
+                     entry?.warehouseBalances,
+                     entry?.warehouse_balances,
+                     entry?.metadata?.stockBalances,
+                     entry?.metadata?.stock_balances,
+                  ]),
+               );
+
+               for (const [warehouseId, quantity] of Object.entries(stockBalances)) {
+                  nextStocks.push({
+                     id: `${product.id}_${warehouseId}`,
+                     productId: product.id,
+                     warehouseId,
+                     quantity: Number(quantity || 0),
+                     qtyPhysical: Number(quantity || 0),
+                     qtyCommitted: 0,
+                     qtyAvailable: Number(quantity || 0),
+                     updatedAt: new Date().toISOString(),
+                  });
+               }
+            }
+
+            setProductStocks(nextStocks);
+            return;
+         }
+
          const stocks = (await db.get('productStocks') || []) as ProductStock[];
          setProductStocks(stocks);
       };
@@ -409,6 +468,43 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       loadCatalogRuntime().catch((error) => console.warn('[CatalogManager] loadCatalogRuntime', error));
 
       const handleStockUpdate = async () => {
+         if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
+            const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
+            const nextStocks: ProductStock[] = [];
+
+            for (const product of products) {
+               const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, product, products));
+               const stockBalances = extractWarehouseStockBalances(
+                  matchedBalances,
+                  ...matchedBalances.flatMap((entry: any) => [
+                     entry?.stockBalances,
+                     entry?.stock_balances,
+                     entry?.balances,
+                     entry?.warehouseBalances,
+                     entry?.warehouse_balances,
+                     entry?.metadata?.stockBalances,
+                     entry?.metadata?.stock_balances,
+                  ]),
+               );
+
+               for (const [warehouseId, quantity] of Object.entries(stockBalances)) {
+                  nextStocks.push({
+                     id: `${product.id}_${warehouseId}`,
+                     productId: product.id,
+                     warehouseId,
+                     quantity: Number(quantity || 0),
+                     qtyPhysical: Number(quantity || 0),
+                     qtyCommitted: 0,
+                     qtyAvailable: Number(quantity || 0),
+                     updatedAt: new Date().toISOString(),
+                  });
+               }
+            }
+
+            setProductStocks(nextStocks);
+            return;
+         }
+
          const stocks = (await db.get('productStocks') || []) as ProductStock[];
          setProductStocks(stocks);
       };
@@ -442,14 +538,6 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       window.addEventListener('productsUpdated', handleProductsUpdate as EventListener);
       window.addEventListener('transactionsUpdated', handleTransactionsUpdate as EventListener);
 
-      // --- INITIAL PRODUCT DEEP LINKING ---
-      if (initialProductId) {
-         const prod = products.find(p => p.id === initialProductId);
-         if (prod) {
-            setEditingProduct(prod);
-         }
-      }
-
       return () => {
          window.removeEventListener('resize', handleResize);
          window.removeEventListener('productStocksUpdated', handleStockUpdate);
@@ -457,7 +545,24 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          window.removeEventListener('productsUpdated', handleProductsUpdate as EventListener);
          window.removeEventListener('transactionsUpdated', handleTransactionsUpdate as EventListener);
       };
-   }, []);
+   }, [products]);
+
+   useEffect(() => {
+      if (!initialProductId) {
+         consumedInitialProductIdRef.current = null;
+         return;
+      }
+
+      if (consumedInitialProductIdRef.current === initialProductId) {
+         return;
+      }
+
+      const prod = products.find((entry) => entry.id === initialProductId);
+      if (!prod) return;
+
+      consumedInitialProductIdRef.current = initialProductId;
+      setEditingProduct(prod);
+   }, [initialProductId, products]);
 
    const tariffs = useMemo(
       () => (Array.isArray(config?.tariffs) ? config.tariffs.filter((entry): entry is Tariff => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),
@@ -1116,7 +1221,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         </span>
                      </div>
                      <div className="flex-1 space-y-12 pb-40 custom-scrollbar overflow-y-auto pr-4">
-                        {runtimeWarehouses.length === 0 ? renderEmptyState('STOCKS') : runtimeWarehouses.map(warehouse => <WarehouseStockCard key={warehouse.id} warehouse={warehouse} filteredProducts={filteredProducts} productStocks={productStocks} />)}
+                        {runtimeWarehouses.length === 0 ? renderEmptyState('STOCKS') : runtimeWarehouses.map(warehouse => <WarehouseStockCard key={warehouse.id} warehouse={warehouse} filteredProducts={filteredProducts} productStocks={productStocks} allProducts={products} />)}
                      </div>
                   </div>
                )}

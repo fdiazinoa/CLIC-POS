@@ -9,6 +9,7 @@ import {
   deriveWarehouseIdsFromStockBalances,
   deriveWarehouseIdsFromSettings,
 } from '../../utils/masterIdentity';
+import { extractWarehouseStockBalances, productIdentityCandidates } from '../../utils/productReferences';
 
 type IncomingProduct = Partial<Product> & Record<string, any>;
 
@@ -267,82 +268,31 @@ class ProductImageCacheService {
   }
 
   private async getLocalProductLookups(): Promise<{
-    localById: Map<string, Product>;
-    localByBarcode: Map<string, Product>;
-    localByCode: Map<string, Product>;
+    localByIdentity: Map<string, Product>;
   }> {
     const products = await db.get('products') as Product[];
-    const localById = new Map<string, Product>();
-    const localByBarcode = new Map<string, Product>();
-    const localByCode = new Map<string, Product>();
+    const localByIdentity = new Map<string, Product>();
 
     for (const product of Array.isArray(products) ? products : []) {
-      const localId = asString(product?.id);
-      if (!localId) continue;
-
-      localById.set(localId, product);
-
-      const barcode = asString(product?.barcode);
-      if (barcode && !localByBarcode.has(barcode)) {
-        localByBarcode.set(barcode, product);
-      }
-
-      const codeCandidates = uniqueStrings([
-        localId,
-        (product as any)?.sku,
-        (product as any)?.item_code,
-        (product as any)?.code,
-        barcode,
-      ]);
-
-      for (const code of codeCandidates) {
-        if (!localByCode.has(code)) {
-          localByCode.set(code, product);
+      for (const candidate of productIdentityCandidates(product)) {
+        if (!localByIdentity.has(candidate)) {
+          localByIdentity.set(candidate, product);
         }
       }
     }
 
-    return { localById, localByBarcode, localByCode };
-  }
-
-  private incomingProductCodeCandidates(item: IncomingProduct): string[] {
-    return uniqueStrings([
-      item?.id,
-      item?.sku,
-      item?.item_code,
-      item?.code,
-      item?.barcode,
-    ]);
+    return { localByIdentity };
   }
 
   private findLocalProductMatch(
     item: IncomingProduct,
     lookups: {
-      localById: Map<string, Product>;
-      localByBarcode: Map<string, Product>;
-      localByCode: Map<string, Product>;
+      localByIdentity: Map<string, Product>;
     }
   ): Product | undefined {
-    const incomingId = asString(item?.id);
-    if (incomingId && lookups.localById.has(incomingId)) {
-      return lookups.localById.get(incomingId);
-    }
-
-    for (const code of this.incomingProductCodeCandidates(item)) {
-      if (code && lookups.localById.has(code)) {
-        return lookups.localById.get(code);
-      }
-    }
-
-    for (const code of this.incomingProductCodeCandidates(item)) {
-      if (code && lookups.localByCode.has(code)) {
-        return lookups.localByCode.get(code);
-      }
-    }
-
-    for (const code of this.incomingProductCodeCandidates(item)) {
-      if (code && lookups.localByBarcode.has(code)) {
-        return lookups.localByBarcode.get(code);
+    for (const candidate of productIdentityCandidates(item)) {
+      if (candidate && lookups.localByIdentity.has(candidate)) {
+        return lookups.localByIdentity.get(candidate);
       }
     }
 
@@ -370,8 +320,22 @@ class ProductImageCacheService {
             : (localProduct?.warehouseSettings || {})),
       context.warehouses || []
     );
-    const incomingStockBalances = asObject(item.stockBalances);
-    const metadataStockBalances = asObject(metadata.stockBalances);
+    const incomingStockBalances = extractWarehouseStockBalances(
+      item.stockBalances,
+      item.stock_balances,
+      item.stockBalancesByWarehouse,
+      item.stock_balances_by_warehouse,
+      item.warehouseStockBalances,
+      item.warehouse_stock_balances,
+    );
+    const metadataStockBalances = extractWarehouseStockBalances(
+      metadata.stockBalances,
+      metadata.stock_balances,
+      metadata.stockBalancesByWarehouse,
+      metadata.stock_balances_by_warehouse,
+      metadata.warehouseStockBalances,
+      metadata.warehouse_stock_balances,
+    );
     const normalizedStockBalances = canonicalizeWarehouseRecord(
       Object.keys(incomingStockBalances).length > 0
         ? incomingStockBalances
@@ -408,7 +372,7 @@ class ProductImageCacheService {
       derivedActiveWarehouseIds = deriveWarehouseIdsFromStockBalances(normalizedStockBalances);
     }
     if (derivedActiveWarehouseIds.length === 0) {
-      derivedActiveWarehouseIds = deriveWarehouseIdsFromStockBalances(metadata.stockBalances);
+      derivedActiveWarehouseIds = deriveWarehouseIdsFromStockBalances(metadataStockBalances);
     }
     if (derivedActiveWarehouseIds.length === 0) {
       derivedActiveWarehouseIds = deriveWarehouseIdsFromSettings(localProduct?.warehouseSettings);
