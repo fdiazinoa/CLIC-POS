@@ -23,7 +23,11 @@ import { inventorySyncService } from '../services/sync/InventorySyncService';
 import ClassificationManager from './ClassificationManager';
 import ErrorBoundary from './ErrorBoundary';
 import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
-import { extractWarehouseStockBalances, productIdMatchesProductReference, resolveProductStockRow } from '../utils/productReferences';
+import {
+   extractWarehouseStockBalances,
+   productIdMatchesInventoryReference,
+   resolveInventoryProductStockRow,
+} from '../utils/productReferences';
 
 interface CatalogManagerProps {
    products: Product[];
@@ -111,7 +115,7 @@ const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks:
    const hasVariants = product.variants && product.variants.length > 0;
 
    // Get stock from detailed collection
-   const detailedStock = resolveProductStockRow(product, warehouseId, productStocks, allProducts);
+   const detailedStock = resolveInventoryProductStockRow(product, warehouseId, productStocks, allProducts);
    const warehouseStock = detailedStock ? detailedStock.quantity : getWarehouseScopedNumber(product.stockBalances || {}, warehouseId, [], 0);
 
    const getStatusBadge = (qty: number) => {
@@ -202,7 +206,7 @@ const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Pro
    const warehouseProducts = filteredProducts.filter(p => isProductWarehouseActive(p, warehouse.id, [warehouse]));
 
    const totalValue = warehouseProducts.reduce((acc, p) => {
-      const detailedStock = resolveProductStockRow(p, warehouse.id, productStocks, allProducts);
+      const detailedStock = resolveInventoryProductStockRow(p, warehouse.id, productStocks, allProducts);
       const qty = detailedStock ? detailedStock.quantity : getWarehouseScopedNumber(p.stockBalances || {}, warehouse.id, [warehouse], 0);
       return acc + (qty * (p.cost || 0));
    }, 0);
@@ -367,7 +371,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       if (!editingProduct || editingProduct === 'NEW') return;
 
       const refreshedProduct = products.find((product) =>
-         productIdMatchesProductReference(product.id, editingProduct, products)
+         productIdMatchesInventoryReference(product, editingProduct, products)
       );
       if (!refreshedProduct) return;
 
@@ -394,7 +398,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             const nextStocks: ProductStock[] = [];
 
             for (const product of products) {
-               const matchedBalances = remoteBalances.filter((entry) => productIdMatchesProductReference(entry, product, products));
+               const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, product, products));
                const stockBalances = extractWarehouseStockBalances(
                   matchedBalances,
                   ...matchedBalances.flatMap((entry: any) => [
@@ -468,7 +472,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             const nextStocks: ProductStock[] = [];
 
             for (const product of products) {
-               const matchedBalances = remoteBalances.filter((entry) => productIdMatchesProductReference(entry, product, products));
+               const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, product, products));
                const stockBalances = extractWarehouseStockBalances(
                   matchedBalances,
                   ...matchedBalances.flatMap((entry: any) => [

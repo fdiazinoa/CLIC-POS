@@ -35,7 +35,13 @@ import {
   resolveWarehouseId,
   tariffMatchesIdentifier,
 } from '../utils/masterIdentity';
-import { extractWarehouseStockBalances, productIdMatchesProductReference, resolveLinkedProductIds, resolveProductStockRow } from '../utils/productReferences';
+import {
+  extractWarehouseStockBalances,
+  productIdMatchesInventoryReference,
+  resolveInventoryProductStockRow,
+  resolveLinkedInventoryProductIds,
+  resolveOperationalProductId,
+} from '../utils/productReferences';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -179,7 +185,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [productionAreasLoaded, setProductionAreasLoaded] = useState(false);
   const [remoteStockBalances, setRemoteStockBalances] = useState<Record<string, number>>({});
   const linkedProductIds = useMemo(
-    () => resolveLinkedProductIds(formData, allProducts),
+    () => resolveLinkedInventoryProductIds(formData, allProducts),
     [formData, allProducts]
   );
   const stockBalanceSource = useMemo(() => {
@@ -278,16 +284,22 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   useEffect(() => {
     const loadLedger = async () => {
       let allEntries: InventoryLedgerEntry[] = [];
+      const operationalProductId = resolveOperationalProductId(formData) || formData.id;
 
       if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
-        allEntries = await inventorySyncService.fetchKardexOnDemand(formData.id);
+        allEntries = await inventorySyncService.fetchKardexOnDemand(operationalProductId);
       } else if (permissionService.isMasterTerminal()) {
         allEntries = (await db.get('inventoryLedger') || []) as InventoryLedgerEntry[];
       } else {
-        allEntries = await inventorySyncService.fetchKardexOnDemand(formData.id);
+        allEntries = await inventorySyncService.fetchKardexOnDemand(operationalProductId);
       }
 
-      const filtered = allEntries.filter(e => productIdMatchesProductReference(e, formData, allProducts))
+      const matchedEntries = allEntries.filter(e => productIdMatchesInventoryReference(e, formData, allProducts));
+      const scopedEntries =
+        inventorySyncService.shouldReadInventoryFromOperationalSource() && matchedEntries.length === 0
+          ? allEntries
+          : matchedEntries;
+      const filtered = scopedEntries
         .filter(e => kardexWarehouse === 'ALL' || e.warehouseId === kardexWarehouse)
         .filter(e => kardexTerminal === 'ALL' || (e.terminalId || 'LOCAL') === kardexTerminal)
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -306,12 +318,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     // Listen for productStocks updates
     const handleStockSync = async () => {
       if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
-        const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
-        const matchedBalances = remoteBalances.filter((entry) => productIdMatchesProductReference(entry, formData, allProducts));
+        const operationalProductId = resolveOperationalProductId(formData) || formData.id;
+        const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand(operationalProductId);
+        const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, formData, allProducts));
+        const scopedBalances = matchedBalances.length === 0 ? remoteBalances : matchedBalances;
         const nextRemoteStockBalances = canonicalizeWarehouseRecord(
           extractWarehouseStockBalances(
-            matchedBalances,
-            ...matchedBalances.flatMap((entry: any) => [
+            scopedBalances,
+            ...scopedBalances.flatMap((entry: any) => [
               entry?.stockBalances,
               entry?.stock_balances,
               entry?.balances,
@@ -1596,7 +1610,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
                 <div className="grid grid-cols-1 gap-4">
                   {warehouses.map(wh => {
-                    const detailedStock = resolveProductStockRow(formData, wh.id, detailedStocks, allProducts);
+                    const detailedStock = resolveInventoryProductStockRow(formData, wh.id, detailedStocks, allProducts);
                     const stock = detailedStock
                       ? detailedStock.quantity
                       : getWarehouseScopedNumber(stockBalanceSource, wh.id, warehouses, 0);

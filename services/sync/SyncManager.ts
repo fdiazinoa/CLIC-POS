@@ -35,7 +35,11 @@ import {
     posCatalogDebugSummarizeItem,
 } from '../../utils/posCatalogDebugTrace';
 import { canonicalizeWarehouseRecord } from '../../utils/masterIdentity';
-import { extractWarehouseStockBalances, productIdMatchesProductReference, productReferenceCandidates } from '../../utils/productReferences';
+import {
+    extractWarehouseStockBalances,
+    productIdMatchesInventoryReference,
+    productIdentityCandidates,
+} from '../../utils/productReferences';
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities';
 
@@ -770,9 +774,23 @@ class SyncManager {
         return { localById, localByBarcode, localByCode };
     }
 
+    private buildLocalProductIdentityLookup(localProducts: Product[]): Map<string, Product> {
+        const localByIdentity = new Map<string, Product>();
+
+        for (const product of Array.isArray(localProducts) ? localProducts : []) {
+            for (const candidate of productIdentityCandidates(product)) {
+                if (!localByIdentity.has(candidate)) {
+                    localByIdentity.set(candidate, product);
+                }
+            }
+        }
+
+        return localByIdentity;
+    }
+
     private collectSnapshotProductAliasIds(product: Product): string[] {
         const canonicalProductId = typeof product?.id === 'string' ? product.id.trim() : String(product?.id || '').trim();
-        return productReferenceCandidates(product).filter((candidate) => candidate !== canonicalProductId);
+        return productIdentityCandidates(product).filter((candidate) => candidate !== canonicalProductId);
     }
 
     private reconcileCatalogProductIds(config: BusinessConfig, localProducts: Product[]): BusinessConfig {
@@ -1073,7 +1091,7 @@ class SyncManager {
 
         for (const product of localProducts) {
             const matchedBalances = remoteBalances.filter((entry) =>
-                productIdMatchesProductReference(entry, product, localProducts)
+                productIdMatchesInventoryReference(entry, product, localProducts)
             );
             if (matchedBalances.length === 0) continue;
 
@@ -1675,7 +1693,7 @@ class SyncManager {
                 stock,
             ]),
         );
-        const { localById, localByBarcode, localByCode } = this.buildLocalProductLookupMaps(localProducts);
+        const localByIdentity = this.buildLocalProductIdentityLookup(localProducts);
         let updatedCount = 0;
         const duplicateIdsToRemove = new Set<string>();
         const traceRaw = rawItems.filter((item: unknown) => posCatalogDebugMatchesRaw(item));
@@ -1692,31 +1710,15 @@ class SyncManager {
             let item = normalizedItem;
 
             const incomingCodes = new Set<string>([
-                ...this.catalogDeleteCandidates(rawItem || null),
-                ...this.catalogDeleteCandidates(normalizedItem as Record<string, unknown>),
+                ...productIdentityCandidates(rawItem || null),
+                ...productIdentityCandidates(normalizedItem as Record<string, unknown>),
             ]);
 
             let canonicalLocalProduct: Product | undefined;
             for (const code of incomingCodes) {
-                if (localById.has(code)) {
-                    canonicalLocalProduct = localById.get(code);
+                if (localByIdentity.has(code)) {
+                    canonicalLocalProduct = localByIdentity.get(code);
                     break;
-                }
-            }
-            if (!canonicalLocalProduct) {
-                for (const code of incomingCodes) {
-                    if (localByCode.has(code)) {
-                        canonicalLocalProduct = localByCode.get(code);
-                        break;
-                    }
-                }
-            }
-            if (!canonicalLocalProduct) {
-                for (const code of incomingCodes) {
-                    if (localByBarcode.has(code)) {
-                        canonicalLocalProduct = localByBarcode.get(code);
-                        break;
-                    }
                 }
             }
 
@@ -1749,16 +1751,8 @@ class SyncManager {
                     saved: posCatalogDebugSummarizeItem(item as Record<string, unknown>),
                 });
             }
-            const savedId = typeof item.id === 'string' ? item.id.trim() : String(item.id || '').trim();
-            if (savedId) {
-                localById.set(savedId, item as Product);
-            }
-            const savedBarcode = typeof (item as any)?.barcode === 'string' ? (item as any).barcode.trim() : String((item as any)?.barcode || '').trim();
-            if (savedBarcode) {
-                localByBarcode.set(savedBarcode, item as Product);
-            }
-            for (const code of this.catalogDeleteCandidates(item as Record<string, unknown>)) {
-                localByCode.set(code, item as Product);
+            for (const candidate of productIdentityCandidates(item as Record<string, unknown>)) {
+                localByIdentity.set(candidate, item as Product);
             }
             updatedCount += 1;
         }
