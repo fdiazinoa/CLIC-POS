@@ -24,6 +24,12 @@ export interface DisplayPlacement {
   height: number;
 }
 
+const isAndroidRuntime = () => {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent.toLowerCase();
+  return ua.includes('android') || ua.includes(' wv)');
+};
+
 const DEFAULT_DISPLAY_CONFIG: CustomerDisplayConfig = {
   isEnabled: true,
   welcomeMessage: '¡Bienvenido a CLIC POS!',
@@ -101,6 +107,10 @@ export const detectSecondaryDisplayPlacement = async (): Promise<DisplayPlacemen
     }
   }
 
+  if (isAndroidRuntime()) {
+    return null;
+  }
+
   const availWidth = window.screen?.availWidth || 0;
   const availHeight = window.screen?.availHeight || 0;
   const outerWidth = window.outerWidth || 0;
@@ -155,6 +165,13 @@ export const launchCustomerDisplay = async (
   const mode = normalizeCustomerDisplayConnectionType(normalized.connectionType);
   const url = buildCustomerDisplayUrl(normalized);
   const placement = mode === 'NETWORK' ? null : await detectSecondaryDisplayPlacement();
+  if (mode !== 'NETWORK' && !placement) {
+    throw new Error(
+      isAndroidRuntime()
+        ? 'No detectamos una segunda pantalla real en este APK. No abriremos el visor sobre la pantalla principal.'
+        : 'No detectamos una segunda pantalla disponible para HDMI/USB. Conecta el display externo e inténtalo de nuevo.',
+    );
+  }
   const features = buildDisplayWindowFeatures(placement);
   const target = mode === 'NETWORK' ? 'clic_pos_visor_network' : 'clic_pos_visor';
 
