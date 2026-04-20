@@ -137,6 +137,42 @@ class SyncManager {
         return normalizedBase ? `${normalizedBase}/api/sync` : null;
     }
 
+    private rehydrateOperationalTargetFromConfig(config: BusinessConfig | null, terminalId: string | null) {
+        const currentTerminal = terminalId && config?.terminals
+            ? config.terminals.find((terminal) =>
+                terminal.id === terminalId || terminal.config?.erpTerminalId === terminalId
+            )
+            : null;
+
+        const hintedTerminalId =
+            String(currentTerminal?.config?.erpBinding?.terminalId || '').trim() ||
+            String(currentTerminal?.config?.erpTerminalId || '').trim();
+
+        const hintedBaseUrl =
+            this.resolveConfigErpBaseUrl(localStorage.getItem('CLIC_ERP_BASE_URL')) ||
+            this.resolveConfigErpBaseUrl(localStorage.getItem('erp_base_url')) ||
+            this.resolveConfigErpBaseUrl(localStorage.getItem('CLIC_ERP_SYNC_URL')) ||
+            this.resolveConfigErpBaseUrl(currentTerminal?.config?.metadata?.erp_base_url) ||
+            this.resolveConfigErpBaseUrl(currentTerminal?.config?.metadata?.erpBaseUrl) ||
+            this.resolveConfigErpBaseUrl((import.meta as any)?.env?.VITE_ERP_BASE_URL) ||
+            this.resolveConfigErpBaseUrl((import.meta as any)?.env?.VITE_ERP_SYNC_API_URL) ||
+            this.resolveConfigErpBaseUrl((import.meta as any)?.env?.VITE_SYNC_API_URL) ||
+            null;
+
+        apiSyncAdapter.setOperationalTargetHint({
+            terminalId: hintedTerminalId || null,
+            baseUrl: hintedBaseUrl || null,
+        });
+
+        if (hintedTerminalId) {
+            localStorage.setItem('clic_erp_sync_terminal_id', hintedTerminalId);
+        }
+
+        if (terminalId) {
+            localStorage.setItem('clic_erp_sync_local_terminal_id', terminalId);
+        }
+    }
+
     private shouldUseAbsoluteTerminalConfigEndpoint(): boolean {
         try {
             return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -198,6 +234,7 @@ class SyncManager {
     async initialize(config: BusinessConfig, terminalId: string) {
         // Ensure a device token exists for this browser instance
         this.ensureDeviceToken();
+        this.rehydrateOperationalTargetFromConfig(config, terminalId);
 
         // Detect Network Mode
         // NOTE: We allow SyncManager even in network mode for Master to manage terminals
@@ -2808,6 +2845,10 @@ class SyncManager {
             return 0;
         }
 
+        if (collection === 'productStocks' && apiSyncAdapter.isUsingErpOperationalTarget()) {
+            return this.refreshOperationalInventorySnapshot();
+        }
+
         const now = Date.now();
         if (!force && !options?.ignoreThrottle && (now - this.lastSyncTime < this.MIN_SYNC_INTERVAL_MS)) {
             // console.log(`⏳ SyncManager: Pull skipped for ${collection} (Throttled: ${((this.MIN_SYNC_INTERVAL_MS - (now - this.lastSyncTime)) / 1000).toFixed(1)}s remaining)`);
@@ -3055,6 +3096,9 @@ class SyncManager {
                     await this.syncProductImages();
                 } catch (error) {
                     console.warn('⚠️ Image sync side-channel failed after products pull:', error);
+                }
+                if (apiSyncAdapter.isUsingErpOperationalTarget()) {
+                    await this.refreshOperationalInventorySnapshot();
                 }
             }
 
@@ -3407,6 +3451,9 @@ class SyncManager {
         }
 
         await this.forcePullAll();
+        if (apiSyncAdapter.isUsingErpOperationalTarget()) {
+            await this.refreshOperationalInventorySnapshot();
+        }
     }
 
     /**

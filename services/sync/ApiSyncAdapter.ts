@@ -58,6 +58,7 @@ class ApiSyncAdapter {
     private config: SyncConfig | null = null;
     private authToken: string | null = null;
     private erpAuthToken: string | null = null;
+    private operationalTargetHint: { terminalId: string | null; baseUrl: string | null } = { terminalId: null, baseUrl: null };
     private isOnline: boolean = true;
     private authInFlight: Promise<void> | null = null;
     private erpAuthInFlight: Promise<string> | null = null;
@@ -301,15 +302,33 @@ class ApiSyncAdapter {
         return /\/api\/sync$/i.test(trimmed) ? trimmed : `${trimmed}/api/sync`;
     }
 
+    setOperationalTargetHint(input: { terminalId?: string | null; baseUrl?: string | null }) {
+        const terminalId = String(input.terminalId || '').trim();
+        const baseUrl = String(input.baseUrl || '').trim();
+        this.operationalTargetHint = {
+            terminalId: terminalId || null,
+            baseUrl: baseUrl || null,
+        };
+        if (baseUrl) {
+            localStorage.setItem('CLIC_ERP_BASE_URL', baseUrl.replace(/\/api\/sync\/?$/i, '').replace(/\/+$/, ''));
+            localStorage.setItem('erp_base_url', baseUrl.replace(/\/api\/sync\/?$/i, '').replace(/\/+$/, ''));
+            localStorage.setItem('CLIC_ERP_SYNC_URL', this.buildSyncApiBase(baseUrl));
+        }
+        if (terminalId) {
+            localStorage.setItem('clic_erp_sync_terminal_id', terminalId);
+        }
+    }
+
     isUsingErpOperationalTarget(): boolean {
         return this.resolveOperationalTarget()?.useLocalTarget === false;
     }
 
     private resolveOperationalTarget(): { baseUrl: string; terminalId: string; useLocalTarget: boolean } | null {
         const boundErpTerminalId =
-            localStorage.getItem('clic_erp_sync_terminal_id') ||
-            localStorage.getItem('CLIC_POS_TERMINAL_ID');
+            this.operationalTargetHint.terminalId ||
+            localStorage.getItem('clic_erp_sync_terminal_id');
         const erpBaseUrl =
+            this.operationalTargetHint.baseUrl ||
             localStorage.getItem('CLIC_ERP_SYNC_URL') ||
             localStorage.getItem('CLIC_ERP_BASE_URL') ||
             localStorage.getItem('erp_base_url');
