@@ -394,16 +394,18 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             const nextStocks: ProductStock[] = [];
 
             for (const product of products) {
-               const matchedBalance = remoteBalances.find((entry) => productIdMatchesProductReference(entry, product, products));
+               const matchedBalances = remoteBalances.filter((entry) => productIdMatchesProductReference(entry, product, products));
                const stockBalances = extractWarehouseStockBalances(
-                  matchedBalance?.stockBalances,
-                  (matchedBalance as any)?.stock_balances,
-                  (matchedBalance as any)?.balances,
-                  (matchedBalance as any)?.warehouseBalances,
-                  (matchedBalance as any)?.warehouse_balances,
-                  (matchedBalance as any)?.metadata?.stockBalances,
-                  (matchedBalance as any)?.metadata?.stock_balances,
-                  matchedBalance,
+                  matchedBalances,
+                  ...matchedBalances.flatMap((entry: any) => [
+                     entry?.stockBalances,
+                     entry?.stock_balances,
+                     entry?.balances,
+                     entry?.warehouseBalances,
+                     entry?.warehouse_balances,
+                     entry?.metadata?.stockBalances,
+                     entry?.metadata?.stock_balances,
+                  ]),
                );
 
                for (const [warehouseId, quantity] of Object.entries(stockBalances)) {
@@ -466,16 +468,18 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             const nextStocks: ProductStock[] = [];
 
             for (const product of products) {
-               const matchedBalance = remoteBalances.find((entry) => productIdMatchesProductReference(entry, product, products));
+               const matchedBalances = remoteBalances.filter((entry) => productIdMatchesProductReference(entry, product, products));
                const stockBalances = extractWarehouseStockBalances(
-                  matchedBalance?.stockBalances,
-                  (matchedBalance as any)?.stock_balances,
-                  (matchedBalance as any)?.balances,
-                  (matchedBalance as any)?.warehouseBalances,
-                  (matchedBalance as any)?.warehouse_balances,
-                  (matchedBalance as any)?.metadata?.stockBalances,
-                  (matchedBalance as any)?.metadata?.stock_balances,
-                  matchedBalance,
+                  matchedBalances,
+                  ...matchedBalances.flatMap((entry: any) => [
+                     entry?.stockBalances,
+                     entry?.stock_balances,
+                     entry?.balances,
+                     entry?.warehouseBalances,
+                     entry?.warehouse_balances,
+                     entry?.metadata?.stockBalances,
+                     entry?.metadata?.stock_balances,
+                  ]),
                );
 
                for (const [warehouseId, quantity] of Object.entries(stockBalances)) {

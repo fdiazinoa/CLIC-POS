@@ -307,17 +307,19 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     const handleStockSync = async () => {
       if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
         const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
-        const matchedBalance = remoteBalances.find((entry) => productIdMatchesProductReference(entry, formData, allProducts));
+        const matchedBalances = remoteBalances.filter((entry) => productIdMatchesProductReference(entry, formData, allProducts));
         const nextRemoteStockBalances = canonicalizeWarehouseRecord(
           extractWarehouseStockBalances(
-            matchedBalance?.stockBalances,
-            (matchedBalance as any)?.stock_balances,
-            (matchedBalance as any)?.balances,
-            (matchedBalance as any)?.warehouseBalances,
-            (matchedBalance as any)?.warehouse_balances,
-            (matchedBalance as any)?.metadata?.stockBalances,
-            (matchedBalance as any)?.metadata?.stock_balances,
-            matchedBalance,
+            matchedBalances,
+            ...matchedBalances.flatMap((entry: any) => [
+              entry?.stockBalances,
+              entry?.stock_balances,
+              entry?.balances,
+              entry?.warehouseBalances,
+              entry?.warehouse_balances,
+              entry?.metadata?.stockBalances,
+              entry?.metadata?.stock_balances,
+            ]),
           ),
           warehouses,
         );
