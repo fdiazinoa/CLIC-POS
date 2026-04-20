@@ -61,6 +61,7 @@ import BarcodeScannerModal from './BarcodeScannerModal';
 import { printComanda, printPrecuenta } from '../utils/printer';
 import ModifierModal from './ModifierModal';
 import { visorSync } from '../utils/visorSync';
+import { maybeAutoLaunchCustomerDisplay } from '../utils/customerDisplay';
 import ProductQuickActions from './ProductQuickActions';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import ActionGrid from './ActionGrid';
@@ -1776,6 +1777,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          currencySymbol: baseCurrency.symbol
       });
    }, [processedCart, cartSubtotal, cartTax, discountAmount, cartTotal, activeTerminalConfig, baseCurrency]);
+
+   useEffect(() => {
+      const isVisorMode = new URLSearchParams(window.location.search).get('view') === 'VISOR';
+      if (isVisorMode) return;
+      void maybeAutoLaunchCustomerDisplay(
+         activeTerminalConfig?.hardware?.customerDisplay,
+         { contextKey: terminalId || activeTerminal?.id || 'default' },
+      );
+   }, [activeTerminal?.id, activeTerminalConfig?.hardware?.customerDisplay, terminalId]);
 
    useEffect(() => {
       if (cart.length > 0) {

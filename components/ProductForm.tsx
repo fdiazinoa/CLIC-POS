@@ -2253,8 +2253,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         < div className="p-6 border-t bg-white flex justify-between items-center shrink-0" >
           <div>{hasHistory && <span className="flex items-center gap-2 text-xs text-orange-600 bg-orange-50 px-3 py-2 rounded-xl font-bold"><ShieldAlert size={16} /> Producto con historial</span>}</div>
           <div className="flex gap-3">
-            <button onClick={onClose} className="px-6 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors">Cancelar</button>
+            <button type="button" onClick={onClose} className="px-6 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors">Cancelar</button>
             <button
+              type="button"
               onClick={handleFinalSave}
               disabled={isSaving}
               className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg hover:bg-blue-700 active:scale-95 flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-blue-600"

@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
    Package, Search, Plus, Edit2, Trash2, ArrowLeft,
    Filter, Tag, Image as ImageIcon, DollarSign,
@@ -283,6 +283,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const [editingProduct, setEditingProduct] = useState<Product | null | 'NEW'>(null);
    const [productStocks, setProductStocks] = useState<ProductStock[]>([]);
    const [viewportWidth, setViewportWidth] = useState(resolveViewportWidth());
+   const consumedInitialProductIdRef = useRef<string | null>(null);
 
    // SELECTION & BULK STATE
    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -537,14 +538,6 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       window.addEventListener('productsUpdated', handleProductsUpdate as EventListener);
       window.addEventListener('transactionsUpdated', handleTransactionsUpdate as EventListener);
 
-      // --- INITIAL PRODUCT DEEP LINKING ---
-      if (initialProductId) {
-         const prod = products.find(p => p.id === initialProductId);
-         if (prod) {
-            setEditingProduct(prod);
-         }
-      }
-
       return () => {
          window.removeEventListener('resize', handleResize);
          window.removeEventListener('productStocksUpdated', handleStockUpdate);
@@ -553,6 +546,23 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          window.removeEventListener('transactionsUpdated', handleTransactionsUpdate as EventListener);
       };
    }, [products]);
+
+   useEffect(() => {
+      if (!initialProductId) {
+         consumedInitialProductIdRef.current = null;
+         return;
+      }
+
+      if (consumedInitialProductIdRef.current === initialProductId) {
+         return;
+      }
+
+      const prod = products.find((entry) => entry.id === initialProductId);
+      if (!prod) return;
+
+      consumedInitialProductIdRef.current = initialProductId;
+      setEditingProduct(prod);
+   }, [initialProductId, products]);
 
    const tariffs = useMemo(
       () => (Array.isArray(config?.tariffs) ? config.tariffs.filter((entry): entry is Tariff => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []),

@@ -437,6 +437,10 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
     async (terminal: TerminalCard, forceTransfer: boolean) => {
       setIsBinding(true);
       setError(null);
+      if (forceTransfer) {
+        setShowTransferModal(false);
+        setPendingTerminal(null);
+      }
 
     try {
       let data: BindTerminalResponse | null = null;
@@ -683,10 +687,10 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
         if (erpBaseUrl) {
           persistErpBaseUrls(erpBaseUrl);
         }
-        const resolvedMasterBinding =
+        const resolvedMasterHost =
           bindingMode === 'SLAVE'
-            ? await resolveReachableMasterBinding(masterIpInput)
-            : null;
+            ? normalizeMasterHost(masterIpInput) || masterIpInput.trim() || undefined
+            : undefined;
 
         await onBound({
           terminalId: initialConfigData.terminal_id || data.terminal_id || terminal.id,
@@ -700,7 +704,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
           previousDeviceId: data.previous_device_id || null,
           config: initialConfigData.config || data.config,
           users: data.users,
-          masterIp: bindingMode === 'SLAVE' ? resolvedMasterBinding?.host || masterIpInput.trim() || undefined : undefined,
+          masterIp: resolvedMasterHost,
           snapshotItems: Array.isArray(initialConfigData.items)
             ? initialConfigData.items
             : (Array.isArray(initialConfigData.terminal_config?.masters?.items) ? initialConfigData.terminal_config?.masters?.items : []),
@@ -931,7 +935,7 @@ export const TerminalSelector: React.FC<TerminalSelectorProps> = ({
       </div>
 
       {showTransferModal && pendingTerminal && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-slate-950/50 p-2 sm:items-center sm:p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/50 p-3 sm:p-4 backdrop-blur-sm">
           <div className="my-auto flex w-full max-w-[38rem] flex-col overflow-hidden rounded-[1.5rem] border border-white/70 bg-white/95 shadow-[0_32px_96px_rgba(15,23,42,0.24)] max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] sm:rounded-[2rem]">
             <div className="overflow-y-auto px-4 py-4 sm:px-6 sm:py-6">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
