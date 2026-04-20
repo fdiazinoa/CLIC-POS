@@ -122,13 +122,35 @@ export const productReferenceCandidates = (
 ): string[] => {
   if (!product || typeof product !== 'object') return [];
   const record = product as Record<string, unknown>;
+  const nestedProduct = asRecord(record.product);
 
   return uniqueValues([
     trimValue(record.id),
+    trimValue(record.productId),
+    trimValue(record.product_id),
+    trimValue(record.sourceProductId),
+    trimValue(record.source_product_id),
+    trimValue(record.erpProductId),
+    trimValue(record.erp_product_id),
+    trimValue(record.sourceItemId),
+    trimValue(record.source_item_id),
     trimValue(record.barcode),
     trimValue(record.sku),
     trimValue(record.item_code),
     trimValue(record.code),
+    trimValue(nestedProduct.id),
+    trimValue(nestedProduct.productId),
+    trimValue(nestedProduct.product_id),
+    trimValue(nestedProduct.sourceProductId),
+    trimValue(nestedProduct.source_product_id),
+    trimValue(nestedProduct.erpProductId),
+    trimValue(nestedProduct.erp_product_id),
+    trimValue(nestedProduct.sourceItemId),
+    trimValue(nestedProduct.source_item_id),
+    trimValue(nestedProduct.barcode),
+    trimValue(nestedProduct.sku),
+    trimValue(nestedProduct.item_code),
+    trimValue(nestedProduct.code),
   ]);
 };
 
@@ -165,24 +187,24 @@ export const productIdMatchesProductReference = (
   product: Partial<Product> | Record<string, unknown> | null | undefined,
   products: Array<Partial<Product> | Record<string, unknown>> = []
 ): boolean => {
-  const candidate = trimValue(productId);
-  if (!candidate) return false;
+  const candidateValues =
+    productId && typeof productId === 'object'
+      ? productReferenceCandidates(productId as Record<string, unknown>)
+      : uniqueValues([trimValue(productId)]);
+  const candidateTokens = new Set(candidateValues.map(normalizeToken).filter(Boolean));
+  if (candidateTokens.size === 0) return false;
 
-  const candidateToken = normalizeToken(candidate);
   const linkedIds = new Set(resolveLinkedProductIds(product, products).map(normalizeToken));
-  if (linkedIds.has(candidateToken)) {
-    return true;
-  }
-
   const referenceTokens = new Set(productReferenceCandidates(product).map(normalizeToken));
-  if (referenceTokens.has(candidateToken)) {
+  if ([...candidateTokens].some((token) => linkedIds.has(token) || referenceTokens.has(token))) {
     return true;
   }
 
   for (const entry of products) {
-    const matchesCurrent = productReferenceCandidates(entry).some((value) => referenceTokens.has(normalizeToken(value)));
+    const entryTokens = productReferenceCandidates(entry).map(normalizeToken);
+    const matchesCurrent = entryTokens.some((value) => referenceTokens.has(value));
     if (!matchesCurrent) continue;
-    if (productReferenceCandidates(entry).some((value) => normalizeToken(value) === candidateToken)) {
+    if (entryTokens.some((value) => candidateTokens.has(value))) {
       return true;
     }
   }

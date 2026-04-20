@@ -35,7 +35,7 @@ import {
   resolveWarehouseId,
   tariffMatchesIdentifier,
 } from '../utils/masterIdentity';
-import { productIdMatchesProductReference, resolveLinkedProductIds, resolveProductStockRow } from '../utils/productReferences';
+import { extractWarehouseStockBalances, productIdMatchesProductReference, resolveLinkedProductIds, resolveProductStockRow } from '../utils/productReferences';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -287,7 +287,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         allEntries = await inventorySyncService.fetchKardexOnDemand(formData.id);
       }
 
-      const filtered = allEntries.filter(e => e.productId === formData.id)
+      const filtered = allEntries.filter(e => productIdMatchesProductReference(e, formData, allProducts))
         .filter(e => kardexWarehouse === 'ALL' || e.warehouseId === kardexWarehouse)
         .filter(e => kardexTerminal === 'ALL' || (e.terminalId || 'LOCAL') === kardexTerminal)
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -306,11 +306,21 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     // Listen for productStocks updates
     const handleStockSync = async () => {
       if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
-        const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand(formData.id);
-        const matchedBalance = remoteBalances.find((entry) => productIdMatchesProductReference(entry?.id, formData, allProducts));
-        const nextRemoteStockBalances = matchedBalance?.stockBalances && typeof matchedBalance.stockBalances === 'object'
-          ? canonicalizeWarehouseRecord(matchedBalance.stockBalances as Record<string, number>, warehouses)
-          : {};
+        const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
+        const matchedBalance = remoteBalances.find((entry) => productIdMatchesProductReference(entry, formData, allProducts));
+        const nextRemoteStockBalances = canonicalizeWarehouseRecord(
+          extractWarehouseStockBalances(
+            matchedBalance?.stockBalances,
+            (matchedBalance as any)?.stock_balances,
+            (matchedBalance as any)?.balances,
+            (matchedBalance as any)?.warehouseBalances,
+            (matchedBalance as any)?.warehouse_balances,
+            (matchedBalance as any)?.metadata?.stockBalances,
+            (matchedBalance as any)?.metadata?.stock_balances,
+            matchedBalance,
+          ),
+          warehouses,
+        );
         setRemoteStockBalances(nextRemoteStockBalances);
 
         const synthesizedStocks: ProductStock[] = Object.entries(nextRemoteStockBalances).map(([warehouseId, quantity]) => ({

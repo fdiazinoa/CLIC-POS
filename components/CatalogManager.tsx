@@ -23,7 +23,7 @@ import { inventorySyncService } from '../services/sync/InventorySyncService';
 import ClassificationManager from './ClassificationManager';
 import ErrorBoundary from './ErrorBoundary';
 import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
-import { productIdMatchesProductReference, resolveProductStockRow } from '../utils/productReferences';
+import { extractWarehouseStockBalances, productIdMatchesProductReference, resolveProductStockRow } from '../utils/productReferences';
 
 interface CatalogManagerProps {
    products: Product[];
@@ -394,10 +394,17 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             const nextStocks: ProductStock[] = [];
 
             for (const product of products) {
-               const matchedBalance = remoteBalances.find((entry) => productIdMatchesProductReference(entry?.id, product, products));
-               const stockBalances = matchedBalance?.stockBalances && typeof matchedBalance.stockBalances === 'object'
-                  ? matchedBalance.stockBalances as Record<string, number>
-                  : {};
+               const matchedBalance = remoteBalances.find((entry) => productIdMatchesProductReference(entry, product, products));
+               const stockBalances = extractWarehouseStockBalances(
+                  matchedBalance?.stockBalances,
+                  (matchedBalance as any)?.stock_balances,
+                  (matchedBalance as any)?.balances,
+                  (matchedBalance as any)?.warehouseBalances,
+                  (matchedBalance as any)?.warehouse_balances,
+                  (matchedBalance as any)?.metadata?.stockBalances,
+                  (matchedBalance as any)?.metadata?.stock_balances,
+                  matchedBalance,
+               );
 
                for (const [warehouseId, quantity] of Object.entries(stockBalances)) {
                   nextStocks.push({
@@ -459,10 +466,17 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             const nextStocks: ProductStock[] = [];
 
             for (const product of products) {
-               const matchedBalance = remoteBalances.find((entry) => productIdMatchesProductReference(entry?.id, product, products));
-               const stockBalances = matchedBalance?.stockBalances && typeof matchedBalance.stockBalances === 'object'
-                  ? matchedBalance.stockBalances as Record<string, number>
-                  : {};
+               const matchedBalance = remoteBalances.find((entry) => productIdMatchesProductReference(entry, product, products));
+               const stockBalances = extractWarehouseStockBalances(
+                  matchedBalance?.stockBalances,
+                  (matchedBalance as any)?.stock_balances,
+                  (matchedBalance as any)?.balances,
+                  (matchedBalance as any)?.warehouseBalances,
+                  (matchedBalance as any)?.warehouse_balances,
+                  (matchedBalance as any)?.metadata?.stockBalances,
+                  (matchedBalance as any)?.metadata?.stock_balances,
+                  matchedBalance,
+               );
 
                for (const [warehouseId, quantity] of Object.entries(stockBalances)) {
                   nextStocks.push({
