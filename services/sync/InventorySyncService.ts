@@ -9,6 +9,10 @@ import { permissionService } from './PermissionService';
 import { InventoryLedgerEntry } from '../../types';
 
 class InventorySyncService {
+    shouldReadInventoryFromOperationalSource(): boolean {
+        return apiSyncAdapter.isUsingErpOperationalTarget();
+    }
+
     /**
      * Pull pending inventory movements (Master only)
      */
@@ -64,6 +68,19 @@ class InventorySyncService {
             return await apiSyncAdapter.pullKardexOnDemand(productId);
         } catch (error) {
             console.error(`❌ InventorySync: Error fetching Kardex for ${productId}:`, error);
+            return [];
+        }
+    }
+
+    async fetchStockBalancesOnDemand(productId?: string): Promise<any[]> {
+        try {
+            console.log(`🔍 InventorySync: Fetching stock balances on-demand${productId ? ` for product ${productId}` : ''}`);
+            if (this.shouldReadInventoryFromOperationalSource()) {
+                return await apiSyncAdapter.pullOperationalStockBalances(productId);
+            }
+            return await apiSyncAdapter.pullStockBalances();
+        } catch (error) {
+            console.error(`❌ InventorySync: Error fetching stock balances${productId ? ` for ${productId}` : ''}:`, error);
             return [];
         }
     }

@@ -35,6 +35,7 @@ import {
   resolveWarehouseId,
   tariffMatchesIdentifier,
 } from '../utils/masterIdentity';
+import { extractWarehouseStockBalances, productIdMatchesProductReference, resolveLinkedProductIds, resolveProductStockRow } from '../utils/productReferences';
 
 interface ProductFormProps {
   initialData?: Product | null;
@@ -176,6 +177,18 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [detailedStocks, setDetailedStocks] = useState<ProductStock[]>([]);
   const [productionAreas, setProductionAreas] = useState<any[]>([]);
   const [productionAreasLoaded, setProductionAreasLoaded] = useState(false);
+  const [remoteStockBalances, setRemoteStockBalances] = useState<Record<string, number>>({});
+  const linkedProductIds = useMemo(
+    () => resolveLinkedProductIds(formData, allProducts),
+    [formData, allProducts]
+  );
+  const stockBalanceSource = useMemo(() => {
+    const linkedProductIdSet = new Set(linkedProductIds);
+    const freshestLinkedProduct = allProducts.find((product) => linkedProductIdSet.has(String(product?.id || '').trim()));
+    return Object.keys(remoteStockBalances).length > 0
+      ? remoteStockBalances
+      : (freshestLinkedProduct?.stockBalances || formData.stockBalances || {});
+  }, [linkedProductIds, allProducts, formData.stockBalances, remoteStockBalances]);
 
   const resolveErpBaseUrl = () => {
     const env = (import.meta as any)?.env || {};
@@ -266,13 +279,15 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     const loadLedger = async () => {
       let allEntries: InventoryLedgerEntry[] = [];
 
-      if (permissionService.isMasterTerminal()) {
+      if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
+        allEntries = await inventorySyncService.fetchKardexOnDemand(formData.id);
+      } else if (permissionService.isMasterTerminal()) {
         allEntries = (await db.get('inventoryLedger') || []) as InventoryLedgerEntry[];
       } else {
         allEntries = await inventorySyncService.fetchKardexOnDemand(formData.id);
       }
 
-      const filtered = allEntries.filter(e => e.productId === formData.id)
+      const filtered = allEntries.filter(e => productIdMatchesProductReference(e, formData, allProducts))
         .filter(e => kardexWarehouse === 'ALL' || e.warehouseId === kardexWarehouse)
         .filter(e => kardexTerminal === 'ALL' || (e.terminalId || 'LOCAL') === kardexTerminal)
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -290,8 +305,41 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
     // Listen for productStocks updates
     const handleStockSync = async () => {
+      if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
+        const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
+        const matchedBalance = remoteBalances.find((entry) => productIdMatchesProductReference(entry, formData, allProducts));
+        const nextRemoteStockBalances = canonicalizeWarehouseRecord(
+          extractWarehouseStockBalances(
+            matchedBalance?.stockBalances,
+            (matchedBalance as any)?.stock_balances,
+            (matchedBalance as any)?.balances,
+            (matchedBalance as any)?.warehouseBalances,
+            (matchedBalance as any)?.warehouse_balances,
+            (matchedBalance as any)?.metadata?.stockBalances,
+            (matchedBalance as any)?.metadata?.stock_balances,
+            matchedBalance,
+          ),
+          warehouses,
+        );
+        setRemoteStockBalances(nextRemoteStockBalances);
+
+        const synthesizedStocks: ProductStock[] = Object.entries(nextRemoteStockBalances).map(([warehouseId, quantity]) => ({
+          id: `${formData.id}_${warehouseId}`,
+          productId: formData.id,
+          warehouseId,
+          quantity: Number(quantity || 0),
+          qtyPhysical: Number(quantity || 0),
+          qtyCommitted: 0,
+          qtyAvailable: Number(quantity || 0),
+          updatedAt: new Date().toISOString(),
+        }));
+        setDetailedStocks(synthesizedStocks);
+        return;
+      }
+
       const allStocks = await db.get('productStocks') as ProductStock[] || [];
-      const myStocks = allStocks.filter(s => s.productId === formData.id);
+      const myStocks = allStocks.filter((stock) => linkedProductIds.includes(String(stock?.productId || '').trim()));
+      setRemoteStockBalances({});
       setDetailedStocks(myStocks);
     };
     window.addEventListener('productStocksUpdated', handleStockSync);
@@ -304,7 +352,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       window.removeEventListener('transactionSynced', handleSync);
       window.removeEventListener('productStocksUpdated', handleStockSync);
     };
-  }, [formData.id, kardexWarehouse, kardexTerminal]);
+  }, [formData.id, linkedProductIds, kardexWarehouse, kardexTerminal]);
 
   // --- DYNAMIC LEDGER SUMMARY (For Cards & Table) ---
   const { entriesWithDynamicBalance, currentViewStock, currentViewCost } = useMemo(() => {
@@ -1546,14 +1594,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
                 <div className="grid grid-cols-1 gap-4">
                   {warehouses.map(wh => {
-                    // Guard against cross-product bleed: this tab must only read the detailed
-                    // stock row for the current product and warehouse combination.
-                    const detailedStock = detailedStocks.find(
-                      s => s.productId === formData.id && s.warehouseId === wh.id
-                    );
+                    const detailedStock = resolveProductStockRow(formData, wh.id, detailedStocks, allProducts);
                     const stock = detailedStock
                       ? detailedStock.quantity
-                      : getWarehouseScopedNumber(formData.stockBalances || {}, wh.id, warehouses, 0);
+                      : getWarehouseScopedNumber(stockBalanceSource, wh.id, warehouses, 0);
                     const isActive = normalizedActiveWarehouseIds.includes(wh.id);
 
                     return (

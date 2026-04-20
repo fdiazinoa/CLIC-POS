@@ -34,6 +34,8 @@ import {
     posCatalogDebugNow,
     posCatalogDebugSummarizeItem,
 } from '../../utils/posCatalogDebugTrace';
+import { canonicalizeWarehouseRecord } from '../../utils/masterIdentity';
+import { extractWarehouseStockBalances, productIdMatchesProductReference, productReferenceCandidates } from '../../utils/productReferences';
 
 export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities';
 
@@ -431,9 +433,18 @@ class SyncManager {
             this.purgeSyncedHistoricalData().catch(e => console.error('❌ SyncManager: Initial purge failed:', e));
         }
 
-        this.syncTerminalMastersOnStartup(config).catch((error) => {
-            console.warn('⚠️ SyncManager: startup terminal manifest sync failed:', error);
-        });
+        if (apiSyncAdapter.isUsingErpOperationalTarget()) {
+            try {
+                await this.syncTerminalMastersOnStartup(config);
+                await this.refreshOperationalInventorySnapshot();
+            } catch (error) {
+                console.warn('⚠️ SyncManager: startup ERP inventory hydration failed:', error);
+            }
+        } else {
+            this.syncTerminalMastersOnStartup(config).catch((error) => {
+                console.warn('⚠️ SyncManager: startup terminal manifest sync failed:', error);
+            });
+        }
 
         console.log('🔄 SyncManager initialized');
 
@@ -722,6 +733,11 @@ class SyncManager {
         return { localById, localByBarcode, localByCode };
     }
 
+    private collectSnapshotProductAliasIds(product: Product): string[] {
+        const canonicalProductId = typeof product?.id === 'string' ? product.id.trim() : String(product?.id || '').trim();
+        return productReferenceCandidates(product).filter((candidate) => candidate !== canonicalProductId);
+    }
+
     private reconcileCatalogProductIds(config: BusinessConfig, localProducts: Product[]): BusinessConfig {
         const hasGroups = Array.isArray(config?.productGroups) && config.productGroups.length > 0;
         const hasSeasons = Array.isArray(config?.seasons) && config.seasons.length > 0;
@@ -991,6 +1007,104 @@ class SyncManager {
         } catch (error) {
             console.warn('⚠️ SyncManager: startup manifest sync failed:', error);
         }
+    }
+
+    private async refreshOperationalInventorySnapshot(): Promise<number> {
+        if (!apiSyncAdapter.isUsingErpOperationalTarget()) {
+            return 0;
+        }
+
+        const [rawProducts, rawWarehouses] = await Promise.all([
+            db.get('products'),
+            db.get('warehouses'),
+        ]);
+        const localProducts = (Array.isArray(rawProducts) ? rawProducts : []) as Product[];
+        const runtimeWarehouses = (Array.isArray(rawWarehouses) ? rawWarehouses : []) as Warehouse[];
+
+        if (localProducts.length === 0) {
+            return 0;
+        }
+
+        const remoteBalances = await apiSyncAdapter.pullOperationalStockBalances();
+        if (!Array.isArray(remoteBalances) || remoteBalances.length === 0) {
+            return 0;
+        }
+
+        const now = new Date().toISOString();
+        const updatedProducts = new Set<string>();
+        const nextStockKeys = new Set<string>();
+
+        for (const product of localProducts) {
+            const matchedBalance = remoteBalances.find((entry) =>
+                productIdMatchesProductReference(entry, product, localProducts)
+            );
+            if (!matchedBalance) continue;
+
+            const normalizedStockBalances = canonicalizeWarehouseRecord(
+                extractWarehouseStockBalances(
+                    (matchedBalance as any)?.stockBalances,
+                    (matchedBalance as any)?.stock_balances,
+                    (matchedBalance as any)?.balances,
+                    (matchedBalance as any)?.warehouseBalances,
+                    (matchedBalance as any)?.warehouse_balances,
+                    (matchedBalance as any)?.metadata?.stockBalances,
+                    (matchedBalance as any)?.metadata?.stock_balances,
+                    matchedBalance,
+                ),
+                runtimeWarehouses,
+            );
+
+            const warehouseIds = Array.from(new Set([
+                ...runtimeWarehouses.map((warehouse) => String(warehouse?.id || '').trim()).filter(Boolean),
+                ...Object.keys(normalizedStockBalances),
+            ]));
+            const nextProduct: Product = {
+                ...product,
+                stockBalances: normalizedStockBalances,
+                stock: Object.values(normalizedStockBalances).reduce((sum, quantity) => sum + Number(quantity || 0), 0),
+                updatedAt: typeof (matchedBalance as any)?.updatedAt === 'string'
+                    ? (matchedBalance as any).updatedAt
+                    : product.updatedAt || now,
+            };
+
+            await db.saveDocument('products', nextProduct);
+            updatedProducts.add(nextProduct.id);
+
+            for (const warehouseId of warehouseIds) {
+                const quantity = Number(normalizedStockBalances?.[warehouseId] ?? 0);
+                const nextStock: ProductStock = {
+                    id: `${nextProduct.id}_${warehouseId}`,
+                    productId: nextProduct.id,
+                    warehouseId,
+                    quantity,
+                    qtyPhysical: quantity,
+                    qtyCommitted: 0,
+                    qtyAvailable: quantity,
+                    updatedAt: now,
+                };
+                nextStockKeys.add(`${nextProduct.id}::${warehouseId}`);
+                await db.saveDocument('productStocks', nextStock);
+            }
+        }
+
+        if (updatedProducts.size === 0) {
+            return 0;
+        }
+
+        const rawStocks = await db.get('productStocks');
+        const existingStocks = (Array.isArray(rawStocks) ? rawStocks : []) as ProductStock[];
+        for (const stock of existingStocks) {
+            if (!updatedProducts.has(String(stock?.productId || '').trim())) continue;
+            const key = `${String(stock?.productId || '').trim()}::${String(stock?.warehouseId || '').trim()}`;
+            if (nextStockKeys.has(key)) continue;
+            if (stock?.id) {
+                await db.deleteDocument('productStocks', stock.id);
+            }
+        }
+
+        window.dispatchEvent(new CustomEvent('productsUpdated'));
+        window.dispatchEvent(new CustomEvent('productStocksUpdated'));
+        return updatedProducts.size;
     }
 
     async syncTerminalManifestInBackground(baseConfig?: BusinessConfig | null): Promise<BusinessConfig | null> {
@@ -1425,10 +1539,14 @@ class SyncManager {
                 await this.applySnapshotProducts(snapshot);
             }
             const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta);
+            const operationalInventoryHydrated = apiSyncAdapter.isUsingErpOperationalTarget()
+                ? await this.refreshOperationalInventorySnapshot()
+                : 0;
             await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
             posCatalogDebugLog('refreshTerminalResolvedConfig: product apply success', {
                 usedCatalogDelta: Boolean(catalogDelta),
                 structuredMasterData,
+                operationalInventoryHydrated,
                 elapsedMs: posCatalogDebugElapsedMs(applyStartedAt),
             });
         } catch (error) {
@@ -1647,7 +1765,8 @@ class SyncManager {
     private collectSnapshotProductWarehouseIds(
         product: Product,
         runtimeWarehouses: Warehouse[],
-        existingStocksByProductWarehouse: Map<string, ProductStock>
+        existingStocksByProductWarehouse: Map<string, ProductStock>,
+        aliasProductIds: string[] = []
     ): string[] {
         const runtimeWarehouseIds = Array.isArray(runtimeWarehouses)
             ? runtimeWarehouses
@@ -1677,7 +1796,61 @@ class SyncManager {
             }
         }
 
+        for (const aliasProductId of aliasProductIds) {
+            const aliasKeyPrefix = `${String(aliasProductId || '').trim()}::`;
+            for (const lookupKey of existingStocksByProductWarehouse.keys()) {
+                if (lookupKey.startsWith(aliasKeyPrefix)) {
+                    productWarehouseIds.push(lookupKey.slice(aliasKeyPrefix.length));
+                }
+            }
+        }
+
         return Array.from(new Set(productWarehouseIds.filter(Boolean)));
+    }
+
+    private resolveExistingSnapshotProductStock(
+        productId: string,
+        warehouseId: string,
+        aliasProductIds: string[],
+        existingStocksByProductWarehouse: Map<string, ProductStock>
+    ): ProductStock | undefined {
+        const candidateProductIds = [productId, ...aliasProductIds].filter(Boolean);
+        for (const candidateProductId of candidateProductIds) {
+            const lookupKey = this.buildSnapshotProductStockLookupKey(candidateProductId, warehouseId);
+            const existingStock = existingStocksByProductWarehouse.get(lookupKey);
+            if (existingStock) {
+                return existingStock;
+            }
+        }
+        return undefined;
+    }
+
+    private async reconcileSnapshotProductStockAliases(
+        canonicalProductId: string,
+        aliasProductIds: string[],
+        existingStocksByProductWarehouse: Map<string, ProductStock>
+    ): Promise<void> {
+        const aliases = Array.from(new Set(aliasProductIds.filter(Boolean).filter((alias) => alias !== canonicalProductId)));
+        if (aliases.length === 0) {
+            return;
+        }
+
+        for (const aliasProductId of aliases) {
+            const aliasKeyPrefix = `${aliasProductId}::`;
+            for (const [lookupKey, stock] of Array.from(existingStocksByProductWarehouse.entries())) {
+                if (!lookupKey.startsWith(aliasKeyPrefix)) continue;
+
+                existingStocksByProductWarehouse.delete(lookupKey);
+
+                try {
+                    if (stock?.id) {
+                        await db.deleteDocument('productStocks', stock.id);
+                    }
+                } catch (error) {
+                    console.warn(`⚠️ SyncManager: could not delete remapped duplicate stock row ${stock?.id}:`, error);
+                }
+            }
+        }
     }
 
     private async syncSnapshotProductStocks(
@@ -1693,7 +1866,8 @@ class SyncManager {
         const stockBalances = product?.stockBalances && typeof product.stockBalances === 'object'
             ? product.stockBalances
             : {};
-        const warehouseIds = this.collectSnapshotProductWarehouseIds(product, runtimeWarehouses, existingStocksByProductWarehouse);
+        const aliasProductIds = this.collectSnapshotProductAliasIds(product);
+        const warehouseIds = this.collectSnapshotProductWarehouseIds(product, runtimeWarehouses, existingStocksByProductWarehouse, aliasProductIds);
         if (warehouseIds.length === 0) {
             return;
         }
@@ -1702,7 +1876,7 @@ class SyncManager {
 
         for (const warehouseId of warehouseIds) {
             const lookupKey = this.buildSnapshotProductStockLookupKey(productId, warehouseId);
-            const existingStock = existingStocksByProductWarehouse.get(lookupKey);
+            const existingStock = this.resolveExistingSnapshotProductStock(productId, warehouseId, aliasProductIds, existingStocksByProductWarehouse);
             const qtyPhysical = Number((stockBalances as Record<string, unknown>)?.[warehouseId] ?? 0);
             const qtyCommitted = Number(existingStock?.qtyCommitted ?? 0);
             const nextStock: ProductStock = {
@@ -1719,6 +1893,8 @@ class SyncManager {
             await db.saveDocument('productStocks', nextStock);
             existingStocksByProductWarehouse.set(lookupKey, nextStock);
         }
+
+        await this.reconcileSnapshotProductStockAliases(productId, aliasProductIds, existingStocksByProductWarehouse);
     }
 
     private snapshotMasterRows(
