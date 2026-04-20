@@ -524,12 +524,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const canChangeTariff = hasPermission('POS_CHANGE_TARIFF');
 
+   const usesSupermarketLayout = useMemo(
+      () => Boolean(!isMobile && isRetailMode),
+      [isMobile, isRetailMode]
+   );
+
    const usesExpandedCatalog = useMemo(
-      () => Boolean(!isMobile && activeTerminalConfig?.operational?.expandTicket),
-      [activeTerminalConfig?.operational?.expandTicket, isMobile]
+      () => Boolean(!isMobile && (isRetailMode || activeTerminalConfig?.operational?.expandTicket)),
+      [activeTerminalConfig?.operational?.expandTicket, isMobile, isRetailMode]
    );
 
    const gridClass = useMemo(() => {
+      if (usesSupermarketLayout) {
+        return "grid [grid-template-columns:repeat(auto-fill,minmax(210px,1fr))] gap-4 md:gap-5 content-start auto-rows-fr";
+      }
       if (usesExpandedCatalog) {
         return "grid grid-cols-4 gap-x-4 gap-y-4 content-start auto-rows-fr";
       }
@@ -537,14 +545,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return "grid [grid-template-columns:repeat(auto-fill,minmax(145px,1fr))] gap-3 content-start";
       }
       return "grid [grid-template-columns:repeat(auto-fill,minmax(160px,1fr))] gap-3 md:gap-4 content-start";
-   }, [usesExpandedCatalog, uxConfig.gridDensity]);
+   }, [usesExpandedCatalog, usesSupermarketLayout, uxConfig.gridDensity]);
 
    const categoryContainerClass = useMemo(() => {
+      if (usesSupermarketLayout) {
+         return "hidden";
+      }
       if (uxConfig.quickKeysLayout === 'B') {
          return "bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex flex-wrap gap-2 shrink-0 max-h-32 overflow-y-auto custom-scrollbar";
       }
       return "bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex gap-2 overflow-x-auto no-scrollbar shrink-0";
-   }, [uxConfig.quickKeysLayout]);
+   }, [usesSupermarketLayout, uxConfig.quickKeysLayout]);
 
    const allowedTariffs = useMemo(() => {
       const allowedIds = activeTerminalConfig?.pricing?.allowedTariffIds || [];
@@ -681,6 +692,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [isScannerOpen, setIsScannerOpen] = useState(false);
    const scannerRef = useRef<Html5Qrcode | null>(null);
    const searchInputRef = useRef<HTMLInputElement>(null);
+   const retailSearchInputRef = useRef<HTMLInputElement>(null);
    const parkAliasInputRef = useRef<HTMLInputElement>(null);
    const [showVirtualKeyboard, setShowVirtualKeyboard] = useState(false);
 
@@ -1234,8 +1246,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
          }
 
-         // B. Check Parent (ID, SKU, or Barcode)
-         if ((p.id === searchCode || p.barcode === searchCode) && productHasActiveTariff(p)) {
+         const rootCodeCandidates = [
+            typeof p.id === 'string' ? p.id.trim() : String(p.id || '').trim(),
+            typeof p.barcode === 'string' ? p.barcode.trim() : String(p.barcode || '').trim(),
+            typeof (p as any).sku === 'string' ? (p as any).sku.trim() : String((p as any).sku || '').trim(),
+            typeof (p as any).item_code === 'string' ? (p as any).item_code.trim() : String((p as any).item_code || '').trim(),
+            typeof (p as any).code === 'string' ? (p as any).code.trim() : String((p as any).code || '').trim(),
+         ].filter(Boolean);
+
+         // B. Check Parent (ID, SKU, Barcode, item_code, code)
+         if (rootCodeCandidates.includes(searchCode) && productHasActiveTariff(p)) {
             return { product: p, quantity, price: getProductPrice(p), modifiers: [] };
          }
       }
@@ -1431,8 +1451,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
          const erpWarehouses = resolveProductActiveWarehouseIds(p, warehouses);
          const hasErpWarehouse = erpWarehouses.length > 0;
-         const productName = p.name || '';
-         const matchSearch = productName.toLowerCase().includes(searchTerm.toLowerCase()) || p.barcode?.includes(searchTerm);
+         const productName = String(p.name || '').toLowerCase();
+         const normalizedSearch = searchTerm.trim().toLowerCase();
+         const searchableCodes = [
+            typeof p.barcode === 'string' ? p.barcode.toLowerCase() : String(p.barcode || '').toLowerCase(),
+            typeof (p as any).sku === 'string' ? (p as any).sku.toLowerCase() : String((p as any).sku || '').toLowerCase(),
+            typeof (p as any).item_code === 'string' ? (p as any).item_code.toLowerCase() : String((p as any).item_code || '').toLowerCase(),
+            typeof (p as any).code === 'string' ? (p as any).code.toLowerCase() : String((p as any).code || '').toLowerCase(),
+         ].filter(Boolean);
+         const variantCodes = Array.isArray((p as any).variants)
+            ? (p as any).variants.flatMap((variant: any) => [
+               typeof variant?.sku === 'string' ? variant.sku.toLowerCase() : String(variant?.sku || '').toLowerCase(),
+               typeof variant?.barcode === 'string' ? variant.barcode.toLowerCase() : String(variant?.barcode || '').toLowerCase(),
+            ]).filter(Boolean)
+            : [];
+         const matchSearch = !normalizedSearch
+            || productName.includes(normalizedSearch)
+            || searchableCodes.some((code) => code.includes(normalizedSearch))
+            || variantCodes.some((code) => code.includes(normalizedSearch));
 
          // Category Scope Check
          const normalizedProductCategory = canonicalizeCategory(p.category);
@@ -1454,6 +1490,38 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return true;
       });
    }, [products, searchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
+
+   const handleRetailSearchSubmit = useCallback(() => {
+      const trimmed = (searchTerm || '').trim();
+      if (!trimmed) {
+         retailSearchInputRef.current?.focus();
+         return;
+      }
+
+      const match = findProductByAnyCode(trimmed);
+      if (match) {
+         addToCart(match.product, (isReturnMode ? -1 : 1) * match.quantity, match.price, match.modifiers);
+         setSearchTerm('');
+         setErrorToast(null);
+         retailSearchInputRef.current?.focus();
+         return;
+      }
+
+      if (filteredProducts.length === 1) {
+         handleProductClick(filteredProducts[0]);
+         setSearchTerm('');
+         setErrorToast(null);
+         retailSearchInputRef.current?.focus();
+         return;
+      }
+
+      if (filteredProducts.length === 0) {
+         setErrorToast("Código no encontrado");
+         setTimeout(() => setErrorToast(null), 2000);
+      }
+
+      retailSearchInputRef.current?.focus();
+   }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode, filteredProducts, handleProductClick]);
 
    const categories = useMemo(() => {
       const allowedDisplayCategories = Array.from(
@@ -3042,11 +3110,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                              warehouseSaleBlocked
                                 ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
                                 : 'cursor-pointer hover:border-purple-300 hover:-translate-y-1 active:scale-95'
-                          } ${(usesExpandedCatalog && uxConfig.showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[228px] grid grid-rows-[52%_48%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[204px] flex flex-col h-full' : isCompactMobileCard ? `rounded-[2rem] p-3.5 min-h-[246px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}` : `rounded-[2rem] p-3 min-h-[228px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
+                           } ${(usesSupermarketLayout && uxConfig.showProductImages) ? 'rounded-[1.75rem] p-4 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[256px] grid grid-rows-[56%_44%]' : (usesExpandedCatalog && uxConfig.showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[228px] grid grid-rows-[52%_48%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[204px] flex flex-col h-full' : isCompactMobileCard ? `rounded-[2rem] p-3.5 min-h-[246px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}` : `rounded-[2rem] p-3 min-h-[228px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
                         >
                            {uxConfig.showProductImages && (
-                              <div className={`${usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-36 rounded-[1.5rem] mb-3 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-3'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
-                                 {product.image ? <img src={product.image} className={`w-full h-full ${usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={48} strokeWidth={1} /></div>}
+                              <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.4rem] mb-0 p-3' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-36 rounded-[1.5rem] mb-3 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-3'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
+                                 {product.image ? <img src={product.image} className={`w-full h-full ${usesSupermarketLayout || usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={usesSupermarketLayout ? 56 : 48} strokeWidth={1} /></div>}
 
                                  {/* BADGES DE TIPO DE ARTÍCULO */}
                                  {isWeighted && (
@@ -3096,12 +3164,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                               </div>
                            )}
                            <div className={`flex flex-col ${usesExpandedCatalog ? 'min-h-0 h-full pt-1 justify-between' : 'flex-1 justify-between gap-3'}`}>
-                              <div className={usesExpandedCatalog ? 'space-y-1' : 'space-y-1.5'}>
-                                 <span className={`block font-bold text-purple-500 uppercase opacity-60 line-clamp-1 ${usesExpandedCatalog ? 'text-[10px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[8px]'}`}>{product.category}</span>
-                                 <h3 className={`font-bold text-gray-800 dark:text-white leading-tight line-clamp-2 ${usesExpandedCatalog ? 'text-[1.05rem] min-h-[2.3rem]' : isCompactMobileCard ? 'text-[1.05rem] min-h-[2.8rem]' : 'text-sm min-h-[2.5rem]'}`}>{product.name}</h3>
+                              <div className={usesSupermarketLayout ? 'space-y-1.5' : usesExpandedCatalog ? 'space-y-1' : 'space-y-1.5'}>
+                                 <span className={`block font-bold text-purple-500 uppercase opacity-60 line-clamp-1 ${usesSupermarketLayout ? 'text-[11px]' : usesExpandedCatalog ? 'text-[10px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[8px]'}`}>{product.category}</span>
+                                 <h3 className={`font-bold text-gray-800 dark:text-white leading-tight line-clamp-2 ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[3rem]' : usesExpandedCatalog ? 'text-[1.05rem] min-h-[2.3rem]' : isCompactMobileCard ? 'text-[1.05rem] min-h-[2.8rem]' : 'text-sm min-h-[2.5rem]'}`}>{product.name}</h3>
                               </div>
-                              <div className={`${usesExpandedCatalog ? 'mt-1 pt-1 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-2 border-t border-gray-50 dark:border-slate-700'}`}>
-                                 <span className={`font-black text-gray-900 dark:text-white leading-none ${usesExpandedCatalog ? 'text-[1.75rem]' : isCompactMobileCard ? 'text-[1.95rem]' : 'text-lg'}`}>{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              <div className={`${usesSupermarketLayout ? 'mt-2 pt-2 border-t border-gray-100 dark:border-slate-700' : usesExpandedCatalog ? 'mt-1 pt-1 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-2 border-t border-gray-50 dark:border-slate-700'}`}>
+                                 <span className={`font-black text-gray-900 dark:text-white leading-none ${usesSupermarketLayout ? 'text-[2rem]' : usesExpandedCatalog ? 'text-[1.75rem]' : isCompactMobileCard ? 'text-[1.95rem]' : 'text-lg'}`}>{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               </div>
                            </div>
                            {warehouseSaleBlocked && (
@@ -3270,10 +3338,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   {/* RETAIL MODE SEARCH BAR */}
                   {isRetailMode && (
                      <div className="relative min-w-0 max-w-xl flex-1 group">
-                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                        <button
+                           type="button"
+                           onClick={handleRetailSearchSubmit}
+                           className="absolute left-2 top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 transition-all hover:bg-purple-50 hover:text-purple-600"
+                           title="Buscar"
+                        >
+                           <Search size={18} />
+                        </button>
                         <input
+                           ref={retailSearchInputRef}
                            type="text"
-                           readOnly={window.matchMedia('(pointer: coarse)').matches}
                            placeholder="Escanear o buscar..."
                            value={searchTerm}
                            onFocus={() => {
@@ -3284,23 +3359,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                            onChange={(e) => setSearchTerm(e.target.value)}
                            onKeyDown={(e) => {
                               if (e.key === 'Enter') {
-                                 const exactMatch = (products || []).find(p => p.barcode === searchTerm || p.id === searchTerm);
-                                 if (exactMatch) {
-                                    handleProductClick(exactMatch);
-                                    setSearchTerm('');
-                                    return;
-                                 }
-                                 if (filteredProducts.length === 1) {
-                                    handleProductClick(filteredProducts[0]);
-                                    setSearchTerm('');
-                                    return;
-                                 }
+                                 handleRetailSearchSubmit();
                               }
                            }}
                            autoFocus
-                           className="w-full pl-10 pr-10 py-2.5 bg-gray-100 rounded-xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-purple-500 text-sm font-bold transition-all"
+                           className="w-full pl-12 pr-12 py-2.5 bg-gray-100 rounded-xl border-none outline-none focus:bg-white focus:ring-2 focus:ring-purple-500 text-sm font-bold transition-all"
                         />
-                        <button onClick={() => setIsScannerOpen(true)} className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-all"><ScanBarcode size={16} /></button>
+                        <button
+                           type="button"
+                           onClick={() => setSearchTerm('')}
+                           className="absolute right-2 top-1/2 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-all hover:bg-slate-200 hover:text-slate-600"
+                           title={searchTerm ? 'Limpiar búsqueda' : 'Lector silencioso activo'}
+                        >
+                           {searchTerm ? <X size={16} /> : <ScanBarcode size={16} />}
+                        </button>
 
                         {/* SEARCH RESULTS DROPDOWN */}
                         {searchTerm && filteredProducts.length > 0 && (
@@ -3751,70 +3823,97 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             )}
 
             {/* Sidebar Footer */}
-            <div className={`flex-none bg-white border-t border-gray-200 p-4 shadow-inner ${isRetailMode ? 'flex flex-row-reverse items-center justify-between gap-6' : 'space-y-3'} ${isMobile ? 'hidden' : ''}`}>
+            <div className={`flex-none bg-white border-t border-gray-200 p-4 shadow-inner ${isRetailMode ? 'flex flex-row-reverse items-end justify-between gap-8' : 'space-y-3'} ${isMobile ? 'hidden' : ''}`}>
                {/* DESKTOP FOOTER CONTENT (UNCHANGED) */}
                {
                   isRetailMode ? (
                      // --- RETAIL MODE FOOTER (HORIZONTAL) ---
                      <>
                         {/* RIGHT: PAY & TOTAL */}
-                        <div className="flex items-center gap-4">
-                           {/* TOTALS BREAKDOWN */}
-                           <div className="hidden xl:flex items-center gap-6 mr-2">
-                              <div className="text-right">
-                                 <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Subtotal</p>
-                                 <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                              </div>
-                              {discountAmount > 0 && (
+                        <div className="flex items-end gap-5">
+                           <div className="hidden xl:flex flex-col gap-3 rounded-[1.75rem] border border-slate-100 bg-slate-50 px-5 py-4 shadow-sm">
+                              <div className="flex items-end gap-6">
                                  <div className="text-right">
-                                    <p className="text-[10px] text-red-400 font-bold uppercase tracking-wider">Descuento</p>
-                                    <p className="text-lg font-bold text-red-500">-{baseCurrency.symbol}{discountAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Subtotal</p>
+                                    <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                                  </div>
-                              )}
-                              <div className="text-right">
-                                 <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Impuestos</p>
-                                 <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartTax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                                 {discountAmount > 0 && (
+                                    <div className="text-right">
+                                       <p className="text-[10px] text-red-400 font-bold uppercase tracking-wider">Descuento</p>
+                                       <p className="text-lg font-bold text-red-500">-{baseCurrency.symbol}{discountAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                                    </div>
+                                 )}
+                                 <div className="text-right">
+                                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Impuestos</p>
+                                    <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartTax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                                 </div>
                               </div>
-                              <div className="w-px h-10 bg-gray-200"></div>
+                              <div className="flex items-end justify-between gap-6 border-t border-slate-200 pt-3">
+                                 <div className="text-left">
+                                    <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Total a Pagar</p>
+                                    <p className="text-[10px] font-bold text-gray-400 mt-1">
+                                       {cart.reduce((acc, i) => acc + i.quantity, 0)} Artículos
+                                       {pointsEarned > 0 && <span className="text-purple-500 ml-2">• Ganarás +{pointsEarned} pts</span>}
+                                    </p>
+                                 </div>
+                                 <div className="text-right text-[3rem] font-black text-slate-900 leading-none tracking-tighter">
+                                    {baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                 </div>
+                              </div>
                            </div>
 
-                           <div className="text-right hidden sm:block">
-                              <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Total a Pagar</p>
-                              <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
-                                 {baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                           <div className="text-right hidden sm:block xl:hidden mr-1">
+                              <div className="flex items-end justify-end gap-5">
+                                 <div>
+                                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Subtotal</p>
+                                    <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                                 </div>
+                                 <div>
+                                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Impuestos</p>
+                                    <p className="text-lg font-bold text-gray-700">{baseCurrency.symbol}{cartTax.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                                 </div>
                               </div>
-                              <p className="text-[10px] font-bold text-gray-400 mt-1">
-                                 {cart.reduce((acc, i) => acc + i.quantity, 0)} Artículos
-                                 {pointsEarned > 0 && <span className="text-purple-500 ml-2">• Ganarás +{pointsEarned} pts</span>}
-                              </p>
+                              <div className="mt-3 border-t border-slate-200 pt-3">
+                                 <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Total a Pagar</p>
+                                 <div className="text-4xl font-black text-slate-900 leading-none tracking-tighter">
+                                    {baseCurrency.symbol}{cartTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                 </div>
+                                 <p className="text-[10px] font-bold text-gray-400 mt-1">
+                                    {cart.reduce((acc, i) => acc + i.quantity, 0)} Artículos
+                                    {pointsEarned > 0 && <span className="text-purple-500 ml-2">• Ganarás +{pointsEarned} pts</span>}
+                                 </p>
+                              </div>
                            </div>
-                           <button
-                              onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
-                              className="h-14 min-w-[132px] px-5 rounded-2xl font-black text-base border-2 border-red-100 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2.5 shrink-0"
-                           >
-                              <LogOut size={22} />
-                              <span>Salir</span>
-                           </button>
-                           <button
-                              onClick={() => {
-                                 if (cart.length > 0 && fiscalStatus.hasNCF) {
-                                    const validation = validateTerminalDocument(config, terminalId, 'TICKET');
-                                    if (!validation.isValid) {
-                                       alert(validation.error);
-                                       return;
+
+                           <div className="flex items-center gap-4 pl-2">
+                              <button
+                                 onClick={() => triggerSafetyGate('Cerrar Sesión', onLogout)}
+                                 className="h-14 min-w-[136px] px-5 rounded-2xl font-black text-base border-2 border-red-100 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-200 shadow-lg shadow-red-100/60 transition-all active:scale-95 flex items-center justify-center gap-2.5 shrink-0"
+                              >
+                                 <LogOut size={22} />
+                                 <span>Salir</span>
+                              </button>
+                              <button
+                                 onClick={() => {
+                                    if (cart.length > 0 && fiscalStatus.hasNCF) {
+                                       const validation = validateTerminalDocument(config, terminalId, 'TICKET');
+                                       if (!validation.isValid) {
+                                          alert(validation.error);
+                                          return;
+                                       }
+                                       if (!canProceedWithOperationalSession()) return;
+                                       proceedToCheckout();
+                                    } else if (!fiscalStatus.hasNCF) {
+                                       alert("No hay secuencias fiscales disponibles.");
                                     }
-                                    if (!canProceedWithOperationalSession()) return;
-                                    proceedToCheckout();
-                                 } else if (!fiscalStatus.hasNCF) {
-                                    alert("No hay secuencias fiscales disponibles.");
-                                 }
-                              }}
-                              disabled={cart.length === 0 || !fiscalStatus.hasNCF}
-                              className={`h-14 min-w-[220px] px-6 rounded-2xl font-black text-lg shadow-xl hover:scale-[1.05] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 shrink-0 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
-                           >
-                              <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
-                              <ArrowRight size={24} />
-                           </button>
+                                 }}
+                                 disabled={cart.length === 0 || !fiscalStatus.hasNCF}
+                                 className={`h-14 min-w-[228px] px-6 rounded-2xl font-black text-lg shadow-xl hover:scale-[1.05] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 shrink-0 ${!fiscalStatus.hasNCF ? 'bg-red-100 text-red-500 cursor-not-allowed border-2 border-red-200' : 'bg-slate-900 text-white hover:bg-black'}`}
+                              >
+                                 <span>{!fiscalStatus.hasNCF ? 'Sin Secuencia' : (activeRecoveredReservation ? 'COBRAR SALDO' : 'COBRAR')}</span>
+                                 <ArrowRight size={24} />
+                              </button>
+                           </div>
                         </div>
 
                         <div className="flex-1 w-full min-w-0 pr-4">
