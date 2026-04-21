@@ -1494,6 +1494,12 @@ export interface Warehouse {
   allowNegativeStock: boolean;
   isMain?: boolean;
   storeId?: string;
+  warehouseId?: string;
+  inventoryLocalId?: string;
+  erpWarehouseId?: string;
+  sourceWarehouseId?: string;
+  uid?: string;
+  label?: string;
 }
 
 export interface StockTransferItem {

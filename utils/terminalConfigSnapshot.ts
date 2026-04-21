@@ -192,14 +192,20 @@ const normalizeWarehouse = (raw: unknown, index: number): Warehouse | null => {
 
   return {
     id,
+    warehouseId: asString(data.warehouseId || data.warehouse_id) || undefined,
     code: asString(data.code || id) || id,
     name: asString(data.name || data.label || id) || id,
+    label: asString(data.label || data.name || id) || undefined,
     type: asString(data.type || 'GENERAL') || 'GENERAL',
     address: asString(data.address),
     allowPosSale: asBoolean(data.allowPosSale ?? data.allow_pos_sale, true),
     allowNegativeStock: asBoolean(data.allowNegativeStock ?? data.allow_negative_stock, false),
     isMain: asBoolean(data.isMain ?? data.is_main, index === 0),
     storeId: asString(data.storeId || data.store_id) || undefined,
+    inventoryLocalId: asString(data.inventoryLocalId || data.inventory_local_id || data.localWarehouseId || data.local_warehouse_id) || undefined,
+    erpWarehouseId: asString(data.erpWarehouseId || data.erp_warehouse_id || data.sourceWarehouseId || data.source_warehouse_id) || undefined,
+    sourceWarehouseId: asString(data.sourceWarehouseId || data.source_warehouse_id || data.erpWarehouseId || data.erp_warehouse_id) || undefined,
+    uid: asString(data.uid || data.uuid) || undefined,
   };
 };
 
