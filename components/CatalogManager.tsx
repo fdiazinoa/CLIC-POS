@@ -109,6 +109,15 @@ const pickRicherBusinessConfig = (primary?: BusinessConfig | null, secondary?: B
    return left;
 };
 
+const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
+   if (!product) return 'NO_STOCK';
+
+   return Object.entries(product.stockBalances || {})
+      .map(([warehouseId, quantity]) => `${warehouseId}:${Number(quantity || 0)}`)
+      .sort()
+      .join('|') || 'NO_STOCK';
+};
+
 // --- SUB-COMPONENT: STOCK ROW ---
 const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks: ProductStock[]; allProducts: Product[] }> = ({ product, warehouseId, productStocks, allProducts }) => {
    const [isExpanded, setIsExpanded] = useState(false);
@@ -376,8 +385,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       );
       if (!refreshedProduct) return;
 
-      const currentMarker = `${editingProduct.id || 'NO_ID'}::${editingProduct.updatedAt || (editingProduct as any).createdAt || 'NO_TS'}`;
-      const nextMarker = `${refreshedProduct.id || 'NO_ID'}::${refreshedProduct.updatedAt || (refreshedProduct as any).createdAt || 'NO_TS'}`;
+      const currentMarker = `${editingProduct.id || 'NO_ID'}::${editingProduct.updatedAt || (editingProduct as any).createdAt || 'NO_TS'}::${buildStockSyncMarker(editingProduct)}`;
+      const nextMarker = `${refreshedProduct.id || 'NO_ID'}::${refreshedProduct.updatedAt || (refreshedProduct as any).createdAt || 'NO_TS'}::${buildStockSyncMarker(refreshedProduct)}`;
       if (currentMarker !== nextMarker) {
          setEditingProduct(refreshedProduct);
       }

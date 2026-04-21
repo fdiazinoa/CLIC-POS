@@ -84,6 +84,17 @@ const VARIANT_TEMPLATES = [
   { name: 'Capacidad', attr: 'Memoria', opts: ['64GB', '128GB', '256GB'] }
 ];
 
+const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
+  if (!product) return 'NO_STOCK';
+
+  const balances = Object.entries(product.stockBalances || {})
+    .map(([warehouseId, quantity]) => `${warehouseId}:${Number(quantity || 0)}`)
+    .sort()
+    .join('|');
+
+  return balances || 'NO_STOCK';
+};
+
 const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], transfers = [], purchaseOrders = [], hasHistory = false, currentUser, roles = [], onSave, onClose, suppliers = [], seasons = [], initialTab = 'GENERAL', allProducts = [] }) => {
   const MAX_IMAGE_BYTES = 700 * 1024; // ~700 KB to avoid oversized base64 blobs blocking saves
   const isNativeAndroidRuntime = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -259,7 +270,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     if (!initialData) return;
 
     const initialTimestamp = initialData.updatedAt || (initialData as any).createdAt || (initialData as any).created_at || 'NO_TS';
-    const syncMarker = `${initialData.id || 'NO_ID'}::${initialTimestamp}`;
+    const stockMarker = buildStockSyncMarker(initialData);
+    const syncMarker = `${initialData.id || 'NO_ID'}::${initialTimestamp}::${stockMarker}`;
     if (lastInitialSyncRef.current === syncMarker) {
       return;
     }
@@ -274,7 +286,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     }));
     setWarehouseSettings(canonicalizeWarehouseRecord(initialData.warehouseSettings || {}, warehouses));
     lastInitialSyncRef.current = syncMarker;
-  }, [initialData?.id, initialData?.updatedAt, (initialData as any)?.createdAt, (initialData as any)?.created_at]);
+  }, [initialData?.id, initialData?.updatedAt, (initialData as any)?.createdAt, (initialData as any)?.created_at, initialData?.stockBalances]);
 
   useEffect(() => {
     setFormData(prev => normalizeProductActivationState(prev));
