@@ -131,6 +131,14 @@ export const getFiscalDisplayCode = (
     || getFiscalCodeFromNcf(tx.legacyNcf);
 };
 
+export const getFiscalDisplayLabel = (
+  tx?: Partial<Transaction> | null
+): string => {
+  const code = getFiscalDisplayCode(tx);
+  if (!code) return '';
+  return FISCAL_DOCUMENT_LABELS[code] || code;
+};
+
 export const canRetryFiscalTransaction = (tx?: Partial<Transaction> | null): boolean => {
   if (!tx) return false;
   if (!isElectronicFiscalTransaction(tx)) return false;

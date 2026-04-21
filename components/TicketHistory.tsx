@@ -27,6 +27,7 @@ import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/
 import {
    canRetryFiscalTransaction,
    getFiscalDisplayCode,
+   getFiscalDisplayLabel,
    getFiscalDisplayNcf,
    getFiscalRetryActionLabel,
    isRefundLikeTransaction
@@ -617,6 +618,7 @@ const TicketDetailDrawer: React.FC<{
    const canRequestAzulRefund = !isRefundDoc && tx.status !== 'REFUNDED' && canOfferAzulRefundAction(tx, config);
    const displayNcf = getFiscalDisplayNcf(tx);
    const displayFiscalCode = getFiscalDisplayCode(tx);
+   const displayFiscalLabel = getFiscalDisplayLabel(tx);
 
    const handleRetryFiscal = async () => {
       if (!tx || !onRetryFiscalDocument || !canRetryFiscal) return;
@@ -789,8 +791,11 @@ const TicketDetailDrawer: React.FC<{
                               <div className="mt-2 flex flex-wrap items-center gap-2">
                                  <FiscalSyncBadge transaction={tx} />
                                  {displayFiscalCode && (
-                                    <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600">
-                                       {displayFiscalCode}
+                                    <span
+                                       className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600"
+                                       title={displayFiscalCode}
+                                    >
+                                       {displayFiscalLabel || displayFiscalCode}
                                     </span>
                                  )}
                                  {tx.fiscalProvider && tx.fiscalProvider !== 'NONE' && (

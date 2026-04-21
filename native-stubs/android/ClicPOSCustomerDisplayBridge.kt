@@ -10,12 +10,19 @@ import android.os.Looper
 import android.util.Log
 import android.view.Display
 import android.view.ViewGroup
+import android.webkit.MimeTypeMap
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.widget.FrameLayout
+import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewClientCompat
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.InputStream
 import java.lang.ref.WeakReference
+import java.net.URLConnection
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -208,6 +215,10 @@ class AndroidCustomerDisplayBridge(
         private val targetUrl: String
     ) : Presentation(context, display) {
         private var webView: WebView? = null
+        private val assetLoader: WebViewAssetLoader = WebViewAssetLoader.Builder()
+            .setDomain("localhost")
+            .addPathHandler("/", PublicAssetsPathHandler(context.applicationContext))
+            .build()
 
         override fun onCreate(savedInstanceState: android.os.Bundle?) {
             super.onCreate(savedInstanceState)
@@ -249,6 +260,52 @@ class AndroidCustomerDisplayBridge(
             }
             webView.isHorizontalScrollBarEnabled = false
             webView.isVerticalScrollBarEnabled = false
+            webView.webViewClient = object : WebViewClientCompat() {
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                    return assetLoader.shouldInterceptRequest(request.url)
+                }
+            }
+        }
+    }
+
+    class PublicAssetsPathHandler(private val context: Context) : WebViewAssetLoader.PathHandler {
+        override fun handle(path: String): WebResourceResponse? {
+            return try {
+                val normalizedPath = when {
+                    path.isBlank() || path == "/" -> "public/index.html"
+                    else -> {
+                        val clean = path.removePrefix("/")
+                        if (clean.startsWith("public/")) clean else "public/$clean"
+                    }
+                }
+
+                val mimeType = resolveMimeType(normalizedPath)
+                val inputStream: InputStream = context.assets.open(normalizedPath)
+                WebResourceResponse(mimeType, "utf-8", inputStream)
+            } catch (error: Throwable) {
+                Log.w(TAG, "asset loader miss for path=$path", error)
+                null
+            }
+        }
+
+        private fun resolveMimeType(path: String): String {
+            val extension = MimeTypeMap.getFileExtensionFromUrl(path)
+            val guessed = if (!extension.isNullOrBlank()) {
+                MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.lowercase())
+            } else {
+                null
+            }
+
+            return guessed
+                ?: URLConnection.guessContentTypeFromName(path)
+                ?: when {
+                    path.endsWith(".js") -> "application/javascript"
+                    path.endsWith(".css") -> "text/css"
+                    path.endsWith(".svg") -> "image/svg+xml"
+                    path.endsWith(".json") -> "application/json"
+                    path.endsWith(".html") -> "text/html"
+                    else -> "application/octet-stream"
+                }
         }
     }
 }

@@ -20,6 +20,7 @@ import FiscalSyncBadge from './FiscalSyncBadge';
 import { calculateTransactionFiscalSummary, formatTaxLineLabel } from '../utils/fiscalBreakdown';
 import {
    canRetryFiscalTransaction,
+   getFiscalDisplayLabel,
    getFiscalRetryActionLabel,
    isRefundLikeTransaction
 } from '../utils/fiscal/fiscalHelpers';
@@ -1853,6 +1854,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
             const fiscalSummary = calculateTransactionFiscalSummary(tx, config, { terminalConfig });
             const canRetryFiscal = canRetryFiscalTransaction(tx) && Boolean(onRetryFiscalDocument);
             const retryActionLabel = getFiscalRetryActionLabel(tx) || 'Reintentar envío';
+            const fiscalDisplayLabel = getFiscalDisplayLabel(tx);
 
             return (
                <div className="fixed inset-0 z-[100] overflow-hidden">
@@ -1976,8 +1978,11 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                                        <div className="mt-2 flex flex-wrap items-center gap-2">
                                           <FiscalSyncBadge transaction={tx} />
                                           {tx.ncfType && (
-                                             <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600">
-                                                {tx.ncfType}
+                                             <span
+                                                className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black text-slate-600"
+                                                title={tx.ncfType}
+                                             >
+                                                {fiscalDisplayLabel || tx.ncfType}
                                              </span>
                                           )}
                                           {tx.fiscalProvider && tx.fiscalProvider !== 'NONE' && (
