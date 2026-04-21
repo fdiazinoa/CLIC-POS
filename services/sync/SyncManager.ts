@@ -54,8 +54,10 @@ interface SyncStatus {
 }
 
 type TerminalManifestMasterScope = 'items' | 'customers' | 'suppliers' | 'sellers' | 'purchase_orders' | 'transfers';
+type TerminalManifestBlockScope = 'inventory';
 type TerminalManifestResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions' | 'loyalty';
-type TerminalManifestScope = 'terminal' | TerminalManifestMasterScope;
+type TerminalManifestScope = 'terminal' | TerminalManifestMasterScope | TerminalManifestBlockScope;
+type TerminalManifestCountScope = TerminalManifestMasterScope | TerminalManifestBlockScope;
 
 interface TerminalCursorMap {
     terminal?: string | null;
@@ -64,13 +66,30 @@ interface TerminalCursorMap {
     suppliers?: string | null;
     purchase_orders?: string | null;
     transfers?: string | null;
+    inventory?: string | null;
 }
 
 interface TerminalManifestPayload {
     cursor_map?: TerminalCursorMap;
     changed?: Partial<Record<TerminalManifestScope, boolean>>;
-    counts?: Partial<Record<TerminalManifestMasterScope, number>>;
+    changed_blocks?: TerminalManifestScope[];
+    counts?: Partial<Record<TerminalManifestCountScope, number>>;
     snapshot_at?: string | null;
+}
+
+interface TerminalInventoryBalancePayload {
+    item_id?: string | null;
+    warehouse_id?: string | null;
+    qty_on_hand?: number | null;
+    qty_reserved?: number | null;
+    qty_committed?: number | null;
+    updated_at?: string | null;
+}
+
+interface TerminalInventoryPayload {
+    cursor?: string | null;
+    balances?: TerminalInventoryBalancePayload[];
+    has_changes?: boolean;
 }
 
 class SyncManager {
@@ -682,6 +701,7 @@ class SyncManager {
                 suppliers: typeof parsed.suppliers === 'string' ? parsed.suppliers.trim() || null : null,
                 purchase_orders: typeof parsed.purchase_orders === 'string' ? parsed.purchase_orders.trim() || null : null,
                 transfers: typeof parsed.transfers === 'string' ? parsed.transfers.trim() || null : null,
+                inventory: typeof parsed.inventory === 'string' ? parsed.inventory.trim() || null : null,
             };
         } catch {
             return {};
@@ -698,6 +718,7 @@ class SyncManager {
             suppliers: typeof cursorMap.suppliers === 'string' ? cursorMap.suppliers.trim() || null : null,
             purchase_orders: typeof cursorMap.purchase_orders === 'string' ? cursorMap.purchase_orders.trim() || null : null,
             transfers: typeof cursorMap.transfers === 'string' ? cursorMap.transfers.trim() || null : null,
+            inventory: typeof cursorMap.inventory === 'string' ? cursorMap.inventory.trim() || null : null,
         };
 
         const hasValue = Object.values(normalizedCursorMap).some((value) => typeof value === 'string' && value.trim());
@@ -874,6 +895,7 @@ class SyncManager {
                 suppliers: typeof cursorMap.suppliers === 'string' ? cursorMap.suppliers.trim() || null : null,
                 purchase_orders: typeof cursorMap.purchase_orders === 'string' ? cursorMap.purchase_orders.trim() || null : null,
                 transfers: typeof cursorMap.transfers === 'string' ? cursorMap.transfers.trim() || null : null,
+                inventory: typeof cursorMap.inventory === 'string' ? cursorMap.inventory.trim() || null : null,
             },
             changed: {
                 terminal: Boolean(changed.terminal),
@@ -882,13 +904,22 @@ class SyncManager {
                 suppliers: Boolean(changed.suppliers),
                 purchase_orders: Boolean(changed.purchase_orders),
                 transfers: Boolean(changed.transfers),
+                inventory: Boolean(changed.inventory),
             },
+            changed_blocks: Array.isArray(manifest.changed_blocks)
+                ? manifest.changed_blocks
+                    .map((scope: unknown) => (typeof scope === 'string' ? scope.trim() : ''))
+                    .filter((scope: string): scope is TerminalManifestScope =>
+                        ['terminal', 'items', 'customers', 'suppliers', 'sellers', 'purchase_orders', 'transfers', 'inventory'].includes(scope),
+                    )
+                : [],
             counts: {
                 items: Number.isFinite(Number(counts.items)) ? Number(counts.items) : 0,
                 customers: Number.isFinite(Number(counts.customers)) ? Number(counts.customers) : 0,
                 suppliers: Number.isFinite(Number(counts.suppliers)) ? Number(counts.suppliers) : 0,
                 purchase_orders: Number.isFinite(Number(counts.purchase_orders)) ? Number(counts.purchase_orders) : 0,
                 transfers: Number.isFinite(Number(counts.transfers)) ? Number(counts.transfers) : 0,
+                inventory: Number.isFinite(Number(counts.inventory)) ? Number(counts.inventory) : 0,
             },
             snapshot_at: typeof manifest.snapshot_at === 'string' ? manifest.snapshot_at.trim() || null : null,
         };
@@ -943,6 +974,7 @@ class SyncManager {
             if (cursorMap.suppliers) params.set('suppliers_cursor', cursorMap.suppliers);
             if (cursorMap.purchase_orders) params.set('purchase_orders_cursor', cursorMap.purchase_orders);
             if (cursorMap.transfers) params.set('transfers_cursor', cursorMap.transfers);
+            if (cursorMap.inventory) params.set('inventory_cursor', cursorMap.inventory);
 
             try {
                 const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/manifest`;
@@ -969,12 +1001,115 @@ class SyncManager {
                     endpointMode: endpointCandidate.mode,
                     elapsedMs: posCatalogDebugElapsedMs(startedAt),
                     changed: normalizedManifest?.changed || null,
+                    changedBlocks: normalizedManifest?.changed_blocks || null,
                     counts: normalizedManifest?.counts || null,
                 });
                 return normalizedManifest;
             } catch (error) {
                 lastError = error;
                 posCatalogDebugLog('startup manifest: fetch failed', {
+                    endpointMode: endpointCandidate.mode,
+                    endpointBaseUrl: endpointCandidate.baseUrl,
+                    elapsedMs: posCatalogDebugElapsedMs(startedAt),
+                    error: String((error as Error)?.message || error),
+                });
+            }
+        }
+
+        if (lastError) {
+            throw lastError;
+        }
+
+        return null;
+    }
+
+    private async fetchTerminalInventoryBlock(context: {
+        terminalId: string | null;
+        localTerminalId: string | null;
+        tenantId: string | null;
+        erpBaseUrl: string | null;
+        posDeviceId: string | null;
+    }, cursor: string | null): Promise<TerminalInventoryPayload | null> {
+        if (!context.terminalId || !context.tenantId) {
+            return null;
+        }
+
+        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
+        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
+        const endpointCandidates = useAbsoluteEndpoint
+            ? [
+                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
+                    baseUrl,
+                    mode: 'local-loopback-proxy',
+                    includeErpBaseUrl: true,
+                })),
+                ...(syncApiBase
+                    ? [{
+                        baseUrl: syncApiBase,
+                        mode: 'absolute-sync-api',
+                        includeErpBaseUrl: false,
+                    }]
+                    : []),
+            ]
+            : [{
+                baseUrl: '/api/sync',
+                mode: 'relative-local-proxy',
+                includeErpBaseUrl: true,
+            }];
+
+        let lastError: unknown = null;
+
+        for (const endpointCandidate of endpointCandidates) {
+            const startedAt = posCatalogDebugNow();
+            const params = new URLSearchParams();
+            params.set('tenant_id', context.tenantId);
+            if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
+            if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
+            if (cursor) params.set('inventory_cursor', cursor);
+
+            try {
+                const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/inventory`;
+                const endpoint = `${endpointCandidate.baseUrl}${endpointPath}?${params.toString()}`;
+                posCatalogDebugLog('inventory block: fetch begin', {
+                    endpoint,
+                    endpointMode: endpointCandidate.mode,
+                    inventoryCursorSent: cursor,
+                });
+
+                const response = await fetch(endpoint, {
+                    headers: {
+                        Accept: 'application/json',
+                    },
+                });
+
+                if (!response.ok) {
+                    const detail = await response.text().catch(() => '');
+                    throw new Error(detail || `No se pudo consultar el bloque inventory (${response.status}).`);
+                }
+
+                const payload = await response.json();
+                const inventory = payload?.inventory && typeof payload.inventory === 'object' && !Array.isArray(payload.inventory)
+                    ? payload.inventory as Record<string, any>
+                    : {};
+                const normalizedPayload: TerminalInventoryPayload = {
+                    cursor: typeof inventory.cursor === 'string' ? inventory.cursor.trim() || null : null,
+                    balances: Array.isArray(inventory.balances) ? inventory.balances as TerminalInventoryBalancePayload[] : [],
+                    has_changes: typeof inventory.has_changes === 'boolean' ? inventory.has_changes : true,
+                };
+
+                posCatalogDebugLog('inventory block: fetch success', {
+                    endpointMode: endpointCandidate.mode,
+                    elapsedMs: posCatalogDebugElapsedMs(startedAt),
+                    balanceCount: normalizedPayload.balances?.length || 0,
+                    hasChanges: normalizedPayload.has_changes,
+                    cursor: normalizedPayload.cursor,
+                });
+
+                return normalizedPayload;
+            } catch (error) {
+                lastError = error;
+                posCatalogDebugLog('inventory block: fetch failed', {
                     endpointMode: endpointCandidate.mode,
                     endpointBaseUrl: endpointCandidate.baseUrl,
                     elapsedMs: posCatalogDebugElapsedMs(startedAt),
@@ -1022,9 +1157,11 @@ class SyncManager {
 
             const changedMasterScopes: TerminalManifestMasterScope[] = (['items', 'customers', 'suppliers', 'sellers', 'purchase_orders', 'transfers'] as TerminalManifestMasterScope[])
                 .filter((scope) => manifest.changed?.[scope]);
+            const changedBlocks = Array.isArray(manifest.changed_blocks) ? manifest.changed_blocks : [];
+            const inventoryChanged = Boolean(manifest.changed.inventory) || changedBlocks.includes('inventory');
             const terminalChanged = Boolean(manifest.changed.terminal);
 
-            if (!terminalChanged && changedMasterScopes.length === 0) {
+            if (!terminalChanged && changedMasterScopes.length === 0 && !inventoryChanged) {
                 this.persistTerminalCursorMap(localTerminalId, manifest.cursor_map);
                 if (options?.markStartupCompleted) {
                     this.markStartupManifestSyncCompleted(localTerminalId);
@@ -1032,13 +1169,26 @@ class SyncManager {
                 return null;
             }
 
-            const refreshedConfig = await this.refreshTerminalResolvedConfig(undefined, {
-                forceRemoteFetch: true,
-                masterScopes: changedMasterScopes,
-                resolvedScopes: terminalChanged ? ['pricing', 'inventory', 'documents', 'catalog', 'promotions', 'loyalty'] : [],
-            });
+            let refreshedConfig: BusinessConfig | null = null;
+            if (terminalChanged || changedMasterScopes.length > 0) {
+                refreshedConfig = await this.refreshTerminalResolvedConfig(undefined, {
+                    forceRemoteFetch: true,
+                    masterScopes: changedMasterScopes,
+                    resolvedScopes: terminalChanged ? ['pricing', 'inventory', 'documents', 'catalog', 'promotions', 'loyalty'] : [],
+                });
+            }
 
-            if (!refreshedConfig) {
+            if (inventoryChanged) {
+                const inventoryPayload = await this.fetchTerminalInventoryBlock(context, storedCursorMap.inventory || null);
+                if (inventoryPayload?.cursor) {
+                    manifest.cursor_map.inventory = inventoryPayload.cursor;
+                }
+                if (inventoryPayload?.has_changes && Array.isArray(inventoryPayload.balances) && inventoryPayload.balances.length > 0) {
+                    await this.applyTerminalInventoryBlock(inventoryPayload.balances);
+                }
+            }
+
+            if (!refreshedConfig && !inventoryChanged) {
                 return null;
             }
 
@@ -1150,6 +1300,116 @@ class SyncManager {
 
         const rawStocks = await db.get('productStocks');
         const existingStocks = (Array.isArray(rawStocks) ? rawStocks : []) as ProductStock[];
+        for (const stock of existingStocks) {
+            if (!updatedProducts.has(String(stock?.productId || '').trim())) continue;
+            const key = `${String(stock?.productId || '').trim()}::${String(stock?.warehouseId || '').trim()}`;
+            if (nextStockKeys.has(key)) continue;
+            if (stock?.id) {
+                await db.deleteDocument('productStocks', stock.id);
+            }
+        }
+
+        window.dispatchEvent(new CustomEvent('productsUpdated'));
+        window.dispatchEvent(new CustomEvent('productStocksUpdated'));
+        return updatedProducts.size;
+    }
+
+    private async applyTerminalInventoryBlock(balances: TerminalInventoryBalancePayload[]): Promise<number> {
+        const normalizedBalances = Array.isArray(balances) ? balances : [];
+        if (normalizedBalances.length === 0) {
+            return 0;
+        }
+
+        const [rawProducts, rawStocks, rawWarehouses] = await Promise.all([
+            db.get('products'),
+            db.get('productStocks'),
+            db.get('warehouses'),
+        ]);
+        const localProducts = (Array.isArray(rawProducts) ? rawProducts : []) as Product[];
+        const existingStocks = (Array.isArray(rawStocks) ? rawStocks : []) as ProductStock[];
+        const runtimeWarehouses = (Array.isArray(rawWarehouses) ? rawWarehouses : []) as Warehouse[];
+
+        if (localProducts.length === 0) {
+            return 0;
+        }
+
+        const existingStocksByProductWarehouse = new Map<string, ProductStock>();
+        for (const stock of existingStocks) {
+            const productId = String(stock?.productId || '').trim();
+            const warehouseId = String(stock?.warehouseId || '').trim();
+            if (!productId || !warehouseId) continue;
+            existingStocksByProductWarehouse.set(this.buildSnapshotProductStockLookupKey(productId, warehouseId), stock);
+        }
+
+        const updatedProducts = new Set<string>();
+        const nextStockKeys = new Set<string>();
+        const now = new Date().toISOString();
+
+        for (const product of localProducts) {
+            const matchedBalances = normalizedBalances.filter((entry) =>
+                productIdMatchesInventoryReference(entry, product, localProducts)
+            );
+            if (matchedBalances.length === 0) {
+                continue;
+            }
+
+            const warehouseBalanceMap = canonicalizeWarehouseRecord(
+                matchedBalances.reduce<Record<string, number>>((acc, entry) => {
+                    const warehouseId = String(entry?.warehouse_id || '').trim();
+                    if (!warehouseId) return acc;
+                    acc[warehouseId] = Number(entry?.qty_on_hand ?? 0);
+                    return acc;
+                }, {}),
+                runtimeWarehouses,
+            );
+
+            const nextProduct: Product = {
+                ...product,
+                stockBalances: warehouseBalanceMap,
+                stock: Object.values(warehouseBalanceMap).reduce((sum, quantity) => sum + Number(quantity || 0), 0),
+                updatedAt: matchedBalances.reduce((latest, entry) => {
+                    const candidate = typeof entry?.updated_at === 'string' ? entry.updated_at : '';
+                    if (!candidate) return latest;
+                    return !latest || candidate > latest ? candidate : latest;
+                }, product.updatedAt || now),
+            };
+
+            await db.saveDocument('products', nextProduct);
+            updatedProducts.add(nextProduct.id);
+
+            const aliasProductIds = this.collectSnapshotProductAliasIds(nextProduct);
+            const warehouseIds = this.collectSnapshotProductWarehouseIds(nextProduct, runtimeWarehouses, existingStocksByProductWarehouse, aliasProductIds);
+
+            for (const warehouseId of warehouseIds) {
+                const lookupKey = this.buildSnapshotProductStockLookupKey(nextProduct.id, warehouseId);
+                const existingStock = this.resolveExistingSnapshotProductStock(nextProduct.id, warehouseId, aliasProductIds, existingStocksByProductWarehouse);
+                const matchedBalance = matchedBalances.find((entry) => String(entry?.warehouse_id || '').trim() === warehouseId);
+                const qtyPhysical = Number(warehouseBalanceMap?.[warehouseId] ?? 0);
+                const qtyCommitted = Number(matchedBalance?.qty_committed ?? existingStock?.qtyCommitted ?? 0);
+                const qtyReserved = Number(matchedBalance?.qty_reserved ?? 0);
+                const nextStock: ProductStock = {
+                    id: `${nextProduct.id}_${warehouseId}`,
+                    productId: nextProduct.id,
+                    warehouseId,
+                    quantity: qtyPhysical,
+                    qtyPhysical,
+                    qtyCommitted,
+                    qtyAvailable: qtyPhysical - qtyCommitted - qtyReserved,
+                    updatedAt: typeof matchedBalance?.updated_at === 'string' ? matchedBalance.updated_at : now,
+                };
+
+                nextStockKeys.add(`${nextProduct.id}::${warehouseId}`);
+                await db.saveDocument('productStocks', nextStock);
+                existingStocksByProductWarehouse.set(lookupKey, nextStock);
+            }
+
+            await this.reconcileSnapshotProductStockAliases(nextProduct.id, aliasProductIds, existingStocksByProductWarehouse);
+        }
+
+        if (updatedProducts.size === 0) {
+            return 0;
+        }
+
         for (const stock of existingStocks) {
             if (!updatedProducts.has(String(stock?.productId || '').trim())) continue;
             const key = `${String(stock?.productId || '').trim()}::${String(stock?.warehouseId || '').trim()}`;
