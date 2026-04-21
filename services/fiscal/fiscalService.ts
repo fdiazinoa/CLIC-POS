@@ -116,8 +116,12 @@ const expandAndroidBaseCandidates = (base?: string | null): string[] => {
     try {
         const url = new URL(normalized);
         const variants = [normalized];
+        const effectivePort = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+        const shouldAddHttpFallback =
+            url.protocol === 'https:'
+            && (isLocalFiscalHost(url.hostname) || effectivePort === 3001);
 
-        if (url.protocol === 'https:' && isLocalFiscalHost(url.hostname)) {
+        if (shouldAddHttpFallback) {
             const httpUrl = new URL(normalized);
             httpUrl.protocol = 'http:';
             variants.push(httpUrl.toString().replace(/\/+$/, ''));
