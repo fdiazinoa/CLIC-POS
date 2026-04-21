@@ -1968,6 +1968,10 @@ class SyncManager {
             if (!normalizedItem?.id) continue;
             const rawItem = rawItems[index] as Record<string, unknown> | undefined;
             let item = normalizedItem;
+            const incomingRemoteId =
+                typeof rawItem?.id === 'string'
+                    ? rawItem.id.trim()
+                    : String(rawItem?.id || normalizedItem.id || '').trim();
 
             const incomingCodes = new Set<string>([
                 ...productIdentityCandidates(rawItem || null),
@@ -1995,12 +1999,48 @@ class SyncManager {
                     ...canonicalLocalProduct,
                     ...normalizedItem,
                     id: canonicalLocalProduct.id,
+                    sourceItemId:
+                        typeof (canonicalLocalProduct as any)?.sourceItemId === 'string' && (canonicalLocalProduct as any).sourceItemId.trim()
+                            ? (canonicalLocalProduct as any).sourceItemId.trim()
+                            : (typeof (normalizedItem as any)?.sourceItemId === 'string' && (normalizedItem as any).sourceItemId.trim()
+                                ? (normalizedItem as any).sourceItemId.trim()
+                                : incomingRemoteId),
+                    source_item_id:
+                        typeof (canonicalLocalProduct as any)?.source_item_id === 'string' && (canonicalLocalProduct as any).source_item_id.trim()
+                            ? (canonicalLocalProduct as any).source_item_id.trim()
+                            : (typeof (normalizedItem as any)?.source_item_id === 'string' && (normalizedItem as any).source_item_id.trim()
+                                ? (normalizedItem as any).source_item_id.trim()
+                                : incomingRemoteId),
+                    erpProductId:
+                        typeof (canonicalLocalProduct as any)?.erpProductId === 'string' && (canonicalLocalProduct as any).erpProductId.trim()
+                            ? (canonicalLocalProduct as any).erpProductId.trim()
+                            : (typeof (normalizedItem as any)?.erpProductId === 'string' && (normalizedItem as any).erpProductId.trim()
+                                ? (normalizedItem as any).erpProductId.trim()
+                                : incomingRemoteId),
                 };
 
                 const rawId = typeof rawItem?.id === 'string' ? rawItem.id.trim() : String(rawItem?.id || '').trim();
                 if (rawId) {
                     duplicateIdsToRemove.add(rawId);
                 }
+            }
+
+            if (item?.id && incomingRemoteId && incomingRemoteId !== item.id) {
+                item = {
+                    ...item,
+                    sourceItemId:
+                        typeof (item as any)?.sourceItemId === 'string' && (item as any).sourceItemId.trim()
+                            ? (item as any).sourceItemId.trim()
+                            : incomingRemoteId,
+                    source_item_id:
+                        typeof (item as any)?.source_item_id === 'string' && (item as any).source_item_id.trim()
+                            ? (item as any).source_item_id.trim()
+                            : incomingRemoteId,
+                    erpProductId:
+                        typeof (item as any)?.erpProductId === 'string' && (item as any).erpProductId.trim()
+                            ? (item as any).erpProductId.trim()
+                            : incomingRemoteId,
+                };
             }
 
             if (!item?.id) continue;
