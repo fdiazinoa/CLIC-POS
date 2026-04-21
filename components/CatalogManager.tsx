@@ -394,6 +394,12 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          setWatchlists((Array.isArray(lists) ? lists.filter((entry): entry is Watchlist => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []));
       };
       const loadStocks = async () => {
+         const stocks = (await db.get('productStocks') || []) as ProductStock[];
+         if (stocks.length > 0) {
+            setProductStocks(stocks);
+            return;
+         }
+
          if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
             const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
             const nextStocks: ProductStock[] = [];
@@ -431,8 +437,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             return;
          }
 
-         const stocks = (await db.get('productStocks') || []) as ProductStock[];
-         setProductStocks(stocks);
+         setProductStocks([]);
       };
       const loadCatalogRuntime = async () => {
          const [rawProducts, rawConfig, rawWarehouses, rawTransactions] = await Promise.all([
@@ -468,6 +473,12 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       loadCatalogRuntime().catch((error) => console.warn('[CatalogManager] loadCatalogRuntime', error));
 
       const handleStockUpdate = async () => {
+         const stocks = (await db.get('productStocks') || []) as ProductStock[];
+         if (stocks.length > 0) {
+            setProductStocks(stocks);
+            return;
+         }
+
          if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
             const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
             const nextStocks: ProductStock[] = [];
@@ -505,8 +516,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             return;
          }
 
-         const stocks = (await db.get('productStocks') || []) as ProductStock[];
-         setProductStocks(stocks);
+         setProductStocks([]);
       };
       const handleConfigUpdate = async () => {
          const rawConfig = await db.get('config');

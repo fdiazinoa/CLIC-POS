@@ -317,6 +317,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
     // Listen for productStocks updates
     const handleStockSync = async () => {
+      const allStocks = await db.get('productStocks') as ProductStock[] || [];
+      const myStocks = allStocks.filter((stock) => linkedProductIds.includes(String(stock?.productId || '').trim()));
+      if (myStocks.length > 0) {
+        setRemoteStockBalances({});
+        setDetailedStocks(myStocks);
+        return;
+      }
+
       if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
         const operationalProductId = resolveOperationalProductId(formData) || formData.id;
         const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand(operationalProductId);
@@ -353,10 +361,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         return;
       }
 
-      const allStocks = await db.get('productStocks') as ProductStock[] || [];
-      const myStocks = allStocks.filter((stock) => linkedProductIds.includes(String(stock?.productId || '').trim()));
       setRemoteStockBalances({});
-      setDetailedStocks(myStocks);
+      setDetailedStocks([]);
     };
     window.addEventListener('productStocksUpdated', handleStockSync);
 
