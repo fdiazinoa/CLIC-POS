@@ -195,6 +195,20 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [productionAreas, setProductionAreas] = useState<any[]>([]);
   const [productionAreasLoaded, setProductionAreasLoaded] = useState(false);
   const [remoteStockBalances, setRemoteStockBalances] = useState<Record<string, number>>({});
+  const activeTerminalId = useMemo(
+    () => localStorage.getItem('active_terminal_id') || localStorage.getItem('CLIC_POS_TERMINAL_ID') || '',
+    []
+  );
+  const inventoryCursorMap = useMemo(() => {
+    if (!activeTerminalId) return null;
+    const raw = localStorage.getItem(`clic_pos_terminal_manifest_cursor_map:${activeTerminalId}`);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  }, [activeTerminalId]);
   const linkedProductIds = useMemo(
     () => resolveLinkedInventoryProductIds(formData, allProducts),
     [formData, allProducts]
@@ -206,6 +220,37 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       ? remoteStockBalances
       : (freshestLinkedProduct?.stockBalances || formData.stockBalances || {});
   }, [linkedProductIds, allProducts, formData.stockBalances, remoteStockBalances]);
+  const inventoryDebugPayload = useMemo(() => ({
+    productId: formData.id,
+    sourceItemId: (formData as any).sourceItemId || null,
+    source_item_id: (formData as any).source_item_id || null,
+    erpProductId: (formData as any).erpProductId || null,
+    operationalProductId: resolveOperationalProductId(formData),
+    linkedProductIds,
+    formStockBalances: formData.stockBalances || {},
+    stockBalanceSource,
+    remoteStockBalances,
+    detailedStocks: detailedStocks.map((stock) => ({
+      id: stock.id,
+      productId: stock.productId,
+      warehouseId: stock.warehouseId,
+      quantity: stock.quantity,
+      qtyPhysical: stock.qtyPhysical,
+      qtyCommitted: stock.qtyCommitted,
+      qtyAvailable: stock.qtyAvailable,
+      updatedAt: stock.updatedAt,
+    })),
+    activeTerminalId,
+    inventoryCursorMap,
+  }), [
+    formData,
+    linkedProductIds,
+    stockBalanceSource,
+    remoteStockBalances,
+    detailedStocks,
+    activeTerminalId,
+    inventoryCursorMap,
+  ]);
 
   const resolveErpBaseUrl = () => {
     const env = (import.meta as any)?.env || {};
@@ -1677,6 +1722,19 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   <p className="text-xs text-orange-800 leading-relaxed">
                     <strong>Nota:</strong> Los cambios manuales en este panel afectan directamente al balance del inventario. Para entradas masivas o compras, utilice el módulo de <strong>Abastecimiento</strong>.
                   </p>
+                </div>
+
+                <div className="bg-slate-950 text-slate-100 p-4 rounded-2xl border border-slate-800 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <ShieldAlert size={16} className="text-amber-300" />
+                    <p className="text-xs font-black uppercase tracking-[0.24em] text-amber-200">Diagnóstico de inventario</p>
+                  </div>
+                  <p className="text-xs text-slate-300">
+                    Esta sección es temporal para validar qué quedó guardado localmente en la caja para este artículo.
+                  </p>
+                  <pre className="max-h-80 overflow-auto rounded-xl bg-black/40 p-3 text-[11px] leading-5 whitespace-pre-wrap break-all">
+{JSON.stringify(inventoryDebugPayload, null, 2)}
+                  </pre>
                 </div>
               </div>
             </div>
