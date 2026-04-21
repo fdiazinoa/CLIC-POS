@@ -348,6 +348,11 @@ const extractFiscalMessage = (payload: any): string => {
     return '';
 };
 
+type FiscalHttpResponse = {
+    ok: boolean;
+    status: number;
+};
+
 const fetchFiscalWithTimeout = async (input: RequestInfo | URL, init: RequestInit, timeoutMs: number): Promise<Response> => {
     if (typeof AbortController === 'undefined') {
         return fetch(input, init);
@@ -366,20 +371,74 @@ const fetchFiscalWithTimeout = async (input: RequestInfo | URL, init: RequestIni
     }
 };
 
+const requestFiscalNativeJson = async <T extends Record<string, any>>(
+    endpoint: string,
+    init: RequestInit,
+    timeoutMs: number
+): Promise<{ response: FiscalHttpResponse; payload: T | null; rawText: string }> => {
+    const method = String(init.method || 'GET').toUpperCase();
+    const headers = Object.fromEntries(
+        Object.entries(init.headers || {}).map(([key, value]) => [key, String(value)])
+    );
+    const body = typeof init.body === 'string'
+        ? (() => {
+            try {
+                return JSON.parse(init.body);
+            } catch {
+                return init.body;
+            }
+        })()
+        : undefined;
+
+    const nativeResponse = await CapacitorHttp.request({
+        url: endpoint,
+        method,
+        headers,
+        data: body,
+        connectTimeout: timeoutMs,
+        readTimeout: timeoutMs,
+        responseType: 'json',
+    });
+
+    const rawData = nativeResponse.data;
+    const payload = rawData && typeof rawData === 'object'
+        ? (rawData as T)
+        : null;
+    const rawText = typeof rawData === 'string'
+        ? rawData
+        : rawData == null
+            ? ''
+            : JSON.stringify(rawData);
+
+    return {
+        response: {
+            ok: nativeResponse.status >= 200 && nativeResponse.status < 300,
+            status: nativeResponse.status,
+        },
+        payload,
+        rawText,
+    };
+};
+
 const requestFiscalJson = async <T extends Record<string, any>>(
     path: string,
     init: RequestInit,
     invalidPayloadFactory: (status: number) => T,
-): Promise<{ response: Response; payload: T }> => {
+): Promise<{ response: FiscalHttpResponse; payload: T }> => {
     const endpoints = await buildFiscalEndpointCandidates(path);
-    let lastInvalid: { response: Response; payload: T } | null = null;
+    let lastInvalid: { response: FiscalHttpResponse; payload: T } | null = null;
     let lastError: Error | null = null;
     const timeoutMs = isNativeAndroidRuntime() ? 2200 : 5000;
 
     for (const endpoint of endpoints) {
         try {
-            const response = await fetchFiscalWithTimeout(endpoint, init, timeoutMs);
-            const { payload, rawText } = await readJsonPayload<T>(response);
+            const { response, payload, rawText } = isNativeAndroidRuntime()
+                ? await requestFiscalNativeJson<T>(endpoint, init, timeoutMs)
+                : await (async () => {
+                    const response = await fetchFiscalWithTimeout(endpoint, init, timeoutMs);
+                    const parsed = await readJsonPayload<T>(response);
+                    return { response, payload: parsed.payload, rawText: parsed.rawText };
+                })();
 
             if (payload && typeof payload === 'object') {
                 const resolvedBase = extractBaseUrlFromEndpoint(endpoint);
