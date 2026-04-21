@@ -1876,7 +1876,7 @@ export interface CustomerDisplayConfig {
   showItemImages: boolean;
   showQrPayment: boolean;
   layout: 'SPLIT' | 'FULL_TOTAL' | 'MARKETING_ONLY';
-  connectionType: 'NETWORK' | 'USB' | 'VIRTUAL' | 'HDMI';
+  connectionType: 'NETWORK' | 'USB' | 'VIRTUAL' | 'HDMI' | 'ANDROID_SECONDARY';
   ipAddress?: string;
   ads: { id: string; url: string; active: boolean }[];
 }

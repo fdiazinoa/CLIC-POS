@@ -36,7 +36,7 @@ const DEFAULT_DISPLAY_CONFIG: CustomerDisplayConfig = {
    showItemImages: true,
    showQrPayment: true,
    layout: 'SPLIT',
-   connectionType: 'HDMI',
+   connectionType: 'ANDROID_SECONDARY',
    ads: [
       { id: 'ad1', url: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=600&auto=format&fit=crop', active: true },
       { id: 'ad2', url: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?q=80&w=600&auto=format&fit=crop', active: true }
@@ -332,11 +332,18 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       try {
          resetCustomerDisplayAutoLaunch(selectedTerminalId);
          const launched = await launchCustomerDisplay(normalizedConfig, { contextKey: selectedTerminalId });
+         const displayLabel = launched.mode === 'NETWORK'
+            ? 'remoto'
+            : launched.mode === 'ANDROID_SECONDARY'
+               ? 'integrado de Android'
+               : launched.mode === 'USB'
+                  ? 'USB / DisplayLink'
+                  : 'HDMI';
          setDisplayLaunchFeedback(
             launched.mode === 'NETWORK'
                ? `Visor remoto abierto en ${launched.url}.`
                : launched.usedSecondScreen
-                  ? `Visor lanzado automáticamente en la segunda pantalla ${launched.mode === 'USB' ? 'USB' : 'HDMI'}.`
+                  ? `Visor lanzado automáticamente en la pantalla secundaria ${displayLabel}.`
                   : 'Visor lanzado. Si no cambió de pantalla, el sistema abrió la vista sin detectar una secundaria disponible.',
          );
          return launched;
@@ -934,7 +941,9 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
       const activeDisplayConnection = normalizeCustomerDisplayConnectionType(displayConfig.connectionType);
       const launchButtonLabel = activeDisplayConnection === 'NETWORK'
          ? 'Lanzar visor por IP'
-         : `Auto detectar y lanzar visor ${activeDisplayConnection === 'USB' ? 'USB' : 'HDMI'}`;
+         : activeDisplayConnection === 'ANDROID_SECONDARY'
+            ? 'Lanzar visor en pantalla integrada Android'
+            : `Auto detectar y lanzar visor ${activeDisplayConnection === 'USB' ? 'USB' : 'HDMI'}`;
 
       return (
          <div className="space-y-6 animate-in slide-in-from-right-4 duration-300 pb-32">
@@ -980,8 +989,9 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                <div className={`bg-white p-8 rounded-3xl shadow-sm border border-gray-200 space-y-6 transition-all ${displayConfig.isEnabled ? 'opacity-100' : 'opacity-60 grayscale cursor-not-allowed'}`}>
                   <div>
                      <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Método de Conexión</label>
-                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                     <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                         {[
+                           { id: 'ANDROID_SECONDARY', label: 'Pantalla integrada Android', icon: Smartphone },
                            { id: 'HDMI', label: 'HDMI', icon: MonitorPlay },
                            { id: 'USB', label: 'USB / DisplayLink', icon: Usb },
                            { id: 'NETWORK', label: 'Tablet por IP', icon: Network },
@@ -1016,7 +1026,9 @@ const HardwareSettings: React.FC<HardwareSettingsProps> = ({ config: globalConfi
                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
                         <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-500">Detección automática</p>
                         <p className="mt-2 text-sm font-medium text-slate-600">
-                           El APK intentará detectar una pantalla secundaria conectada por {activeDisplayConnection === 'USB' ? 'USB / DisplayLink' : 'HDMI'} y mover el visor automáticamente.
+                           {activeDisplayConnection === 'ANDROID_SECONDARY'
+                              ? 'El APK usará la detección nativa de Android con DisplayManager / Presentation para abrir el visor en una pantalla secundaria integrada o gestionada por el sistema.'
+                              : `El APK intentará detectar una pantalla secundaria conectada por ${activeDisplayConnection === 'USB' ? 'USB / DisplayLink' : 'HDMI'} y mover el visor automáticamente.`}
                         </p>
                      </div>
                   )}

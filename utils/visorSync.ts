@@ -54,9 +54,11 @@ class VisorSyncService {
      */
     public onStateUpdate(callback: (state: VisorState) => void) {
         if (typeof window === 'undefined') return () => { };
+        let lastSerialized = '';
 
         const broadcastHandler = (event: MessageEvent) => {
             if (event.data?.type === 'STATE_UPDATE') {
+                lastSerialized = JSON.stringify(event.data.payload);
                 callback(event.data.payload);
             }
         };
@@ -64,6 +66,7 @@ class VisorSyncService {
         const storageHandler = (event: StorageEvent) => {
             if (event.key === STORAGE_KEY && event.newValue) {
                 try {
+                    lastSerialized = event.newValue;
                     callback(JSON.parse(event.newValue));
                 } catch (e) {
                     console.error("Error parsing visor state from storage:", e);
@@ -71,12 +74,24 @@ class VisorSyncService {
             }
         };
 
+        const poller = window.setInterval(() => {
+            try {
+                const latest = localStorage.getItem(STORAGE_KEY);
+                if (!latest || latest === lastSerialized) return;
+                lastSerialized = latest;
+                callback(JSON.parse(latest));
+            } catch (e) {
+                console.error("Error polling visor state from storage:", e);
+            }
+        }, 750);
+
         this.channel?.addEventListener('message', broadcastHandler);
         window.addEventListener('storage', storageHandler);
 
         return () => {
             this.channel?.removeEventListener('message', broadcastHandler);
             window.removeEventListener('storage', storageHandler);
+            window.clearInterval(poller);
         };
     }
 

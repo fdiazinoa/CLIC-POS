@@ -11,6 +11,7 @@ import android.webkit.WebView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
+import com.clicpos.customerdisplay.AndroidCustomerDisplayBridge;
 import com.clicpos.nativeprinter.AndroidPrinterBridge;
 import com.getcapacitor.BridgeActivity;
 
@@ -42,6 +43,11 @@ public class MainActivity extends BridgeActivity {
 
         webView.addJavascriptInterface(new AndroidPrinterBridge(getApplicationContext()), "AndroidPrinter");
         AndroidPrinterBridge.injectContractShim(webView);
+        webView.addJavascriptInterface(
+                new AndroidCustomerDisplayBridge(this),
+                "AndroidCustomerDisplay"
+        );
+        AndroidCustomerDisplayBridge.injectContractShim(webView);
         webView.setInitialScale(0);
         webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
 

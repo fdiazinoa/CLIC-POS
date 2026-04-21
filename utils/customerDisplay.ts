@@ -3,12 +3,13 @@ import { CustomerDisplayConfig } from '../types';
 const DISPLAY_QUERY_PARAM = 'view=VISOR';
 
 const DISPLAY_SESSION_KEYS = [
+  'ANDROID_SECONDARY',
   'HDMI',
   'USB',
   'NETWORK',
 ] as const;
 
-type DisplayLaunchMode = 'HDMI' | 'USB' | 'NETWORK';
+type DisplayLaunchMode = 'ANDROID_SECONDARY' | 'HDMI' | 'USB' | 'NETWORK';
 
 export interface DisplayLaunchResult {
   opened: boolean;
@@ -36,7 +37,7 @@ const DEFAULT_DISPLAY_CONFIG: CustomerDisplayConfig = {
   showItemImages: true,
   showQrPayment: true,
   layout: 'SPLIT',
-  connectionType: 'HDMI',
+  connectionType: 'ANDROID_SECONDARY',
   ipAddress: '',
   ads: [],
 };
@@ -47,6 +48,8 @@ export const normalizeCustomerDisplayConnectionType = (
   switch ((value || '').toUpperCase()) {
     case 'USB':
       return 'USB';
+    case 'ANDROID_SECONDARY':
+      return 'ANDROID_SECONDARY';
     case 'NETWORK':
       return 'NETWORK';
     case 'HDMI':
@@ -80,10 +83,49 @@ export const buildCustomerDisplayUrl = (config: CustomerDisplayConfig): string =
     return buildNetworkVisorUrl(normalized.ipAddress);
   }
 
-  const path = window.location.pathname || '/';
-  const basePath = path === '/' ? '' : path.replace(/\/+$/, '');
-  return `${basePath || ''}/?${DISPLAY_QUERY_PARAM}`;
+  const url = new URL(window.location.pathname || '/', window.location.origin);
+  url.search = '';
+  url.searchParams.set('view', 'VISOR');
+  return url.toString();
 };
+
+interface NativeCustomerDisplayBridge {
+  launch(payload: string): string;
+  dismiss(payload?: string): string;
+  probe(payload?: string): string;
+}
+
+interface NativeCustomerDisplayShim {
+  platform: 'android';
+  launch: (payload: {
+    mode: DisplayLaunchMode;
+    url: string;
+    welcomeMessage?: string;
+  }) => Promise<{
+    success: boolean;
+    opened?: boolean;
+    mode?: DisplayLaunchMode;
+    usedSecondScreen?: boolean;
+    message?: string;
+    displayName?: string;
+  }>;
+  dismiss: () => Promise<{ success: boolean; message?: string }>;
+  probe: () => Promise<{ success: boolean; displays?: Array<Record<string, unknown>>; message?: string }>;
+}
+
+declare global {
+  interface Window {
+    AndroidCustomerDisplay?: NativeCustomerDisplayBridge;
+    ClicPOSCustomerDisplay?: NativeCustomerDisplayShim;
+  }
+}
+
+const isNativeAndroidDisplayMode = (mode: DisplayLaunchMode) => mode !== 'NETWORK';
+
+const supportsNativeAndroidCustomerDisplay = () =>
+  typeof window !== 'undefined'
+  && isAndroidRuntime()
+  && typeof window.ClicPOSCustomerDisplay?.launch === 'function';
 
 export const detectSecondaryDisplayPlacement = async (): Promise<DisplayPlacement | null> => {
   if (typeof window === 'undefined') return null;
@@ -164,6 +206,33 @@ export const launchCustomerDisplay = async (
   const normalized = normalizeCustomerDisplayConfig(config);
   const mode = normalizeCustomerDisplayConnectionType(normalized.connectionType);
   const url = buildCustomerDisplayUrl(normalized);
+
+  if (supportsNativeAndroidCustomerDisplay() && isNativeAndroidDisplayMode(mode)) {
+    const response = await window.ClicPOSCustomerDisplay!.launch({
+      mode,
+      url,
+      welcomeMessage: normalized.welcomeMessage,
+    });
+
+    if (!response?.success || !response?.opened) {
+      throw new Error(
+        response?.message
+          || 'No detectamos una segunda pantalla Android disponible para el visor del cliente.',
+      );
+    }
+
+    if (options?.contextKey) {
+      sessionStorage.setItem(`clic_pos_customer_display_${options.contextKey}_${mode}`, String(Date.now()));
+    }
+
+    return {
+      opened: true,
+      mode,
+      url,
+      usedSecondScreen: response.usedSecondScreen !== false,
+    };
+  }
+
   const placement = mode === 'NETWORK' ? null : await detectSecondaryDisplayPlacement();
   if (mode !== 'NETWORK' && !placement) {
     throw new Error(
