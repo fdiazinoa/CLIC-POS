@@ -525,12 +525,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const canChangeTariff = hasPermission('POS_CHANGE_TARIFF');
 
    const usesSupermarketLayout = useMemo(
-      () => Boolean(!isMobile && isRetailMode),
-      [isMobile, isRetailMode]
+      () => Boolean(isRetailMode),
+      [isRetailMode]
    );
 
    const usesExpandedCatalog = useMemo(
-      () => Boolean(!isMobile && (isRetailMode || activeTerminalConfig?.operational?.expandTicket)),
+      () => Boolean(isRetailMode || (!isMobile && activeTerminalConfig?.operational?.expandTicket)),
       [activeTerminalConfig?.operational?.expandTicket, isMobile, isRetailMode]
    );
 
