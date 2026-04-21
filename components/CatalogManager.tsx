@@ -22,7 +22,7 @@ import { permissionService } from '../services/sync/PermissionService';
 import { inventorySyncService } from '../services/sync/InventorySyncService';
 import ClassificationManager from './ClassificationManager';
 import ErrorBoundary from './ErrorBoundary';
-import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
+import { canonicalizeWarehouseRecord, getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
 import {
    extractWarehouseStockBalances,
    productIdMatchesInventoryReference,
@@ -119,13 +119,14 @@ const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
 };
 
 // --- SUB-COMPONENT: STOCK ROW ---
-const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks: ProductStock[]; allProducts: Product[] }> = ({ product, warehouseId, productStocks, allProducts }) => {
+const StockRow: React.FC<{ product: Product; warehouseId: string; warehouses: Warehouse[]; productStocks: ProductStock[]; allProducts: Product[] }> = ({ product, warehouseId, warehouses, productStocks, allProducts }) => {
    const [isExpanded, setIsExpanded] = useState(false);
    const hasVariants = product.variants && product.variants.length > 0;
 
    // Get stock from detailed collection
    const detailedStock = resolveInventoryProductStockRow(product, warehouseId, productStocks, allProducts);
-   const warehouseStock = detailedStock ? detailedStock.quantity : getWarehouseScopedNumber(product.stockBalances || {}, warehouseId, [], 0);
+   const sourceStock = getWarehouseScopedNumber(product.stockBalances || {}, warehouseId, warehouses, Number.NaN);
+   const warehouseStock = Number.isFinite(sourceStock) ? sourceStock : (detailedStock ? detailedStock.quantity : 0);
 
    const getStatusBadge = (qty: number) => {
       if (qty > 10) return <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full"><CheckCircle2 size={12} /> Disponible</span>;
@@ -216,7 +217,8 @@ const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Pro
 
    const totalValue = warehouseProducts.reduce((acc, p) => {
       const detailedStock = resolveInventoryProductStockRow(p, warehouse.id, productStocks, allProducts);
-      const qty = detailedStock ? detailedStock.quantity : getWarehouseScopedNumber(p.stockBalances || {}, warehouse.id, [warehouse], 0);
+      const sourceStock = getWarehouseScopedNumber(p.stockBalances || {}, warehouse.id, [warehouse], Number.NaN);
+      const qty = Number.isFinite(sourceStock) ? sourceStock : (detailedStock ? detailedStock.quantity : 0);
       return acc + (qty * (p.cost || 0));
    }, 0);
    const itemCount = warehouseProducts.length;
@@ -258,7 +260,7 @@ const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Pro
                         <tr><th className="p-4 w-[40%]">Artículo</th><th className="p-4">Variante / Atributo</th><th className="p-4 text-center">Stock Físico</th><th className="p-4 text-right">Estado</th></tr>
                      </thead>
                      <tbody className="divide-y divide-gray-100">
-                        {warehouseProducts.map(product => <StockRow key={product.id} product={product} warehouseId={warehouse.id} productStocks={productStocks} allProducts={allProducts} />)}
+                        {warehouseProducts.map(product => <StockRow key={product.id} product={product} warehouseId={warehouse.id} warehouses={[warehouse]} productStocks={productStocks} allProducts={allProducts} />)}
                      </tbody>
                   </table>
                </div>
@@ -402,20 +404,23 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          const lists = (await db.get('watchlists') || []) as Watchlist[];
          setWatchlists((Array.isArray(lists) ? lists.filter((entry): entry is Watchlist => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []));
       };
-      const loadStocks = async () => {
-         const stocks = (await db.get('productStocks') || []) as ProductStock[];
-         if (stocks.length > 0) {
-            setProductStocks(stocks);
-            return;
+      const buildOperationalStocks = async (existingStocks: ProductStock[] = []) => {
+         const rawWarehouses = await db.get('warehouses');
+         const runtimeWarehouses = (Array.isArray(rawWarehouses) ? rawWarehouses : []) as Warehouse[];
+         const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
+         const nextStocksByKey = new Map<string, ProductStock>();
+
+         for (const stock of existingStocks) {
+            const productId = String(stock?.productId || '').trim();
+            const warehouseId = String(stock?.warehouseId || '').trim();
+            if (!productId || !warehouseId) continue;
+            nextStocksByKey.set(`${productId}::${warehouseId}`, stock);
          }
 
-         if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
-            const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
-            const nextStocks: ProductStock[] = [];
-
-            for (const product of products) {
-               const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, product, products));
-               const stockBalances = extractWarehouseStockBalances(
+         for (const product of products) {
+            const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, product, products));
+            const stockBalances = canonicalizeWarehouseRecord(
+               extractWarehouseStockBalances(
                   matchedBalances,
                   ...matchedBalances.flatMap((entry: any) => [
                      entry?.stockBalances,
@@ -426,27 +431,34 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                      entry?.metadata?.stockBalances,
                      entry?.metadata?.stock_balances,
                   ]),
-               );
+               ),
+               runtimeWarehouses,
+            );
 
-               for (const [warehouseId, quantity] of Object.entries(stockBalances)) {
-                  nextStocks.push({
-                     id: `${product.id}_${warehouseId}`,
-                     productId: product.id,
-                     warehouseId,
-                     quantity: Number(quantity || 0),
-                     qtyPhysical: Number(quantity || 0),
-                     qtyCommitted: 0,
-                     qtyAvailable: Number(quantity || 0),
-                     updatedAt: new Date().toISOString(),
-                  });
-               }
+            for (const [warehouseId, quantity] of Object.entries(stockBalances)) {
+               nextStocksByKey.set(`${product.id}::${warehouseId}`, {
+                  id: `${product.id}_${warehouseId}`,
+                  productId: product.id,
+                  warehouseId,
+                  quantity: Number(quantity || 0),
+                  qtyPhysical: Number(quantity || 0),
+                  qtyCommitted: 0,
+                  qtyAvailable: Number(quantity || 0),
+                  updatedAt: new Date().toISOString(),
+               });
             }
+         }
 
-            setProductStocks(nextStocks);
+         return Array.from(nextStocksByKey.values());
+      };
+      const loadStocks = async () => {
+         const stocks = (await db.get('productStocks') || []) as ProductStock[];
+         if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
+            setProductStocks(await buildOperationalStocks(stocks));
             return;
          }
 
-         setProductStocks([]);
+         setProductStocks(stocks);
       };
       const loadCatalogRuntime = async () => {
          const [rawProducts, rawConfig, rawWarehouses, rawTransactions] = await Promise.all([
@@ -483,49 +495,12 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
       const handleStockUpdate = async () => {
          const stocks = (await db.get('productStocks') || []) as ProductStock[];
-         if (stocks.length > 0) {
-            setProductStocks(stocks);
-            return;
-         }
-
          if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
-            const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
-            const nextStocks: ProductStock[] = [];
-
-            for (const product of products) {
-               const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, product, products));
-               const stockBalances = extractWarehouseStockBalances(
-                  matchedBalances,
-                  ...matchedBalances.flatMap((entry: any) => [
-                     entry?.stockBalances,
-                     entry?.stock_balances,
-                     entry?.balances,
-                     entry?.warehouseBalances,
-                     entry?.warehouse_balances,
-                     entry?.metadata?.stockBalances,
-                     entry?.metadata?.stock_balances,
-                  ]),
-               );
-
-               for (const [warehouseId, quantity] of Object.entries(stockBalances)) {
-                  nextStocks.push({
-                     id: `${product.id}_${warehouseId}`,
-                     productId: product.id,
-                     warehouseId,
-                     quantity: Number(quantity || 0),
-                     qtyPhysical: Number(quantity || 0),
-                     qtyCommitted: 0,
-                     qtyAvailable: Number(quantity || 0),
-                     updatedAt: new Date().toISOString(),
-                  });
-               }
-            }
-
-            setProductStocks(nextStocks);
+            setProductStocks(await buildOperationalStocks(stocks));
             return;
          }
 
-         setProductStocks([]);
+         setProductStocks(stocks);
       };
       const handleConfigUpdate = async () => {
          const rawConfig = await db.get('config');

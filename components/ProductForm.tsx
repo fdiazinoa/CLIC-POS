@@ -376,11 +376,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     const handleStockSync = async () => {
       const allStocks = await db.get('productStocks') as ProductStock[] || [];
       const myStocks = allStocks.filter((stock) => linkedProductIds.includes(String(stock?.productId || '').trim()));
-      if (myStocks.length > 0) {
-        setRemoteStockBalances({});
-        setDetailedStocks(myStocks);
-        return;
-      }
+      setDetailedStocks(myStocks);
 
       if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
         const operationalProductId = resolveOperationalProductId(formData) || formData.id;
@@ -403,23 +399,34 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
           warehouses,
         );
         setRemoteStockBalances(nextRemoteStockBalances);
-
-        const synthesizedStocks: ProductStock[] = Object.entries(nextRemoteStockBalances).map(([warehouseId, quantity]) => ({
-          id: `${formData.id}_${warehouseId}`,
-          productId: formData.id,
-          warehouseId,
-          quantity: Number(quantity || 0),
-          qtyPhysical: Number(quantity || 0),
-          qtyCommitted: 0,
-          qtyAvailable: Number(quantity || 0),
-          updatedAt: new Date().toISOString(),
-        }));
-        setDetailedStocks(synthesizedStocks);
+        if (Object.keys(nextRemoteStockBalances).length > 0) {
+          const normalizedLocalStocks = myStocks.filter((stock) =>
+            !warehouses.some((warehouse) => resolveWarehouseId(stock?.warehouseId, warehouses) === warehouse.id)
+          );
+          const synthesizedStocks: ProductStock[] = warehouses.map((warehouse) => {
+            const quantity = getWarehouseScopedNumber(nextRemoteStockBalances, warehouse.id, warehouses, 0);
+            return {
+              id: `${formData.id}_${warehouse.id}`,
+              productId: formData.id,
+              warehouseId: warehouse.id,
+              quantity,
+              qtyPhysical: quantity,
+              qtyCommitted: 0,
+              qtyAvailable: quantity,
+              updatedAt: new Date().toISOString(),
+            };
+          });
+          setDetailedStocks([...normalizedLocalStocks, ...synthesizedStocks]);
+        } else if (myStocks.length === 0) {
+          setDetailedStocks([]);
+        }
         return;
       }
 
       setRemoteStockBalances({});
-      setDetailedStocks([]);
+      if (myStocks.length === 0) {
+        setDetailedStocks([]);
+      }
     };
     window.addEventListener('productStocksUpdated', handleStockSync);
 
@@ -1674,9 +1681,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                 <div className="grid grid-cols-1 gap-4">
                   {warehouses.map(wh => {
                     const detailedStock = resolveInventoryProductStockRow(formData, wh.id, detailedStocks, allProducts);
-                    const stock = detailedStock
-                      ? detailedStock.quantity
-                      : getWarehouseScopedNumber(stockBalanceSource, wh.id, warehouses, 0);
+                    const sourceStock = getWarehouseScopedNumber(stockBalanceSource, wh.id, warehouses, Number.NaN);
+                    const stock = Number.isFinite(sourceStock)
+                      ? sourceStock
+                      : (detailedStock ? detailedStock.quantity : 0);
                     const isActive = normalizedActiveWarehouseIds.includes(wh.id);
 
                     return (
