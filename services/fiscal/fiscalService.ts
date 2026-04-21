@@ -93,22 +93,6 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
     }
 };
 
-const isLocalFiscalHost = (hostname?: string | null): boolean => {
-    const normalized = String(hostname || '').trim().toLowerCase();
-    if (!normalized) return false;
-    if (normalized === 'localhost' || normalized === '127.0.0.1') return true;
-    if (normalized.startsWith('10.')) return true;
-    if (normalized.startsWith('192.168.')) return true;
-
-    const match172 = normalized.match(/^172\.(\d{1,3})\./);
-    if (match172) {
-        const segment = Number(match172[1]);
-        if (segment >= 16 && segment <= 31) return true;
-    }
-
-    return false;
-};
-
 const expandAndroidBaseCandidates = (base?: string | null): string[] => {
     const normalized = normalizeBaseUrl(base);
     if (!normalized) return [];
@@ -116,10 +100,7 @@ const expandAndroidBaseCandidates = (base?: string | null): string[] => {
     try {
         const url = new URL(normalized);
         const variants = [normalized];
-        const effectivePort = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
-        const shouldAddHttpFallback =
-            url.protocol === 'https:'
-            && (isLocalFiscalHost(url.hostname) || effectivePort === 3001);
+        const shouldAddHttpFallback = url.protocol === 'https:';
 
         if (shouldAddHttpFallback) {
             const httpUrl = new URL(normalized);
