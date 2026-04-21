@@ -93,6 +93,42 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
     }
 };
 
+const isLocalFiscalHost = (hostname?: string | null): boolean => {
+    const normalized = String(hostname || '').trim().toLowerCase();
+    if (!normalized) return false;
+    if (normalized === 'localhost' || normalized === '127.0.0.1') return true;
+    if (normalized.startsWith('10.')) return true;
+    if (normalized.startsWith('192.168.')) return true;
+
+    const match172 = normalized.match(/^172\.(\d{1,3})\./);
+    if (match172) {
+        const segment = Number(match172[1]);
+        if (segment >= 16 && segment <= 31) return true;
+    }
+
+    return false;
+};
+
+const expandAndroidBaseCandidates = (base?: string | null): string[] => {
+    const normalized = normalizeBaseUrl(base);
+    if (!normalized) return [];
+
+    try {
+        const url = new URL(normalized);
+        const variants = [normalized];
+
+        if (url.protocol === 'https:' && isLocalFiscalHost(url.hostname)) {
+            const httpUrl = new URL(normalized);
+            httpUrl.protocol = 'http:';
+            variants.push(httpUrl.toString().replace(/\/+$/, ''));
+        }
+
+        return uniqueStrings(variants);
+    } catch {
+        return normalized ? [normalized] : [];
+    }
+};
+
 const uniqueStrings = (values: Array<string | null | undefined>) =>
     Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
 
@@ -283,14 +319,14 @@ const buildFiscalEndpointCandidates = async (path: string): Promise<string[]> =>
 
     if (isNativeAndroidRuntime()) {
         return uniqueStrings([
-            pinnedFiscalBase ? `${pinnedFiscalBase}${fiscalPath}` : null,
-            persistedMasterBase ? `${persistedMasterBase}${fiscalPath}` : null,
-            cloudMasterBase ? `${cloudMasterBase}${fiscalPath}` : null,
-            runtimeMasterBase ? `${runtimeMasterBase}${fiscalPath}` : null,
+            ...expandAndroidBaseCandidates(pinnedFiscalBase).map((base) => `${base}${fiscalPath}`),
+            ...expandAndroidBaseCandidates(persistedMasterBase).map((base) => `${base}${fiscalPath}`),
+            ...expandAndroidBaseCandidates(cloudMasterBase).map((base) => `${base}${fiscalPath}`),
+            ...expandAndroidBaseCandidates(runtimeMasterBase).map((base) => `${base}${fiscalPath}`),
             `${buildMasterUrlFromHost('127.0.0.1')}${fiscalPath}`,
             `${buildMasterUrlFromHost('10.0.2.2')}${fiscalPath}`,
             `${buildMasterUrlFromHost('10.0.3.2')}${fiscalPath}`,
-            persistedErpBase ? `${persistedErpBase}${fiscalPath}` : null,
+            ...expandAndroidBaseCandidates(persistedErpBase).map((base) => `${base}${fiscalPath}`),
         ]);
     }
 
