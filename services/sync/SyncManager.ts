@@ -1159,9 +1159,10 @@ class SyncManager {
                 .filter((scope) => manifest.changed?.[scope]);
             const changedBlocks = Array.isArray(manifest.changed_blocks) ? manifest.changed_blocks : [];
             const inventoryChanged = Boolean(manifest.changed.inventory) || changedBlocks.includes('inventory');
+            const bootstrapInventoryOnStartup = Boolean(options?.markStartupCompleted && manifest.cursor_map.inventory);
             const terminalChanged = Boolean(manifest.changed.terminal);
 
-            if (!terminalChanged && changedMasterScopes.length === 0 && !inventoryChanged) {
+            if (!terminalChanged && changedMasterScopes.length === 0 && !inventoryChanged && !bootstrapInventoryOnStartup) {
                 this.persistTerminalCursorMap(localTerminalId, manifest.cursor_map);
                 if (options?.markStartupCompleted) {
                     this.markStartupManifestSyncCompleted(localTerminalId);
@@ -1178,8 +1179,11 @@ class SyncManager {
                 });
             }
 
-            if (inventoryChanged) {
-                const inventoryPayload = await this.fetchTerminalInventoryBlock(context, storedCursorMap.inventory || null);
+            if (inventoryChanged || bootstrapInventoryOnStartup) {
+                const inventoryPayload = await this.fetchTerminalInventoryBlock(
+                    context,
+                    inventoryChanged ? (storedCursorMap.inventory || null) : null,
+                );
                 if (inventoryPayload?.cursor) {
                     manifest.cursor_map.inventory = inventoryPayload.cursor;
                 }
