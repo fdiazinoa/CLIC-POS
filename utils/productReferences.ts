@@ -126,6 +126,8 @@ export const productReferenceCandidates = (
 
   return uniqueValues([
     trimValue(record.id),
+    trimValue(record.itemId),
+    trimValue(record.item_id),
     trimValue(record.productId),
     trimValue(record.product_id),
     trimValue(record.sourceProductId),
@@ -139,6 +141,8 @@ export const productReferenceCandidates = (
     trimValue(record.item_code),
     trimValue(record.code),
     trimValue(nestedProduct.id),
+    trimValue(nestedProduct.itemId),
+    trimValue(nestedProduct.item_id),
     trimValue(nestedProduct.productId),
     trimValue(nestedProduct.product_id),
     trimValue(nestedProduct.sourceProductId),
@@ -163,6 +167,8 @@ export const productIdentityCandidates = (
 
   return uniqueValues([
     trimValue(record.id),
+    trimValue(record.itemId),
+    trimValue(record.item_id),
     trimValue(record.productId),
     trimValue(record.product_id),
     trimValue(record.sourceProductId),
@@ -172,6 +178,8 @@ export const productIdentityCandidates = (
     trimValue(record.sourceItemId),
     trimValue(record.source_item_id),
     trimValue(nestedProduct.id),
+    trimValue(nestedProduct.itemId),
+    trimValue(nestedProduct.item_id),
     trimValue(nestedProduct.productId),
     trimValue(nestedProduct.product_id),
     trimValue(nestedProduct.sourceProductId),
@@ -191,6 +199,8 @@ export const resolveOperationalProductId = (
   const nestedProduct = asRecord(record.product);
 
   return uniqueValues([
+    trimValue(record.itemId),
+    trimValue(record.item_id),
     trimValue(record.sourceProductId),
     trimValue(record.source_product_id),
     trimValue(record.erpProductId),
@@ -199,6 +209,8 @@ export const resolveOperationalProductId = (
     trimValue(record.source_item_id),
     trimValue(record.productId),
     trimValue(record.product_id),
+    trimValue(nestedProduct.itemId),
+    trimValue(nestedProduct.item_id),
     trimValue(nestedProduct.sourceProductId),
     trimValue(nestedProduct.source_product_id),
     trimValue(nestedProduct.erpProductId),
