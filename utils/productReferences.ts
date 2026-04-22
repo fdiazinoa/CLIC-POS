@@ -33,12 +33,12 @@ const quantityFromValue = (value: unknown): number | null => {
 };
 
 const WAREHOUSE_ID_KEYS = [
-  'warehouseId',
-  'warehouse_id',
-  'id',
   'code',
   'warehouseCode',
   'warehouse_code',
+  'warehouseId',
+  'warehouse_id',
+  'id',
   'storeId',
   'store_id',
 ];
@@ -52,18 +52,25 @@ const STOCK_QTY_KEYS = [
   'stock',
   'onHand',
   'on_hand',
+  'qtyOnHand',
+  'qty_on_hand',
   'physical',
   'available',
   'qtyAvailable',
   'qty_available',
 ];
 
-const extractWarehouseIdFromRow = (row: Record<string, unknown>): string => {
+const extractWarehouseIdsFromRow = (row: Record<string, unknown>): string[] => {
+  const values: string[] = [];
   for (const key of WAREHOUSE_ID_KEYS) {
     const value = trimValue(row[key]);
-    if (value) return value;
+    if (value) values.push(value);
   }
-  return '';
+  return uniqueValues(values);
+};
+
+const extractWarehouseIdFromRow = (row: Record<string, unknown>): string => {
+  return extractWarehouseIdsFromRow(row)[0] || '';
 };
 
 const extractQuantityFromRow = (row: Record<string, unknown>): number | null => {
@@ -79,10 +86,12 @@ const normalizeStockBalanceSource = (source: unknown): Record<string, number> =>
 
   for (const row of asArray(source)) {
     const record = asRecord(row);
-    const warehouseId = extractWarehouseIdFromRow(record);
     const quantity = extractQuantityFromRow(record);
-    if (warehouseId && quantity != null) {
-      normalized[warehouseId] = quantity;
+    const warehouseIds = extractWarehouseIdsFromRow(record);
+    if (warehouseIds.length > 0 && quantity != null) {
+      for (const warehouseId of warehouseIds) {
+        normalized[warehouseId] = quantity;
+      }
     }
   }
   if (Object.keys(normalized).length > 0) {
