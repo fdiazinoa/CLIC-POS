@@ -110,6 +110,24 @@ class SyncManager {
 
     public isInitialized: boolean = false;
 
+    private resolveRuntimeWarehousesFromConfig(config: BusinessConfig | null | undefined, terminalId: string): Warehouse[] {
+        if (!config || !Array.isArray(config.terminals)) {
+            return [];
+        }
+
+        const terminal = config.terminals.find((candidate) => candidate?.id === terminalId) || config.terminals[0];
+        const warehouses = Array.isArray(terminal?.config?.inventoryScope?.warehouses)
+            ? terminal.config.inventoryScope.warehouses
+            : [];
+
+        return warehouses
+            .filter((warehouse) => warehouse && typeof warehouse === 'object')
+            .map((warehouse) => ({
+                ...warehouse,
+                erpWarehouseId: String((warehouse as any).erpWarehouseId || (warehouse as any).sourceWarehouseId || (warehouse as any).inventoryLocalId || warehouse.id || '').trim() || String(warehouse.id || '').trim(),
+            })) as Warehouse[];
+    }
+
     private isImageBackedCollection(collection: SyncableCollection): collection is ImageBackedCollection {
         return collection === 'customers' || collection === 'suppliers';
     }
@@ -1888,6 +1906,7 @@ class SyncManager {
 
         const localProducts = ((await db.get('products')) as Product[]) || [];
         const nextConfig = this.reconcileCatalogProductIds(applied.config, localProducts);
+        const nextRuntimeWarehouses = this.resolveRuntimeWarehousesFromConfig(nextConfig, applied.terminalId);
         const operationalDocumentState = extractTerminalOperationalDocumentState(nextConfig, applied.terminalId);
         const changed =
             JSON.stringify(this.sanitizeConfig(baseConfig)) !==
@@ -1895,6 +1914,17 @@ class SyncManager {
 
         if (options?.persist !== false && changed) {
             await db.save('config', nextConfig);
+        }
+
+        if (nextRuntimeWarehouses.length > 0) {
+            const persistedWarehouses = ((await db.get('warehouses')) as Warehouse[]) || [];
+            const persistedJson = JSON.stringify(persistedWarehouses);
+            const nextJson = JSON.stringify(nextRuntimeWarehouses);
+
+            if (persistedJson !== nextJson) {
+                await db.save('warehouses', nextRuntimeWarehouses);
+                window.dispatchEvent(new CustomEvent('warehousesUpdated'));
+            }
         }
 
         await db.rehydrateOperationalDocumentState(
