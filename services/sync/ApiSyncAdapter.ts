@@ -229,6 +229,17 @@ class ApiSyncAdapter {
         }
     }
 
+    private async fetchWithoutCircuitBreaker(url: string, options: RequestInit = {}, timeoutMs = 5000): Promise<Response> {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            return await fetch(url, { ...options, signal: controller.signal });
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    }
+
     /**
      * Initialize the adapter with configuration
      */
@@ -1623,7 +1634,7 @@ class ApiSyncAdapter {
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
 
             const endpoint = `${context.syncApiBase}/terminals/${encodeURIComponent(context.terminalId)}/inventory?${params.toString()}`;
-            const response = await this.fetchWithRetry(endpoint, {
+            const response = await this.fetchWithoutCircuitBreaker(endpoint, {
                 headers: {
                     Accept: 'application/json',
                 },
