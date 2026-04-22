@@ -203,7 +203,20 @@ const normalizeWarehouse = (raw: unknown, index: number): Warehouse | null => {
     isMain: asBoolean(data.isMain ?? data.is_main, index === 0),
     storeId: asString(data.storeId || data.store_id) || undefined,
     inventoryLocalId: asString(data.inventoryLocalId || data.inventory_local_id || data.localWarehouseId || data.local_warehouse_id) || undefined,
-    erpWarehouseId: asString(data.erpWarehouseId || data.erp_warehouse_id || data.sourceWarehouseId || data.source_warehouse_id) || undefined,
+    erpWarehouseId:
+      asString(
+        data.erpWarehouseId
+        || data.erp_warehouse_id
+        || data.sourceWarehouseId
+        || data.source_warehouse_id
+        || data.warehouseId
+        || data.warehouse_id
+        || data.inventoryLocalId
+        || data.inventory_local_id
+        || data.uid
+        || data.uuid
+        || id
+      ) || id,
     sourceWarehouseId: asString(data.sourceWarehouseId || data.source_warehouse_id || data.erpWarehouseId || data.erp_warehouse_id) || undefined,
     uid: asString(data.uid || data.uuid) || undefined,
   };

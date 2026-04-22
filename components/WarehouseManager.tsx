@@ -278,8 +278,9 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
    };
 
    const handleCreateWarehouse = () => {
+      const warehouseId = `wh_${Date.now()}`;
       setEditingWarehouse({
-         id: `wh_${Date.now()}`,
+         id: warehouseId,
          code: '',
          name: '',
          type: 'PHYSICAL',
@@ -287,7 +288,8 @@ const WarehouseManager: React.FC<WarehouseManagerProps> = ({
          allowPosSale: true,
          allowNegativeStock: false,
          isMain: false,
-         storeId: 'S1'
+         storeId: 'S1',
+         erpWarehouseId: warehouseId
       });
    };
 

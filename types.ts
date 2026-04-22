@@ -1496,7 +1496,7 @@ export interface Warehouse {
   storeId?: string;
   warehouseId?: string;
   inventoryLocalId?: string;
-  erpWarehouseId?: string;
+  erpWarehouseId: string;
   sourceWarehouseId?: string;
   uid?: string;
   label?: string;

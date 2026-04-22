@@ -106,6 +106,7 @@ const DEFAULT_WAREHOUSE: Warehouse = {
   allowPosSale: true,
   allowNegativeStock: false,
   isMain: true,
+  erpWarehouseId: 'wh-1',
 };
 
 const SUGGESTED_DOCUMENT_SERIES: DocumentSeries[] = [
@@ -802,20 +803,22 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
           <p className="text-gray-500">Define almacenes y selecciona el principal.</p>
         </div>
         <button
-          onClick={() =>
+          onClick={() => {
+            const warehouseId = makeId('wh');
             setWarehouses(prev => [
               ...prev,
               {
-                id: makeId('wh'),
+                id: warehouseId,
                 code: '',
                 name: 'Nuevo almacén',
                 type: 'PHYSICAL',
                 address: '',
                 allowPosSale: true,
-                allowNegativeStock: false
+                allowNegativeStock: false,
+                erpWarehouseId: warehouseId,
               }
-            ])
-          }
+            ]);
+          }}
           className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold"
         >
           + Agregar almacén

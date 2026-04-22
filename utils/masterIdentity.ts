@@ -66,6 +66,28 @@ const buildWarehouseTokens = (warehouse?: Partial<Warehouse> | null): Set<string
   return tokens;
 };
 
+export const resolveWarehouseErpId = (warehouse?: Partial<Warehouse> | null): string => {
+  const candidates = [
+    warehouse?.erpWarehouseId,
+    (warehouse as any)?.erp_warehouse_id,
+    warehouse?.sourceWarehouseId,
+    (warehouse as any)?.source_warehouse_id,
+    warehouse?.inventoryLocalId,
+    (warehouse as any)?.inventory_local_id,
+    warehouse?.warehouseId,
+    (warehouse as any)?.warehouse_id,
+    warehouse?.uid,
+    warehouse?.id,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = typeof candidate === 'string' ? candidate.trim() : '';
+    if (normalized) return normalized;
+  }
+
+  return '';
+};
+
 const readEntryIdentifier = (entry: unknown, keys: string[]): string => {
   if (typeof entry === 'string') return entry.trim();
   if (!entry || typeof entry !== 'object') return '';

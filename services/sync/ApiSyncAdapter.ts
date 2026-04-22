@@ -81,6 +81,7 @@ class ApiSyncAdapter {
     private isOnline: boolean = true;
     private authInFlight: Promise<void> | null = null;
     private erpAuthInFlight: Promise<string> | null = null;
+    private lastOperationalStockBalanceMaps = new Map<string, Record<string, number>>();
     private onlineListener: (() => void) | null = null;
     private offlineListener: (() => void) | null = null;
 
@@ -400,6 +401,41 @@ class ApiSyncAdapter {
         ];
 
         return candidateValues.some((value) => String(value || '').trim() === target);
+    }
+
+    private buildOperationalStockBalanceCacheKey(productId?: string): string {
+        return String(productId || '__ALL__').trim() || '__ALL__';
+    }
+
+    private buildOperationalStockBalanceMap(
+        balances: Array<TerminalInventoryBalancePayload | Record<string, unknown>> = []
+    ): Record<string, number> {
+        const normalized: Record<string, number> = {};
+
+        for (const balance of balances) {
+            const warehouseId = String(
+                (balance as any)?.warehouse_id
+                || (balance as any)?.warehouseId
+                || (balance as any)?.id
+                || ''
+            ).trim();
+            const qtyOnHand = Number(
+                (balance as any)?.qty_on_hand
+                ?? (balance as any)?.qtyOnHand
+                ?? (balance as any)?.quantity
+                ?? (balance as any)?.qty
+                ?? (balance as any)?.stock
+                ?? (balance as any)?.balance
+            );
+
+            if (!warehouseId || !Number.isFinite(qtyOnHand)) {
+                continue;
+            }
+
+            normalized[warehouseId] = qtyOnHand;
+        }
+
+        return normalized;
     }
 
     setOperationalTargetHint(input: { terminalId?: string | null; baseUrl?: string | null }) {
@@ -1650,6 +1686,81 @@ class ApiSyncAdapter {
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pulling operational stock balances:', error);
             return [];
+        }
+    }
+
+    async pullOperationalStockBalanceMap(productId?: string): Promise<Record<string, number>> {
+        const cacheKey = this.buildOperationalStockBalanceCacheKey(productId);
+        const previous = this.lastOperationalStockBalanceMaps.get(cacheKey) || {};
+
+        try {
+            if (!this.isUsingErpOperationalTarget()) {
+                const balances = await this.pullOperationalStockBalances(productId);
+                const nextMap = this.buildOperationalStockBalanceMap(balances);
+                if (Object.keys(nextMap).length > 0) {
+                    this.lastOperationalStockBalanceMaps.set(cacheKey, nextMap);
+                    return nextMap;
+                }
+                return previous;
+            }
+
+            const context = this.resolveOperationalInventoryContext();
+            if (!context.terminalId || !context.syncApiBase) {
+                console.error('❌ ApiSyncAdapter: Missing ERP inventory context', context);
+                return previous;
+            }
+
+            const params = new URLSearchParams();
+            if (context.tenantId) params.set('tenant_id', context.tenantId);
+            if (context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
+            if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
+
+            const endpoint = `${context.syncApiBase}/terminals/${encodeURIComponent(context.terminalId)}/inventory?${params.toString()}`;
+            const response = await this.fetchWithoutCircuitBreaker(endpoint, {
+                headers: {
+                    Accept: 'application/json',
+                },
+            });
+
+            if (!response.ok) {
+                const detail = await response.text().catch(() => '');
+                console.error('❌ ApiSyncAdapter: ERP inventory request failed', {
+                    endpoint,
+                    status: response.status,
+                    statusText: response.statusText,
+                    detail,
+                });
+                return previous;
+            }
+
+            const payload = await response.json();
+            const balances = Array.isArray(payload?.inventory?.balances)
+                ? payload.inventory.balances
+                : Array.isArray(payload?.data?.inventory?.balances)
+                    ? payload.data.inventory.balances
+                    : [];
+            const filteredBalances = balances.filter((balance: any) => this.matchesInventoryBalanceProduct(balance, productId));
+            const nextMap = this.buildOperationalStockBalanceMap(filteredBalances);
+
+            if (Object.keys(nextMap).length > 0) {
+                this.lastOperationalStockBalanceMaps.set(cacheKey, nextMap);
+                return nextMap;
+            }
+
+            console.error('❌ ApiSyncAdapter: ERP inventory payload parsed without balances', {
+                endpoint,
+                productId,
+                payload,
+            });
+            return previous;
+        } catch (error) {
+            console.error('❌ ApiSyncAdapter: Error pulling operational stock balance map:', {
+                productId,
+                error,
+                previous,
+            });
+            return previous;
         }
     }
 

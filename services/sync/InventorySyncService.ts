@@ -9,6 +9,12 @@ import { permissionService } from './PermissionService';
 import { InventoryLedgerEntry } from '../../types';
 
 class InventorySyncService {
+    private lastStockBalanceMaps = new Map<string, Record<string, number>>();
+
+    private buildStockBalanceCacheKey(productId?: string): string {
+        return String(productId || '__ALL__').trim() || '__ALL__';
+    }
+
     shouldReadInventoryFromOperationalSource(): boolean {
         return apiSyncAdapter.isUsingErpOperationalTarget();
     }
@@ -82,6 +88,47 @@ class InventorySyncService {
         } catch (error) {
             console.error(`❌ InventorySync: Error fetching stock balances${productId ? ` for ${productId}` : ''}:`, error);
             return [];
+        }
+    }
+
+    async fetchStockBalanceMapOnDemand(productId?: string): Promise<Record<string, number>> {
+        const cacheKey = this.buildStockBalanceCacheKey(productId);
+        const previous = this.lastStockBalanceMaps.get(cacheKey) || {};
+
+        try {
+            console.log(`🔍 InventorySync: Fetching stock balance map on-demand${productId ? ` for product ${productId}` : ''}`);
+            if (this.shouldReadInventoryFromOperationalSource()) {
+                const nextMap = await apiSyncAdapter.pullOperationalStockBalanceMap(productId);
+                if (Object.keys(nextMap).length > 0) {
+                    this.lastStockBalanceMaps.set(cacheKey, nextMap);
+                    return nextMap;
+                }
+                return previous;
+            }
+
+            const balances = await apiSyncAdapter.pullStockBalances();
+            const nextMap = balances.reduce((acc: Record<string, number>, entry: any) => {
+                const warehouseId = String(entry?.warehouse_id || entry?.warehouseId || '').trim();
+                const qtyOnHand = Number(entry?.qty_on_hand ?? entry?.qtyOnHand ?? entry?.quantity ?? entry?.qty ?? entry?.stock ?? entry?.balance);
+                if (warehouseId && Number.isFinite(qtyOnHand)) {
+                    acc[warehouseId] = qtyOnHand;
+                }
+                return acc;
+            }, {});
+
+            if (Object.keys(nextMap).length > 0) {
+                this.lastStockBalanceMaps.set(cacheKey, nextMap);
+                return nextMap;
+            }
+
+            return previous;
+        } catch (error) {
+            console.error(`❌ InventorySync: Error fetching stock balance map${productId ? ` for ${productId}` : ''}:`, {
+                productId,
+                error,
+                previous,
+            });
+            return previous;
         }
     }
 

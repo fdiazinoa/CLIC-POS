@@ -32,6 +32,7 @@ import {
   canonicalizeWarehouseRecord,
   getWarehouseScopedNumber,
   resolveProductActiveWarehouseIds,
+  resolveWarehouseErpId,
   resolveWarehouseId,
   tariffMatchesIdentifier,
 } from '../utils/masterIdentity';
@@ -93,6 +94,34 @@ const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
     .join('|');
 
   return balances || 'NO_STOCK';
+};
+
+const readNumericBalance = (record: Record<string, unknown> | null | undefined, key: string): number | undefined => {
+  const value = record && key ? record[key] : undefined;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+};
+
+const buildErpScopedStockBalanceMap = (
+  balances: Record<string, unknown> | null | undefined,
+  warehouses: Warehouse[]
+): Record<string, number> => {
+  const scoped: Record<string, number> = {};
+
+  for (const [rawWarehouseKey, rawValue] of Object.entries(balances || {})) {
+    const numeric = Number(rawValue);
+    if (!Number.isFinite(numeric)) continue;
+
+    const localWarehouse =
+      warehouses.find((warehouse) => warehouse.id === rawWarehouseKey)
+      || warehouses.find((warehouse) => resolveWarehouseId(rawWarehouseKey, warehouses) === warehouse.id);
+
+    const erpWarehouseId = localWarehouse ? resolveWarehouseErpId(localWarehouse) : rawWarehouseKey;
+    if (!erpWarehouseId) continue;
+    scoped[erpWarehouseId] = numeric;
+  }
+
+  return scoped;
 };
 
 const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], transfers = [], purchaseOrders = [], hasHistory = false, currentUser, roles = [], onSave, onClose, suppliers = [], seasons = [], initialTab = 'GENERAL', allProducts = [] }) => {
@@ -214,13 +243,21 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     () => resolveLinkedInventoryProductIds(formData, allProducts),
     [formData, allProducts]
   );
+  const erpScopedFormStockBalances = useMemo(
+    () => buildErpScopedStockBalanceMap(formData.stockBalances as Record<string, unknown>, warehouses),
+    [formData.stockBalances, warehouses]
+  );
   const stockBalanceSource = useMemo(() => {
     const linkedProductIdSet = new Set(linkedProductIds);
     const freshestLinkedProduct = allProducts.find((product) => linkedProductIdSet.has(String(product?.id || '').trim()));
+    const linkedProductStockBalances = buildErpScopedStockBalanceMap(
+      freshestLinkedProduct?.stockBalances as Record<string, unknown>,
+      warehouses
+    );
     return Object.keys(remoteStockBalances).length > 0
       ? remoteStockBalances
-      : (freshestLinkedProduct?.stockBalances || formData.stockBalances || {});
-  }, [linkedProductIds, allProducts, formData.stockBalances, remoteStockBalances]);
+      : (Object.keys(linkedProductStockBalances).length > 0 ? linkedProductStockBalances : erpScopedFormStockBalances);
+  }, [linkedProductIds, allProducts, erpScopedFormStockBalances, remoteStockBalances, warehouses]);
   const inventoryDebugPayload = useMemo(() => ({
     productId: formData.id,
     sourceItemId: (formData as any).sourceItemId || null,
@@ -233,18 +270,24 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     erpSyncTerminalId: localStorage.getItem('clic_erp_sync_terminal_id') || null,
     linkedProductIds,
     formStockBalances: formData.stockBalances || {},
+    erpScopedFormStockBalances,
     stockBalanceSource,
     remoteStockBalances,
     warehouses: warehouses.map((warehouse) => ({
       id: warehouse.id,
       code: warehouse.code,
       name: warehouse.name,
+      erpWarehouseId: warehouse.erpWarehouseId,
       label: (warehouse as any).label || null,
       warehouseId: (warehouse as any).warehouseId || null,
       inventoryLocalId: (warehouse as any).inventoryLocalId || null,
-      erpWarehouseId: (warehouse as any).erpWarehouseId || null,
       sourceWarehouseId: (warehouse as any).sourceWarehouseId || null,
-      lookupStock: getWarehouseScopedNumber(stockBalanceSource, warehouse.id, warehouses, Number.NaN),
+      lookupStock: (() => {
+        const erpWarehouseId = resolveWarehouseErpId(warehouse);
+        return remoteStockBalances[erpWarehouseId]
+          ?? erpScopedFormStockBalances[erpWarehouseId]
+          ?? Number.NaN;
+      })(),
     })),
     detailedStocks: detailedStocks.map((stock) => ({
       id: stock.id,
@@ -261,6 +304,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   }), [
     formData,
     linkedProductIds,
+    erpScopedFormStockBalances,
     stockBalanceSource,
     remoteStockBalances,
     warehouses,
@@ -399,26 +443,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
       if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
         const operationalProductId = resolveOperationalProductId(formData) || formData.id;
-        const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand(operationalProductId);
+        const nextRemoteStockBalances = await inventorySyncService.fetchStockBalanceMapOnDemand(operationalProductId);
         if (requestId !== stockSyncRequestIdRef.current) return;
-        const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, formData, allProducts));
-        const scopedBalances = matchedBalances.length === 0 ? remoteBalances : matchedBalances;
-        const nextRemoteStockBalances = canonicalizeWarehouseRecord(
-          extractWarehouseStockBalances(
-            scopedBalances,
-            ...scopedBalances.flatMap((entry: any) => [
-              entry?.stockBalances,
-              entry?.stock_balances,
-              entry?.balances,
-              entry?.warehouseBalances,
-              entry?.warehouse_balances,
-              entry?.metadata?.stockBalances,
-              entry?.metadata?.stock_balances,
-            ]),
-          ),
-          warehouses,
-        );
-
         const hasRemoteBalances = Object.keys(nextRemoteStockBalances).length > 0;
         setRemoteStockBalances((previous) => (hasRemoteBalances ? nextRemoteStockBalances : previous));
 
@@ -427,7 +453,11 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             !warehouses.some((warehouse) => resolveWarehouseId(stock?.warehouseId, warehouses) === warehouse.id)
           );
           const synthesizedStocks: ProductStock[] = warehouses.map((warehouse) => {
-            const quantity = getWarehouseScopedNumber(nextRemoteStockBalances, warehouse.id, warehouses, 0);
+            const erpWarehouseId = resolveWarehouseErpId(warehouse);
+            const quantity =
+              nextRemoteStockBalances[erpWarehouseId]
+              ?? erpScopedFormStockBalances[erpWarehouseId]
+              ?? 0;
             return {
               id: `${formData.id}_${warehouse.id}`,
               productId: formData.id,
@@ -461,7 +491,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       window.removeEventListener('transactionSynced', handleSync);
       window.removeEventListener('productStocksUpdated', handleStockSync);
     };
-  }, [formData.id, linkedProductIds, kardexWarehouse, kardexTerminal]);
+  }, [formData.id, linkedProductIds, kardexWarehouse, kardexTerminal, erpScopedFormStockBalances, warehouses]);
 
   // --- DYNAMIC LEDGER SUMMARY (For Cards & Table) ---
   const { entriesWithDynamicBalance, currentViewStock, currentViewCost } = useMemo(() => {
@@ -633,8 +663,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     setFormData({ ...formData, attributes: formData.attributes.filter(a => a.id !== id) });
   };
 
-  const updateStockBalance = (whId: string, value: number) => {
-    setFormData({ ...formData, stockBalances: { ...(formData.stockBalances || {}), [whId]: value } });
+  const updateStockBalance = (warehouseBalanceKey: string, value: number) => {
+    setFormData({ ...formData, stockBalances: { ...(formData.stockBalances || {}), [warehouseBalanceKey]: value } });
   };
 
   const imageTooHeavy = (bytes: number) => bytes > MAX_IMAGE_BYTES;
@@ -1704,10 +1734,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                 <div className="grid grid-cols-1 gap-4">
                   {warehouses.map(wh => {
                     const detailedStock = resolveInventoryProductStockRow(formData, wh.id, detailedStocks, allProducts);
-                    const sourceStock = getWarehouseScopedNumber(stockBalanceSource, wh.id, warehouses, Number.NaN);
-                    const stock = Number.isFinite(sourceStock)
-                      ? sourceStock
-                      : (detailedStock ? detailedStock.quantity : 0);
+                    const erpWarehouseId = resolveWarehouseErpId(wh);
+                    const finalStock =
+                      remoteStockBalances[erpWarehouseId]
+                      ?? erpScopedFormStockBalances[erpWarehouseId]
+                      ?? (detailedStock ? detailedStock.quantity : 0)
+                      ?? 0;
                     const isActive = normalizedActiveWarehouseIds.includes(wh.id);
 
                     return (
@@ -1725,8 +1757,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                         <div className="flex items-center gap-8">
                           <div className="text-center">
                             <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Estado</p>
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${stock > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                              {stock > 0 ? 'Con Stock' : 'Sin Stock'}
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${finalStock > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                              {finalStock > 0 ? 'Con Stock' : 'Sin Stock'}
                             </span>
                           </div>
                           <div className="text-right">
@@ -1735,8 +1767,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                               <input
                                 type="number"
                                 disabled={!isActive}
-                                value={stock}
-                                onChange={(e) => updateStockBalance(wh.id, parseFloat(e.target.value) || 0)}
+                                value={finalStock}
+                                onChange={(e) => updateStockBalance(erpWarehouseId || wh.id, parseFloat(e.target.value) || 0)}
                                 className="w-24 p-2 bg-gray-50 border border-gray-200 rounded-xl text-center font-black text-xl text-blue-600 outline-none focus:ring-2 focus:ring-blue-100 disabled:opacity-50"
                               />
                               <span className="text-xs font-bold text-gray-400">unidades</span>
