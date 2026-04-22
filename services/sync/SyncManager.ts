@@ -1402,7 +1402,7 @@ class SyncManager {
                 matchedBalances.reduce<Record<string, number>>((acc, entry) => {
                     const warehouseId = String(entry?.warehouse_id || '').trim();
                     if (!warehouseId) return acc;
-                    acc[warehouseId] = Number(entry?.qty_on_hand ?? 0);
+                    acc[warehouseId] = Number(acc[warehouseId] || 0) + Number(entry?.qty_on_hand ?? 0);
                     return acc;
                 }, {}),
                 runtimeWarehouses,
@@ -1428,10 +1428,17 @@ class SyncManager {
             for (const warehouseId of warehouseIds) {
                 const lookupKey = this.buildSnapshotProductStockLookupKey(nextProduct.id, warehouseId);
                 const existingStock = this.resolveExistingSnapshotProductStock(nextProduct.id, warehouseId, aliasProductIds, existingStocksByProductWarehouse);
-                const matchedBalance = matchedBalances.find((entry) => String(entry?.warehouse_id || '').trim() === warehouseId);
+                const matchedWarehouseBalances = matchedBalances.filter((entry) => String(entry?.warehouse_id || '').trim() === warehouseId);
+                const matchedBalance = matchedWarehouseBalances[matchedWarehouseBalances.length - 1];
                 const qtyPhysical = Number(warehouseBalanceMap?.[warehouseId] ?? 0);
-                const qtyCommitted = Number(matchedBalance?.qty_committed ?? existingStock?.qtyCommitted ?? 0);
-                const qtyReserved = Number(matchedBalance?.qty_reserved ?? 0);
+                const qtyCommitted = matchedWarehouseBalances.reduce((sum, entry) => {
+                    const nextValue = Number(entry?.qty_committed);
+                    return Number.isFinite(nextValue) ? sum + nextValue : sum;
+                }, 0) || Number(existingStock?.qtyCommitted ?? 0);
+                const qtyReserved = matchedWarehouseBalances.reduce((sum, entry) => {
+                    const nextValue = Number(entry?.qty_reserved);
+                    return Number.isFinite(nextValue) ? sum + nextValue : sum;
+                }, 0);
                 const nextStock: ProductStock = {
                     id: `${nextProduct.id}_${warehouseId}`,
                     productId: nextProduct.id,

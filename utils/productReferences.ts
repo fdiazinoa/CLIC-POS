@@ -90,7 +90,7 @@ const normalizeStockBalanceSource = (source: unknown): Record<string, number> =>
     const warehouseIds = extractWarehouseIdsFromRow(record);
     if (warehouseIds.length > 0 && quantity != null) {
       for (const warehouseId of warehouseIds) {
-        normalized[warehouseId] = quantity;
+        normalized[warehouseId] = Number(normalized[warehouseId] || 0) + quantity;
       }
     }
   }

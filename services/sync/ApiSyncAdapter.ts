@@ -435,7 +435,7 @@ class ApiSyncAdapter {
                 continue;
             }
 
-            normalized[warehouseId] = qtyOnHand;
+            normalized[warehouseId] = Number(normalized[warehouseId] || 0) + qtyOnHand;
         }
 
         return normalized;
