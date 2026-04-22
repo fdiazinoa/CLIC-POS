@@ -1611,13 +1611,13 @@ class ApiSyncAdapter {
             }
 
             const context = this.resolveOperationalInventoryContext();
-            if (!context.terminalId || !context.tenantId || !context.syncApiBase) {
+            if (!context.terminalId || !context.syncApiBase) {
                 console.warn('⚠️ ApiSyncAdapter: Missing ERP terminal inventory context for operational balances');
                 return [];
             }
 
             const params = new URLSearchParams();
-            params.set('tenant_id', context.tenantId);
+            if (context.tenantId) params.set('tenant_id', context.tenantId);
             if (context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
             if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
             if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
