@@ -66,6 +66,9 @@ interface TerminalInventoryBalancePayload {
 }
 
 interface TerminalInventoryPayload {
+    cursor?: string | null;
+    balances?: TerminalInventoryBalancePayload[];
+    has_changes?: boolean;
     inventory?: {
         cursor?: string | null;
         balances?: TerminalInventoryBalancePayload[];
@@ -436,6 +439,41 @@ class ApiSyncAdapter {
         }
 
         return normalized;
+    }
+
+    private normalizeTerminalInventoryPayload(payload: unknown): Required<Pick<TerminalInventoryPayload, 'balances' | 'cursor' | 'has_changes'>> {
+        const root = payload && typeof payload === 'object' && !Array.isArray(payload)
+            ? payload as Record<string, unknown>
+            : {};
+        const nested = root.inventory && typeof root.inventory === 'object' && !Array.isArray(root.inventory)
+            ? root.inventory as Record<string, unknown>
+            : {};
+
+        const balances = Array.isArray(nested.balances)
+            ? nested.balances
+            : Array.isArray(root.balances)
+                ? root.balances
+                : Array.isArray((root.data as any)?.inventory?.balances)
+                    ? (root.data as any).inventory.balances
+                    : [];
+
+        const cursor = typeof nested.cursor === 'string'
+            ? nested.cursor.trim() || null
+            : typeof root.cursor === 'string'
+                ? root.cursor.trim() || null
+                : null;
+
+        const hasChanges = typeof nested.has_changes === 'boolean'
+            ? nested.has_changes
+            : typeof root.has_changes === 'boolean'
+                ? root.has_changes
+                : true;
+
+        return {
+            balances: balances as TerminalInventoryBalancePayload[],
+            cursor,
+            has_changes: hasChanges,
+        };
     }
 
     setOperationalTargetHint(input: { terminalId?: string | null; baseUrl?: string | null }) {
@@ -1681,8 +1719,8 @@ class ApiSyncAdapter {
             }
 
             const payload = (await response.json()) as TerminalInventoryPayload;
-            const balances = Array.isArray(payload?.inventory?.balances) ? payload.inventory.balances : [];
-            return balances.filter((balance) => this.matchesInventoryBalanceProduct(balance, productId));
+            const normalizedPayload = this.normalizeTerminalInventoryPayload(payload);
+            return normalizedPayload.balances.filter((balance) => this.matchesInventoryBalanceProduct(balance, productId));
         } catch (error) {
             console.error('❌ ApiSyncAdapter: Error pulling operational stock balances:', error);
             return [];
@@ -1735,12 +1773,8 @@ class ApiSyncAdapter {
             }
 
             const payload = await response.json();
-            const balances = Array.isArray(payload?.inventory?.balances)
-                ? payload.inventory.balances
-                : Array.isArray(payload?.data?.inventory?.balances)
-                    ? payload.data.inventory.balances
-                    : [];
-            const filteredBalances = balances.filter((balance: any) => this.matchesInventoryBalanceProduct(balance, productId));
+            const normalizedPayload = this.normalizeTerminalInventoryPayload(payload);
+            const filteredBalances = normalizedPayload.balances.filter((balance: any) => this.matchesInventoryBalanceProduct(balance, productId));
             const nextMap = this.buildOperationalStockBalanceMap(filteredBalances);
 
             if (Object.keys(nextMap).length > 0) {

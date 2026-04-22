@@ -90,6 +90,11 @@ interface TerminalInventoryPayload {
     cursor?: string | null;
     balances?: TerminalInventoryBalancePayload[];
     has_changes?: boolean;
+    inventory?: {
+        cursor?: string | null;
+        balances?: TerminalInventoryBalancePayload[];
+        has_changes?: boolean;
+    };
 }
 
 class SyncManager {
@@ -1107,13 +1112,31 @@ class SyncManager {
                 }
 
                 const payload = await response.json();
-                const inventory = payload?.inventory && typeof payload.inventory === 'object' && !Array.isArray(payload.inventory)
-                    ? payload.inventory as Record<string, any>
+                const root = payload && typeof payload === 'object' && !Array.isArray(payload)
+                    ? payload as Record<string, any>
+                    : {};
+                const inventory = root.inventory && typeof root.inventory === 'object' && !Array.isArray(root.inventory)
+                    ? root.inventory as Record<string, any>
                     : {};
                 const normalizedPayload: TerminalInventoryPayload = {
-                    cursor: typeof inventory.cursor === 'string' ? inventory.cursor.trim() || null : null,
-                    balances: Array.isArray(inventory.balances) ? inventory.balances as TerminalInventoryBalancePayload[] : [],
-                    has_changes: typeof inventory.has_changes === 'boolean' ? inventory.has_changes : true,
+                    cursor:
+                        typeof inventory.cursor === 'string'
+                            ? inventory.cursor.trim() || null
+                            : typeof root.cursor === 'string'
+                                ? root.cursor.trim() || null
+                                : null,
+                    balances:
+                        Array.isArray(inventory.balances)
+                            ? inventory.balances as TerminalInventoryBalancePayload[]
+                            : Array.isArray(root.balances)
+                                ? root.balances as TerminalInventoryBalancePayload[]
+                                : [],
+                    has_changes:
+                        typeof inventory.has_changes === 'boolean'
+                            ? inventory.has_changes
+                            : typeof root.has_changes === 'boolean'
+                                ? root.has_changes
+                                : true,
                 };
 
                 posCatalogDebugLog('inventory block: fetch success', {
