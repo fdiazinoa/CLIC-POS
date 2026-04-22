@@ -225,6 +225,11 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [productionAreas, setProductionAreas] = useState<any[]>([]);
   const [productionAreasLoaded, setProductionAreasLoaded] = useState(false);
   const [remoteStockBalances, setRemoteStockBalances] = useState<Record<string, number>>({});
+  const [remoteInventoryPending, setRemoteInventoryPending] = useState(false);
+  const readsOperationalInventory = useMemo(
+    () => inventorySyncService.shouldReadInventoryFromOperationalSource(),
+    []
+  );
   const activeTerminalId = useMemo(
     () => localStorage.getItem('active_terminal_id') || localStorage.getItem('CLIC_POS_TERMINAL_ID') || '',
     []
@@ -264,7 +269,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     source_item_id: (formData as any).source_item_id || null,
     erpProductId: (formData as any).erpProductId || null,
     operationalProductId: resolveOperationalProductId(formData),
-    readsOperationalInventory: inventorySyncService.shouldReadInventoryFromOperationalSource(),
+    readsOperationalInventory,
     erpBaseUrl: localStorage.getItem('CLIC_ERP_BASE_URL') || localStorage.getItem('erp_base_url') || null,
     erpSyncUrl: localStorage.getItem('CLIC_ERP_SYNC_URL') || null,
     erpSyncTerminalId: localStorage.getItem('clic_erp_sync_terminal_id') || null,
@@ -307,6 +312,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     erpScopedFormStockBalances,
     stockBalanceSource,
     remoteStockBalances,
+    readsOperationalInventory,
     warehouses,
     detailedStocks,
     activeTerminalId,
@@ -439,9 +445,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       const allStocks = await db.get('productStocks') as ProductStock[] || [];
       const myStocks = allStocks.filter((stock) => linkedProductIds.includes(String(stock?.productId || '').trim()));
       if (requestId !== stockSyncRequestIdRef.current) return;
-      setDetailedStocks(myStocks);
-
-      if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
+      if (readsOperationalInventory) {
+        setRemoteInventoryPending(true);
         const operationalProductId = resolveOperationalProductId(formData) || formData.id;
         const nextRemoteStockBalances = await inventorySyncService.fetchStockBalanceMapOnDemand(operationalProductId);
         if (requestId !== stockSyncRequestIdRef.current) return;
@@ -473,9 +478,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
         } else if (myStocks.length > 0) {
           setDetailedStocks(myStocks);
         }
+        setRemoteInventoryPending(false);
         return;
       }
 
+      setDetailedStocks(myStocks);
+      setRemoteInventoryPending(false);
       setRemoteStockBalances({});
       if (myStocks.length === 0) {
         setDetailedStocks([]);
@@ -491,7 +499,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       window.removeEventListener('transactionSynced', handleSync);
       window.removeEventListener('productStocksUpdated', handleStockSync);
     };
-  }, [formData.id, linkedProductIds, kardexWarehouse, kardexTerminal, erpScopedFormStockBalances, warehouses]);
+  }, [formData.id, linkedProductIds, kardexWarehouse, kardexTerminal, erpScopedFormStockBalances, warehouses, readsOperationalInventory]);
 
   // --- DYNAMIC LEDGER SUMMARY (For Cards & Table) ---
   const { entriesWithDynamicBalance, currentViewStock, currentViewCost } = useMemo(() => {
@@ -1735,11 +1743,15 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   {warehouses.map(wh => {
                     const detailedStock = resolveInventoryProductStockRow(formData, wh.id, detailedStocks, allProducts);
                     const erpWarehouseId = resolveWarehouseErpId(wh);
-                    const finalStock =
-                      remoteStockBalances[erpWarehouseId]
-                      ?? erpScopedFormStockBalances[erpWarehouseId]
-                      ?? (detailedStock ? detailedStock.quantity : 0)
-                      ?? 0;
+                    const shouldHoldStaleLocalStock = readsOperationalInventory && remoteInventoryPending && Object.keys(remoteStockBalances).length === 0;
+                    const finalStock = shouldHoldStaleLocalStock
+                      ? null
+                      : (
+                        remoteStockBalances[erpWarehouseId]
+                        ?? erpScopedFormStockBalances[erpWarehouseId]
+                        ?? (detailedStock ? detailedStock.quantity : 0)
+                        ?? 0
+                      );
                     const isActive = normalizedActiveWarehouseIds.includes(wh.id);
 
                     return (
@@ -1758,7 +1770,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                           <div className="text-center">
                             <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Estado</p>
                             <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${finalStock > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                              {finalStock > 0 ? 'Con Stock' : 'Sin Stock'}
+                              {finalStock === null ? 'Consultando ERP' : finalStock > 0 ? 'Con Stock' : 'Sin Stock'}
                             </span>
                           </div>
                           <div className="text-right">
@@ -1767,8 +1779,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                               <input
                                 type="number"
                                 disabled={!isActive}
-                                value={finalStock}
+                                value={finalStock ?? ''}
                                 onChange={(e) => updateStockBalance(erpWarehouseId || wh.id, parseFloat(e.target.value) || 0)}
+                                placeholder={finalStock === null ? '...' : undefined}
                                 className="w-24 p-2 bg-gray-50 border border-gray-200 rounded-xl text-center font-black text-xl text-blue-600 outline-none focus:ring-2 focus:ring-blue-100 disabled:opacity-50"
                               />
                               <span className="text-xs font-bold text-gray-400">unidades</span>

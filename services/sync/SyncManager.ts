@@ -2010,7 +2010,13 @@ class SyncManager {
                 stock,
             ]),
         );
+        const localProductsById = new Map<string, Product>(
+            localProducts
+                .filter((product) => Boolean(product?.id))
+                .map((product) => [String(product.id).trim(), product]),
+        );
         const localByIdentity = this.buildLocalProductIdentityLookup(localProducts);
+        const preserveOperationalInventory = apiSyncAdapter.isUsingErpOperationalTarget();
         let updatedCount = 0;
         const duplicateIdsToRemove = new Set<string>();
         const traceRaw = rawItems.filter((item: unknown) => posCatalogDebugMatchesRaw(item));
@@ -2101,8 +2107,28 @@ class SyncManager {
             }
 
             if (!item?.id) continue;
+            const existingLocalProduct =
+                (canonicalLocalProduct?.id && canonicalLocalProduct.id === item.id
+                    ? canonicalLocalProduct
+                    : localProductsById.get(String(item.id).trim())) || canonicalLocalProduct;
+
+            if (preserveOperationalInventory && existingLocalProduct) {
+                item = {
+                    ...item,
+                    stockBalances:
+                        existingLocalProduct.stockBalances && typeof existingLocalProduct.stockBalances === 'object'
+                            ? { ...existingLocalProduct.stockBalances }
+                            : {},
+                    stock: Number.isFinite(Number(existingLocalProduct.stock))
+                        ? Number(existingLocalProduct.stock)
+                        : Number((item as Product).stock ?? 0),
+                };
+            }
+
             await db.saveDocument('products', item);
-            await this.syncSnapshotProductStocks(item as Product, runtimeWarehouses, existingStocksByProductWarehouse);
+            if (!preserveOperationalInventory) {
+                await this.syncSnapshotProductStocks(item as Product, runtimeWarehouses, existingStocksByProductWarehouse);
+            }
             if (posCatalogDebugMatchesRaw(rawItem || item)) {
                 posCatalogDebugLog('applySnapshotProducts: saved product', {
                     saved: posCatalogDebugSummarizeItem(item as Record<string, unknown>),
@@ -2111,6 +2137,7 @@ class SyncManager {
             for (const candidate of productIdentityCandidates(item as Record<string, unknown>)) {
                 localByIdentity.set(candidate, item as Product);
             }
+            localProductsById.set(String(item.id).trim(), item as Product);
             updatedCount += 1;
         }
 
