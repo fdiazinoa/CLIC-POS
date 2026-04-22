@@ -105,6 +105,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastInitialSyncRef = useRef<string>('');
+  const stockSyncRequestIdRef = useRef(0);
 
   // --- STATE ---
   const [showProfitCalc, setShowProfitCalc] = useState<string | null>(null);
@@ -390,13 +391,16 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
 
     // Listen for productStocks updates
     const handleStockSync = async () => {
+      const requestId = ++stockSyncRequestIdRef.current;
       const allStocks = await db.get('productStocks') as ProductStock[] || [];
       const myStocks = allStocks.filter((stock) => linkedProductIds.includes(String(stock?.productId || '').trim()));
+      if (requestId !== stockSyncRequestIdRef.current) return;
       setDetailedStocks(myStocks);
 
       if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
         const operationalProductId = resolveOperationalProductId(formData) || formData.id;
         const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand(operationalProductId);
+        if (requestId !== stockSyncRequestIdRef.current) return;
         const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, formData, allProducts));
         const scopedBalances = matchedBalances.length === 0 ? remoteBalances : matchedBalances;
         const nextRemoteStockBalances = canonicalizeWarehouseRecord(
@@ -414,7 +418,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
           ),
           warehouses,
         );
-        setRemoteStockBalances(nextRemoteStockBalances);
+
+        const hasRemoteBalances = Object.keys(nextRemoteStockBalances).length > 0;
+        setRemoteStockBalances((previous) => (hasRemoteBalances ? nextRemoteStockBalances : previous));
+
         if (Object.keys(nextRemoteStockBalances).length > 0) {
           const normalizedLocalStocks = myStocks.filter((stock) =>
             !warehouses.some((warehouse) => resolveWarehouseId(stock?.warehouseId, warehouses) === warehouse.id)
@@ -433,8 +440,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
             };
           });
           setDetailedStocks([...normalizedLocalStocks, ...synthesizedStocks]);
-        } else if (myStocks.length === 0) {
-          setDetailedStocks([]);
+        } else if (myStocks.length > 0) {
+          setDetailedStocks(myStocks);
         }
         return;
       }
