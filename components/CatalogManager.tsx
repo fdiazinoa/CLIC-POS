@@ -19,12 +19,10 @@ import WatchlistMonitor from './WatchlistMonitor';
 import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
-import { inventorySyncService } from '../services/sync/InventorySyncService';
 import ClassificationManager from './ClassificationManager';
 import ErrorBoundary from './ErrorBoundary';
-import { canonicalizeWarehouseRecord, getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
+import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
 import {
-   extractWarehouseStockBalances,
    productIdMatchesInventoryReference,
    resolveInventoryProductStockRow,
 } from '../utils/productReferences';
@@ -404,62 +402,6 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          const lists = (await db.get('watchlists') || []) as Watchlist[];
          setWatchlists((Array.isArray(lists) ? lists.filter((entry): entry is Watchlist => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []));
       };
-      const buildOperationalStocks = async (existingStocks: ProductStock[] = []) => {
-         const rawWarehouses = await db.get('warehouses');
-         const runtimeWarehouses = (Array.isArray(rawWarehouses) ? rawWarehouses : []) as Warehouse[];
-         const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
-         const nextStocksByKey = new Map<string, ProductStock>();
-
-         for (const stock of existingStocks) {
-            const productId = String(stock?.productId || '').trim();
-            const warehouseId = String(stock?.warehouseId || '').trim();
-            if (!productId || !warehouseId) continue;
-            nextStocksByKey.set(`${productId}::${warehouseId}`, stock);
-         }
-
-         for (const product of products) {
-            const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, product, products));
-            const stockBalances = canonicalizeWarehouseRecord(
-               extractWarehouseStockBalances(
-                  matchedBalances,
-                  ...matchedBalances.flatMap((entry: any) => [
-                     entry?.stockBalances,
-                     entry?.stock_balances,
-                     entry?.balances,
-                     entry?.warehouseBalances,
-                     entry?.warehouse_balances,
-                     entry?.metadata?.stockBalances,
-                     entry?.metadata?.stock_balances,
-                  ]),
-               ),
-               runtimeWarehouses,
-            );
-
-            for (const [warehouseId, quantity] of Object.entries(stockBalances)) {
-               nextStocksByKey.set(`${product.id}::${warehouseId}`, {
-                  id: `${product.id}_${warehouseId}`,
-                  productId: product.id,
-                  warehouseId,
-                  quantity: Number(quantity || 0),
-                  qtyPhysical: Number(quantity || 0),
-                  qtyCommitted: 0,
-                  qtyAvailable: Number(quantity || 0),
-                  updatedAt: new Date().toISOString(),
-               });
-            }
-         }
-
-         return Array.from(nextStocksByKey.values());
-      };
-      const loadStocks = async () => {
-         const stocks = (await db.get('productStocks') || []) as ProductStock[];
-         if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
-            setProductStocks(await buildOperationalStocks(stocks));
-            return;
-         }
-
-         setProductStocks(stocks);
-      };
       const loadCatalogRuntime = async () => {
          const [rawProducts, rawConfig, rawWarehouses, rawTransactions] = await Promise.all([
             db.get('products'),
@@ -490,18 +432,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          }
       };
       loadWatchlists();
-      loadStocks();
       loadCatalogRuntime().catch((error) => console.warn('[CatalogManager] loadCatalogRuntime', error));
 
-      const handleStockUpdate = async () => {
-         const stocks = (await db.get('productStocks') || []) as ProductStock[];
-         if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
-            setProductStocks(await buildOperationalStocks(stocks));
-            return;
-         }
-
-         setProductStocks(stocks);
-      };
       const handleConfigUpdate = async () => {
          const rawConfig = await db.get('config');
          const storedConfig = Array.isArray(rawConfig)
@@ -527,19 +459,38 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             return nextTransactions;
          });
       };
-      window.addEventListener('productStocksUpdated', handleStockUpdate);
       window.addEventListener('configUpdated', handleConfigUpdate as EventListener);
       window.addEventListener('productsUpdated', handleProductsUpdate as EventListener);
       window.addEventListener('transactionsUpdated', handleTransactionsUpdate as EventListener);
 
       return () => {
          window.removeEventListener('resize', handleResize);
-         window.removeEventListener('productStocksUpdated', handleStockUpdate);
          window.removeEventListener('configUpdated', handleConfigUpdate as EventListener);
          window.removeEventListener('productsUpdated', handleProductsUpdate as EventListener);
          window.removeEventListener('transactionsUpdated', handleTransactionsUpdate as EventListener);
       };
    }, [products]);
+
+   useEffect(() => {
+      if (viewMode !== 'STOCKS') return;
+
+      const loadStocks = async () => {
+         const stocks = (await db.get('productStocks') || []) as ProductStock[];
+         setProductStocks(stocks);
+      };
+
+      const handleStockUpdate = async () => {
+         const stocks = (await db.get('productStocks') || []) as ProductStock[];
+         setProductStocks(stocks);
+      };
+
+      loadStocks();
+      window.addEventListener('productStocksUpdated', handleStockUpdate);
+
+      return () => {
+         window.removeEventListener('productStocksUpdated', handleStockUpdate);
+      };
+   }, [viewMode]);
 
    useEffect(() => {
       if (!initialProductId) {
