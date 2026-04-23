@@ -1,4 +1,5 @@
 export type TerminalConfigPushMasterScope = 'items' | 'customers' | 'suppliers' | 'sellers';
+export type TerminalConfigPushBlockScope = 'inventory' | 'product_prices';
 export type TerminalConfigPushResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions';
 
 export type TerminalConfigSyncRequestDetail = {
@@ -7,11 +8,13 @@ export type TerminalConfigSyncRequestDetail = {
     terminalId?: string | null;
     localTerminalId?: string | null;
     masterScopes?: TerminalConfigPushMasterScope[];
+    blockScopes?: TerminalConfigPushBlockScope[];
     resolvedScopes?: TerminalConfigPushResolvedScope[];
     selective?: boolean;
 };
 
 const TERMINAL_CONFIG_MASTER_SCOPE_SET = new Set<TerminalConfigPushMasterScope>(['items', 'customers', 'suppliers', 'sellers']);
+const TERMINAL_CONFIG_BLOCK_SCOPE_SET = new Set<TerminalConfigPushBlockScope>(['inventory', 'product_prices']);
 const TERMINAL_CONFIG_RESOLVED_SCOPE_SET = new Set<TerminalConfigPushResolvedScope>(['pricing', 'inventory', 'documents', 'catalog', 'promotions']);
 
 const asObject = (value: unknown): Record<string, unknown> => (
@@ -39,13 +42,15 @@ const normalizeScopes = <T extends string>(value: unknown, supported: Set<T>): T
 export const extractTerminalConfigRequestedScopes = (value: unknown) => {
     const record = asObject(value);
     const hasMasterScopes = hasOwn(record, 'master_scopes') || hasOwn(record, 'masterScopes');
+    const hasBlockScopes = hasOwn(record, 'block_scopes') || hasOwn(record, 'blockScopes');
     const hasResolvedScopes = hasOwn(record, 'resolved_scopes') || hasOwn(record, 'resolvedScopes');
-    const selective = hasMasterScopes || hasResolvedScopes;
+    const selective = hasMasterScopes || hasBlockScopes || hasResolvedScopes;
 
     if (!selective) {
         return {
             selective: false,
             masterScopes: undefined,
+            blockScopes: undefined,
             resolvedScopes: undefined,
         };
     }
@@ -53,6 +58,7 @@ export const extractTerminalConfigRequestedScopes = (value: unknown) => {
     return {
         selective: true,
         masterScopes: normalizeScopes(record.masterScopes ?? record.master_scopes, TERMINAL_CONFIG_MASTER_SCOPE_SET),
+        blockScopes: normalizeScopes(record.blockScopes ?? record.block_scopes, TERMINAL_CONFIG_BLOCK_SCOPE_SET),
         resolvedScopes: normalizeScopes(record.resolvedScopes ?? record.resolved_scopes, TERMINAL_CONFIG_RESOLVED_SCOPE_SET),
     };
 };
@@ -67,10 +73,11 @@ export const buildTerminalConfigRefreshRequest = (value: unknown) => {
         };
     }
 
-    return {
-        forceRemoteFetch: true as const,
-        forceFullCatalog: false,
-        masterScopes: scopes.masterScopes ?? [],
-        resolvedScopes: scopes.resolvedScopes ?? [],
-    };
+        return {
+            forceRemoteFetch: true as const,
+            forceFullCatalog: false,
+            masterScopes: scopes.masterScopes ?? [],
+            blockScopes: scopes.blockScopes ?? [],
+            resolvedScopes: scopes.resolvedScopes ?? [],
+        };
 };

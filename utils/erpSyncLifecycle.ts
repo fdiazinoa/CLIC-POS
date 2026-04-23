@@ -584,6 +584,7 @@ const persistPendingTerminalConfigSnapshot = (event: SyncOutboxEvent) => {
             || binding.localTerminalId
             || null,
         masterScopes: requestedScopes.selective ? (requestedScopes.masterScopes || []) : undefined,
+        blockScopes: requestedScopes.selective ? (requestedScopes.blockScopes || []) : undefined,
         resolvedScopes: requestedScopes.selective ? (requestedScopes.resolvedScopes || []) : undefined,
         snapshot: terminalConfig,
     };
@@ -597,6 +598,7 @@ const persistPendingTerminalConfigSnapshot = (event: SyncOutboxEvent) => {
             localTerminalId: pendingSnapshot.localTerminalId,
             ...(requestedScopes.selective ? {
                 masterScopes: requestedScopes.masterScopes || [],
+                blockScopes: requestedScopes.blockScopes || [],
                 resolvedScopes: requestedScopes.resolvedScopes || [],
                 selective: true,
             } : {}),

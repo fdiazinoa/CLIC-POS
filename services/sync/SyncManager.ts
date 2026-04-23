@@ -1976,6 +1976,7 @@ class SyncManager {
             forceRemoteFetch?: boolean;
             forceFullCatalog?: boolean;
             masterScopes?: TerminalManifestMasterScope[];
+            blockScopes?: TerminalManifestBlockScope[];
             resolvedScopes?: TerminalManifestResolvedScope[];
         }
     ): Promise<BusinessConfig | null> {
@@ -1998,8 +1999,12 @@ class SyncManager {
         const snapshotTerminalId = context.localTerminalId || context.terminalId;
         const cachedSnapshot = baseConfig.terminalSnapshots?.[snapshotTerminalId] || null;
         const currentCatalogCursor = this.readStoredCatalogCursor(snapshotTerminalId);
+        const currentTerminalCursorMap = this.readStoredTerminalCursorMap(snapshotTerminalId);
         const requestedMasterScopes = Array.isArray(options?.masterScopes)
             ? Array.from(new Set(options.masterScopes.filter(Boolean)))
+            : null;
+        const requestedBlockScopes = Array.isArray(options?.blockScopes)
+            ? Array.from(new Set(options.blockScopes.filter(Boolean)))
             : null;
         const requestedResolvedScopes = Array.isArray(options?.resolvedScopes)
             ? Array.from(new Set(options.resolvedScopes.filter(Boolean)))
@@ -2055,8 +2060,10 @@ class SyncManager {
             forceRemoteFetch: Boolean(options?.forceRemoteFetch),
             forceFullCatalog: Boolean(options?.forceFullCatalog),
             hasCatalogCursor: Boolean(currentCatalogCursor),
+            hasTerminalCursorMap: Object.keys(currentTerminalCursorMap).length > 0,
             hasPendingSnapshot: Boolean(pendingSnapshot),
             requestedMasterScopes,
+            requestedBlockScopes,
             requestedResolvedScopes,
         });
 
@@ -2102,6 +2109,7 @@ class SyncManager {
                         forceFullCatalog: Boolean(options?.forceFullCatalog),
                         catalogCursorSent: !options?.forceFullCatalog ? currentCatalogCursor : null,
                         requestedMasterScopes,
+                        requestedBlockScopes,
                         requestedResolvedScopes,
                     });
                     const response = await fetch(endpoint, {
@@ -2266,8 +2274,47 @@ class SyncManager {
         }
         localStorage.setItem('active_terminal_id', applied.terminalId);
         localStorage.setItem('CLIC_POS_TERMINAL_ID', applied.terminalId);
+        let nextTerminalCursorMap = { ...currentTerminalCursorMap };
         if (nextCatalogCursor) {
             this.persistCatalogCursor(snapshotTerminalId, nextCatalogCursor);
+        }
+
+        if (requestedBlockScopes?.includes('inventory')) {
+            const inventoryPayload = await this.fetchTerminalInventoryBlock(
+                context,
+                currentTerminalCursorMap.inventory || null,
+            );
+            if (inventoryPayload?.cursor) {
+                nextTerminalCursorMap = {
+                    ...nextTerminalCursorMap,
+                    inventory: inventoryPayload.cursor,
+                };
+            }
+            if (inventoryPayload?.has_changes) {
+                await this.applyTerminalInventoryBlock(Array.isArray(inventoryPayload.balances) ? inventoryPayload.balances : []);
+            }
+        }
+
+        if (requestedBlockScopes?.includes('product_prices')) {
+            const productPricesPayload = await this.fetchTerminalProductPricesBlock(
+                context,
+                currentTerminalCursorMap.product_prices || null,
+            );
+            if (productPricesPayload?.cursor) {
+                nextTerminalCursorMap = {
+                    ...nextTerminalCursorMap,
+                    product_prices: productPricesPayload.cursor,
+                };
+            }
+            if (productPricesPayload?.has_changes) {
+                await this.applyTerminalProductPricesBlock(
+                    Array.isArray(productPricesPayload.prices) ? productPricesPayload.prices : [],
+                );
+            }
+        }
+
+        if (JSON.stringify(nextTerminalCursorMap) !== JSON.stringify(currentTerminalCursorMap)) {
+            this.persistTerminalCursorMap(snapshotTerminalId, nextTerminalCursorMap);
         }
 
         try {
@@ -2284,6 +2331,7 @@ class SyncManager {
             changed,
             usedCatalogDelta: Boolean(catalogDelta),
             nextCatalogCursor,
+            requestedBlockScopes,
             elapsedMs: posCatalogDebugElapsedMs(refreshStartedAt),
         });
 
