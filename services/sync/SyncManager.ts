@@ -15,7 +15,7 @@ import { permissionService } from './PermissionService';
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { productImageCacheService } from './ProductImageCacheService';
 import { masterDataImageCacheService, type ImageBackedCollection } from './MasterDataImageCacheService';
-import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer, ProductStock, Warehouse } from '../../types';
+import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer, ProductStock, ProductPrice, TariffPrice, Warehouse } from '../../types';
 import {
     applyTerminalConfigSnapshot,
     extractTerminalConfigSnapshot,
@@ -40,8 +40,9 @@ import {
     productIdMatchesInventoryReference,
     productIdentityCandidates,
 } from '../../utils/productReferences';
+import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterIdentity';
 
-export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities';
+export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'productPrices' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities';
 
 interface SyncStatus {
     collection: string;
@@ -54,7 +55,7 @@ interface SyncStatus {
 }
 
 type TerminalManifestMasterScope = 'items' | 'customers' | 'suppliers' | 'sellers' | 'purchase_orders' | 'transfers';
-type TerminalManifestBlockScope = 'inventory';
+type TerminalManifestBlockScope = 'inventory' | 'product_prices';
 type TerminalManifestResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions' | 'loyalty';
 type TerminalManifestScope = 'terminal' | TerminalManifestMasterScope | TerminalManifestBlockScope;
 type TerminalManifestCountScope = TerminalManifestMasterScope | TerminalManifestBlockScope;
@@ -67,6 +68,7 @@ interface TerminalCursorMap {
     purchase_orders?: string | null;
     transfers?: string | null;
     inventory?: string | null;
+    product_prices?: string | null;
 }
 
 interface TerminalManifestPayload {
@@ -93,6 +95,28 @@ interface TerminalInventoryPayload {
     inventory?: {
         cursor?: string | null;
         balances?: TerminalInventoryBalancePayload[];
+        has_changes?: boolean;
+    };
+}
+
+interface TerminalProductPricePayload {
+    id?: string | null;
+    product_id?: string | null;
+    item_id?: string | null;
+    tariff_id?: string | null;
+    tariff_code?: string | null;
+    price?: number | null;
+    currency?: string | null;
+    updated_at?: string | null;
+}
+
+interface TerminalProductPricesPayload {
+    cursor?: string | null;
+    prices?: TerminalProductPricePayload[];
+    has_changes?: boolean;
+    product_prices?: {
+        cursor?: string | null;
+        prices?: TerminalProductPricePayload[];
         has_changes?: boolean;
     };
 }
@@ -724,6 +748,7 @@ class SyncManager {
                 purchase_orders: typeof parsed.purchase_orders === 'string' ? parsed.purchase_orders.trim() || null : null,
                 transfers: typeof parsed.transfers === 'string' ? parsed.transfers.trim() || null : null,
                 inventory: typeof parsed.inventory === 'string' ? parsed.inventory.trim() || null : null,
+                product_prices: typeof parsed.product_prices === 'string' ? parsed.product_prices.trim() || null : null,
             };
         } catch {
             return {};
@@ -741,6 +766,7 @@ class SyncManager {
             purchase_orders: typeof cursorMap.purchase_orders === 'string' ? cursorMap.purchase_orders.trim() || null : null,
             transfers: typeof cursorMap.transfers === 'string' ? cursorMap.transfers.trim() || null : null,
             inventory: typeof cursorMap.inventory === 'string' ? cursorMap.inventory.trim() || null : null,
+            product_prices: typeof cursorMap.product_prices === 'string' ? cursorMap.product_prices.trim() || null : null,
         };
 
         const hasValue = Object.values(normalizedCursorMap).some((value) => typeof value === 'string' && value.trim());
@@ -918,6 +944,7 @@ class SyncManager {
                 purchase_orders: typeof cursorMap.purchase_orders === 'string' ? cursorMap.purchase_orders.trim() || null : null,
                 transfers: typeof cursorMap.transfers === 'string' ? cursorMap.transfers.trim() || null : null,
                 inventory: typeof cursorMap.inventory === 'string' ? cursorMap.inventory.trim() || null : null,
+                product_prices: typeof cursorMap.product_prices === 'string' ? cursorMap.product_prices.trim() || null : null,
             },
             changed: {
                 terminal: Boolean(changed.terminal),
@@ -927,12 +954,13 @@ class SyncManager {
                 purchase_orders: Boolean(changed.purchase_orders),
                 transfers: Boolean(changed.transfers),
                 inventory: Boolean(changed.inventory),
+                product_prices: Boolean(changed.product_prices),
             },
             changed_blocks: Array.isArray(manifest.changed_blocks)
                 ? manifest.changed_blocks
                     .map((scope: unknown) => (typeof scope === 'string' ? scope.trim() : ''))
                     .filter((scope: string): scope is TerminalManifestScope =>
-                        ['terminal', 'items', 'customers', 'suppliers', 'sellers', 'purchase_orders', 'transfers', 'inventory'].includes(scope),
+                        ['terminal', 'items', 'customers', 'suppliers', 'sellers', 'purchase_orders', 'transfers', 'inventory', 'product_prices'].includes(scope),
                     )
                 : [],
             counts: {
@@ -942,6 +970,7 @@ class SyncManager {
                 purchase_orders: Number.isFinite(Number(counts.purchase_orders)) ? Number(counts.purchase_orders) : 0,
                 transfers: Number.isFinite(Number(counts.transfers)) ? Number(counts.transfers) : 0,
                 inventory: Number.isFinite(Number(counts.inventory)) ? Number(counts.inventory) : 0,
+                product_prices: Number.isFinite(Number(counts.product_prices)) ? Number(counts.product_prices) : 0,
             },
             snapshot_at: typeof manifest.snapshot_at === 'string' ? manifest.snapshot_at.trim() || null : null,
         };
@@ -997,6 +1026,7 @@ class SyncManager {
             if (cursorMap.purchase_orders) params.set('purchase_orders_cursor', cursorMap.purchase_orders);
             if (cursorMap.transfers) params.set('transfers_cursor', cursorMap.transfers);
             if (cursorMap.inventory) params.set('inventory_cursor', cursorMap.inventory);
+            if (cursorMap.product_prices) params.set('product_prices_cursor', cursorMap.product_prices);
 
             try {
                 const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/manifest`;
@@ -1165,6 +1195,126 @@ class SyncManager {
         return null;
     }
 
+    private async fetchTerminalProductPricesBlock(context: {
+        terminalId: string | null;
+        localTerminalId: string | null;
+        tenantId: string | null;
+        erpBaseUrl: string | null;
+        posDeviceId: string | null;
+    }, cursor: string | null): Promise<TerminalProductPricesPayload | null> {
+        if (!context.terminalId || !context.tenantId) {
+            return null;
+        }
+
+        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
+        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
+        const endpointCandidates = useAbsoluteEndpoint
+            ? [
+                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
+                    baseUrl,
+                    mode: 'local-loopback-proxy',
+                    includeErpBaseUrl: true,
+                })),
+                ...(syncApiBase
+                    ? [{
+                        baseUrl: syncApiBase,
+                        mode: 'absolute-sync-api',
+                        includeErpBaseUrl: false,
+                    }]
+                    : []),
+            ]
+            : [{
+                baseUrl: '/api/sync',
+                mode: 'relative-local-proxy',
+                includeErpBaseUrl: true,
+            }];
+
+        let lastError: unknown = null;
+
+        for (const endpointCandidate of endpointCandidates) {
+            const startedAt = posCatalogDebugNow();
+            const params = new URLSearchParams();
+            params.set('tenant_id', context.tenantId);
+            if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
+            if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
+            if (cursor) params.set('product_prices_cursor', cursor);
+
+            try {
+                const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/product-prices`;
+                const endpoint = `${endpointCandidate.baseUrl}${endpointPath}?${params.toString()}`;
+                posCatalogDebugLog('product prices block: fetch begin', {
+                    endpoint,
+                    endpointMode: endpointCandidate.mode,
+                    productPricesCursorSent: cursor,
+                });
+
+                const response = await fetch(endpoint, {
+                    headers: {
+                        Accept: 'application/json',
+                    },
+                });
+
+                if (!response.ok) {
+                    const detail = await response.text().catch(() => '');
+                    throw new Error(detail || `No se pudo consultar el bloque product_prices (${response.status}).`);
+                }
+
+                const payload = await response.json();
+                const root = payload && typeof payload === 'object' && !Array.isArray(payload)
+                    ? payload as Record<string, any>
+                    : {};
+                const productPrices = root.product_prices && typeof root.product_prices === 'object' && !Array.isArray(root.product_prices)
+                    ? root.product_prices as Record<string, any>
+                    : {};
+                const normalizedPayload: TerminalProductPricesPayload = {
+                    cursor:
+                        typeof productPrices.cursor === 'string'
+                            ? productPrices.cursor.trim() || null
+                            : typeof root.cursor === 'string'
+                                ? root.cursor.trim() || null
+                                : null,
+                    prices:
+                        Array.isArray(productPrices.prices)
+                            ? productPrices.prices as TerminalProductPricePayload[]
+                            : Array.isArray(root.prices)
+                                ? root.prices as TerminalProductPricePayload[]
+                                : [],
+                    has_changes:
+                        typeof productPrices.has_changes === 'boolean'
+                            ? productPrices.has_changes
+                            : typeof root.has_changes === 'boolean'
+                                ? root.has_changes
+                                : true,
+                };
+
+                posCatalogDebugLog('product prices block: fetch success', {
+                    endpointMode: endpointCandidate.mode,
+                    elapsedMs: posCatalogDebugElapsedMs(startedAt),
+                    priceCount: normalizedPayload.prices?.length || 0,
+                    hasChanges: normalizedPayload.has_changes,
+                    cursor: normalizedPayload.cursor,
+                });
+
+                return normalizedPayload;
+            } catch (error) {
+                lastError = error;
+                posCatalogDebugLog('product prices block: fetch failed', {
+                    endpointMode: endpointCandidate.mode,
+                    endpointBaseUrl: endpointCandidate.baseUrl,
+                    elapsedMs: posCatalogDebugElapsedMs(startedAt),
+                    error: String((error as Error)?.message || error),
+                });
+            }
+        }
+
+        if (lastError) {
+            throw lastError;
+        }
+
+        return null;
+    }
+
     private async reconcileTerminalManifest(
         baseConfig: BusinessConfig | null,
         options?: {
@@ -1199,10 +1349,12 @@ class SyncManager {
                 .filter((scope) => manifest.changed?.[scope]);
             const changedBlocks = Array.isArray(manifest.changed_blocks) ? manifest.changed_blocks : [];
             const inventoryChanged = Boolean(manifest.changed.inventory) || changedBlocks.includes('inventory');
+            const productPricesChanged = Boolean(manifest.changed.product_prices) || changedBlocks.includes('product_prices');
             const bootstrapInventoryOnStartup = Boolean(options?.markStartupCompleted && manifest.cursor_map.inventory);
+            const bootstrapProductPricesOnStartup = Boolean(options?.markStartupCompleted && manifest.cursor_map.product_prices);
             const terminalChanged = Boolean(manifest.changed.terminal);
 
-            if (!terminalChanged && changedMasterScopes.length === 0 && !inventoryChanged && !bootstrapInventoryOnStartup) {
+            if (!terminalChanged && changedMasterScopes.length === 0 && !inventoryChanged && !bootstrapInventoryOnStartup && !productPricesChanged && !bootstrapProductPricesOnStartup) {
                 this.persistTerminalCursorMap(localTerminalId, manifest.cursor_map);
                 if (options?.markStartupCompleted) {
                     this.markStartupManifestSyncCompleted(localTerminalId);
@@ -1232,7 +1384,22 @@ class SyncManager {
                 }
             }
 
-            if (!refreshedConfig && !inventoryChanged) {
+            if (productPricesChanged || bootstrapProductPricesOnStartup) {
+                const productPricesPayload = await this.fetchTerminalProductPricesBlock(
+                    context,
+                    productPricesChanged ? (storedCursorMap.product_prices || null) : null,
+                );
+                if (productPricesPayload?.cursor) {
+                    manifest.cursor_map.product_prices = productPricesPayload.cursor;
+                }
+                if (productPricesPayload?.has_changes) {
+                    await this.applyTerminalProductPricesBlock(
+                        Array.isArray(productPricesPayload.prices) ? productPricesPayload.prices : [],
+                    );
+                }
+            }
+
+            if (!refreshedConfig && !inventoryChanged && !productPricesChanged && !bootstrapInventoryOnStartup && !bootstrapProductPricesOnStartup) {
                 return null;
             }
 
@@ -1473,6 +1640,137 @@ class SyncManager {
         window.dispatchEvent(new CustomEvent('productsUpdated'));
         window.dispatchEvent(new CustomEvent('productStocksUpdated'));
         return updatedProducts.size;
+    }
+
+    private async applyTerminalProductPricesBlock(prices: TerminalProductPricePayload[]): Promise<number> {
+        const normalizedPrices = Array.isArray(prices) ? prices : [];
+        const [rawProducts, rawConfig] = await Promise.all([
+            db.get('products'),
+            db.get('config'),
+        ]);
+        const localProducts = (Array.isArray(rawProducts) ? rawProducts : []) as Product[];
+        const businessConfig = rawConfig && typeof rawConfig === 'object' && !Array.isArray(rawConfig)
+            ? rawConfig as BusinessConfig
+            : null;
+        const configTariffs = Array.isArray(businessConfig?.tariffs) ? businessConfig.tariffs : [];
+
+        if (normalizedPrices.length === 0) {
+            await db.save('productPrices' as any, []);
+            window.dispatchEvent(new CustomEvent('productPricesUpdated'));
+            return 0;
+        }
+
+        if (localProducts.length === 0) {
+            return 0;
+        }
+
+        const localById = new Map<string, Product>();
+        for (const product of localProducts) {
+            if (product?.id) {
+                localById.set(String(product.id).trim(), product);
+            }
+        }
+
+        const localByIdentity = this.buildLocalProductIdentityLookup(localProducts);
+        const nextPriceDocs = new Map<string, ProductPrice>();
+        const nextTariffsByProduct = new Map<string, TariffPrice[]>();
+
+        for (const entry of normalizedPrices) {
+            const candidateTokens = productIdentityCandidates({
+                id: entry?.product_id || entry?.item_id || entry?.id || '',
+                productId: entry?.product_id || '',
+                itemId: entry?.item_id || '',
+            });
+            const matchedProduct = candidateTokens
+                .map((candidate) => localByIdentity.get(candidate) || localById.get(candidate))
+                .find(Boolean) || null;
+
+            if (!matchedProduct?.id) {
+                continue;
+            }
+
+            const rawTariffId = String(entry?.tariff_id || entry?.tariff_code || '').trim();
+            const tariffId = resolveTariffId(rawTariffId, configTariffs);
+            const price = Number(entry?.price);
+
+            if (!tariffId || !Number.isFinite(price)) {
+                continue;
+            }
+
+            const productId = String(matchedProduct.id).trim();
+            const documentId = `${productId}_${tariffId}`;
+            const itemId = String(
+                entry?.item_id
+                || entry?.product_id
+                || this.collectSnapshotProductAliasIds(matchedProduct)[0]
+                || productId
+            ).trim();
+            nextPriceDocs.set(documentId, {
+                id: documentId,
+                productId,
+                tariffId,
+                tariffCode: String(entry?.tariff_code || '').trim() || undefined,
+                itemId,
+                erpProductId: itemId || undefined,
+                sourceProductId: itemId || undefined,
+                price,
+                currency: String(entry?.currency || '').trim() || undefined,
+                updatedAt: String(entry?.updated_at || matchedProduct.updatedAt || new Date().toISOString()).trim(),
+            });
+
+            const currentTariffs = nextTariffsByProduct.get(productId)
+                || canonicalizeTariffEntries(Array.isArray(matchedProduct.tariffs) ? matchedProduct.tariffs : [], configTariffs);
+            const currentIndex = currentTariffs.findIndex((tariff) => String(tariff?.tariffId || '').trim() === tariffId);
+            const nextTariff: TariffPrice = {
+                ...(currentIndex >= 0 ? currentTariffs[currentIndex] : {}),
+                tariffId,
+                price,
+                name: currentIndex >= 0 ? currentTariffs[currentIndex]?.name : undefined,
+            };
+
+            if (currentIndex >= 0) {
+                currentTariffs[currentIndex] = nextTariff;
+            } else {
+                currentTariffs.push(nextTariff);
+            }
+
+            nextTariffsByProduct.set(productId, canonicalizeTariffEntries(currentTariffs, configTariffs));
+        }
+
+        await db.save('productPrices' as any, Array.from(nextPriceDocs.values()));
+
+        const activeTerminalId =
+            localStorage.getItem('active_terminal_id') ||
+            localStorage.getItem('CLIC_POS_TERMINAL_ID') ||
+            null;
+        const currentTerminal = activeTerminalId && Array.isArray(businessConfig?.terminals)
+            ? businessConfig!.terminals.find((terminal) => terminal?.id === activeTerminalId) || businessConfig!.terminals[0]
+            : businessConfig?.terminals?.[0];
+        const defaultTariffId =
+            String(currentTerminal?.config?.pricing?.defaultTariffId || '').trim()
+            || String(configTariffs[0]?.id || '').trim()
+            || '';
+
+        let updatedProducts = 0;
+        for (const [productId, tariffs] of nextTariffsByProduct.entries()) {
+            const product = localById.get(productId);
+            if (!product) continue;
+
+            const defaultTariff = tariffs.find((tariff) => String(tariff?.tariffId || '').trim() === defaultTariffId);
+            const nextProduct: Product = {
+                ...product,
+                tariffs,
+                price: Number.isFinite(Number(defaultTariff?.price)) ? Number(defaultTariff?.price) : product.price,
+            };
+            await db.saveDocument('products', nextProduct);
+            updatedProducts += 1;
+        }
+
+        if (updatedProducts > 0) {
+            window.dispatchEvent(new CustomEvent('productsUpdated'));
+        }
+        window.dispatchEvent(new CustomEvent('productPricesUpdated'));
+        return nextPriceDocs.size;
     }
 
     async syncTerminalManifestInBackground(baseConfig?: BusinessConfig | null): Promise<BusinessConfig | null> {
