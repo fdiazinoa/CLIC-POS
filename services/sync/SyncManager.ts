@@ -519,9 +519,8 @@ class SyncManager {
         if (apiSyncAdapter.isUsingErpOperationalTarget()) {
             try {
                 await this.syncTerminalMastersOnStartup(config);
-                await this.refreshOperationalInventorySnapshot();
             } catch (error) {
-                console.warn('⚠️ SyncManager: startup ERP inventory hydration failed:', error);
+                console.warn('⚠️ SyncManager: startup terminal manifest sync failed:', error);
             }
         } else {
             this.syncTerminalMastersOnStartup(config).catch((error) => {
@@ -1908,14 +1907,10 @@ class SyncManager {
                 await this.applySnapshotProducts(snapshot);
             }
             const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta);
-            const operationalInventoryHydrated = apiSyncAdapter.isUsingErpOperationalTarget()
-                ? await this.refreshOperationalInventorySnapshot()
-                : 0;
             await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
             posCatalogDebugLog('refreshTerminalResolvedConfig: product apply success', {
                 usedCatalogDelta: Boolean(catalogDelta),
                 structuredMasterData,
-                operationalInventoryHydrated,
                 elapsedMs: posCatalogDebugElapsedMs(applyStartedAt),
             });
         } catch (error) {
@@ -3230,10 +3225,6 @@ class SyncManager {
             return 0;
         }
 
-        if (collection === 'productStocks' && apiSyncAdapter.isUsingErpOperationalTarget()) {
-            return this.refreshOperationalInventorySnapshot();
-        }
-
         const now = Date.now();
         if (!force && !options?.ignoreThrottle && (now - this.lastSyncTime < this.MIN_SYNC_INTERVAL_MS)) {
             // console.log(`⏳ SyncManager: Pull skipped for ${collection} (Throttled: ${((this.MIN_SYNC_INTERVAL_MS - (now - this.lastSyncTime)) / 1000).toFixed(1)}s remaining)`);
@@ -3481,9 +3472,6 @@ class SyncManager {
                     await this.syncProductImages();
                 } catch (error) {
                     console.warn('⚠️ Image sync side-channel failed after products pull:', error);
-                }
-                if (apiSyncAdapter.isUsingErpOperationalTarget()) {
-                    await this.refreshOperationalInventorySnapshot();
                 }
             }
 
@@ -3836,9 +3824,6 @@ class SyncManager {
         }
 
         await this.forcePullAll();
-        if (apiSyncAdapter.isUsingErpOperationalTarget()) {
-            await this.refreshOperationalInventorySnapshot();
-        }
     }
 
     /**
