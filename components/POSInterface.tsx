@@ -78,6 +78,7 @@ import { resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
+import { resolveOperationalProductId } from '../utils/productReferences';
 
 // ... existing imports
 
@@ -117,6 +118,33 @@ export interface POSInterfaceProps {
    internalSequences?: any[];
    rooms?: Room[];
 }
+
+const productSalesIdentityKey = (product: Product): string => {
+   const operationalId = resolveOperationalProductId(product);
+   if (operationalId) return `op:${operationalId}`;
+
+   const barcode = typeof product.barcode === 'string' ? product.barcode.trim().toLowerCase() : '';
+   if (barcode) return `barcode:${barcode}`;
+
+   const sku = typeof (product as any).sku === 'string' ? (product as any).sku.trim().toLowerCase() : '';
+   if (sku) return `sku:${sku}`;
+
+   return `id:${String(product.id || '').trim().toLowerCase()}`;
+};
+
+const scoreProductForSales = (product: Product, warehouses: Warehouse[]): number => {
+   const activeWarehouses = resolveProductActiveWarehouseIds(product, warehouses).length;
+   const stockBalanceCount = Object.keys(product.stockBalances || {}).length;
+   const updatedAtScore = new Date((product as any).updatedAt || (product as any).createdAt || 0).getTime() || 0;
+
+   return (
+      activeWarehouses * 1000 +
+      stockBalanceCount * 100 +
+      (product.is_sellable !== false ? 10 : 0) +
+      (Number.isFinite(Number(product.price)) ? 1 : 0) +
+      updatedAtScore / 1_000_000_000_000
+   );
+};
 
 const buildCartDigest = (items: CartItem[] = []): string =>
    items
@@ -1443,11 +1471,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
    const filteredProducts = useMemo(() => {
+      const dedupedProducts = Array.from(
+         products.reduce((map, product) => {
+            if (!product || typeof product !== 'object' || Array.isArray(product)) return map;
+
+            const key = productSalesIdentityKey(product);
+            const existing = map.get(key);
+            if (!existing || scoreProductForSales(product, warehouses) > scoreProductForSales(existing, warehouses)) {
+               map.set(key, product);
+            }
+            return map;
+         }, new Map<string, Product>()).values()
+      );
+
       const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
          : canonicalizeCategory(categoryFilter);
 
-      const filtered = products.filter(p => {
+      const filtered = dedupedProducts.filter(p => {
          if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
          const erpWarehouses = resolveProductActiveWarehouseIds(p, warehouses);
          const hasErpWarehouse = erpWarehouses.length > 0;
@@ -1524,10 +1565,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode, filteredProducts, handleProductClick]);
 
    const categories = useMemo(() => {
+      const dedupedProducts = Array.from(
+         products.reduce((map, product) => {
+            if (!product || typeof product !== 'object' || Array.isArray(product)) return map;
+
+            const key = productSalesIdentityKey(product);
+            const existing = map.get(key);
+            if (!existing || scoreProductForSales(product, warehouses) > scoreProductForSales(existing, warehouses)) {
+               map.set(key, product);
+            }
+            return map;
+         }, new Map<string, Product>()).values()
+      );
+
       const allowedDisplayCategories = Array.from(
          new Set(Array.from(effectiveAllowedCategorySet).map((category) => displayCategory(category)).filter(Boolean))
       );
-      const availableProducts = products.filter(p => {
+      const availableProducts = dedupedProducts.filter(p => {
          if (!p || p.is_sellable === false) return false;
          if (!productHasActiveTariff(p)) return false;
          const erpWh = resolveProductActiveWarehouseIds(p, warehouses);
