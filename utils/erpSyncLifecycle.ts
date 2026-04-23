@@ -774,10 +774,9 @@ const applyErpConfigPushToLocalTerminal = async ({
     const incomingDocuments = asObject<Record<string, unknown>>(incomingConfig.documents);
     const resolvedSnapshot = asObject<Record<string, unknown>>(snapshot.resolved);
     const resolvedInventory = asObject<Record<string, unknown>>(resolvedSnapshot.inventory);
-    const allowedCategories = asStringList(
-        incomingCatalog.allowedCategories
-        ?? currentConfig.catalog?.allowedCategories
-    );
+    const allowedCategories = Array.isArray(incomingCatalog.allowedCategories)
+        ? asStringList(incomingCatalog.allowedCategories)
+        : [];
     const allowedTariffIds = asStringList(
         incomingPricing.allowedTariffIds
         ?? currentConfig.pricing?.allowedTariffIds

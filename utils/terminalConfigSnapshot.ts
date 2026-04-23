@@ -881,10 +881,9 @@ export const applyTerminalConfigSnapshot = (
     },
     catalog: {
       ...(terminalTemplate.catalog || { allowedCategories: [] }),
-      allowedCategories:
-        allowedCategories.length > 0
-          ? allowedCategories
-          : terminalTemplate.catalog?.allowedCategories || [],
+      // If ERP does not send category restrictions, treat it as unrestricted
+      // instead of inheriting stale local categories from a prior binding.
+      allowedCategories,
       fullPullOnPairing:
         typeof resolvedCatalog.full_pull_on_pairing === 'boolean'
           ? Boolean(resolvedCatalog.full_pull_on_pairing)
