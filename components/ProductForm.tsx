@@ -405,6 +405,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   }, [availableTariffs, warehouses]);
 
   useEffect(() => {
+    if (activeTab !== 'KARDEX') return;
+
     const loadLedger = async () => {
       let allEntries: InventoryLedgerEntry[] = [];
       const operationalProductId = resolveOperationalProductId(formData) || formData.id;
@@ -431,14 +433,21 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     };
     loadLedger();
 
-    // Listen for sync events to refresh Kardex in real-time
     const handleSync = () => {
       loadLedger();
     };
     window.addEventListener('ledgerSynced', handleSync);
     window.addEventListener('transactionSynced', handleSync);
 
-    // Listen for productStocks updates
+    return () => {
+      window.removeEventListener('ledgerSynced', handleSync);
+      window.removeEventListener('transactionSynced', handleSync);
+    };
+  }, [activeTab, formData.id, linkedProductIds, kardexWarehouse, kardexTerminal, allProducts]);
+
+  useEffect(() => {
+    if (activeTab !== 'STOCKS') return;
+
     const handleStockSync = async () => {
       const allStocks = await db.get('productStocks') as ProductStock[] || [];
       const myStocks = allStocks.filter((stock) => linkedProductIds.includes(String(stock?.productId || '').trim()));
@@ -454,11 +463,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     handleStockSync();
 
     return () => {
-      window.removeEventListener('ledgerSynced', handleSync);
-      window.removeEventListener('transactionSynced', handleSync);
       window.removeEventListener('productStocksUpdated', handleStockSync);
     };
-  }, [formData.id, linkedProductIds, kardexWarehouse, kardexTerminal]);
+  }, [activeTab, linkedProductIds]);
 
   // --- DYNAMIC LEDGER SUMMARY (For Cards & Table) ---
   const { entriesWithDynamicBalance, currentViewStock, currentViewCost } = useMemo(() => {
