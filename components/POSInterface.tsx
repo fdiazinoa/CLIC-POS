@@ -78,7 +78,7 @@ import { resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
-import { resolveOperationalProductId } from '../utils/productReferences';
+import { productIdentityCandidates, resolveOperationalProductId } from '../utils/productReferences';
 
 // ... existing imports
 
@@ -123,11 +123,24 @@ const productSalesIdentityKey = (product: Product): string => {
    const operationalId = resolveOperationalProductId(product);
    if (operationalId) return `op:${operationalId}`;
 
+   const normalizedId = String(product.id || '').trim().toLowerCase();
+   const identityCandidate = productIdentityCandidates(product)
+      .map((value) => String(value || '').trim().toLowerCase())
+      .find((value) => value && value !== normalizedId);
+   if (identityCandidate) return `identity:${identityCandidate}`;
+
    const barcode = typeof product.barcode === 'string' ? product.barcode.trim().toLowerCase() : '';
    if (barcode) return `barcode:${barcode}`;
 
    const sku = typeof (product as any).sku === 'string' ? (product as any).sku.trim().toLowerCase() : '';
    if (sku) return `sku:${sku}`;
+
+   const code = typeof (product as any).code === 'string' ? (product as any).code.trim().toLowerCase() : '';
+   if (code) return `code:${code}`;
+
+   const name = typeof product.name === 'string' ? product.name.trim().toLowerCase() : '';
+   const category = typeof product.category === 'string' ? product.category.trim().toLowerCase() : '';
+   if (name) return `namecat:${name}::${category}`;
 
    return `id:${String(product.id || '').trim().toLowerCase()}`;
 };
