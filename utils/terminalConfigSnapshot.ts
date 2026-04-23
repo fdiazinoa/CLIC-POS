@@ -750,14 +750,9 @@ export const applyTerminalConfigSnapshot = (
   const effectiveAllowedTariffIds =
     allowedTariffIds.length > 0
       ? allowedTariffIds
-      : terminalTemplate.pricing?.allowedTariffIds?.length
-        ? terminalTemplate.pricing.allowedTariffIds
-            .map((value) => resolveTariffId(value, effectiveTariffs))
-            .filter(Boolean)
-        : effectiveTariffs.map((tariff) => tariff.id);
+      : effectiveTariffs.map((tariff) => tariff.id);
   const effectiveDefaultTariffId =
     resolveTariffId(asString(resolvedPricing.default_tariff_id), effectiveTariffs) ||
-    resolveTariffId(terminalTemplate.pricing?.defaultTariffId, effectiveTariffs) ||
     effectiveAllowedTariffIds[0] ||
     effectiveTariffs[0]?.id ||
     '';
@@ -769,14 +764,9 @@ export const applyTerminalConfigSnapshot = (
   const effectiveAllowedWarehouseIds =
     allowedWarehouseIds.length > 0
       ? allowedWarehouseIds
-      : terminalTemplate.inventoryScope?.visibleWarehouseIds?.length
-        ? terminalTemplate.inventoryScope.visibleWarehouseIds
-            .map((value) => resolveWarehouseId(value, effectiveWarehouses))
-            .filter(Boolean)
-        : effectiveWarehouses.map((warehouse) => warehouse.id);
+      : effectiveWarehouses.map((warehouse) => warehouse.id);
   const effectiveDefaultWarehouseId =
     resolveWarehouseId(asString(resolvedInventory.default_warehouse_id), effectiveWarehouses) ||
-    resolveWarehouseId(terminalTemplate.inventoryScope?.defaultSalesWarehouseId, effectiveWarehouses) ||
     effectiveAllowedWarehouseIds[0] ||
     '';
 
@@ -875,8 +865,8 @@ export const applyTerminalConfigSnapshot = (
         terminalTemplate.inventoryScope?.transferWarehouseId,
       defaultWarehouse:
         Object.keys(asObject(resolvedInventory.default_warehouse)).length > 0
-          ? (normalizeWarehouse(resolvedInventory.default_warehouse, 0) || terminalTemplate.inventoryScope?.defaultWarehouse)
-          : terminalTemplate.inventoryScope?.defaultWarehouse,
+          ? normalizeWarehouse(resolvedInventory.default_warehouse, 0)
+          : effectiveWarehouses.find((warehouse) => warehouse.id === effectiveDefaultWarehouseId),
       warehouses: effectiveWarehouses,
     },
     catalog: {

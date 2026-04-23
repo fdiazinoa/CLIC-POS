@@ -713,20 +713,20 @@ const buildCompatibleInventoryScope = (
         String(
             resolvedInventory.default_warehouse_id
             || asObject<Record<string, unknown>>(resolvedInventory.default_warehouse).id
-            || currentInventoryScope?.defaultSalesWarehouseId
             || ''
         )
     );
 
     if (!defaultSalesWarehouseId && visibleWarehouseIds.length === 0) {
-        return currentInventoryScope;
+        return {
+            defaultSalesWarehouseId: '',
+            visibleWarehouseIds: [],
+        };
     }
 
     return {
-        defaultSalesWarehouseId: defaultSalesWarehouseId || currentInventoryScope?.defaultSalesWarehouseId || '',
-        visibleWarehouseIds: visibleWarehouseIds.length > 0
-            ? visibleWarehouseIds
-            : currentInventoryScope?.visibleWarehouseIds || [],
+        defaultSalesWarehouseId: defaultSalesWarehouseId || visibleWarehouseIds[0] || '',
+        visibleWarehouseIds,
     };
 };
 
@@ -777,12 +777,11 @@ const applyErpConfigPushToLocalTerminal = async ({
     const allowedCategories = Array.isArray(incomingCatalog.allowedCategories)
         ? asStringList(incomingCatalog.allowedCategories)
         : [];
-    const allowedTariffIds = asStringList(
-        incomingPricing.allowedTariffIds
-        ?? currentConfig.pricing?.allowedTariffIds
-    );
+    const allowedTariffIds = Array.isArray(incomingPricing.allowedTariffIds)
+        ? asStringList(incomingPricing.allowedTariffIds)
+        : [];
     const defaultTariffId = normalizeOptional(
-        String(incomingPricing.defaultTariffId || currentConfig.pricing?.defaultTariffId || '')
+        String(incomingPricing.defaultTariffId || '')
     );
     const incomingAssignments = asObject<Record<string, string>>(incomingDocuments.assignments);
     const nextOperational = {
@@ -798,7 +797,7 @@ const applyErpConfigPushToLocalTerminal = async ({
         ...(currentConfig.pricing || {}),
         ...incomingPricing,
         allowedTariffIds,
-        defaultTariffId: defaultTariffId || currentConfig.pricing?.defaultTariffId || '',
+        defaultTariffId,
     } as TerminalConfig['pricing'];
     const nextDocumentAssignments = {
         ...DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS,
