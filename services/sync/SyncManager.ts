@@ -1329,7 +1329,7 @@ class SyncManager {
 
         const context = this.getActiveTerminalContext(baseConfig);
         const localTerminalId = context.localTerminalId || context.terminalId;
-        if (!context.terminalId || !localTerminalId || !context.tenantId || !context.erpBaseUrl) {
+        if (!context.terminalId || !localTerminalId || !context.tenantId) {
             return null;
         }
 
