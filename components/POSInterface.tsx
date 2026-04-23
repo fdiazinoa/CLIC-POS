@@ -145,12 +145,37 @@ const productSalesIdentityKey = (product: Product): string => {
    return `id:${String(product.id || '').trim().toLowerCase()}`;
 };
 
+const isSeedCatalogProduct = (product: Product): boolean => {
+   const id = String(product.id || '').trim().toLowerCase();
+   return /^prod-\d+$/.test(id) || /^p\d+$/.test(id) || /^f\d+$/.test(id);
+};
+
+const productBusinessKeys = (product: Product): string[] => {
+   const keys = new Set<string>();
+   const barcode = typeof product.barcode === 'string' ? product.barcode.trim().toLowerCase() : '';
+   const sku = typeof (product as any).sku === 'string' ? (product as any).sku.trim().toLowerCase() : '';
+   const code = typeof (product as any).code === 'string' ? (product as any).code.trim().toLowerCase() : '';
+   const itemCode = typeof (product as any).item_code === 'string' ? (product as any).item_code.trim().toLowerCase() : '';
+   const name = typeof product.name === 'string' ? product.name.trim().toLowerCase() : '';
+   const category = typeof product.category === 'string' ? product.category.trim().toLowerCase() : '';
+
+   if (barcode) keys.add(`barcode:${barcode}`);
+   if (sku) keys.add(`sku:${sku}`);
+   if (code) keys.add(`code:${code}`);
+   if (itemCode) keys.add(`item_code:${itemCode}`);
+   if (name) keys.add(`namecat:${name}::${category}`);
+
+   return Array.from(keys);
+};
+
 const scoreProductForSales = (product: Product, warehouses: Warehouse[]): number => {
    const activeWarehouses = resolveProductActiveWarehouseIds(product, warehouses).length;
    const stockBalanceCount = Object.keys(product.stockBalances || {}).length;
    const updatedAtScore = new Date((product as any).updatedAt || (product as any).createdAt || 0).getTime() || 0;
+   const seedPenalty = isSeedCatalogProduct(product) ? -50_000 : 0;
 
    return (
+      seedPenalty +
       activeWarehouses * 1000 +
       stockBalanceCount * 100 +
       (product.is_sellable !== false ? 10 : 0) +
@@ -1483,9 +1508,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [selectedCustomer, cart, terminalId, activeTerminalConfig?.operational?.fiscalThreshold]);
 
 
+   const salesCatalogProducts = useMemo(() => {
+      const nonSeedBusinessKeys = new Set<string>();
+
+      for (const product of products) {
+         if (!product || typeof product !== 'object' || Array.isArray(product)) continue;
+         if (isSeedCatalogProduct(product)) continue;
+         productBusinessKeys(product).forEach((key) => nonSeedBusinessKeys.add(key));
+      }
+
+      return products.filter((product) => {
+         if (!product || typeof product !== 'object' || Array.isArray(product)) return false;
+         if (!isSeedCatalogProduct(product)) return true;
+
+         const businessKeys = productBusinessKeys(product);
+         return !businessKeys.some((key) => nonSeedBusinessKeys.has(key));
+      });
+   }, [products]);
+
    const filteredProducts = useMemo(() => {
       const dedupedProducts = Array.from(
-         products.reduce((map, product) => {
+         salesCatalogProducts.reduce((map, product) => {
             if (!product || typeof product !== 'object' || Array.isArray(product)) return map;
 
             const key = productSalesIdentityKey(product);
@@ -1538,12 +1581,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // Defensive: Ensure unique IDs to prevent React key warnings
       const seenIds = new Set();
-      return filtered.filter(p => {
-         if (seenIds.has(p.id)) return false;
-         seenIds.add(p.id);
-         return true;
-      });
-   }, [products, searchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
+         return filtered.filter(p => {
+            if (seenIds.has(p.id)) return false;
+            seenIds.add(p.id);
+            return true;
+         });
+   }, [salesCatalogProducts, searchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
 
    const handleRetailSearchSubmit = useCallback(() => {
       const trimmed = (searchTerm || '').trim();
@@ -1579,7 +1622,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const categories = useMemo(() => {
       const dedupedProducts = Array.from(
-         products.reduce((map, product) => {
+         salesCatalogProducts.reduce((map, product) => {
             if (!product || typeof product !== 'object' || Array.isArray(product)) return map;
 
             const key = productSalesIdentityKey(product);
@@ -1624,7 +1667,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const cats = ['ALL', ...scopedCategories];
       console.log('[POS] Categories:', cats);
       return cats;
-   }, [products, canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
+   }, [salesCatalogProducts, canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
 
    useEffect(() => {
       if (categoryFilter !== 'ALL' && !categories.includes(categoryFilter)) {
