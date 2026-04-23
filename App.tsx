@@ -1229,7 +1229,9 @@ const AppContent: React.FC = () => {
           || now - lastManifestRefreshAt >= MANIFEST_REFRESH_INTERVAL_MS;
 
         if (shouldRefreshManifest) {
-          const refreshedFromManifest = await syncManager.syncTerminalManifestInBackground();
+          const refreshedFromManifest = await syncManager.syncTerminalManifestInBackground(undefined, {
+            bootstrapBlocks: Boolean(options?.forceManifestRefresh),
+          });
           if (!disposed && refreshedFromManifest && !Array.isArray(refreshedFromManifest) && refreshedFromManifest.terminals) {
             console.log(`[ERP SYNC] ${terminalName} actualizó su estado runtime desde el manifest del ERP.`);
           }

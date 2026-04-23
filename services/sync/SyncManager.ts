@@ -1320,6 +1320,7 @@ class SyncManager {
         options?: {
             skipIfStartupCompleted?: boolean;
             markStartupCompleted?: boolean;
+            bootstrapBlocks?: boolean;
         }
     ): Promise<BusinessConfig | null> {
         if (this.isDisabled || this.terminalManifestSyncInFlight || !navigator.onLine) {
@@ -1350,8 +1351,9 @@ class SyncManager {
             const changedBlocks = Array.isArray(manifest.changed_blocks) ? manifest.changed_blocks : [];
             const inventoryChanged = Boolean(manifest.changed.inventory) || changedBlocks.includes('inventory');
             const productPricesChanged = Boolean(manifest.changed.product_prices) || changedBlocks.includes('product_prices');
-            const bootstrapInventoryOnStartup = Boolean(options?.markStartupCompleted && manifest.cursor_map.inventory);
-            const bootstrapProductPricesOnStartup = Boolean(options?.markStartupCompleted && manifest.cursor_map.product_prices);
+            const shouldBootstrapBlocks = Boolean(options?.markStartupCompleted || options?.bootstrapBlocks);
+            const bootstrapInventoryOnStartup = Boolean(shouldBootstrapBlocks && manifest.cursor_map.inventory);
+            const bootstrapProductPricesOnStartup = Boolean(shouldBootstrapBlocks && manifest.cursor_map.product_prices);
             const terminalChanged = Boolean(manifest.changed.terminal);
 
             if (!terminalChanged && changedMasterScopes.length === 0 && !inventoryChanged && !bootstrapInventoryOnStartup && !productPricesChanged && !bootstrapProductPricesOnStartup) {
@@ -1773,11 +1775,17 @@ class SyncManager {
         return nextPriceDocs.size;
     }
 
-    async syncTerminalManifestInBackground(baseConfig?: BusinessConfig | null): Promise<BusinessConfig | null> {
+    async syncTerminalManifestInBackground(
+        baseConfig?: BusinessConfig | null,
+        options?: {
+            bootstrapBlocks?: boolean;
+        }
+    ): Promise<BusinessConfig | null> {
         try {
             return await this.reconcileTerminalManifest(baseConfig ?? null, {
                 skipIfStartupCompleted: false,
                 markStartupCompleted: false,
+                bootstrapBlocks: Boolean(options?.bootstrapBlocks),
             });
         } catch (error) {
             console.warn('⚠️ SyncManager: background manifest sync failed:', error);
