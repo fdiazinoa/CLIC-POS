@@ -129,6 +129,7 @@ class SyncManager {
     private syncConfig: SyncConfig | null = null;
     private isMaster: boolean = false;
     private isDisabled: boolean = false;
+    private initializedLocalTerminalId: string | null = null;
     private imageSyncInProgress = false;
     private lastProductImageManifestVersion = 0;
     private productImageHashes: Map<string, string> = new Map();
@@ -304,6 +305,7 @@ class SyncManager {
     async initialize(config: BusinessConfig, terminalId: string) {
         // Ensure a device token exists for this browser instance
         this.ensureDeviceToken();
+        this.initializedLocalTerminalId = terminalId;
         this.rehydrateOperationalTargetFromConfig(config, terminalId);
 
         // Detect Network Mode
@@ -652,6 +654,7 @@ class SyncManager {
         const activeTerminalId =
             localStorage.getItem('active_terminal_id') ||
             localStorage.getItem('CLIC_POS_TERMINAL_ID') ||
+            this.initializedLocalTerminalId ||
             null;
 
         const currentTerminal = activeTerminalId && config?.terminals
@@ -1744,6 +1747,7 @@ class SyncManager {
         const activeTerminalId =
             localStorage.getItem('active_terminal_id') ||
             localStorage.getItem('CLIC_POS_TERMINAL_ID') ||
+            this.initializedLocalTerminalId ||
             null;
         const currentTerminal = activeTerminalId && Array.isArray(businessConfig?.terminals)
             ? businessConfig!.terminals.find((terminal) => terminal?.id === activeTerminalId) || businessConfig!.terminals[0]
