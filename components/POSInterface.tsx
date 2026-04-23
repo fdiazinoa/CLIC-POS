@@ -19,7 +19,7 @@ import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType, FiscalDocumentCode,
-   PaymentEntry, Table, Reservation, ZReport, Room, Permission
+   PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, Tariff
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import { getFiscalComplianceConfig, getDefaultFiscalProvider, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
@@ -117,6 +117,7 @@ export interface POSInterfaceProps {
    onKioskPay?: () => void;
    internalSequences?: any[];
    rooms?: Room[];
+   productPrices?: ProductPrice[];
 }
 
 const productSalesIdentityKey = (product: Product): string => {
@@ -230,7 +231,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onUpdateActiveTableGuests,
    onKioskPay,
    internalSequences,
-   rooms = []
+   rooms = [],
+   productPrices: externalProductPrices = []
 }) => {
    const cartEndRef = useRef<HTMLDivElement>(null);
    const posRootRef = useRef<HTMLDivElement>(null);
@@ -238,6 +240,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const mobileCartButtonRef = useRef<HTMLButtonElement>(null);
    const desktopActionGridRef = useRef<HTMLDivElement>(null);
    const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
+   const [productPrices, setProductPrices] = useState<ProductPrice[]>(externalProductPrices);
+
+   useEffect(() => {
+      setProductPrices(Array.isArray(externalProductPrices) ? externalProductPrices : []);
+   }, [externalProductPrices]);
+
+   useEffect(() => {
+      let cancelled = false;
+
+      const refreshProductPrices = async () => {
+         try {
+            const fresh = await db.get('productPrices') as ProductPrice[] | null;
+            if (!cancelled && Array.isArray(fresh)) {
+               setProductPrices(fresh);
+            }
+         } catch (error) {
+            console.warn('⚠️ POSInterface: Could not load productPrices collection:', error);
+         }
+      };
+
+      void refreshProductPrices();
+      window.addEventListener('productPricesUpdated', refreshProductPrices);
+      return () => {
+         cancelled = true;
+         window.removeEventListener('productPricesUpdated', refreshProductPrices);
+      };
+   }, []);
+
    const isMaster = useMemo(() => {
       const terminal = config.terminals?.find(t => t.id === activeTerminalId);
       return terminal?.config?.isPrimaryNode === true;
@@ -646,6 +676,42 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          setActiveTariffId(desiredTariffId);
       }
    }, [activeTariffId, allowedTariffs, desiredTariffId]);
+
+   const productPriceIndex = useMemo(() => {
+      const index = new Map<string, number>();
+      const normalizeToken = (value: unknown): string =>
+         typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+      for (const record of productPrices) {
+         if (!record || typeof record !== 'object') continue;
+         const price = Number(record.price);
+         if (!Number.isFinite(price)) continue;
+
+         const productTokens = [
+            record.productId,
+            record.itemId,
+            record.erpProductId,
+            record.sourceProductId,
+         ]
+            .map(normalizeToken)
+            .filter(Boolean);
+
+         const tariffTokens = [
+            record.tariffId,
+            record.tariffCode,
+         ]
+            .map(normalizeToken)
+            .filter(Boolean);
+
+         for (const productToken of productTokens) {
+            for (const tariffToken of tariffTokens) {
+               index.set(`${productToken}::${tariffToken}`, price);
+            }
+         }
+      }
+
+      return index;
+   }, [productPrices]);
 
    // FILTER: Only pending transactions (after latest Z close for this terminal)
    const terminalTransactions = useMemo(() => {
@@ -1061,12 +1127,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const getTariffPrice = useCallback((p: Product) => {
-      const selectedTariff = (config.tariffs || []).find((tariff) => tariff.id === activeTariffId);
+      const selectedTariff = (config.tariffs || []).find((tariff) => tariff.id === activeTariffId) as Tariff | undefined;
       const activeTokens = new Set(
          [activeTariffId, selectedTariff?.id, (selectedTariff as any)?.code]
             .map((value) => (typeof value === 'string' ? value.trim().toLowerCase() : ''))
             .filter(Boolean)
       );
+
+      const productTokens = new Set(
+         [
+            p.id,
+            resolveOperationalProductId(p),
+            ...productIdentityCandidates(p),
+         ]
+            .map((value) => (typeof value === 'string' ? value.trim().toLowerCase() : ''))
+            .filter(Boolean)
+      );
+
+      for (const productToken of productTokens) {
+         for (const activeToken of activeTokens) {
+            const indexedPrice = productPriceIndex.get(`${productToken}::${activeToken}`);
+            if (typeof indexedPrice === 'number' && Number.isFinite(indexedPrice)) {
+               return indexedPrice;
+            }
+         }
+      }
 
       const matchedEntry = (p.tariffs || []).find((entry: any) => {
          const entryTokens = [
@@ -1085,7 +1170,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const tariffPrice = matchedEntry?.price;
       return typeof tariffPrice === 'number' && Number.isFinite(tariffPrice) ? tariffPrice : null;
-   }, [activeTariffId, config.tariffs]);
+   }, [activeTariffId, config.tariffs, productPriceIndex]);
 
    const productHasActiveTariff = useCallback((p: Product) => getTariffPrice(p) !== null, [getTariffPrice]);
 

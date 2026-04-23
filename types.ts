@@ -1180,6 +1180,19 @@ export interface ProductStock {
   updatedAt: string;
 }
 
+export interface ProductPrice {
+  id: string; // generateId(productId, tariffId)
+  productId: string;
+  tariffId: string;
+  price: number;
+  updatedAt: string;
+  itemId?: string;
+  erpProductId?: string;
+  sourceProductId?: string;
+  tariffCode?: string;
+  currency?: string;
+}
+
 export interface InventoryCommitment {
   id: string; // productId + '_' + warehouseId
   productId: string;

@@ -359,6 +359,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ initialConfig, onComplete }) 
         'zReports',
         'receptions',
         'productStocks',
+        'productPrices',
         'reservations',
         'inventoryCommitments',
         'supplierProductPrices',
