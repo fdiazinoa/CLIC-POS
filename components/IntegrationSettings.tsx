@@ -33,6 +33,7 @@ import {
 } from '../services/payments/paymentIntegrationAudit';
 import {
   IngenicoAzulWebApiError,
+  IngenicoAzulWebApiNormalizedResult,
   ingenicoAzulWebApiService,
 } from '../services/payments/IngenicoAzulWebApiService';
 import { printGatewayReceipt } from '../utils/printer';
@@ -53,8 +54,8 @@ type AzulTerminalModalState = {
   mode: 'TOTALS' | 'SETTLE';
   isLoadingTotals: boolean;
   isSettling: boolean;
-  previewResult: AzulNormalizedResult | null;
-  settledResult: AzulNormalizedResult | null;
+  previewResult: AzulNormalizedResult | IngenicoAzulWebApiNormalizedResult | null;
+  settledResult: AzulNormalizedResult | IngenicoAzulWebApiNormalizedResult | null;
   errorMessage: string | null;
   printWarning: string | null;
 };
@@ -343,7 +344,27 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
     ));
 
     try {
-      const result = await azulMcmService.getTransactionTotals(integration);
+      const result = integration.provider === 'AZUL'
+        ? await azulMcmService.getTransactionTotals(integration)
+        : null;
+
+      if (!result) {
+        setAzulTerminalModal(prev => (
+          prev && prev.integration.id === integration.id
+            ? {
+              ...prev,
+              mode,
+              isLoadingTotals: false,
+              previewResult: null,
+              settledResult: null,
+              errorMessage: null,
+              printWarning: null,
+            }
+            : prev
+        ));
+        return;
+      }
+
       await persistAuditEvent(createPaymentIntegrationAuditEvent(integration, {
         action: 'PINPAD_TRANSACTION_TOTALS',
         status: 'SUCCESS',
@@ -427,11 +448,13 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
     ));
 
     try {
-      const result = await azulMcmService.pinpadSettle(integration);
+      const result = integration.provider === 'AZUL'
+        ? await azulMcmService.pinpadSettle(integration)
+        : await ingenicoAzulWebApiService.closeTotals(integration);
       await persistAuditEvent(createPaymentIntegrationAuditEvent(integration, {
         action: 'PINPAD_SETTLE',
         status: 'SUCCESS',
-        message: 'Cierre de lote completado correctamente en AZUL.',
+        message: `Cierre de lote completado correctamente en ${integration.provider === 'AZUL' ? 'AZUL' : 'Ingenico Azul WebAPI'}.`,
         requestDetails: {
           MerchantId: integration.merchantId || '',
           TerminalId: integration.terminalId || '',
@@ -447,20 +470,20 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
       }));
 
       let printWarning: string | null = null;
-      const receipt = result.receiptMerchant || '';
+      const receipt = result.receiptMerchant || result.receiptClient || '';
       if (receipt) {
         const printed = await printGatewayReceipt(config, {
-          providerLabel: 'AZUL',
+          providerLabel: integration.provider === 'AZUL' ? 'AZUL' : 'Ingenico Azul WebAPI',
           copyLabel: 'Cierre de lote',
           voucherText: receipt,
           referenceId: `${integration.id}-settle-${Date.now()}`,
           terminalId: integration.terminalId,
         });
         if (!printed) {
-          printWarning = 'AZUL cerró el lote, pero no se pudo imprimir el comprobante automáticamente.';
+          printWarning = `${integration.provider === 'AZUL' ? 'AZUL' : 'Ingenico Azul WebAPI'} cerró el lote, pero no se pudo imprimir el comprobante automáticamente.`;
         }
       } else {
-        printWarning = 'AZUL no devolvió un comprobante legible para imprimir después del cierre.';
+        printWarning = `${integration.provider === 'AZUL' ? 'AZUL' : 'Ingenico Azul WebAPI'} no devolvió un comprobante legible para imprimir después del cierre.`;
       }
 
       setAzulTerminalModal(prev => (
@@ -477,6 +500,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo cerrar el lote en AZUL.';
       const gatewayError = error instanceof AzulGatewayError ? error : null;
+      const ingenicoError = error instanceof IngenicoAzulWebApiError ? error : null;
       await persistAuditEvent(createPaymentIntegrationAuditEvent(integration, {
         action: 'PINPAD_SETTLE',
         status: 'FAILED',
@@ -488,10 +512,16 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
         responseDetails: {
           Estado: 'Error',
         },
-        responseCode: gatewayError?.normalized?.responseCode || gatewayError?.response?.ResponseCode,
-        responseMessage: gatewayError?.normalized?.responseMessage || gatewayError?.response?.ResponseMessage,
-        merchantId: gatewayError?.normalized?.merchantId,
-        terminalId: gatewayError?.normalized?.terminalId,
+        responseCode:
+          gatewayError?.normalized?.responseCode ||
+          gatewayError?.response?.ResponseCode ||
+          ingenicoError?.normalized?.responseCode,
+        responseMessage:
+          gatewayError?.normalized?.responseMessage ||
+          gatewayError?.response?.ResponseMessage ||
+          ingenicoError?.normalized?.responseMessage,
+        merchantId: gatewayError?.normalized?.merchantId || ingenicoError?.normalized?.merchantId,
+        terminalId: gatewayError?.normalized?.terminalId || ingenicoError?.normalized?.terminalId,
       }));
 
       setAzulTerminalModal(prev => (
@@ -613,16 +643,18 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {integration.provider === 'AZUL' && integration.isEnabled && (
+                      {integration.isEnabled && (integration.provider === 'AZUL' || integration.provider === 'INGENICO_AZUL_WEBAPI') && (
                         <>
-                          <button
-                            onClick={() => openAzulTerminalModal(integration, 'TOTALS')}
-                            className="rounded-lg bg-gray-50 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-700"
-                          >
-                            <span className="flex items-center gap-2">
-                              <RefreshCw size={16} /> Totales
-                            </span>
-                          </button>
+                          {integration.provider === 'AZUL' && (
+                            <button
+                              onClick={() => openAzulTerminalModal(integration, 'TOTALS')}
+                              className="rounded-lg bg-gray-50 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-700"
+                            >
+                              <span className="flex items-center gap-2">
+                                <RefreshCw size={16} /> Totales
+                              </span>
+                            </button>
+                          )}
                           <button
                             onClick={() => openAzulTerminalModal(integration, 'SETTLE')}
                             className="rounded-lg bg-gray-50 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
@@ -742,7 +774,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
                         className="w-full rounded-xl border border-indigo-100 bg-white p-3 pl-10 outline-none transition-all focus:ring-2 focus:ring-indigo-400"
                         placeholder={
                           editingIntegration.provider === 'INGENICO_AZUL_WEBAPI'
-                            ? 'http://127.0.0.1:9001'
+                            ? 'http://localhost:9000'
                             : 'https://pruebas.azul.com.do/POSWebServices/JSON/default.aspx'
                         }
                       />
@@ -835,7 +867,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
                   <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800">
                     <p className="font-bold">Companion app Android local</p>
                     <p className="mt-1">
-                      Esta integración espera que la APK de Azul Ingenico WebAPI esté instalada en el mismo dispositivo y exponga su API local, por defecto en <code>http://127.0.0.1:9001</code>.
+                      Esta integración espera que la APK de Azul Ingenico WebAPI esté instalada en el mismo dispositivo y exponga su API local, por defecto en <code>http://localhost:9000</code>.
                     </p>
                   </div>
                 )}
@@ -917,12 +949,14 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
         <AzulSettlementModal
           integration={azulTerminalModal.integration}
           mode={azulTerminalModal.mode}
+          providerLabel={PROVIDER_LABELS[azulTerminalModal.integration.provider]}
           isLoadingTotals={azulTerminalModal.isLoadingTotals}
           isSettling={azulTerminalModal.isSettling}
           previewResult={azulTerminalModal.previewResult}
           settledResult={azulTerminalModal.settledResult}
           errorMessage={azulTerminalModal.errorMessage}
           printWarning={azulTerminalModal.printWarning}
+          allowSettleWithoutPreview={azulTerminalModal.integration.provider === 'INGENICO_AZUL_WEBAPI'}
           onRefreshTotals={() => {
             void handleLoadAzulTotals(azulTerminalModal.integration, azulTerminalModal.mode);
           }}
