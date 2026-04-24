@@ -65,7 +65,7 @@ export class IngenicoAzulWebApiError extends Error {
   }
 }
 
-const DEFAULT_LOCAL_BASE_URL = 'http://127.0.0.1:9001';
+const DEFAULT_LOCAL_BASE_URL = 'http://localhost:9000';
 const DEFAULT_TIMEOUT_MS = 65000;
 
 const isNativeCapacitorRuntime = (): boolean => {
@@ -430,7 +430,7 @@ export const ingenicoAzulWebApiService = {
     const response = await getJson(
       integration,
       'REFUND',
-      `/api/transaction/lane/Refund/${encodeURIComponent(formatAmount(request.amount))}`
+      `/api/transaction/lane/refund/${encodeURIComponent(formatAmount(request.amount))}`
     );
 
     const normalized = normalizeResult(response);
@@ -453,7 +453,7 @@ export const ingenicoAzulWebApiService = {
     const response = await getJson(
       integration,
       'VOID',
-      `/api/transaction/lane/Void/${encodeURIComponent(request.invoiceNumber)}`
+      `/api/transaction/lane/void/${encodeURIComponent(request.invoiceNumber)}`
     );
 
     const normalized = normalizeResult(response);

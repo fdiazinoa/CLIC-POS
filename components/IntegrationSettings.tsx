@@ -88,7 +88,7 @@ const createDefaultIntegration = (
         ? 'https://pruebas.azul.com.do/POSWebServices/JSON/default.aspx'
         : 'https://pagos.azul.com.do/POSWebServices/JSON/default.aspx')
       : provider === 'INGENICO_AZUL_WEBAPI'
-        ? 'http://127.0.0.1:9001'
+        ? 'http://localhost:9000'
         : '',
   secondaryBaseUrl: '',
   merchantId: '',
