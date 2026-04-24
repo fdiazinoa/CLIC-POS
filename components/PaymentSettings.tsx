@@ -251,7 +251,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
       <div className="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-8 py-6">
         <div>
           <h1 className="text-2xl font-black text-gray-800">Métodos de Pago</h1>
-          <p className="text-sm text-gray-500">Configura las opciones de cobro visibles en caja y asigna tarjeta manual o integrada.</p>
+          <p className="text-sm text-gray-500">Configura las opciones de cobro visibles en caja y decide si una tarjeta se procesa manualmente o integrada a un dispositivo.</p>
         </div>
         <div className="flex gap-3">
           <button onClick={onClose} className="rounded-lg px-4 py-2 font-bold text-gray-500 hover:bg-gray-100">
@@ -418,7 +418,7 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
 
                 {editingMethod.type === 'CARD' && (
                   <div>
-                    <label className="mb-1 block text-xs font-bold uppercase text-gray-500">Modo de Tarjeta</label>
+                    <label className="mb-1 block text-xs font-bold uppercase text-gray-500">Integrado a</label>
                     <select
                       value={editingMethod.integrationMode || 'MANUAL'}
                       onChange={(event) => {
@@ -432,8 +432,8 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                       }}
                       className="w-full rounded-xl border border-indigo-100 bg-indigo-50 p-3 font-medium text-indigo-900 outline-none transition-all focus:ring-2 focus:ring-indigo-500"
                     >
-                      <option value="MANUAL">Cobro manual</option>
-                      <option value="INTEGRATED">Cobro integrado</option>
+                      <option value="MANUAL">Ninguno (cobro manual)</option>
+                      <option value="INTEGRATED">Dispositivo / gateway</option>
                     </select>
                   </div>
                 )}
@@ -462,13 +462,13 @@ const PaymentSettings: React.FC<PaymentSettingsProps> = ({ config, onUpdateConfi
                 <div className="space-y-4 rounded-2xl border border-indigo-100 bg-indigo-50/60 p-5">
                   <div className="flex items-center gap-2">
                     <CreditCard size={18} className="text-indigo-600" />
-                    <h4 className="text-sm font-bold uppercase tracking-wide text-indigo-800">Asignación de Integración</h4>
+                    <h4 className="text-sm font-bold uppercase tracking-wide text-indigo-800">Dispositivo o gateway asignado</h4>
                   </div>
 
                   {availableIntegrations.length > 0 ? (
                     <>
                       <div>
-                        <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">Proveedor configurado</label>
+                        <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">Integración disponible</label>
                         <select
                           value={editingMethod.integrationId || ''}
                           onChange={(event) => handleIntegrationSelection(event.target.value)}

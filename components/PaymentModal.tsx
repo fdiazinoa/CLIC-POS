@@ -31,6 +31,10 @@ import { printIntegratedPaymentArtifacts, printTicket } from '../utils/printer';
 import { networkSyncService } from '../services/sync/NetworkSyncService';
 import { AzulGatewayError, azulMcmService } from '../services/payments/AzulMcmService';
 import {
+   IngenicoAzulWebApiError,
+   ingenicoAzulWebApiService,
+} from '../services/payments/IngenicoAzulWebApiService';
+import {
    createPaymentIntegrationAuditEvent,
    dispatchAuditEventConfigUpdate,
 } from '../services/payments/paymentIntegrationAudit';
@@ -475,6 +479,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       return undefined;
    };
 
+   const resolveGatewaySummaryLabel = (payment: PaymentEntry): string => {
+      const integration = resolveGatewayIntegrationForPayment(payment, resolvePaymentMethodForEntry(payment));
+      return resolveGatewayDisplayName(integration, payment.gatewayProvider || 'Procesador');
+   };
+
    const calculateGatewayTaxAmount = (amountInBase: number): number =>
       absTotal > 0
          ? roundToTwo(Math.min(amountInBase, absTotal) / absTotal * Math.max(0, taxAmount))
@@ -511,10 +520,6 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          throw new Error('La tarjeta integrada no puede cobrar más que el restante del ticket.');
       }
 
-      if (method.integration.provider !== 'AZUL') {
-         throw new Error(`La integración ${method.integration.provider} todavía no está soportada en caja.`);
-      }
-
       return {
          ...buildLocalPaymentEntry(method, valInSelectedCurrency, amountInBase),
          gatewayProvider: method.integration.provider,
@@ -533,10 +538,6 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
          throw new Error('La tarjeta integrada no tiene una integración asignada.');
       }
 
-      if (integration.provider !== 'AZUL') {
-         throw new Error(`La integración ${integration.provider} todavía no está soportada en caja.`);
-      }
-
       const amountInBase = roundToTwo(Number(payment.amount || 0));
       const valInSelectedCurrency = roundToTwo(
          Number(payment.amountOriginal || 0) > 0
@@ -550,16 +551,37 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
       setFinalizeError(null);
       setGatewayProgress({
          title: 'Procesando pago',
-         providerLabel: resolveGatewayDisplayName(integration, 'AZUL'),
+         providerLabel: resolveGatewayDisplayName(integration, integration.provider),
          detail: 'Espere la confirmación del procesador.',
       });
       try {
-         const azulResponse = await azulMcmService.sale(integration, {
-            amount: amountInBase,
-            itbis: proportionalTax,
-            orderNumber,
-            installment: '0',
-         });
+         const requestDetails: Record<string, string> = {
+            Amount: amountInBase.toFixed(2),
+         };
+
+         const gatewayResult = integration.provider === 'AZUL'
+            ? await azulMcmService.sale(integration, {
+               amount: amountInBase,
+               itbis: proportionalTax,
+               orderNumber,
+               installment: '0',
+            })
+            : integration.provider === 'INGENICO_AZUL_WEBAPI'
+               ? await ingenicoAzulWebApiService.sale(integration, {
+                  amount: amountInBase,
+               })
+               : (() => {
+                  throw new Error(`La integración ${integration.provider} todavía no está soportada en caja.`);
+               })();
+
+         if (integration.provider === 'AZUL') {
+            requestDetails.Itbis = proportionalTax.toFixed(2);
+            requestDetails.OrderNumber = orderNumber;
+         }
+
+         const gatewayReference = 'referenceNumber' in gatewayResult
+            ? gatewayResult.referenceNumber
+            : ('transactionReference' in gatewayResult ? gatewayResult.transactionReference : undefined);
 
          if (config) {
             await dispatchAuditEventConfigUpdate(
@@ -567,63 +589,64 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                integration.id,
                createPaymentIntegrationAuditEvent(integration, {
                   action: 'SALE',
-                  status: 'SUCCESS',
-                  message: azulResponse.responseMessage || 'Pago aprobado por el procesador.',
-                  requestDetails: {
-                     Amount: amountInBase.toFixed(2),
-                     Itbis: proportionalTax.toFixed(2),
-                     OrderNumber: orderNumber,
-                  },
+                  status: gatewayResult.approved ? 'SUCCESS' : 'FAILED',
+                  message: gatewayResult.responseMessage || 'Pago aprobado por el procesador.',
+                  requestDetails,
                   responseDetails: {
-                     MerchantId: azulResponse.merchantId || integration.merchantId || '',
-                     TerminalId: azulResponse.terminalId || integration.terminalId || '',
-                     EntryMode: azulResponse.entryMode || '',
-                     CardBrand: azulResponse.cardBrand || '',
+                     MerchantId: gatewayResult.merchantId || integration.merchantId || '',
+                     TerminalId: gatewayResult.terminalId || integration.terminalId || '',
+                     EntryMode: gatewayResult.entryMode || '',
+                     CardBrand: gatewayResult.cardBrand || '',
                   },
-                  responseCode: azulResponse.responseCode,
-                  responseMessage: azulResponse.responseMessage,
-                  authorizationCode: azulResponse.authorizationCode,
-                  referenceNumber: azulResponse.referenceNumber,
-                  invoiceNumber: azulResponse.invoiceNumber,
-                  sequenceNumber: azulResponse.sequenceNumber,
-                  maskedPan: azulResponse.maskedPan,
-                  entryMode: azulResponse.entryMode,
-                  merchantId: azulResponse.merchantId,
-                  terminalId: azulResponse.terminalId,
+                  responseCode: gatewayResult.responseCode,
+                  responseMessage: gatewayResult.responseMessage,
+                  authorizationCode: gatewayResult.authorizationCode,
+                  referenceNumber: gatewayReference,
+                  invoiceNumber: gatewayResult.invoiceNumber,
+                  sequenceNumber: 'sequenceNumber' in gatewayResult
+                     ? gatewayResult.sequenceNumber
+                     : undefined,
+                  maskedPan: gatewayResult.maskedPan,
+                  entryMode: gatewayResult.entryMode,
+                  merchantId: gatewayResult.merchantId,
+                  terminalId: gatewayResult.terminalId,
                })
             );
          }
 
          return {
             ...payment,
-            gatewayProvider: 'AZUL',
+            gatewayProvider: integration.provider,
             gatewayIntegrationId: integration.id,
             gatewayTransactionType: 'SALE',
-            gatewayStatus: azulResponse.approved ? 'APPROVED' : 'DECLINED',
-            gatewayResponseCode: azulResponse.responseCode,
-            gatewayResponseMessage: azulResponse.responseMessage,
-            gatewayOrderNumber: azulResponse.orderNumber || orderNumber,
+            gatewayStatus: gatewayResult.approved ? 'APPROVED' : 'DECLINED',
+            gatewayResponseCode: gatewayResult.responseCode,
+            gatewayResponseMessage: gatewayResult.responseMessage,
+            gatewayOrderNumber: 'orderNumber' in gatewayResult ? (gatewayResult.orderNumber || orderNumber) : orderNumber,
             gatewayProcessedAmount: roundToTwo(amountInBase),
-            gatewayProcessedTaxAmount: roundToTwo(proportionalTax),
-            gatewayAuthorizationCode: azulResponse.authorizationCode,
-            gatewayReference: azulResponse.referenceNumber,
-            gatewaySequenceNumber: azulResponse.sequenceNumber,
-            gatewayInvoiceNumber: azulResponse.invoiceNumber,
-            gatewayBatchNumber: azulResponse.batchNumber,
-            gatewayMerchantId: azulResponse.merchantId,
-            gatewayTerminalId: azulResponse.terminalId,
-            gatewayMaskedPan: azulResponse.maskedPan,
-            gatewayCardBrand: azulResponse.cardBrand,
-            gatewayEntryMode: azulResponse.entryMode,
-            gatewayReceiptMerchant: azulResponse.receiptMerchant,
-            gatewayReceiptClient: azulResponse.receiptClient,
-            gatewaySignatureData: azulResponse.signatureData,
-            gatewayRequireSignature: azulResponse.requireSignature || !!method?.definition?.requiresSignature,
-            gatewayRawResponse: azulResponse.rawResponse,
+            gatewayProcessedTaxAmount: integration.provider === 'AZUL' ? roundToTwo(proportionalTax) : 0,
+            gatewayAuthorizationCode: gatewayResult.authorizationCode,
+            gatewayReference,
+            gatewaySequenceNumber: 'sequenceNumber' in gatewayResult
+               ? gatewayResult.sequenceNumber
+               : undefined,
+            gatewayInvoiceNumber: gatewayResult.invoiceNumber,
+            gatewayBatchNumber: gatewayResult.batchNumber,
+            gatewayMerchantId: gatewayResult.merchantId,
+            gatewayTerminalId: gatewayResult.terminalId,
+            gatewayMaskedPan: gatewayResult.maskedPan,
+            gatewayCardBrand: gatewayResult.cardBrand,
+            gatewayEntryMode: gatewayResult.entryMode,
+            gatewayReceiptMerchant: gatewayResult.receiptMerchant,
+            gatewayReceiptClient: gatewayResult.receiptClient,
+            gatewaySignatureData: 'signatureData' in gatewayResult ? gatewayResult.signatureData : undefined,
+            gatewayRequireSignature: ('requireSignature' in gatewayResult ? gatewayResult.requireSignature : false) || !!method?.definition?.requiresSignature,
+            gatewayRawResponse: gatewayResult.rawResponse,
          };
       } catch (error) {
          if (config) {
             const gatewayError = error instanceof AzulGatewayError ? error : null;
+            const ingenicoError = error instanceof IngenicoAzulWebApiError ? error : null;
             await dispatchAuditEventConfigUpdate(
                config,
                integration.id,
@@ -631,27 +654,45 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                   action: 'SALE',
                   status: 'FAILED',
                   message: error instanceof Error ? error.message : 'No se pudo completar la venta integrada.',
-                  requestDetails: {
-                     Amount: amountInBase.toFixed(2),
-                     Itbis: proportionalTax.toFixed(2),
-                     OrderNumber: orderNumber,
-                  },
+                  requestDetails: integration.provider === 'AZUL'
+                     ? {
+                        Amount: amountInBase.toFixed(2),
+                        Itbis: proportionalTax.toFixed(2),
+                        OrderNumber: orderNumber,
+                     }
+                     : {
+                        Amount: amountInBase.toFixed(2),
+                     },
                   responseDetails: {
-                     MerchantId: gatewayError?.normalized?.merchantId || integration.merchantId || '',
-                     TerminalId: gatewayError?.normalized?.terminalId || integration.terminalId || '',
-                     EntryMode: gatewayError?.normalized?.entryMode || '',
-                     CardBrand: gatewayError?.normalized?.cardBrand || '',
+                     MerchantId:
+                        gatewayError?.normalized?.merchantId ||
+                        ingenicoError?.normalized?.merchantId ||
+                        integration.merchantId ||
+                        '',
+                     TerminalId:
+                        gatewayError?.normalized?.terminalId ||
+                        ingenicoError?.normalized?.terminalId ||
+                        integration.terminalId ||
+                        '',
+                     EntryMode: gatewayError?.normalized?.entryMode || ingenicoError?.normalized?.entryMode || '',
+                     CardBrand: gatewayError?.normalized?.cardBrand || ingenicoError?.normalized?.cardBrand || '',
                   },
-                  responseCode: gatewayError?.normalized?.responseCode || gatewayError?.response?.ResponseCode,
-                  responseMessage: gatewayError?.normalized?.responseMessage || gatewayError?.response?.ResponseMessage,
-                  authorizationCode: gatewayError?.normalized?.authorizationCode,
-                  referenceNumber: gatewayError?.normalized?.referenceNumber,
-                  invoiceNumber: gatewayError?.normalized?.invoiceNumber,
+                  responseCode:
+                     gatewayError?.normalized?.responseCode ||
+                     gatewayError?.response?.ResponseCode ||
+                     ingenicoError?.normalized?.responseCode,
+                  responseMessage:
+                     gatewayError?.normalized?.responseMessage ||
+                     gatewayError?.response?.ResponseMessage ||
+                     ingenicoError?.normalized?.responseMessage,
+                  authorizationCode: gatewayError?.normalized?.authorizationCode || ingenicoError?.normalized?.authorizationCode,
+                  referenceNumber: gatewayError?.normalized?.referenceNumber || ingenicoError?.normalized?.transactionReference,
+                  invoiceNumber: gatewayError?.normalized?.invoiceNumber || ingenicoError?.normalized?.invoiceNumber,
                   sequenceNumber: gatewayError?.normalized?.sequenceNumber,
-                  maskedPan: gatewayError?.normalized?.maskedPan,
-                  entryMode: gatewayError?.normalized?.entryMode,
-                  merchantId: gatewayError?.normalized?.merchantId,
-                  terminalId: gatewayError?.normalized?.terminalId,
+                  maskedPan: gatewayError?.normalized?.maskedPan || ingenicoError?.normalized?.maskedPan,
+                  entryMode: gatewayError?.normalized?.entryMode || ingenicoError?.normalized?.entryMode,
+                  merchantId: gatewayError?.normalized?.merchantId || ingenicoError?.normalized?.merchantId,
+                  terminalId: gatewayError?.normalized?.terminalId || ingenicoError?.normalized?.terminalId,
                })
             );
          }
@@ -1230,11 +1271,11 @@ const UnifiedPaymentModal: React.FC<PaymentModalProps> = ({ total, items, taxAmo
                                        Eq. {currencySymbol}{displayReceivedBase.toFixed(2)}
                                     </span>
                                  ) : null}
-                                 {p.gatewayProvider === 'AZUL' && (
+                                 {p.gatewayProvider && (
                                     <span className={`text-[9px] md:text-[10px] font-bold block ${p.gatewayStatus === 'PENDING' ? 'text-amber-600' : 'text-indigo-500'}`}>
                                        {p.gatewayStatus === 'PENDING'
                                           ? 'PENDIENTE DE COBRO AL FINALIZAR'
-                                          : `AUT ${p.gatewayAuthorizationCode || '-'} · REF ${p.gatewayReference || '-'}`}
+                                          : `${resolveGatewaySummaryLabel(p)} · AUT ${p.gatewayAuthorizationCode || '-'} · REF ${p.gatewayReference || '-'}`}
                                     </span>
                                  )}
                               </div>
