@@ -180,6 +180,27 @@ const extractMessage = (response: IngenicoAzulWebApiGatewayResponse): string => 
   ]) || 'Ingenico no devolvió un mensaje.'
 );
 
+const extractReceiptValue = (
+  response: IngenicoAzulWebApiGatewayResponse,
+  preferredPaths: string[],
+  fallbackPaths: string[] = []
+): string => {
+  const preferred = pickFirstString(response, preferredPaths);
+  if (preferred) return preferred;
+
+  return pickFirstString(response, [
+    ...fallbackPaths,
+    'Receipt',
+    'receipt',
+    'Receipts.Client',
+    'receipts.client',
+    'Receipts.Customer',
+    'receipts.customer',
+    'Receipts.Merchant',
+    'receipts.merchant',
+  ]);
+};
+
 const parseJsonBody = (
   rawBody: unknown,
   action: IngenicoAzulWebApiAction
@@ -350,21 +371,30 @@ const normalizeResult = (
   maskedPan: pickFirstString(response, ['MaskedPAN', 'maskedPan', 'MaskedPan']),
   cardBrand: pickFirstString(response, ['RangeName', 'rangeName', 'CardBrand', 'cardBrand']),
   entryMode: pickFirstString(response, ['EntryMode', 'entryMode']),
-  receiptMerchant: pickFirstString(response, [
+  receiptMerchant: extractReceiptValue(response, [
     'ReceiptMerchant',
     'receiptMerchant',
     'MerchantReceipt',
     'merchantReceipt',
     'Receipts.Merchant',
     'receipts.merchant',
+  ], [
+    'MerchantVoucher',
+    'merchantVoucher',
   ]),
-  receiptClient: pickFirstString(response, [
+  receiptClient: extractReceiptValue(response, [
     'ReceiptClient',
     'receiptClient',
     'CustomerReceipt',
     'customerReceipt',
     'Receipts.Customer',
     'receipts.customer',
+    'Receipts.Client',
+    'receipts.client',
+    'Voucher',
+    'voucher',
+    'ClientVoucher',
+    'clientVoucher',
   ]),
   responseFields: Object.entries(response || {}).reduce<Record<string, string>>((acc, [key, value]) => {
     if (value === undefined || value === null) return acc;
@@ -473,7 +503,7 @@ export const ingenicoAzulWebApiService = {
     const response = await getJson(
       integration,
       'CLOSE_TOTALS',
-      '/api/transaction/lane/CloseTotals'
+      '/api/transaction/lane/closetotals'
     );
 
     const normalized = normalizeResult(response);
