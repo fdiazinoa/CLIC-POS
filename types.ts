@@ -699,7 +699,13 @@ export interface CurrencyAuditLog {
 }
 
 export type PaymentMethod = 'CASH' | 'CARD' | 'QR' | 'WALLET' | 'ADVANCE' | 'OTHER' | 'CREDIT' | 'STORE_CREDIT';
-export type PaymentIntegrationProvider = 'AZUL' | 'CARDNET' | 'CARNET' | 'VISANET' | 'STRIPE';
+export type PaymentIntegrationProvider =
+  | 'AZUL'
+  | 'INGENICO_AZUL_WEBAPI'
+  | 'CARDNET'
+  | 'CARNET'
+  | 'VISANET'
+  | 'STRIPE';
 export type PaymentIntegrationEnvironment = 'TEST' | 'PRODUCTION';
 export type PaymentIntegrationMode = 'MANUAL' | 'INTEGRATED';
 export type PaymentIntegrationAuditAction =

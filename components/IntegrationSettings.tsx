@@ -31,6 +31,10 @@ import {
   createPaymentIntegrationAuditEvent,
   dispatchAuditEventConfigUpdate,
 } from '../services/payments/paymentIntegrationAudit';
+import {
+  IngenicoAzulWebApiError,
+  ingenicoAzulWebApiService,
+} from '../services/payments/IngenicoAzulWebApiService';
 import { printGatewayReceipt } from '../utils/printer';
 
 interface IntegrationSettingsProps {
@@ -57,6 +61,7 @@ type AzulTerminalModalState = {
 
 const PROVIDER_LABELS: Record<PaymentIntegrationProvider, string> = {
   AZUL: 'AZUL',
+  INGENICO_AZUL_WEBAPI: 'Ingenico Azul WebAPI',
   CARDNET: 'CardNet',
   CARNET: 'Carnet',
   VISANET: 'VisaNet',
@@ -68,28 +73,36 @@ const createDefaultIntegration = (
   environment: PaymentIntegrationEnvironment = 'TEST'
 ): PaymentIntegrationDefinition => ({
   id: `int-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-  name: provider === 'AZUL' ? 'AZUL Desarrollo' : `Nueva integración ${PROVIDER_LABELS[provider]}`,
+  name:
+    provider === 'AZUL'
+      ? 'AZUL Desarrollo'
+      : provider === 'INGENICO_AZUL_WEBAPI'
+        ? 'Ingenico Lane 7000'
+        : `Nueva integración ${PROVIDER_LABELS[provider]}`,
   provider,
   isEnabled: true,
   environment,
-  baseUrl: provider === 'AZUL'
-    ? (environment === 'TEST'
-      ? 'https://pruebas.azul.com.do/POSWebServices/JSON/default.aspx'
-      : 'https://pagos.azul.com.do/POSWebServices/JSON/default.aspx')
-    : '',
+  baseUrl:
+    provider === 'AZUL'
+      ? (environment === 'TEST'
+        ? 'https://pruebas.azul.com.do/POSWebServices/JSON/default.aspx'
+        : 'https://pagos.azul.com.do/POSWebServices/JSON/default.aspx')
+      : provider === 'INGENICO_AZUL_WEBAPI'
+        ? 'http://127.0.0.1:9001'
+        : '',
   secondaryBaseUrl: '',
   merchantId: '',
   terminalId: '',
   auth1: '',
   auth2: '',
-  timeoutMs: 160000,
+  timeoutMs: provider === 'INGENICO_AZUL_WEBAPI' ? 65000 : 160000,
   capabilities: {
     sale: true,
-    getLastTrx: true,
+    getLastTrx: provider !== 'INGENICO_AZUL_WEBAPI',
     refund: true,
     void: true,
-    pinpadInit: true,
-    transactionTotals: true,
+    pinpadInit: provider === 'AZUL',
+    transactionTotals: provider === 'AZUL',
     settle: true,
   },
   metadata: {},
@@ -181,9 +194,15 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
     setEditingIntegration({
       ...editingIntegration,
       provider,
-      name: editingIntegration.name || draft.name,
-      baseUrl: editingIntegration.baseUrl || draft.baseUrl,
-      timeoutMs: editingIntegration.timeoutMs || draft.timeoutMs,
+      name: (!editingIntegration.name || editingIntegration.name === PROVIDER_LABELS[editingIntegration.provider]) ? draft.name : editingIntegration.name,
+      baseUrl: draft.baseUrl,
+      secondaryBaseUrl: provider === 'AZUL' ? (editingIntegration.secondaryBaseUrl || draft.secondaryBaseUrl) : '',
+      timeoutMs: draft.timeoutMs,
+      merchantId: provider === 'AZUL' ? editingIntegration.merchantId : '',
+      terminalId: provider === 'AZUL' ? editingIntegration.terminalId : '',
+      auth1: provider === 'AZUL' ? editingIntegration.auth1 : '',
+      auth2: provider === 'AZUL' ? editingIntegration.auth2 : '',
+      capabilities: draft.capabilities,
     });
     setTestResult(null);
   };
@@ -194,7 +213,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
     setEditingIntegration({
       ...editingIntegration,
       environment,
-      baseUrl: editingIntegration.provider === 'AZUL' ? defaults.baseUrl : editingIntegration.baseUrl,
+      baseUrl: defaults.baseUrl,
     });
     setTestResult(null);
   };
@@ -220,34 +239,21 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
     setIsTesting(true);
     setTestResult(null);
     try {
-      if (editingIntegration.provider !== 'AZUL') {
-        const unsupportedResult = {
-          success: false,
-          message: 'La prueba en vivo todavía solo está disponible para AZUL.',
-        };
-        await persistAuditEvent(createPaymentIntegrationAuditEvent(editingIntegration, {
-          action: 'GET_LAST_TRX',
-          status: 'FAILED',
-          message: unsupportedResult.message,
-          requestDetails: {
-            Origen: 'Prueba de conexión',
-          },
-          responseDetails: {
-            Motivo: 'Proveedor todavía no soportado en caja',
-          },
-        }));
-        setTestResult(unsupportedResult);
-        return;
-      }
-
-      const result = await azulMcmService.testConnection(editingIntegration);
+      const result = editingIntegration.provider === 'AZUL'
+        ? await azulMcmService.testConnection(editingIntegration)
+        : editingIntegration.provider === 'INGENICO_AZUL_WEBAPI'
+          ? await ingenicoAzulWebApiService.testConnection(editingIntegration)
+          : {
+            success: false,
+            message: 'La prueba en vivo todavía no está disponible para este proveedor.',
+          };
       await persistAuditEvent(createPaymentIntegrationAuditEvent(editingIntegration, {
         action: 'GET_LAST_TRX',
         status: result.success ? 'SUCCESS' : 'FAILED',
         message: result.message,
         requestDetails: {
           Origen: 'Prueba de conexión',
-          TrxType: 'Sale',
+          TrxType: editingIntegration.provider === 'INGENICO_AZUL_WEBAPI' ? 'Config' : 'Sale',
         },
         responseDetails: {
           MerchantId: result.merchantId || editingIntegration.merchantId || '',
@@ -263,23 +269,34 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo probar la conexión.';
       const gatewayError = error instanceof AzulGatewayError ? error : null;
+      const ingenicoError = error instanceof IngenicoAzulWebApiError ? error : null;
       await persistAuditEvent(createPaymentIntegrationAuditEvent(editingIntegration, {
         action: 'GET_LAST_TRX',
         status: 'FAILED',
         message,
         requestDetails: {
           Origen: 'Prueba de conexión',
-          TrxType: 'Sale',
+          TrxType: editingIntegration.provider === 'INGENICO_AZUL_WEBAPI' ? 'Config' : 'Sale',
         },
         responseDetails: {
-          MerchantId: gatewayError?.normalized?.merchantId || editingIntegration.merchantId || '',
-          TerminalId: gatewayError?.normalized?.terminalId || editingIntegration.terminalId || '',
+          MerchantId: gatewayError?.normalized?.merchantId || '',
+          TerminalId:
+            gatewayError?.normalized?.terminalId ||
+            ingenicoError?.normalized?.terminalId ||
+            editingIntegration.terminalId ||
+            '',
           Estado: 'Error',
         },
-        responseCode: gatewayError?.normalized?.responseCode || gatewayError?.response?.ResponseCode,
-        responseMessage: gatewayError?.normalized?.responseMessage || gatewayError?.response?.ResponseMessage,
+        responseCode:
+          gatewayError?.normalized?.responseCode ||
+          gatewayError?.response?.ResponseCode ||
+          ingenicoError?.normalized?.responseCode,
+        responseMessage:
+          gatewayError?.normalized?.responseMessage ||
+          gatewayError?.response?.ResponseMessage ||
+          ingenicoError?.normalized?.responseMessage,
         merchantId: gatewayError?.normalized?.merchantId,
-        terminalId: gatewayError?.normalized?.terminalId,
+        terminalId: gatewayError?.normalized?.terminalId || ingenicoError?.normalized?.terminalId,
       }));
       setTestResult({
         success: false,
@@ -714,83 +731,93 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="md:col-span-2">
-                    <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">URL Base JSON</label>
+                    <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">
+                      {editingIntegration.provider === 'INGENICO_AZUL_WEBAPI' ? 'URL Base WebAPI Local' : 'URL Base JSON'}
+                    </label>
                     <div className="relative">
                       <input
                         type="text"
                         value={editingIntegration.baseUrl}
                         onChange={(event) => updateEditingIntegration({ baseUrl: event.target.value })}
                         className="w-full rounded-xl border border-indigo-100 bg-white p-3 pl-10 outline-none transition-all focus:ring-2 focus:ring-indigo-400"
-                        placeholder="https://pruebas.azul.com.do/POSWebServices/JSON/default.aspx"
+                        placeholder={
+                          editingIntegration.provider === 'INGENICO_AZUL_WEBAPI'
+                            ? 'http://127.0.0.1:9001'
+                            : 'https://pruebas.azul.com.do/POSWebServices/JSON/default.aspx'
+                        }
                       />
                       <Server className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-300" size={16} />
                     </div>
                   </div>
-                  <div className="md:col-span-2">
-                    <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">URL Secundaria / Failover</label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        value={editingIntegration.secondaryBaseUrl || ''}
-                        onChange={(event) => updateEditingIntegration({ secondaryBaseUrl: event.target.value })}
-                        className="w-full rounded-xl border border-indigo-100 bg-white p-3 pl-10 outline-none transition-all focus:ring-2 focus:ring-indigo-400"
-                        placeholder="Opcional"
-                      />
-                      <RefreshCw className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-300" size={16} />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">Merchant ID</label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        value={editingIntegration.merchantId || ''}
-                        onChange={(event) => updateEditingIntegration({ merchantId: event.target.value })}
-                        className="w-full rounded-xl border border-indigo-100 bg-white p-3 pl-10 outline-none transition-all focus:ring-2 focus:ring-indigo-400"
-                        placeholder="39036630010"
-                      />
-                      <Server className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-300" size={16} />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">Terminal ID</label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        value={editingIntegration.terminalId || ''}
-                        onChange={(event) => updateEditingIntegration({ terminalId: event.target.value })}
-                        className="w-full rounded-xl border border-indigo-100 bg-white p-3 pl-10 outline-none transition-all focus:ring-2 focus:ring-indigo-400"
-                        placeholder="01290010"
-                      />
-                      <Smartphone className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-300" size={16} />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">Auth1</label>
-                    <div className="relative">
-                      <input
-                        type="password"
-                        value={editingIntegration.auth1 || ''}
-                        onChange={(event) => updateEditingIntegration({ auth1: event.target.value })}
-                        className="w-full rounded-xl border border-indigo-100 bg-white p-3 pl-10 outline-none transition-all focus:ring-2 focus:ring-indigo-400"
-                        placeholder="••••••"
-                      />
-                      <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-300" size={16} />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">Auth2</label>
-                    <div className="relative">
-                      <input
-                        type="password"
-                        value={editingIntegration.auth2 || ''}
-                        onChange={(event) => updateEditingIntegration({ auth2: event.target.value })}
-                        className="w-full rounded-xl border border-indigo-100 bg-white p-3 pl-10 outline-none transition-all focus:ring-2 focus:ring-indigo-400"
-                        placeholder="••••••"
-                      />
-                      <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-300" size={16} />
-                    </div>
-                  </div>
+                  {editingIntegration.provider === 'AZUL' && (
+                    <>
+                      <div className="md:col-span-2">
+                        <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">URL Secundaria / Failover</label>
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={editingIntegration.secondaryBaseUrl || ''}
+                            onChange={(event) => updateEditingIntegration({ secondaryBaseUrl: event.target.value })}
+                            className="w-full rounded-xl border border-indigo-100 bg-white p-3 pl-10 outline-none transition-all focus:ring-2 focus:ring-indigo-400"
+                            placeholder="Opcional"
+                          />
+                          <RefreshCw className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-300" size={16} />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">Merchant ID</label>
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={editingIntegration.merchantId || ''}
+                            onChange={(event) => updateEditingIntegration({ merchantId: event.target.value })}
+                            className="w-full rounded-xl border border-indigo-100 bg-white p-3 pl-10 outline-none transition-all focus:ring-2 focus:ring-indigo-400"
+                            placeholder="39036630010"
+                          />
+                          <Server className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-300" size={16} />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">Terminal ID</label>
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={editingIntegration.terminalId || ''}
+                            onChange={(event) => updateEditingIntegration({ terminalId: event.target.value })}
+                            className="w-full rounded-xl border border-indigo-100 bg-white p-3 pl-10 outline-none transition-all focus:ring-2 focus:ring-indigo-400"
+                            placeholder="01290010"
+                          />
+                          <Smartphone className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-300" size={16} />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">Auth1</label>
+                        <div className="relative">
+                          <input
+                            type="password"
+                            value={editingIntegration.auth1 || ''}
+                            onChange={(event) => updateEditingIntegration({ auth1: event.target.value })}
+                            className="w-full rounded-xl border border-indigo-100 bg-white p-3 pl-10 outline-none transition-all focus:ring-2 focus:ring-indigo-400"
+                            placeholder="••••••"
+                          />
+                          <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-300" size={16} />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">Auth2</label>
+                        <div className="relative">
+                          <input
+                            type="password"
+                            value={editingIntegration.auth2 || ''}
+                            onChange={(event) => updateEditingIntegration({ auth2: event.target.value })}
+                            className="w-full rounded-xl border border-indigo-100 bg-white p-3 pl-10 outline-none transition-all focus:ring-2 focus:ring-indigo-400"
+                            placeholder="••••••"
+                          />
+                          <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-300" size={16} />
+                        </div>
+                      </div>
+                    </>
+                  )}
                   <div>
                     <label className="mb-1 block text-xs font-bold uppercase text-indigo-400">Timeout (ms)</label>
                     <input
@@ -803,6 +830,15 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
                     />
                   </div>
                 </div>
+
+                {editingIntegration.provider === 'INGENICO_AZUL_WEBAPI' && (
+                  <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800">
+                    <p className="font-bold">Companion app Android local</p>
+                    <p className="mt-1">
+                      Esta integración espera que la APK de Azul Ingenico WebAPI esté instalada en el mismo dispositivo y exponga su API local, por defecto en <code>http://127.0.0.1:9001</code>.
+                    </p>
+                  </div>
+                )}
 
                 <div className="mt-5 space-y-3">
                   <button
@@ -845,7 +881,9 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ config, onUpd
 
               {editingIntegration.provider !== 'AZUL' && (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
-                  Esta primera entrega deja el modelo listo para múltiples adquirentes, pero el flujo operativo en caja está implementado ahora mismo para <strong>AZUL</strong>.
+                  {editingIntegration.provider === 'INGENICO_AZUL_WEBAPI'
+                    ? 'La integración local de Ingenico se usa desde métodos de pago tipo tarjeta. En esta primera entrega queda soportado el flujo principal de cobro en caja.'
+                    : 'Esta primera entrega deja el modelo listo para múltiples adquirentes, pero el flujo operativo en caja está implementado ahora mismo para AZUL e Ingenico Azul WebAPI.'}
                 </div>
               )}
             </div>
