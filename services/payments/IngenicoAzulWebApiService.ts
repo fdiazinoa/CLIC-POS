@@ -108,6 +108,29 @@ const getDeepValue = (source: any, path: string): unknown => {
   }, source);
 };
 
+const withClientTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  action: IngenicoAzulWebApiAction | 'TEST'
+): Promise<T> => {
+  let timeoutHandle: number | undefined;
+
+  try {
+    return await Promise.race<T>([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = window.setTimeout(() => {
+          reject(new Error(`Ingenico agotó el tiempo de espera (${Math.round(timeoutMs / 1000)}s) durante ${action}.`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      window.clearTimeout(timeoutHandle);
+    }
+  }
+};
+
 const pickFirstString = (source: IngenicoAzulWebApiGatewayResponse, paths: string[]): string => {
   for (const path of paths) {
     const value = getDeepValue(source, path);
@@ -188,12 +211,16 @@ const getJson = async (
 
   try {
     if (isNativeCapacitorRuntime()) {
-      const response = await CapacitorHttp.get({
-        url,
-        connectTimeout: timeoutMs,
-        readTimeout: timeoutMs,
-        responseType: 'json',
-      });
+      const response = await withClientTimeout(
+        CapacitorHttp.get({
+          url,
+          connectTimeout: timeoutMs,
+          readTimeout: timeoutMs,
+          responseType: 'text',
+        }),
+        timeoutMs,
+        action
+      );
 
       if (response.status < 200 || response.status >= 300) {
         throw new Error(`Ingenico respondió HTTP ${response.status}.`);
@@ -206,10 +233,14 @@ const getJson = async (
     const timeoutHandle = window.setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        signal: controller.signal,
-      });
+      const response = await withClientTimeout(
+        fetch(url, {
+          method: 'GET',
+          signal: controller.signal,
+        }),
+        timeoutMs,
+        action
+      );
 
       const bodyText = await response.text();
       if (!response.ok) {
@@ -241,12 +272,16 @@ const getText = async (integration: PaymentIntegrationDefinition, path: string):
 
   try {
     if (isNativeCapacitorRuntime()) {
-      const response = await CapacitorHttp.get({
-        url,
-        connectTimeout: timeoutMs,
-        readTimeout: timeoutMs,
-        responseType: 'text',
-      });
+      const response = await withClientTimeout(
+        CapacitorHttp.get({
+          url,
+          connectTimeout: timeoutMs,
+          readTimeout: timeoutMs,
+          responseType: 'text',
+        }),
+        timeoutMs,
+        'TEST'
+      );
 
       if (response.status < 200 || response.status >= 300) {
         throw new Error(`Ingenico respondió HTTP ${response.status}.`);
@@ -259,10 +294,14 @@ const getText = async (integration: PaymentIntegrationDefinition, path: string):
     const timeoutHandle = window.setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        signal: controller.signal,
-      });
+      const response = await withClientTimeout(
+        fetch(url, {
+          method: 'GET',
+          signal: controller.signal,
+        }),
+        timeoutMs,
+        'TEST'
+      );
 
       if (!response.ok) {
         throw new Error(`Ingenico respondió HTTP ${response.status}.`);
