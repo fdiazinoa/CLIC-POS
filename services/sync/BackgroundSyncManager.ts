@@ -398,6 +398,14 @@ class BackgroundSyncManager {
         this.scheduleSync(0);
     }
 
+    async triggerSyncAndWait() {
+        await this.updatePendingCount();
+        if (navigator.onLine) {
+            apiSyncAdapter.resetCircuit();
+        }
+        await this.sync();
+    }
+
     /**
      * Convert stale SYNCING records to ERROR so they are retried automatically.
      * This handles abrupt browser/tab shutdowns during sync.

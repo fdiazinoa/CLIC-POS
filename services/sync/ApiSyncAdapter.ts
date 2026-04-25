@@ -498,6 +498,29 @@ class ApiSyncAdapter {
         return this.resolveOperationalTarget()?.useLocalTarget === false;
     }
 
+    private buildOperationalPostBody(
+        target: { terminalId: string; useLocalTarget: boolean },
+        body: Record<string, unknown>
+    ): Record<string, unknown> {
+        if (target.useLocalTarget) return body;
+
+        let deviceId: string | null = null;
+        try {
+            deviceId =
+                localStorage.getItem('CLIC_POS_DEVICE_ID') ||
+                localStorage.getItem('pos_device_id') ||
+                null;
+        } catch {
+            deviceId = null;
+        }
+
+        return {
+            terminal_id: target.terminalId,
+            ...(deviceId ? { device_id: deviceId } : {}),
+            ...body
+        };
+    }
+
     private resolveOperationalTarget(): { baseUrl: string; terminalId: string; useLocalTarget: boolean } | null {
         const localMasterTarget: { baseUrl: string; terminalId: string; useLocalTarget: boolean } | null = this.config?.masterUrl && this.config?.terminalId
             ? {
@@ -624,13 +647,14 @@ class ApiSyncAdapter {
 
     private async postOperationalPayload(path: string, body: Record<string, unknown>): Promise<void> {
         const target = await this.authenticateOperationalTarget();
+        const requestBody = this.buildOperationalPostBody(target, body);
         const response = await this.fetchWithRetry(`${target.baseUrl}${path}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'X-Sync-Token': target.token
             },
-            body: JSON.stringify(body)
+            body: JSON.stringify(requestBody)
         });
 
         if (response.status === 401) {
@@ -641,13 +665,14 @@ class ApiSyncAdapter {
             }
 
             const retriedTarget = await this.authenticateOperationalTarget(true);
+            const retryBody = this.buildOperationalPostBody(retriedTarget, body);
             const retryResponse = await this.fetchWithRetry(`${retriedTarget.baseUrl}${path}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Sync-Token': retriedTarget.token
                 },
-                body: JSON.stringify(body)
+                body: JSON.stringify(retryBody)
             });
 
             if (!retryResponse.ok) {
@@ -1212,13 +1237,14 @@ class ApiSyncAdapter {
                 console.log(
                     `[SYNC_TX_PUSH] ERP direct auth token=${this.maskSyncToken(target.token)} terminal=${target.terminalId}`
                 );
+                const requestBody = this.buildOperationalPostBody(target, { items: [normalizedTransaction] });
                 let response = await this.fetchWithRetry(`${target.baseUrl}/transactions`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'X-Sync-Token': target.token
                     },
-                    body: JSON.stringify({ items: [normalizedTransaction] })
+                    body: JSON.stringify(requestBody)
                 });
 
                 if (response.status === 401) {
@@ -1227,13 +1253,14 @@ class ApiSyncAdapter {
                     console.log(
                         `[SYNC_TX_PUSH] ERP direct re-auth token=${this.maskSyncToken(target.token)} terminal=${target.terminalId}`
                     );
+                    const retryBody = this.buildOperationalPostBody(target, { items: [normalizedTransaction] });
                     response = await this.fetchWithRetry(`${target.baseUrl}/transactions`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
                             'X-Sync-Token': target.token
                         },
-                        body: JSON.stringify({ items: [normalizedTransaction] })
+                        body: JSON.stringify(retryBody)
                     });
                 }
 
