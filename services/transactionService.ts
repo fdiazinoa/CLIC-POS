@@ -2,6 +2,7 @@ import { Transaction, DocumentType, DocumentSeries } from '../types';
 import { db } from '../utils/db';
 import { normalizeTransactionForSync } from './sync/sourceIdentity';
 import {
+  isDocumentSeriesCompatibleWithType,
   mergeDocumentSeriesCollection,
   resolveDocumentAssignmentId,
   resolveEffectiveSeriesIdForDocumentType,
@@ -173,7 +174,12 @@ class TransactionService {
         if (typeof assignment === 'string' && assignment.trim()) {
             const trimmed = assignment.trim();
             const effective = resolveEffectiveSeriesIdForDocumentType(documentType, merged, trimmed);
-            return effective || trimmed;
+            if (effective) return effective;
+
+            const rawAssignment = merged.find((series) => series.id === trimmed);
+            if (rawAssignment && isDocumentSeriesCompatibleWithType(documentType, rawAssignment)) {
+                return trimmed;
+            }
         }
 
         return resolveDocumentAssignmentId(documentType, merged, callerSeriesId) || callerSeriesId;
@@ -197,6 +203,10 @@ class TransactionService {
 
         if (!seriesConfig) {
             throw new Error(`Series ${seriesId} not found in internalSequences`);
+        }
+
+        if (!isDocumentSeriesCompatibleWithType(documentType, seriesConfig)) {
+            throw new Error(`Series ${seriesId} is not valid for ${documentType}`);
         }
 
         // Get next global sequence

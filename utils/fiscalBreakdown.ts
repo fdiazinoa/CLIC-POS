@@ -25,6 +25,8 @@ type TaxableLineItem = {
   price?: number;
   quantity?: number;
   appliedTaxIds?: string[];
+  taxable?: boolean;
+  tax_ids?: string[];
 };
 
 export interface FiscalLineAmounts {
@@ -73,12 +75,17 @@ export const resolveEffectiveTaxIds = (
 
 export const resolveEffectiveTaxes = (
   item: Pick<TaxableLineItem, 'appliedTaxIds'>,
-  config: Pick<BusinessConfig, 'taxes'>,
+  config: Pick<BusinessConfig, 'taxes' | 'taxRate'>,
   terminalConfig?: TerminalTaxConfig,
   fallbackTaxRate = 0,
   fallbackTaxName = 'Impuesto'
 ): TaxDefinition[] => {
-  const resolvedTaxes = resolveEffectiveTaxIds(item.appliedTaxIds, terminalConfig)
+  const itemTaxIds = normalizeTaxIds(
+    Array.isArray((item as TaxableLineItem).appliedTaxIds)
+      ? (item as TaxableLineItem).appliedTaxIds
+      : (item as TaxableLineItem).tax_ids
+  );
+  const resolvedTaxes = resolveEffectiveTaxIds(itemTaxIds, terminalConfig)
     .map((taxId) => findTaxByIdentifier(config.taxes || [], taxId))
     .filter(Boolean) as TaxDefinition[];
 
@@ -86,11 +93,18 @@ export const resolveEffectiveTaxes = (
     return resolvedTaxes;
   }
 
-  if (fallbackTaxRate > EPSILON) {
+  const shouldFallbackForTaxableItem = (item as TaxableLineItem).taxable === true;
+  const effectiveFallbackRate = fallbackTaxRate > EPSILON
+    ? fallbackTaxRate
+    : shouldFallbackForTaxableItem
+      ? toNumber((config as Pick<BusinessConfig, 'taxRate'>).taxRate)
+      : 0;
+
+  if (effectiveFallbackRate > EPSILON) {
     return [{
       id: 'default-tax',
       name: fallbackTaxName,
-      rate: fallbackTaxRate,
+      rate: effectiveFallbackRate,
       type: 'VAT',
     }];
   }

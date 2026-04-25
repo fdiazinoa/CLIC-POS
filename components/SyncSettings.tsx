@@ -107,15 +107,34 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     raw: r
                 }));
 
-                const formattedMovs = (movements as any[] || []).map(m => ({
-                    id: m.documentRef || m.id,
-                    terminalId: m.terminalId || '-',
-                    type: 'INVENTARIO',
-                    date: m.createdAt || m.timestamp,
-                    status: getDocumentSyncStatus(m),
-                    error: getDocumentSyncError(m),
-                    raw: m
-                }));
+                const movementGroups = new Map<string, any[]>();
+                (movements as any[] || []).forEach(m => {
+                    const groupKey = String(m.documentRef || m.id || '').trim() || m.id;
+                    movementGroups.set(groupKey, [...(movementGroups.get(groupKey) || []), m]);
+                });
+
+                const formattedMovs = Array.from(movementGroups.entries()).map(([documentRef, entries]) => {
+                    const latest = entries.reduce((current, entry) => {
+                        const currentTime = new Date(current?.createdAt || current?.timestamp || 0).getTime();
+                        const entryTime = new Date(entry?.createdAt || entry?.timestamp || 0).getTime();
+                        return entryTime > currentTime ? entry : current;
+                    }, entries[0]);
+                    const hasError = entries.some(entry => getDocumentSyncStatus(entry) === 'ERROR');
+                    const allSynced = entries.every(entry => ['SYNCED', 'COMPLETED'].includes(getDocumentSyncStatus(entry)));
+                    const firstError = entries.find(entry => getDocumentSyncStatus(entry) === 'ERROR');
+
+                    return {
+                        id: entries.length > 1 ? `${documentRef} (${entries.length} mov.)` : documentRef,
+                        terminalId: latest?.terminalId || '-',
+                        type: 'INVENTARIO',
+                        date: latest?.createdAt || latest?.timestamp,
+                        status: hasError ? 'ERROR' : allSynced ? 'SYNCED' : 'PENDING',
+                        error: firstError ? getDocumentSyncError(firstError) : undefined,
+                        raw: entries.length > 1
+                            ? { id: documentRef, documentRef, movementCount: entries.length, entries, __syncGroup: true }
+                            : latest
+                    };
+                });
 
                 const formattedZs = (zReports as any[] || []).map(z => ({
                     id: z.sequenceNumber || z.id,
@@ -219,6 +238,22 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         const collectionName = getCollectionNameForAuditType(item.type);
         if (!collectionName || !item.raw?.id) {
             alert('No pudimos identificar el documento para reintentar.');
+            return;
+        }
+
+        if (item.raw?.__syncGroup && Array.isArray(item.raw.entries)) {
+            for (const entry of item.raw.entries) {
+                if (!entry?.id) continue;
+                await db.saveDocument(collectionName as any, {
+                    ...entry,
+                    syncStatus: 'PENDING',
+                    syncError: undefined,
+                    cloudSyncStatus: undefined,
+                    cloudSyncError: undefined,
+                });
+            }
+            await backgroundSyncManager.triggerSync();
+            await loadStatus();
             return;
         }
 
@@ -629,7 +664,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                         </thead>
                                         <tbody className="divide-y divide-gray-50">
                                             {paginatedData.map((item) => (
-                                                <tr key={item.raw.id} className="hover:bg-gray-50/50 transition-colors group">
+                                                <tr key={`${item.type}-${item.raw.id || item.id}`} className="hover:bg-gray-50/50 transition-colors group">
                                                     <td className="py-4 px-6">
                                                         <div className="font-bold text-gray-700 font-mono text-sm">{item.id}</div>
                                                         {item.raw?.ncf && (
@@ -660,7 +695,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                     </td>
                                                     <td className="py-4 px-6 text-center">
                                                         <div className="flex items-center justify-center gap-2">
-                                                            {item.status === 'SYNCED' ? (
+                                                            {['SYNCED', 'COMPLETED'].includes(item.status) ? (
                                                                 <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase">
                                                                     <CheckCircle2 size={12} /> Sincronizado
                                                                 </span>

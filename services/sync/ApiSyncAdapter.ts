@@ -1188,6 +1188,54 @@ class ApiSyncAdapter {
         return `${token.slice(0, 4)}…${token.slice(-4)}`;
     }
 
+    private async pushTransactionViaMaster(
+        normalizedTransaction: any,
+        txId: string,
+        itemsCount: number | string
+    ): Promise<void> {
+        console.log(
+            `[SYNC_TX_PUSH] fallback master start masterUrl=${this.config?.masterUrl || 'n/a'} terminalId=${this.config?.terminalId || 'n/a'} tx=${txId} items=${itemsCount}`
+        );
+        await this.ensurePushReady();
+        const erpBaseUrl = this.resolveClientErpBaseUrlForInbox();
+        const response = await this.fetchWithRetry(`${this.config!.masterUrl}/api/sync/transactions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Sync-Token': this.authToken || ''
+            },
+            body: JSON.stringify({
+                items: [normalizedTransaction],
+                ...(erpBaseUrl ? { erp_base_url: erpBaseUrl } : {})
+            })
+        });
+
+        if (response.status === 401) {
+            await this.authenticate(true);
+            const retryResponse = await this.fetchWithRetry(`${this.config!.masterUrl}/api/sync/transactions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Token': this.authToken || ''
+                },
+                body: JSON.stringify({
+                    items: [normalizedTransaction],
+                    ...(erpBaseUrl ? { erp_base_url: erpBaseUrl } : {})
+                })
+            });
+            if (!retryResponse.ok) {
+                const retryText = await retryResponse.text();
+                throw new Error(`Master transaction sync failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}${retryText ? ` — ${retryText.slice(0, 400)}` : ''}`);
+            }
+            return;
+        }
+
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`Master transaction sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`);
+        }
+    }
+
     async pushTransaction(transaction: any): Promise<void> {
         try {
             const normalizedTransaction = buildErpSalePayload(transaction);
@@ -1241,6 +1289,14 @@ class ApiSyncAdapter {
                 }
 
                 if (!response.ok) {
+                    if (response.status === 401 && this.config?.masterUrl && this.config?.terminalId) {
+                        this.erpAuthToken = null;
+                        console.warn(
+                            `[SYNC_TX_PUSH] ERP direct rejected token for tx=${txId}. Falling back to local master route. body=${text.slice(0, 240)}`
+                        );
+                        await this.pushTransactionViaMaster(normalizedTransaction, txId, itemsCount);
+                        return;
+                    }
                     throw new Error(
                         `ERP transaction sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`
                     );

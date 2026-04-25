@@ -3814,7 +3814,9 @@ const AppContent: React.FC = () => {
     backgroundSyncManager.triggerSync().catch(console.error);
 
     // Update inventory locally (simple stock tracking) AND Record Ledger
-    const defaultWarehouseId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
+    const defaultWarehouseId = currentTerminal?.config.inventoryScope?.defaultSalesWarehouseId
+      || config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId
+      || 'wh_central';
 
     // Calculate and Record Inventory Deductions (Recursive & UOM Aware)
     for (const item of txn.items) {
@@ -3860,37 +3862,22 @@ const AppContent: React.FC = () => {
     const refreshedDb = await db.init();
     setProducts(refreshedDb.products || []);
 
-    // --- CRITICAL: Increment Document Series Sequence in Internal Sequences ---
-    // This is the global source of truth for sequences, synced with Settings.
+    // TransactionService already increments the emitted series atomically before saving
+    // the ticket. Do not increment here again, or POS folios skip and drift.
     const seriesId = txn.seriesId;
     if (seriesId && internalSequences) {
-      const seriesIndex = internalSequences.findIndex(s => s.id === seriesId);
+      const persistedSequences = ((await db.get('internalSequences')) as typeof internalSequences) || internalSequences;
+      setInternalSequences(persistedSequences);
 
-      if (seriesIndex !== undefined && seriesIndex >= 0) {
-        // Create a deep copy
-        const updatedSequences = [...internalSequences];
-
-        // Increment
-        updatedSequences[seriesIndex].nextNumber++;
-
-        // Update State
-        setInternalSequences(updatedSequences);
-
-        // Persist local first
-        await db.save('internalSequences', updatedSequences);
-
-        // SYNC: Push to Server immediately if Master to prevent overwrite
-        if (permissionService.isMasterTerminal()) {
-          console.log(`📤 [App.tsx] Pushing updated sequences to Server...`);
-          try {
-            await syncManager.pushCatalog('internalSequences');
-            console.log(`✅ [App.tsx] Sequences pushed to Server.`);
-          } catch (e) {
-            console.error(`❌ [App.tsx] Failed to push sequences to Server:`, e);
-          }
+      // SYNC: Push to Server immediately if Master to prevent overwrite
+      if (permissionService.isMasterTerminal()) {
+        console.log(`📤 [App.tsx] Pushing updated sequences to Server...`);
+        try {
+          await syncManager.pushCatalog('internalSequences');
+          console.log(`✅ [App.tsx] Sequences pushed to Server.`);
+        } catch (e) {
+          console.error(`❌ [App.tsx] Failed to push sequences to Server:`, e);
         }
-
-        console.log(`✅ Sequence ${seriesId} incremented to ${updatedSequences[seriesIndex].nextNumber}`);
       }
     }
 
