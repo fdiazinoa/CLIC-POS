@@ -514,11 +514,29 @@ class ApiSyncAdapter {
             deviceId = null;
         }
 
-        return {
+        const normalizedBody: Record<string, unknown> = {
+            ...body,
+            terminalId: target.terminalId,
             terminal_id: target.terminalId,
-            ...(deviceId ? { device_id: deviceId } : {}),
-            ...body
+            ...(deviceId ? { device_id: deviceId } : {})
         };
+
+        if (Array.isArray(body.items)) {
+            normalizedBody.items = body.items.map((item) => {
+                const record = item && typeof item === 'object' && !Array.isArray(item)
+                    ? item as Record<string, unknown>
+                    : {};
+
+                return {
+                    ...record,
+                    terminalId: target.terminalId,
+                    terminal_id: target.terminalId,
+                    ...(deviceId ? { device_id: deviceId } : {})
+                };
+            });
+        }
+
+        return normalizedBody;
     }
 
     private resolveOperationalTarget(): { baseUrl: string; terminalId: string; useLocalTarget: boolean } | null {
