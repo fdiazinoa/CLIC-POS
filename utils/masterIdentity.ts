@@ -24,16 +24,68 @@ const buildTariffTokens = (tariff?: Partial<Tariff> | TariffPrice | null): Set<s
 const buildWarehouseTokens = (warehouse?: Partial<Warehouse> | null): Set<string> => {
   const tokens = new Set<string>();
   if (!warehouse) return tokens;
+
+  const normalizedCode = normalizeToken(warehouse.code);
+  const normalizedName = normalizeToken(warehouse.name);
+  const normalizedLabel = normalizeToken((warehouse as any).label);
+
   pushToken(tokens, warehouse.id);
   pushToken(tokens, (warehouse as any).warehouseId);
   pushToken(tokens, (warehouse as any).warehouse_id);
+  pushToken(tokens, (warehouse as any).inventoryLocalId);
+  pushToken(tokens, (warehouse as any).inventory_local_id);
+  pushToken(tokens, (warehouse as any).erpWarehouseId);
+  pushToken(tokens, (warehouse as any).erp_warehouse_id);
+  pushToken(tokens, (warehouse as any).sourceWarehouseId);
+  pushToken(tokens, (warehouse as any).source_warehouse_id);
   pushToken(tokens, warehouse.code);
   pushToken(tokens, (warehouse as any).uid);
   pushToken(tokens, warehouse.name);
   pushToken(tokens, (warehouse as any).label);
   pushToken(tokens, (warehouse as any).storeId);
   pushToken(tokens, (warehouse as any).store_id);
+
+  if (
+    normalizedCode === 'cen' ||
+    normalizedCode === 'central' ||
+    normalizedName.includes('central') ||
+    normalizedLabel.includes('central')
+  ) {
+    pushToken(tokens, 'wh_central');
+  }
+
+  if (
+    normalizedCode === 'nte' ||
+    normalizedCode === 'norte' ||
+    normalizedName.includes('norte') ||
+    normalizedLabel.includes('norte')
+  ) {
+    pushToken(tokens, 'wh_norte');
+  }
+
   return tokens;
+};
+
+export const resolveWarehouseErpId = (warehouse?: Partial<Warehouse> | null): string => {
+  const candidates = [
+    warehouse?.erpWarehouseId,
+    (warehouse as any)?.erp_warehouse_id,
+    warehouse?.sourceWarehouseId,
+    (warehouse as any)?.source_warehouse_id,
+    warehouse?.inventoryLocalId,
+    (warehouse as any)?.inventory_local_id,
+    warehouse?.warehouseId,
+    (warehouse as any)?.warehouse_id,
+    warehouse?.uid,
+    warehouse?.id,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = typeof candidate === 'string' ? candidate.trim() : '';
+    if (normalized) return normalized;
+  }
+
+  return '';
 };
 
 const readEntryIdentifier = (entry: unknown, keys: string[]): string => {

@@ -192,14 +192,33 @@ const normalizeWarehouse = (raw: unknown, index: number): Warehouse | null => {
 
   return {
     id,
+    warehouseId: asString(data.warehouseId || data.warehouse_id) || undefined,
     code: asString(data.code || id) || id,
     name: asString(data.name || data.label || id) || id,
+    label: asString(data.label || data.name || id) || undefined,
     type: asString(data.type || 'GENERAL') || 'GENERAL',
     address: asString(data.address),
     allowPosSale: asBoolean(data.allowPosSale ?? data.allow_pos_sale, true),
     allowNegativeStock: asBoolean(data.allowNegativeStock ?? data.allow_negative_stock, false),
     isMain: asBoolean(data.isMain ?? data.is_main, index === 0),
     storeId: asString(data.storeId || data.store_id) || undefined,
+    inventoryLocalId: asString(data.inventoryLocalId || data.inventory_local_id || data.localWarehouseId || data.local_warehouse_id) || undefined,
+    erpWarehouseId:
+      asString(
+        data.erpWarehouseId
+        || data.erp_warehouse_id
+        || data.sourceWarehouseId
+        || data.source_warehouse_id
+        || data.warehouseId
+        || data.warehouse_id
+        || data.inventoryLocalId
+        || data.inventory_local_id
+        || data.uid
+        || data.uuid
+        || id
+      ) || id,
+    sourceWarehouseId: asString(data.sourceWarehouseId || data.source_warehouse_id || data.erpWarehouseId || data.erp_warehouse_id) || undefined,
+    uid: asString(data.uid || data.uuid) || undefined,
   };
 };
 
@@ -731,14 +750,9 @@ export const applyTerminalConfigSnapshot = (
   const effectiveAllowedTariffIds =
     allowedTariffIds.length > 0
       ? allowedTariffIds
-      : terminalTemplate.pricing?.allowedTariffIds?.length
-        ? terminalTemplate.pricing.allowedTariffIds
-            .map((value) => resolveTariffId(value, effectiveTariffs))
-            .filter(Boolean)
-        : effectiveTariffs.map((tariff) => tariff.id);
+      : effectiveTariffs.map((tariff) => tariff.id);
   const effectiveDefaultTariffId =
     resolveTariffId(asString(resolvedPricing.default_tariff_id), effectiveTariffs) ||
-    resolveTariffId(terminalTemplate.pricing?.defaultTariffId, effectiveTariffs) ||
     effectiveAllowedTariffIds[0] ||
     effectiveTariffs[0]?.id ||
     '';
@@ -750,14 +764,9 @@ export const applyTerminalConfigSnapshot = (
   const effectiveAllowedWarehouseIds =
     allowedWarehouseIds.length > 0
       ? allowedWarehouseIds
-      : terminalTemplate.inventoryScope?.visibleWarehouseIds?.length
-        ? terminalTemplate.inventoryScope.visibleWarehouseIds
-            .map((value) => resolveWarehouseId(value, effectiveWarehouses))
-            .filter(Boolean)
-        : effectiveWarehouses.map((warehouse) => warehouse.id);
+      : effectiveWarehouses.map((warehouse) => warehouse.id);
   const effectiveDefaultWarehouseId =
     resolveWarehouseId(asString(resolvedInventory.default_warehouse_id), effectiveWarehouses) ||
-    resolveWarehouseId(terminalTemplate.inventoryScope?.defaultSalesWarehouseId, effectiveWarehouses) ||
     effectiveAllowedWarehouseIds[0] ||
     '';
 
@@ -856,16 +865,15 @@ export const applyTerminalConfigSnapshot = (
         terminalTemplate.inventoryScope?.transferWarehouseId,
       defaultWarehouse:
         Object.keys(asObject(resolvedInventory.default_warehouse)).length > 0
-          ? (normalizeWarehouse(resolvedInventory.default_warehouse, 0) || terminalTemplate.inventoryScope?.defaultWarehouse)
-          : terminalTemplate.inventoryScope?.defaultWarehouse,
+          ? normalizeWarehouse(resolvedInventory.default_warehouse, 0)
+          : effectiveWarehouses.find((warehouse) => warehouse.id === effectiveDefaultWarehouseId),
       warehouses: effectiveWarehouses,
     },
     catalog: {
       ...(terminalTemplate.catalog || { allowedCategories: [] }),
-      allowedCategories:
-        allowedCategories.length > 0
-          ? allowedCategories
-          : terminalTemplate.catalog?.allowedCategories || [],
+      // If ERP does not send category restrictions, treat it as unrestricted
+      // instead of inheriting stale local categories from a prior binding.
+      allowedCategories,
       fullPullOnPairing:
         typeof resolvedCatalog.full_pull_on_pairing === 'boolean'
           ? Boolean(resolvedCatalog.full_pull_on_pairing)

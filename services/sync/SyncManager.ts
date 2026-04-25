@@ -15,7 +15,7 @@ import { permissionService } from './PermissionService';
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { productImageCacheService } from './ProductImageCacheService';
 import { masterDataImageCacheService, type ImageBackedCollection } from './MasterDataImageCacheService';
-import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer, ProductStock, Warehouse } from '../../types';
+import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer, ProductStock, ProductPrice, TariffPrice, Warehouse } from '../../types';
 import {
     applyTerminalConfigSnapshot,
     extractTerminalConfigSnapshot,
@@ -40,8 +40,9 @@ import {
     productIdMatchesInventoryReference,
     productIdentityCandidates,
 } from '../../utils/productReferences';
+import { canonicalizeTariffEntries, resolveTariffId } from '../../utils/masterIdentity';
 
-export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities';
+export type SyncableCollection = 'products' | 'customers' | 'suppliers' | 'users' | 'roles' | 'internalSequences' | 'fiscalRanges' | 'inventoryLedger' | 'transactions' | 'zReports' | 'cashMovements' | 'productStocks' | 'productPrices' | 'transfers' | 'receptions' | 'purchaseOrders' | 'supplierProductPrices' | 'paymentMethods' | 'activities';
 
 interface SyncStatus {
     collection: string;
@@ -54,7 +55,7 @@ interface SyncStatus {
 }
 
 type TerminalManifestMasterScope = 'items' | 'customers' | 'suppliers' | 'sellers' | 'purchase_orders' | 'transfers';
-type TerminalManifestBlockScope = 'inventory';
+type TerminalManifestBlockScope = 'inventory' | 'product_prices';
 type TerminalManifestResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions' | 'loyalty';
 type TerminalManifestScope = 'terminal' | TerminalManifestMasterScope | TerminalManifestBlockScope;
 type TerminalManifestCountScope = TerminalManifestMasterScope | TerminalManifestBlockScope;
@@ -67,6 +68,7 @@ interface TerminalCursorMap {
     purchase_orders?: string | null;
     transfers?: string | null;
     inventory?: string | null;
+    product_prices?: string | null;
 }
 
 interface TerminalManifestPayload {
@@ -90,6 +92,33 @@ interface TerminalInventoryPayload {
     cursor?: string | null;
     balances?: TerminalInventoryBalancePayload[];
     has_changes?: boolean;
+    inventory?: {
+        cursor?: string | null;
+        balances?: TerminalInventoryBalancePayload[];
+        has_changes?: boolean;
+    };
+}
+
+interface TerminalProductPricePayload {
+    id?: string | null;
+    product_id?: string | null;
+    item_id?: string | null;
+    tariff_id?: string | null;
+    tariff_code?: string | null;
+    price?: number | null;
+    currency?: string | null;
+    updated_at?: string | null;
+}
+
+interface TerminalProductPricesPayload {
+    cursor?: string | null;
+    prices?: TerminalProductPricePayload[];
+    has_changes?: boolean;
+    product_prices?: {
+        cursor?: string | null;
+        prices?: TerminalProductPricePayload[];
+        has_changes?: boolean;
+    };
 }
 
 class SyncManager {
@@ -100,6 +129,7 @@ class SyncManager {
     private syncConfig: SyncConfig | null = null;
     private isMaster: boolean = false;
     private isDisabled: boolean = false;
+    private initializedLocalTerminalId: string | null = null;
     private imageSyncInProgress = false;
     private lastProductImageManifestVersion = 0;
     private productImageHashes: Map<string, string> = new Map();
@@ -109,6 +139,24 @@ class SyncManager {
     private terminalManifestSyncInFlight = false;
 
     public isInitialized: boolean = false;
+
+    private resolveRuntimeWarehousesFromConfig(config: BusinessConfig | null | undefined, terminalId: string): Warehouse[] {
+        if (!config || !Array.isArray(config.terminals)) {
+            return [];
+        }
+
+        const terminal = config.terminals.find((candidate) => candidate?.id === terminalId) || config.terminals[0];
+        const warehouses = Array.isArray(terminal?.config?.inventoryScope?.warehouses)
+            ? terminal.config.inventoryScope.warehouses
+            : [];
+
+        return warehouses
+            .filter((warehouse) => warehouse && typeof warehouse === 'object')
+            .map((warehouse) => ({
+                ...warehouse,
+                erpWarehouseId: String((warehouse as any).erpWarehouseId || (warehouse as any).sourceWarehouseId || (warehouse as any).inventoryLocalId || warehouse.id || '').trim() || String(warehouse.id || '').trim(),
+            })) as Warehouse[];
+    }
 
     private isImageBackedCollection(collection: SyncableCollection): collection is ImageBackedCollection {
         return collection === 'customers' || collection === 'suppliers';
@@ -257,6 +305,7 @@ class SyncManager {
     async initialize(config: BusinessConfig, terminalId: string) {
         // Ensure a device token exists for this browser instance
         this.ensureDeviceToken();
+        this.initializedLocalTerminalId = terminalId;
         this.rehydrateOperationalTargetFromConfig(config, terminalId);
 
         // Detect Network Mode
@@ -496,9 +545,8 @@ class SyncManager {
         if (apiSyncAdapter.isUsingErpOperationalTarget()) {
             try {
                 await this.syncTerminalMastersOnStartup(config);
-                await this.refreshOperationalInventorySnapshot();
             } catch (error) {
-                console.warn('⚠️ SyncManager: startup ERP inventory hydration failed:', error);
+                console.warn('⚠️ SyncManager: startup terminal manifest sync failed:', error);
             }
         } else {
             this.syncTerminalMastersOnStartup(config).catch((error) => {
@@ -606,6 +654,7 @@ class SyncManager {
         const activeTerminalId =
             localStorage.getItem('active_terminal_id') ||
             localStorage.getItem('CLIC_POS_TERMINAL_ID') ||
+            this.initializedLocalTerminalId ||
             null;
 
         const currentTerminal = activeTerminalId && config?.terminals
@@ -702,6 +751,7 @@ class SyncManager {
                 purchase_orders: typeof parsed.purchase_orders === 'string' ? parsed.purchase_orders.trim() || null : null,
                 transfers: typeof parsed.transfers === 'string' ? parsed.transfers.trim() || null : null,
                 inventory: typeof parsed.inventory === 'string' ? parsed.inventory.trim() || null : null,
+                product_prices: typeof parsed.product_prices === 'string' ? parsed.product_prices.trim() || null : null,
             };
         } catch {
             return {};
@@ -719,6 +769,7 @@ class SyncManager {
             purchase_orders: typeof cursorMap.purchase_orders === 'string' ? cursorMap.purchase_orders.trim() || null : null,
             transfers: typeof cursorMap.transfers === 'string' ? cursorMap.transfers.trim() || null : null,
             inventory: typeof cursorMap.inventory === 'string' ? cursorMap.inventory.trim() || null : null,
+            product_prices: typeof cursorMap.product_prices === 'string' ? cursorMap.product_prices.trim() || null : null,
         };
 
         const hasValue = Object.values(normalizedCursorMap).some((value) => typeof value === 'string' && value.trim());
@@ -896,6 +947,7 @@ class SyncManager {
                 purchase_orders: typeof cursorMap.purchase_orders === 'string' ? cursorMap.purchase_orders.trim() || null : null,
                 transfers: typeof cursorMap.transfers === 'string' ? cursorMap.transfers.trim() || null : null,
                 inventory: typeof cursorMap.inventory === 'string' ? cursorMap.inventory.trim() || null : null,
+                product_prices: typeof cursorMap.product_prices === 'string' ? cursorMap.product_prices.trim() || null : null,
             },
             changed: {
                 terminal: Boolean(changed.terminal),
@@ -905,12 +957,13 @@ class SyncManager {
                 purchase_orders: Boolean(changed.purchase_orders),
                 transfers: Boolean(changed.transfers),
                 inventory: Boolean(changed.inventory),
+                product_prices: Boolean(changed.product_prices),
             },
             changed_blocks: Array.isArray(manifest.changed_blocks)
                 ? manifest.changed_blocks
                     .map((scope: unknown) => (typeof scope === 'string' ? scope.trim() : ''))
                     .filter((scope: string): scope is TerminalManifestScope =>
-                        ['terminal', 'items', 'customers', 'suppliers', 'sellers', 'purchase_orders', 'transfers', 'inventory'].includes(scope),
+                        ['terminal', 'items', 'customers', 'suppliers', 'sellers', 'purchase_orders', 'transfers', 'inventory', 'product_prices'].includes(scope),
                     )
                 : [],
             counts: {
@@ -920,6 +973,7 @@ class SyncManager {
                 purchase_orders: Number.isFinite(Number(counts.purchase_orders)) ? Number(counts.purchase_orders) : 0,
                 transfers: Number.isFinite(Number(counts.transfers)) ? Number(counts.transfers) : 0,
                 inventory: Number.isFinite(Number(counts.inventory)) ? Number(counts.inventory) : 0,
+                product_prices: Number.isFinite(Number(counts.product_prices)) ? Number(counts.product_prices) : 0,
             },
             snapshot_at: typeof manifest.snapshot_at === 'string' ? manifest.snapshot_at.trim() || null : null,
         };
@@ -975,6 +1029,7 @@ class SyncManager {
             if (cursorMap.purchase_orders) params.set('purchase_orders_cursor', cursorMap.purchase_orders);
             if (cursorMap.transfers) params.set('transfers_cursor', cursorMap.transfers);
             if (cursorMap.inventory) params.set('inventory_cursor', cursorMap.inventory);
+            if (cursorMap.product_prices) params.set('product_prices_cursor', cursorMap.product_prices);
 
             try {
                 const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/manifest`;
@@ -1089,13 +1144,31 @@ class SyncManager {
                 }
 
                 const payload = await response.json();
-                const inventory = payload?.inventory && typeof payload.inventory === 'object' && !Array.isArray(payload.inventory)
-                    ? payload.inventory as Record<string, any>
+                const root = payload && typeof payload === 'object' && !Array.isArray(payload)
+                    ? payload as Record<string, any>
+                    : {};
+                const inventory = root.inventory && typeof root.inventory === 'object' && !Array.isArray(root.inventory)
+                    ? root.inventory as Record<string, any>
                     : {};
                 const normalizedPayload: TerminalInventoryPayload = {
-                    cursor: typeof inventory.cursor === 'string' ? inventory.cursor.trim() || null : null,
-                    balances: Array.isArray(inventory.balances) ? inventory.balances as TerminalInventoryBalancePayload[] : [],
-                    has_changes: typeof inventory.has_changes === 'boolean' ? inventory.has_changes : true,
+                    cursor:
+                        typeof inventory.cursor === 'string'
+                            ? inventory.cursor.trim() || null
+                            : typeof root.cursor === 'string'
+                                ? root.cursor.trim() || null
+                                : null,
+                    balances:
+                        Array.isArray(inventory.balances)
+                            ? inventory.balances as TerminalInventoryBalancePayload[]
+                            : Array.isArray(root.balances)
+                                ? root.balances as TerminalInventoryBalancePayload[]
+                                : [],
+                    has_changes:
+                        typeof inventory.has_changes === 'boolean'
+                            ? inventory.has_changes
+                            : typeof root.has_changes === 'boolean'
+                                ? root.has_changes
+                                : true,
                 };
 
                 posCatalogDebugLog('inventory block: fetch success', {
@@ -1125,11 +1198,132 @@ class SyncManager {
         return null;
     }
 
+    private async fetchTerminalProductPricesBlock(context: {
+        terminalId: string | null;
+        localTerminalId: string | null;
+        tenantId: string | null;
+        erpBaseUrl: string | null;
+        posDeviceId: string | null;
+    }, cursor: string | null): Promise<TerminalProductPricesPayload | null> {
+        if (!context.terminalId || !context.tenantId) {
+            return null;
+        }
+
+        const syncApiBase = this.resolveTerminalConfigSyncApiBase(context);
+        const useAbsoluteEndpoint = this.shouldUseAbsoluteTerminalConfigEndpoint();
+        const endpointCandidates = useAbsoluteEndpoint
+            ? [
+                ...this.resolveLocalSyncApiBaseCandidates().map((baseUrl) => ({
+                    baseUrl,
+                    mode: 'local-loopback-proxy',
+                    includeErpBaseUrl: true,
+                })),
+                ...(syncApiBase
+                    ? [{
+                        baseUrl: syncApiBase,
+                        mode: 'absolute-sync-api',
+                        includeErpBaseUrl: false,
+                    }]
+                    : []),
+            ]
+            : [{
+                baseUrl: '/api/sync',
+                mode: 'relative-local-proxy',
+                includeErpBaseUrl: true,
+            }];
+
+        let lastError: unknown = null;
+
+        for (const endpointCandidate of endpointCandidates) {
+            const startedAt = posCatalogDebugNow();
+            const params = new URLSearchParams();
+            params.set('tenant_id', context.tenantId);
+            if (endpointCandidate.includeErpBaseUrl && context.erpBaseUrl) params.set('erp_base_url', context.erpBaseUrl);
+            if (context.posDeviceId) params.set('pos_device_id', context.posDeviceId);
+            if (context.localTerminalId) params.set('local_terminal_id', context.localTerminalId);
+            if (cursor) params.set('product_prices_cursor', cursor);
+
+            try {
+                const endpointPath = `/terminals/${encodeURIComponent(context.terminalId)}/product-prices`;
+                const endpoint = `${endpointCandidate.baseUrl}${endpointPath}?${params.toString()}`;
+                posCatalogDebugLog('product prices block: fetch begin', {
+                    endpoint,
+                    endpointMode: endpointCandidate.mode,
+                    productPricesCursorSent: cursor,
+                });
+
+                const response = await fetch(endpoint, {
+                    headers: {
+                        Accept: 'application/json',
+                    },
+                });
+
+                if (!response.ok) {
+                    const detail = await response.text().catch(() => '');
+                    throw new Error(detail || `No se pudo consultar el bloque product_prices (${response.status}).`);
+                }
+
+                const payload = await response.json();
+                const root = payload && typeof payload === 'object' && !Array.isArray(payload)
+                    ? payload as Record<string, any>
+                    : {};
+                const productPrices = root.product_prices && typeof root.product_prices === 'object' && !Array.isArray(root.product_prices)
+                    ? root.product_prices as Record<string, any>
+                    : {};
+                const normalizedPayload: TerminalProductPricesPayload = {
+                    cursor:
+                        typeof productPrices.cursor === 'string'
+                            ? productPrices.cursor.trim() || null
+                            : typeof root.cursor === 'string'
+                                ? root.cursor.trim() || null
+                                : null,
+                    prices:
+                        Array.isArray(productPrices.prices)
+                            ? productPrices.prices as TerminalProductPricePayload[]
+                            : Array.isArray(root.prices)
+                                ? root.prices as TerminalProductPricePayload[]
+                                : [],
+                    has_changes:
+                        typeof productPrices.has_changes === 'boolean'
+                            ? productPrices.has_changes
+                            : typeof root.has_changes === 'boolean'
+                                ? root.has_changes
+                                : true,
+                };
+
+                posCatalogDebugLog('product prices block: fetch success', {
+                    endpointMode: endpointCandidate.mode,
+                    elapsedMs: posCatalogDebugElapsedMs(startedAt),
+                    priceCount: normalizedPayload.prices?.length || 0,
+                    hasChanges: normalizedPayload.has_changes,
+                    cursor: normalizedPayload.cursor,
+                });
+
+                return normalizedPayload;
+            } catch (error) {
+                lastError = error;
+                posCatalogDebugLog('product prices block: fetch failed', {
+                    endpointMode: endpointCandidate.mode,
+                    endpointBaseUrl: endpointCandidate.baseUrl,
+                    elapsedMs: posCatalogDebugElapsedMs(startedAt),
+                    error: String((error as Error)?.message || error),
+                });
+            }
+        }
+
+        if (lastError) {
+            throw lastError;
+        }
+
+        return null;
+    }
+
     private async reconcileTerminalManifest(
         baseConfig: BusinessConfig | null,
         options?: {
             skipIfStartupCompleted?: boolean;
             markStartupCompleted?: boolean;
+            bootstrapBlocks?: boolean;
         }
     ): Promise<BusinessConfig | null> {
         if (this.isDisabled || this.terminalManifestSyncInFlight || !navigator.onLine) {
@@ -1138,7 +1332,7 @@ class SyncManager {
 
         const context = this.getActiveTerminalContext(baseConfig);
         const localTerminalId = context.localTerminalId || context.terminalId;
-        if (!context.terminalId || !localTerminalId || !context.tenantId || !context.erpBaseUrl) {
+        if (!context.terminalId || !localTerminalId || !context.tenantId) {
             return null;
         }
 
@@ -1159,9 +1353,13 @@ class SyncManager {
                 .filter((scope) => manifest.changed?.[scope]);
             const changedBlocks = Array.isArray(manifest.changed_blocks) ? manifest.changed_blocks : [];
             const inventoryChanged = Boolean(manifest.changed.inventory) || changedBlocks.includes('inventory');
+            const productPricesChanged = Boolean(manifest.changed.product_prices) || changedBlocks.includes('product_prices');
+            const shouldBootstrapBlocks = Boolean(options?.markStartupCompleted || options?.bootstrapBlocks);
+            const bootstrapInventoryOnStartup = Boolean(shouldBootstrapBlocks && manifest.cursor_map.inventory);
+            const bootstrapProductPricesOnStartup = Boolean(shouldBootstrapBlocks && manifest.cursor_map.product_prices);
             const terminalChanged = Boolean(manifest.changed.terminal);
 
-            if (!terminalChanged && changedMasterScopes.length === 0 && !inventoryChanged) {
+            if (!terminalChanged && changedMasterScopes.length === 0 && !inventoryChanged && !bootstrapInventoryOnStartup && !productPricesChanged && !bootstrapProductPricesOnStartup) {
                 this.persistTerminalCursorMap(localTerminalId, manifest.cursor_map);
                 if (options?.markStartupCompleted) {
                     this.markStartupManifestSyncCompleted(localTerminalId);
@@ -1178,8 +1376,11 @@ class SyncManager {
                 });
             }
 
-            if (inventoryChanged) {
-                const inventoryPayload = await this.fetchTerminalInventoryBlock(context, storedCursorMap.inventory || null);
+            if (inventoryChanged || bootstrapInventoryOnStartup) {
+                const inventoryPayload = await this.fetchTerminalInventoryBlock(
+                    context,
+                    inventoryChanged ? (storedCursorMap.inventory || null) : null,
+                );
                 if (inventoryPayload?.cursor) {
                     manifest.cursor_map.inventory = inventoryPayload.cursor;
                 }
@@ -1188,7 +1389,22 @@ class SyncManager {
                 }
             }
 
-            if (!refreshedConfig && !inventoryChanged) {
+            if (productPricesChanged || bootstrapProductPricesOnStartup) {
+                const productPricesPayload = await this.fetchTerminalProductPricesBlock(
+                    context,
+                    productPricesChanged ? (storedCursorMap.product_prices || null) : null,
+                );
+                if (productPricesPayload?.cursor) {
+                    manifest.cursor_map.product_prices = productPricesPayload.cursor;
+                }
+                if (productPricesPayload?.has_changes) {
+                    await this.applyTerminalProductPricesBlock(
+                        Array.isArray(productPricesPayload.prices) ? productPricesPayload.prices : [],
+                    );
+                }
+            }
+
+            if (!refreshedConfig && !inventoryChanged && !productPricesChanged && !bootstrapInventoryOnStartup && !bootstrapProductPricesOnStartup) {
                 return null;
             }
 
@@ -1357,7 +1573,7 @@ class SyncManager {
                 matchedBalances.reduce<Record<string, number>>((acc, entry) => {
                     const warehouseId = String(entry?.warehouse_id || '').trim();
                     if (!warehouseId) return acc;
-                    acc[warehouseId] = Number(entry?.qty_on_hand ?? 0);
+                    acc[warehouseId] = Number(acc[warehouseId] || 0) + Number(entry?.qty_on_hand ?? 0);
                     return acc;
                 }, {}),
                 runtimeWarehouses,
@@ -1383,10 +1599,17 @@ class SyncManager {
             for (const warehouseId of warehouseIds) {
                 const lookupKey = this.buildSnapshotProductStockLookupKey(nextProduct.id, warehouseId);
                 const existingStock = this.resolveExistingSnapshotProductStock(nextProduct.id, warehouseId, aliasProductIds, existingStocksByProductWarehouse);
-                const matchedBalance = matchedBalances.find((entry) => String(entry?.warehouse_id || '').trim() === warehouseId);
+                const matchedWarehouseBalances = matchedBalances.filter((entry) => String(entry?.warehouse_id || '').trim() === warehouseId);
+                const matchedBalance = matchedWarehouseBalances[matchedWarehouseBalances.length - 1];
                 const qtyPhysical = Number(warehouseBalanceMap?.[warehouseId] ?? 0);
-                const qtyCommitted = Number(matchedBalance?.qty_committed ?? existingStock?.qtyCommitted ?? 0);
-                const qtyReserved = Number(matchedBalance?.qty_reserved ?? 0);
+                const qtyCommitted = matchedWarehouseBalances.reduce((sum, entry) => {
+                    const nextValue = Number(entry?.qty_committed);
+                    return Number.isFinite(nextValue) ? sum + nextValue : sum;
+                }, 0) || Number(existingStock?.qtyCommitted ?? 0);
+                const qtyReserved = matchedWarehouseBalances.reduce((sum, entry) => {
+                    const nextValue = Number(entry?.qty_reserved);
+                    return Number.isFinite(nextValue) ? sum + nextValue : sum;
+                }, 0);
                 const nextStock: ProductStock = {
                     id: `${nextProduct.id}_${warehouseId}`,
                     productId: nextProduct.id,
@@ -1424,11 +1647,149 @@ class SyncManager {
         return updatedProducts.size;
     }
 
-    async syncTerminalManifestInBackground(baseConfig?: BusinessConfig | null): Promise<BusinessConfig | null> {
+    private async applyTerminalProductPricesBlock(prices: TerminalProductPricePayload[]): Promise<number> {
+        const normalizedPrices = Array.isArray(prices) ? prices : [];
+        const [rawProducts, rawConfig] = await Promise.all([
+            db.get('products'),
+            db.get('config'),
+        ]);
+        const localProducts = (Array.isArray(rawProducts) ? rawProducts : []) as Product[];
+        const businessConfig = rawConfig && typeof rawConfig === 'object' && !Array.isArray(rawConfig)
+            ? rawConfig as BusinessConfig
+            : null;
+        const configTariffs = Array.isArray(businessConfig?.tariffs) ? businessConfig.tariffs : [];
+
+        if (normalizedPrices.length === 0) {
+            await db.save('productPrices' as any, []);
+            window.dispatchEvent(new CustomEvent('productPricesUpdated'));
+            return 0;
+        }
+
+        if (localProducts.length === 0) {
+            return 0;
+        }
+
+        const localById = new Map<string, Product>();
+        for (const product of localProducts) {
+            if (product?.id) {
+                localById.set(String(product.id).trim(), product);
+            }
+        }
+
+        const localByIdentity = this.buildLocalProductIdentityLookup(localProducts);
+        const nextPriceDocs = new Map<string, ProductPrice>();
+        const nextTariffsByProduct = new Map<string, TariffPrice[]>();
+
+        for (const entry of normalizedPrices) {
+            const candidateTokens = productIdentityCandidates({
+                id: entry?.product_id || entry?.item_id || entry?.id || '',
+                productId: entry?.product_id || '',
+                itemId: entry?.item_id || '',
+            });
+            const matchedProduct = candidateTokens
+                .map((candidate) => localByIdentity.get(candidate) || localById.get(candidate))
+                .find(Boolean) || null;
+
+            if (!matchedProduct?.id) {
+                continue;
+            }
+
+            const rawTariffId = String(entry?.tariff_id || entry?.tariff_code || '').trim();
+            const tariffId = resolveTariffId(rawTariffId, configTariffs);
+            const price = Number(entry?.price);
+
+            if (!tariffId || !Number.isFinite(price)) {
+                continue;
+            }
+
+            const productId = String(matchedProduct.id).trim();
+            const documentId = `${productId}_${tariffId}`;
+            const itemId = String(
+                entry?.item_id
+                || entry?.product_id
+                || this.collectSnapshotProductAliasIds(matchedProduct)[0]
+                || productId
+            ).trim();
+            nextPriceDocs.set(documentId, {
+                id: documentId,
+                productId,
+                tariffId,
+                tariffCode: String(entry?.tariff_code || '').trim() || undefined,
+                itemId,
+                erpProductId: itemId || undefined,
+                sourceProductId: itemId || undefined,
+                price,
+                currency: String(entry?.currency || '').trim() || undefined,
+                updatedAt: String(entry?.updated_at || matchedProduct.updatedAt || new Date().toISOString()).trim(),
+            });
+
+            const currentTariffs = nextTariffsByProduct.get(productId)
+                || canonicalizeTariffEntries(Array.isArray(matchedProduct.tariffs) ? matchedProduct.tariffs : [], configTariffs);
+            const currentIndex = currentTariffs.findIndex((tariff) => String(tariff?.tariffId || '').trim() === tariffId);
+            const nextTariff: TariffPrice = {
+                ...(currentIndex >= 0 ? currentTariffs[currentIndex] : {}),
+                tariffId,
+                price,
+                name: currentIndex >= 0 ? currentTariffs[currentIndex]?.name : undefined,
+            };
+
+            if (currentIndex >= 0) {
+                currentTariffs[currentIndex] = nextTariff;
+            } else {
+                currentTariffs.push(nextTariff);
+            }
+
+            nextTariffsByProduct.set(productId, canonicalizeTariffEntries(currentTariffs, configTariffs));
+        }
+
+        await db.save('productPrices' as any, Array.from(nextPriceDocs.values()));
+
+        const activeTerminalId =
+            localStorage.getItem('active_terminal_id') ||
+            localStorage.getItem('CLIC_POS_TERMINAL_ID') ||
+            this.initializedLocalTerminalId ||
+            null;
+        const currentTerminal = activeTerminalId && Array.isArray(businessConfig?.terminals)
+            ? businessConfig!.terminals.find((terminal) => terminal?.id === activeTerminalId) || businessConfig!.terminals[0]
+            : businessConfig?.terminals?.[0];
+        const defaultTariffId =
+            String(currentTerminal?.config?.pricing?.defaultTariffId || '').trim()
+            || String(configTariffs[0]?.id || '').trim()
+            || '';
+
+        let updatedProducts = 0;
+        for (const [productId, tariffs] of nextTariffsByProduct.entries()) {
+            const product = localById.get(productId);
+            if (!product) continue;
+
+            const defaultTariff = tariffs.find((tariff) => String(tariff?.tariffId || '').trim() === defaultTariffId);
+            const nextProduct: Product = {
+                ...product,
+                tariffs,
+                price: Number.isFinite(Number(defaultTariff?.price)) ? Number(defaultTariff?.price) : product.price,
+            };
+            await db.saveDocument('products', nextProduct);
+            updatedProducts += 1;
+        }
+
+        if (updatedProducts > 0) {
+            window.dispatchEvent(new CustomEvent('productsUpdated'));
+        }
+        window.dispatchEvent(new CustomEvent('productPricesUpdated'));
+        return nextPriceDocs.size;
+    }
+
+    async syncTerminalManifestInBackground(
+        baseConfig?: BusinessConfig | null,
+        options?: {
+            bootstrapBlocks?: boolean;
+        }
+    ): Promise<BusinessConfig | null> {
         try {
             return await this.reconcileTerminalManifest(baseConfig ?? null, {
                 skipIfStartupCompleted: false,
                 markStartupCompleted: false,
+                bootstrapBlocks: Boolean(options?.bootstrapBlocks),
             });
         } catch (error) {
             console.warn('⚠️ SyncManager: background manifest sync failed:', error);
@@ -1627,6 +1988,7 @@ class SyncManager {
             forceRemoteFetch?: boolean;
             forceFullCatalog?: boolean;
             masterScopes?: TerminalManifestMasterScope[];
+            blockScopes?: TerminalManifestBlockScope[];
             resolvedScopes?: TerminalManifestResolvedScope[];
         }
     ): Promise<BusinessConfig | null> {
@@ -1649,8 +2011,12 @@ class SyncManager {
         const snapshotTerminalId = context.localTerminalId || context.terminalId;
         const cachedSnapshot = baseConfig.terminalSnapshots?.[snapshotTerminalId] || null;
         const currentCatalogCursor = this.readStoredCatalogCursor(snapshotTerminalId);
+        const currentTerminalCursorMap = this.readStoredTerminalCursorMap(snapshotTerminalId);
         const requestedMasterScopes = Array.isArray(options?.masterScopes)
             ? Array.from(new Set(options.masterScopes.filter(Boolean)))
+            : null;
+        const requestedBlockScopes = Array.isArray(options?.blockScopes)
+            ? Array.from(new Set(options.blockScopes.filter(Boolean)))
             : null;
         const requestedResolvedScopes = Array.isArray(options?.resolvedScopes)
             ? Array.from(new Set(options.resolvedScopes.filter(Boolean)))
@@ -1706,8 +2072,10 @@ class SyncManager {
             forceRemoteFetch: Boolean(options?.forceRemoteFetch),
             forceFullCatalog: Boolean(options?.forceFullCatalog),
             hasCatalogCursor: Boolean(currentCatalogCursor),
+            hasTerminalCursorMap: Object.keys(currentTerminalCursorMap).length > 0,
             hasPendingSnapshot: Boolean(pendingSnapshot),
             requestedMasterScopes,
+            requestedBlockScopes,
             requestedResolvedScopes,
         });
 
@@ -1753,6 +2121,7 @@ class SyncManager {
                         forceFullCatalog: Boolean(options?.forceFullCatalog),
                         catalogCursorSent: !options?.forceFullCatalog ? currentCatalogCursor : null,
                         requestedMasterScopes,
+                        requestedBlockScopes,
                         requestedResolvedScopes,
                     });
                     const response = await fetch(endpoint, {
@@ -1856,14 +2225,10 @@ class SyncManager {
                 await this.applySnapshotProducts(snapshot);
             }
             const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta);
-            const operationalInventoryHydrated = apiSyncAdapter.isUsingErpOperationalTarget()
-                ? await this.refreshOperationalInventorySnapshot()
-                : 0;
             await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
             posCatalogDebugLog('refreshTerminalResolvedConfig: product apply success', {
                 usedCatalogDelta: Boolean(catalogDelta),
                 structuredMasterData,
-                operationalInventoryHydrated,
                 elapsedMs: posCatalogDebugElapsedMs(applyStartedAt),
             });
         } catch (error) {
@@ -1884,6 +2249,7 @@ class SyncManager {
 
         const localProducts = ((await db.get('products')) as Product[]) || [];
         const nextConfig = this.reconcileCatalogProductIds(applied.config, localProducts);
+        const nextRuntimeWarehouses = this.resolveRuntimeWarehousesFromConfig(nextConfig, applied.terminalId);
         const operationalDocumentState = extractTerminalOperationalDocumentState(nextConfig, applied.terminalId);
         const changed =
             JSON.stringify(this.sanitizeConfig(baseConfig)) !==
@@ -1891,6 +2257,17 @@ class SyncManager {
 
         if (options?.persist !== false && changed) {
             await db.save('config', nextConfig);
+        }
+
+        if (nextRuntimeWarehouses.length > 0) {
+            const persistedWarehouses = ((await db.get('warehouses')) as Warehouse[]) || [];
+            const persistedJson = JSON.stringify(persistedWarehouses);
+            const nextJson = JSON.stringify(nextRuntimeWarehouses);
+
+            if (persistedJson !== nextJson) {
+                await db.save('warehouses', nextRuntimeWarehouses);
+                window.dispatchEvent(new CustomEvent('warehousesUpdated'));
+            }
         }
 
         await db.rehydrateOperationalDocumentState(
@@ -1909,8 +2286,47 @@ class SyncManager {
         }
         localStorage.setItem('active_terminal_id', applied.terminalId);
         localStorage.setItem('CLIC_POS_TERMINAL_ID', applied.terminalId);
+        let nextTerminalCursorMap = { ...currentTerminalCursorMap };
         if (nextCatalogCursor) {
             this.persistCatalogCursor(snapshotTerminalId, nextCatalogCursor);
+        }
+
+        if (requestedBlockScopes?.includes('inventory')) {
+            const inventoryPayload = await this.fetchTerminalInventoryBlock(
+                context,
+                currentTerminalCursorMap.inventory || null,
+            );
+            if (inventoryPayload?.cursor) {
+                nextTerminalCursorMap = {
+                    ...nextTerminalCursorMap,
+                    inventory: inventoryPayload.cursor,
+                };
+            }
+            if (inventoryPayload?.has_changes) {
+                await this.applyTerminalInventoryBlock(Array.isArray(inventoryPayload.balances) ? inventoryPayload.balances : []);
+            }
+        }
+
+        if (requestedBlockScopes?.includes('product_prices')) {
+            const productPricesPayload = await this.fetchTerminalProductPricesBlock(
+                context,
+                currentTerminalCursorMap.product_prices || null,
+            );
+            if (productPricesPayload?.cursor) {
+                nextTerminalCursorMap = {
+                    ...nextTerminalCursorMap,
+                    product_prices: productPricesPayload.cursor,
+                };
+            }
+            if (productPricesPayload?.has_changes) {
+                await this.applyTerminalProductPricesBlock(
+                    Array.isArray(productPricesPayload.prices) ? productPricesPayload.prices : [],
+                );
+            }
+        }
+
+        if (JSON.stringify(nextTerminalCursorMap) !== JSON.stringify(currentTerminalCursorMap)) {
+            this.persistTerminalCursorMap(snapshotTerminalId, nextTerminalCursorMap);
         }
 
         try {
@@ -1927,6 +2343,7 @@ class SyncManager {
             changed,
             usedCatalogDelta: Boolean(catalogDelta),
             nextCatalogCursor,
+            requestedBlockScopes,
             elapsedMs: posCatalogDebugElapsedMs(refreshStartedAt),
         });
 
@@ -1953,7 +2370,13 @@ class SyncManager {
                 stock,
             ]),
         );
+        const localProductsById = new Map<string, Product>(
+            localProducts
+                .filter((product) => Boolean(product?.id))
+                .map((product) => [String(product.id).trim(), product]),
+        );
         const localByIdentity = this.buildLocalProductIdentityLookup(localProducts);
+        const preserveOperationalInventory = apiSyncAdapter.isUsingErpOperationalTarget();
         let updatedCount = 0;
         const duplicateIdsToRemove = new Set<string>();
         const traceRaw = rawItems.filter((item: unknown) => posCatalogDebugMatchesRaw(item));
@@ -1968,6 +2391,10 @@ class SyncManager {
             if (!normalizedItem?.id) continue;
             const rawItem = rawItems[index] as Record<string, unknown> | undefined;
             let item = normalizedItem;
+            const incomingRemoteId =
+                typeof rawItem?.id === 'string'
+                    ? rawItem.id.trim()
+                    : String(rawItem?.id || normalizedItem.id || '').trim();
 
             const incomingCodes = new Set<string>([
                 ...productIdentityCandidates(rawItem || null),
@@ -1995,6 +2422,24 @@ class SyncManager {
                     ...canonicalLocalProduct,
                     ...normalizedItem,
                     id: canonicalLocalProduct.id,
+                    sourceItemId:
+                        typeof (canonicalLocalProduct as any)?.sourceItemId === 'string' && (canonicalLocalProduct as any).sourceItemId.trim()
+                            ? (canonicalLocalProduct as any).sourceItemId.trim()
+                            : (typeof (normalizedItem as any)?.sourceItemId === 'string' && (normalizedItem as any).sourceItemId.trim()
+                                ? (normalizedItem as any).sourceItemId.trim()
+                                : incomingRemoteId),
+                    source_item_id:
+                        typeof (canonicalLocalProduct as any)?.source_item_id === 'string' && (canonicalLocalProduct as any).source_item_id.trim()
+                            ? (canonicalLocalProduct as any).source_item_id.trim()
+                            : (typeof (normalizedItem as any)?.source_item_id === 'string' && (normalizedItem as any).source_item_id.trim()
+                                ? (normalizedItem as any).source_item_id.trim()
+                                : incomingRemoteId),
+                    erpProductId:
+                        typeof (canonicalLocalProduct as any)?.erpProductId === 'string' && (canonicalLocalProduct as any).erpProductId.trim()
+                            ? (canonicalLocalProduct as any).erpProductId.trim()
+                            : (typeof (normalizedItem as any)?.erpProductId === 'string' && (normalizedItem as any).erpProductId.trim()
+                                ? (normalizedItem as any).erpProductId.trim()
+                                : incomingRemoteId),
                 };
 
                 const rawId = typeof rawItem?.id === 'string' ? rawItem.id.trim() : String(rawItem?.id || '').trim();
@@ -2003,9 +2448,47 @@ class SyncManager {
                 }
             }
 
+            if (item?.id && incomingRemoteId && incomingRemoteId !== item.id) {
+                item = {
+                    ...item,
+                    sourceItemId:
+                        typeof (item as any)?.sourceItemId === 'string' && (item as any).sourceItemId.trim()
+                            ? (item as any).sourceItemId.trim()
+                            : incomingRemoteId,
+                    source_item_id:
+                        typeof (item as any)?.source_item_id === 'string' && (item as any).source_item_id.trim()
+                            ? (item as any).source_item_id.trim()
+                            : incomingRemoteId,
+                    erpProductId:
+                        typeof (item as any)?.erpProductId === 'string' && (item as any).erpProductId.trim()
+                            ? (item as any).erpProductId.trim()
+                            : incomingRemoteId,
+                };
+            }
+
             if (!item?.id) continue;
+            const existingLocalProduct =
+                (canonicalLocalProduct?.id && canonicalLocalProduct.id === item.id
+                    ? canonicalLocalProduct
+                    : localProductsById.get(String(item.id).trim())) || canonicalLocalProduct;
+
+            if (preserveOperationalInventory && existingLocalProduct) {
+                item = {
+                    ...item,
+                    stockBalances:
+                        existingLocalProduct.stockBalances && typeof existingLocalProduct.stockBalances === 'object'
+                            ? { ...existingLocalProduct.stockBalances }
+                            : {},
+                    stock: Number.isFinite(Number(existingLocalProduct.stock))
+                        ? Number(existingLocalProduct.stock)
+                        : Number((item as Product).stock ?? 0),
+                };
+            }
+
             await db.saveDocument('products', item);
-            await this.syncSnapshotProductStocks(item as Product, runtimeWarehouses, existingStocksByProductWarehouse);
+            if (!preserveOperationalInventory) {
+                await this.syncSnapshotProductStocks(item as Product, runtimeWarehouses, existingStocksByProductWarehouse);
+            }
             if (posCatalogDebugMatchesRaw(rawItem || item)) {
                 posCatalogDebugLog('applySnapshotProducts: saved product', {
                     saved: posCatalogDebugSummarizeItem(item as Record<string, unknown>),
@@ -2014,6 +2497,7 @@ class SyncManager {
             for (const candidate of productIdentityCandidates(item as Record<string, unknown>)) {
                 localByIdentity.set(candidate, item as Product);
             }
+            localProductsById.set(String(item.id).trim(), item as Product);
             updatedCount += 1;
         }
 
@@ -3099,10 +3583,6 @@ class SyncManager {
             return 0;
         }
 
-        if (collection === 'productStocks' && apiSyncAdapter.isUsingErpOperationalTarget()) {
-            return this.refreshOperationalInventorySnapshot();
-        }
-
         const now = Date.now();
         if (!force && !options?.ignoreThrottle && (now - this.lastSyncTime < this.MIN_SYNC_INTERVAL_MS)) {
             // console.log(`⏳ SyncManager: Pull skipped for ${collection} (Throttled: ${((this.MIN_SYNC_INTERVAL_MS - (now - this.lastSyncTime)) / 1000).toFixed(1)}s remaining)`);
@@ -3350,9 +3830,6 @@ class SyncManager {
                     await this.syncProductImages();
                 } catch (error) {
                     console.warn('⚠️ Image sync side-channel failed after products pull:', error);
-                }
-                if (apiSyncAdapter.isUsingErpOperationalTarget()) {
-                    await this.refreshOperationalInventorySnapshot();
                 }
             }
 
@@ -3705,9 +4182,6 @@ class SyncManager {
         }
 
         await this.forcePullAll();
-        if (apiSyncAdapter.isUsingErpOperationalTarget()) {
-            await this.refreshOperationalInventorySnapshot();
-        }
     }
 
     /**

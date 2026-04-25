@@ -1229,7 +1229,9 @@ const AppContent: React.FC = () => {
           || now - lastManifestRefreshAt >= MANIFEST_REFRESH_INTERVAL_MS;
 
         if (shouldRefreshManifest) {
-          const refreshedFromManifest = await syncManager.syncTerminalManifestInBackground();
+          const refreshedFromManifest = await syncManager.syncTerminalManifestInBackground(undefined, {
+            bootstrapBlocks: Boolean(options?.forceManifestRefresh),
+          });
           if (!disposed && refreshedFromManifest && !Array.isArray(refreshedFromManifest) && refreshedFromManifest.terminals) {
             console.log(`[ERP SYNC] ${terminalName} actualizó su estado runtime desde el manifest del ERP.`);
           }
@@ -2620,6 +2622,7 @@ const AppContent: React.FC = () => {
         case 'transactions': setTransactions(Array.isArray(freshData) ? freshData as Transaction[] : []); break;
         case 'cashMovements': setCashMovements(freshData as CashMovement[]); break;
         case 'zReports': setZReports(freshData as ZReport[]); break;
+        case 'warehouses': setWarehouses(Array.isArray(freshData) ? freshData as Warehouse[] : []); break;
         case 'productStocks':
           setProductStocks(freshData as ProductStock[]);
           // CRITICAL: When detailed stocks change, we should also refresh products 
@@ -2630,7 +2633,7 @@ const AppContent: React.FC = () => {
       }
     };
 
-    const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'purchaseOrdersUpdated', 'transfersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'cashMovementsUpdated', 'zReportsUpdated', 'productStocksUpdated', 'tablesUpdated'];
+    const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'purchaseOrdersUpdated', 'transfersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'cashMovementsUpdated', 'zReportsUpdated', 'warehousesUpdated', 'productStocksUpdated', 'tablesUpdated'];
     syncEvents.forEach(e => window.addEventListener(e, handleSyncUpdate));
 
     return () => {

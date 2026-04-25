@@ -32,6 +32,7 @@ import {
   canonicalizeWarehouseRecord,
   getWarehouseScopedNumber,
   resolveProductActiveWarehouseIds,
+  resolveWarehouseErpId,
   resolveWarehouseId,
   tariffMatchesIdentifier,
 } from '../utils/masterIdentity';
@@ -84,6 +85,45 @@ const VARIANT_TEMPLATES = [
   { name: 'Capacidad', attr: 'Memoria', opts: ['64GB', '128GB', '256GB'] }
 ];
 
+const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
+  if (!product) return 'NO_STOCK';
+
+  const balances = Object.entries(product.stockBalances || {})
+    .map(([warehouseId, quantity]) => `${warehouseId}:${Number(quantity || 0)}`)
+    .sort()
+    .join('|');
+
+  return balances || 'NO_STOCK';
+};
+
+const readNumericBalance = (record: Record<string, unknown> | null | undefined, key: string): number | undefined => {
+  const value = record && key ? record[key] : undefined;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+};
+
+const buildErpScopedStockBalanceMap = (
+  balances: Record<string, unknown> | null | undefined,
+  warehouses: Warehouse[]
+): Record<string, number> => {
+  const scoped: Record<string, number> = {};
+
+  for (const [rawWarehouseKey, rawValue] of Object.entries(balances || {})) {
+    const numeric = Number(rawValue);
+    if (!Number.isFinite(numeric)) continue;
+
+    const localWarehouse =
+      warehouses.find((warehouse) => warehouse.id === rawWarehouseKey)
+      || warehouses.find((warehouse) => resolveWarehouseId(rawWarehouseKey, warehouses) === warehouse.id);
+
+    const erpWarehouseId = localWarehouse ? resolveWarehouseErpId(localWarehouse) : rawWarehouseKey;
+    if (!erpWarehouseId) continue;
+    scoped[erpWarehouseId] = numeric;
+  }
+
+  return scoped;
+};
+
 const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], transfers = [], purchaseOrders = [], hasHistory = false, currentUser, roles = [], onSave, onClose, suppliers = [], seasons = [], initialTab = 'GENERAL', allProducts = [] }) => {
   const MAX_IMAGE_BYTES = 700 * 1024; // ~700 KB to avoid oversized base64 blobs blocking saves
   const isNativeAndroidRuntime = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -94,6 +134,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastInitialSyncRef = useRef<string>('');
+  const stockSyncRequestIdRef = useRef(0);
 
   // --- STATE ---
   const [showProfitCalc, setShowProfitCalc] = useState<string | null>(null);
@@ -184,17 +225,98 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [productionAreas, setProductionAreas] = useState<any[]>([]);
   const [productionAreasLoaded, setProductionAreasLoaded] = useState(false);
   const [remoteStockBalances, setRemoteStockBalances] = useState<Record<string, number>>({});
+  const readsOperationalInventory = useMemo(
+    () => inventorySyncService.shouldReadInventoryFromOperationalSource(),
+    []
+  );
+  const activeTerminalId = useMemo(
+    () => localStorage.getItem('active_terminal_id') || localStorage.getItem('CLIC_POS_TERMINAL_ID') || '',
+    []
+  );
+  const inventoryCursorMap = useMemo(() => {
+    if (!activeTerminalId) return null;
+    const raw = localStorage.getItem(`clic_pos_terminal_manifest_cursor_map:${activeTerminalId}`);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  }, [activeTerminalId]);
   const linkedProductIds = useMemo(
     () => resolveLinkedInventoryProductIds(formData, allProducts),
     [formData, allProducts]
   );
+  const erpScopedFormStockBalances = useMemo(
+    () => buildErpScopedStockBalanceMap(formData.stockBalances as Record<string, unknown>, warehouses),
+    [formData.stockBalances, warehouses]
+  );
   const stockBalanceSource = useMemo(() => {
     const linkedProductIdSet = new Set(linkedProductIds);
     const freshestLinkedProduct = allProducts.find((product) => linkedProductIdSet.has(String(product?.id || '').trim()));
+    const linkedProductStockBalances = buildErpScopedStockBalanceMap(
+      freshestLinkedProduct?.stockBalances as Record<string, unknown>,
+      warehouses
+    );
     return Object.keys(remoteStockBalances).length > 0
       ? remoteStockBalances
-      : (freshestLinkedProduct?.stockBalances || formData.stockBalances || {});
-  }, [linkedProductIds, allProducts, formData.stockBalances, remoteStockBalances]);
+      : (Object.keys(linkedProductStockBalances).length > 0 ? linkedProductStockBalances : erpScopedFormStockBalances);
+  }, [linkedProductIds, allProducts, erpScopedFormStockBalances, remoteStockBalances, warehouses]);
+  const inventoryDebugPayload = useMemo(() => ({
+    productId: formData.id,
+    sourceItemId: (formData as any).sourceItemId || null,
+    source_item_id: (formData as any).source_item_id || null,
+    erpProductId: (formData as any).erpProductId || null,
+    operationalProductId: resolveOperationalProductId(formData),
+    readsOperationalInventory,
+    erpBaseUrl: localStorage.getItem('CLIC_ERP_BASE_URL') || localStorage.getItem('erp_base_url') || null,
+    erpSyncUrl: localStorage.getItem('CLIC_ERP_SYNC_URL') || null,
+    erpSyncTerminalId: localStorage.getItem('clic_erp_sync_terminal_id') || null,
+    linkedProductIds,
+    formStockBalances: formData.stockBalances || {},
+    erpScopedFormStockBalances,
+    stockBalanceSource,
+    remoteStockBalances,
+    warehouses: warehouses.map((warehouse) => ({
+      id: warehouse.id,
+      code: warehouse.code,
+      name: warehouse.name,
+      erpWarehouseId: warehouse.erpWarehouseId,
+      label: (warehouse as any).label || null,
+      warehouseId: (warehouse as any).warehouseId || null,
+      inventoryLocalId: (warehouse as any).inventoryLocalId || null,
+      sourceWarehouseId: (warehouse as any).sourceWarehouseId || null,
+      lookupStock: (() => {
+        const erpWarehouseId = resolveWarehouseErpId(warehouse);
+        return remoteStockBalances[erpWarehouseId]
+          ?? erpScopedFormStockBalances[erpWarehouseId]
+          ?? Number.NaN;
+      })(),
+    })),
+    detailedStocks: detailedStocks.map((stock) => ({
+      id: stock.id,
+      productId: stock.productId,
+      warehouseId: stock.warehouseId,
+      quantity: stock.quantity,
+      qtyPhysical: stock.qtyPhysical,
+      qtyCommitted: stock.qtyCommitted,
+      qtyAvailable: stock.qtyAvailable,
+      updatedAt: stock.updatedAt,
+    })),
+    activeTerminalId,
+    inventoryCursorMap,
+  }), [
+    formData,
+    linkedProductIds,
+    erpScopedFormStockBalances,
+    stockBalanceSource,
+    remoteStockBalances,
+    readsOperationalInventory,
+    warehouses,
+    detailedStocks,
+    activeTerminalId,
+    inventoryCursorMap,
+  ]);
 
   const resolveErpBaseUrl = () => {
     const env = (import.meta as any)?.env || {};
@@ -259,7 +381,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     if (!initialData) return;
 
     const initialTimestamp = initialData.updatedAt || (initialData as any).createdAt || (initialData as any).created_at || 'NO_TS';
-    const syncMarker = `${initialData.id || 'NO_ID'}::${initialTimestamp}`;
+    const stockMarker = buildStockSyncMarker(initialData);
+    const syncMarker = `${initialData.id || 'NO_ID'}::${initialTimestamp}::${stockMarker}`;
     if (lastInitialSyncRef.current === syncMarker) {
       return;
     }
@@ -274,7 +397,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     }));
     setWarehouseSettings(canonicalizeWarehouseRecord(initialData.warehouseSettings || {}, warehouses));
     lastInitialSyncRef.current = syncMarker;
-  }, [initialData?.id, initialData?.updatedAt, (initialData as any)?.createdAt, (initialData as any)?.created_at]);
+  }, [initialData?.id, initialData?.updatedAt, (initialData as any)?.createdAt, (initialData as any)?.created_at, initialData?.stockBalances]);
 
   useEffect(() => {
     setFormData(prev => normalizeProductActivationState(prev));
@@ -282,6 +405,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   }, [availableTariffs, warehouses]);
 
   useEffect(() => {
+    if (activeTab !== 'KARDEX') return;
+
     const loadLedger = async () => {
       let allEntries: InventoryLedgerEntry[] = [];
       const operationalProductId = resolveOperationalProductId(formData) || formData.id;
@@ -308,55 +433,29 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     };
     loadLedger();
 
-    // Listen for sync events to refresh Kardex in real-time
     const handleSync = () => {
       loadLedger();
     };
     window.addEventListener('ledgerSynced', handleSync);
     window.addEventListener('transactionSynced', handleSync);
 
-    // Listen for productStocks updates
+    return () => {
+      window.removeEventListener('ledgerSynced', handleSync);
+      window.removeEventListener('transactionSynced', handleSync);
+    };
+  }, [activeTab, formData.id, linkedProductIds, kardexWarehouse, kardexTerminal, allProducts]);
+
+  useEffect(() => {
+    if (activeTab !== 'STOCKS') return;
+
     const handleStockSync = async () => {
-      if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
-        const operationalProductId = resolveOperationalProductId(formData) || formData.id;
-        const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand(operationalProductId);
-        const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, formData, allProducts));
-        const scopedBalances = matchedBalances.length === 0 ? remoteBalances : matchedBalances;
-        const nextRemoteStockBalances = canonicalizeWarehouseRecord(
-          extractWarehouseStockBalances(
-            scopedBalances,
-            ...scopedBalances.flatMap((entry: any) => [
-              entry?.stockBalances,
-              entry?.stock_balances,
-              entry?.balances,
-              entry?.warehouseBalances,
-              entry?.warehouse_balances,
-              entry?.metadata?.stockBalances,
-              entry?.metadata?.stock_balances,
-            ]),
-          ),
-          warehouses,
-        );
-        setRemoteStockBalances(nextRemoteStockBalances);
-
-        const synthesizedStocks: ProductStock[] = Object.entries(nextRemoteStockBalances).map(([warehouseId, quantity]) => ({
-          id: `${formData.id}_${warehouseId}`,
-          productId: formData.id,
-          warehouseId,
-          quantity: Number(quantity || 0),
-          qtyPhysical: Number(quantity || 0),
-          qtyCommitted: 0,
-          qtyAvailable: Number(quantity || 0),
-          updatedAt: new Date().toISOString(),
-        }));
-        setDetailedStocks(synthesizedStocks);
-        return;
-      }
-
       const allStocks = await db.get('productStocks') as ProductStock[] || [];
       const myStocks = allStocks.filter((stock) => linkedProductIds.includes(String(stock?.productId || '').trim()));
-      setRemoteStockBalances({});
       setDetailedStocks(myStocks);
+      setRemoteStockBalances({});
+      if (myStocks.length === 0) {
+        setDetailedStocks([]);
+      }
     };
     window.addEventListener('productStocksUpdated', handleStockSync);
 
@@ -364,11 +463,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     handleStockSync();
 
     return () => {
-      window.removeEventListener('ledgerSynced', handleSync);
-      window.removeEventListener('transactionSynced', handleSync);
       window.removeEventListener('productStocksUpdated', handleStockSync);
     };
-  }, [formData.id, linkedProductIds, kardexWarehouse, kardexTerminal]);
+  }, [activeTab, linkedProductIds]);
 
   // --- DYNAMIC LEDGER SUMMARY (For Cards & Table) ---
   const { entriesWithDynamicBalance, currentViewStock, currentViewCost } = useMemo(() => {
@@ -540,8 +637,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     setFormData({ ...formData, attributes: formData.attributes.filter(a => a.id !== id) });
   };
 
-  const updateStockBalance = (whId: string, value: number) => {
-    setFormData({ ...formData, stockBalances: { ...(formData.stockBalances || {}), [whId]: value } });
+  const updateStockBalance = (warehouseBalanceKey: string, value: number) => {
+    setFormData({ ...formData, stockBalances: { ...(formData.stockBalances || {}), [warehouseBalanceKey]: value } });
   };
 
   const imageTooHeavy = (bytes: number) => bytes > MAX_IMAGE_BYTES;
@@ -1611,9 +1708,12 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                 <div className="grid grid-cols-1 gap-4">
                   {warehouses.map(wh => {
                     const detailedStock = resolveInventoryProductStockRow(formData, wh.id, detailedStocks, allProducts);
-                    const stock = detailedStock
-                      ? detailedStock.quantity
-                      : getWarehouseScopedNumber(stockBalanceSource, wh.id, warehouses, 0);
+                    const erpWarehouseId = resolveWarehouseErpId(wh);
+                    const finalStock =
+                      remoteStockBalances[erpWarehouseId]
+                      ?? erpScopedFormStockBalances[erpWarehouseId]
+                      ?? (detailedStock ? detailedStock.quantity : 0)
+                      ?? 0;
                     const isActive = normalizedActiveWarehouseIds.includes(wh.id);
 
                     return (
@@ -1631,8 +1731,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                         <div className="flex items-center gap-8">
                           <div className="text-center">
                             <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Estado</p>
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${stock > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                              {stock > 0 ? 'Con Stock' : 'Sin Stock'}
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${finalStock > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                              {finalStock > 0 ? 'Con Stock' : 'Sin Stock'}
                             </span>
                           </div>
                           <div className="text-right">
@@ -1641,8 +1741,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                               <input
                                 type="number"
                                 disabled={!isActive}
-                                value={stock}
-                                onChange={(e) => updateStockBalance(wh.id, parseFloat(e.target.value) || 0)}
+                                value={finalStock}
+                                onChange={(e) => updateStockBalance(erpWarehouseId || wh.id, parseFloat(e.target.value) || 0)}
                                 className="w-24 p-2 bg-gray-50 border border-gray-200 rounded-xl text-center font-black text-xl text-blue-600 outline-none focus:ring-2 focus:ring-blue-100 disabled:opacity-50"
                               />
                               <span className="text-xs font-bold text-gray-400">unidades</span>
@@ -1659,6 +1759,19 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                   <p className="text-xs text-orange-800 leading-relaxed">
                     <strong>Nota:</strong> Los cambios manuales en este panel afectan directamente al balance del inventario. Para entradas masivas o compras, utilice el módulo de <strong>Abastecimiento</strong>.
                   </p>
+                </div>
+
+                <div className="bg-slate-950 text-slate-100 p-4 rounded-2xl border border-slate-800 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <ShieldAlert size={16} className="text-amber-300" />
+                    <p className="text-xs font-black uppercase tracking-[0.24em] text-amber-200">Diagnóstico de inventario</p>
+                  </div>
+                  <p className="text-xs text-slate-300">
+                    Esta sección es temporal para validar qué quedó guardado localmente en la caja para este artículo.
+                  </p>
+                  <pre className="max-h-80 overflow-auto rounded-xl bg-black/40 p-3 text-[11px] leading-5 whitespace-pre-wrap break-all">
+{JSON.stringify(inventoryDebugPayload, null, 2)}
+                  </pre>
                 </div>
               </div>
             </div>

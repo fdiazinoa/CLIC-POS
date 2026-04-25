@@ -19,12 +19,10 @@ import WatchlistMonitor from './WatchlistMonitor';
 import { db } from '../utils/db';
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
-import { inventorySyncService } from '../services/sync/InventorySyncService';
 import ClassificationManager from './ClassificationManager';
 import ErrorBoundary from './ErrorBoundary';
 import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
 import {
-   extractWarehouseStockBalances,
    productIdMatchesInventoryReference,
    resolveInventoryProductStockRow,
 } from '../utils/productReferences';
@@ -109,14 +107,24 @@ const pickRicherBusinessConfig = (primary?: BusinessConfig | null, secondary?: B
    return left;
 };
 
+const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
+   if (!product) return 'NO_STOCK';
+
+   return Object.entries(product.stockBalances || {})
+      .map(([warehouseId, quantity]) => `${warehouseId}:${Number(quantity || 0)}`)
+      .sort()
+      .join('|') || 'NO_STOCK';
+};
+
 // --- SUB-COMPONENT: STOCK ROW ---
-const StockRow: React.FC<{ product: Product; warehouseId: string; productStocks: ProductStock[]; allProducts: Product[] }> = ({ product, warehouseId, productStocks, allProducts }) => {
+const StockRow: React.FC<{ product: Product; warehouseId: string; warehouses: Warehouse[]; productStocks: ProductStock[]; allProducts: Product[] }> = ({ product, warehouseId, warehouses, productStocks, allProducts }) => {
    const [isExpanded, setIsExpanded] = useState(false);
    const hasVariants = product.variants && product.variants.length > 0;
 
    // Get stock from detailed collection
    const detailedStock = resolveInventoryProductStockRow(product, warehouseId, productStocks, allProducts);
-   const warehouseStock = detailedStock ? detailedStock.quantity : getWarehouseScopedNumber(product.stockBalances || {}, warehouseId, [], 0);
+   const sourceStock = getWarehouseScopedNumber(product.stockBalances || {}, warehouseId, warehouses, Number.NaN);
+   const warehouseStock = Number.isFinite(sourceStock) ? sourceStock : (detailedStock ? detailedStock.quantity : 0);
 
    const getStatusBadge = (qty: number) => {
       if (qty > 10) return <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full"><CheckCircle2 size={12} /> Disponible</span>;
@@ -207,7 +215,8 @@ const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Pro
 
    const totalValue = warehouseProducts.reduce((acc, p) => {
       const detailedStock = resolveInventoryProductStockRow(p, warehouse.id, productStocks, allProducts);
-      const qty = detailedStock ? detailedStock.quantity : getWarehouseScopedNumber(p.stockBalances || {}, warehouse.id, [warehouse], 0);
+      const sourceStock = getWarehouseScopedNumber(p.stockBalances || {}, warehouse.id, [warehouse], Number.NaN);
+      const qty = Number.isFinite(sourceStock) ? sourceStock : (detailedStock ? detailedStock.quantity : 0);
       return acc + (qty * (p.cost || 0));
    }, 0);
    const itemCount = warehouseProducts.length;
@@ -249,7 +258,7 @@ const WarehouseStockCard: React.FC<{ warehouse: Warehouse; filteredProducts: Pro
                         <tr><th className="p-4 w-[40%]">Artículo</th><th className="p-4">Variante / Atributo</th><th className="p-4 text-center">Stock Físico</th><th className="p-4 text-right">Estado</th></tr>
                      </thead>
                      <tbody className="divide-y divide-gray-100">
-                        {warehouseProducts.map(product => <StockRow key={product.id} product={product} warehouseId={warehouse.id} productStocks={productStocks} allProducts={allProducts} />)}
+                        {warehouseProducts.map(product => <StockRow key={product.id} product={product} warehouseId={warehouse.id} warehouses={[warehouse]} productStocks={productStocks} allProducts={allProducts} />)}
                      </tbody>
                   </table>
                </div>
@@ -376,8 +385,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       );
       if (!refreshedProduct) return;
 
-      const currentMarker = `${editingProduct.id || 'NO_ID'}::${editingProduct.updatedAt || (editingProduct as any).createdAt || 'NO_TS'}`;
-      const nextMarker = `${refreshedProduct.id || 'NO_ID'}::${refreshedProduct.updatedAt || (refreshedProduct as any).createdAt || 'NO_TS'}`;
+      const currentMarker = `${editingProduct.id || 'NO_ID'}::${editingProduct.updatedAt || (editingProduct as any).createdAt || 'NO_TS'}::${buildStockSyncMarker(editingProduct)}`;
+      const nextMarker = `${refreshedProduct.id || 'NO_ID'}::${refreshedProduct.updatedAt || (refreshedProduct as any).createdAt || 'NO_TS'}::${buildStockSyncMarker(refreshedProduct)}`;
       if (currentMarker !== nextMarker) {
          setEditingProduct(refreshedProduct);
       }
@@ -392,47 +401,6 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       const loadWatchlists = async () => {
          const lists = (await db.get('watchlists') || []) as Watchlist[];
          setWatchlists((Array.isArray(lists) ? lists.filter((entry): entry is Watchlist => Boolean(entry && typeof entry === 'object' && (entry as any).id)) : []));
-      };
-      const loadStocks = async () => {
-         if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
-            const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
-            const nextStocks: ProductStock[] = [];
-
-            for (const product of products) {
-               const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, product, products));
-               const stockBalances = extractWarehouseStockBalances(
-                  matchedBalances,
-                  ...matchedBalances.flatMap((entry: any) => [
-                     entry?.stockBalances,
-                     entry?.stock_balances,
-                     entry?.balances,
-                     entry?.warehouseBalances,
-                     entry?.warehouse_balances,
-                     entry?.metadata?.stockBalances,
-                     entry?.metadata?.stock_balances,
-                  ]),
-               );
-
-               for (const [warehouseId, quantity] of Object.entries(stockBalances)) {
-                  nextStocks.push({
-                     id: `${product.id}_${warehouseId}`,
-                     productId: product.id,
-                     warehouseId,
-                     quantity: Number(quantity || 0),
-                     qtyPhysical: Number(quantity || 0),
-                     qtyCommitted: 0,
-                     qtyAvailable: Number(quantity || 0),
-                     updatedAt: new Date().toISOString(),
-                  });
-               }
-            }
-
-            setProductStocks(nextStocks);
-            return;
-         }
-
-         const stocks = (await db.get('productStocks') || []) as ProductStock[];
-         setProductStocks(stocks);
       };
       const loadCatalogRuntime = async () => {
          const [rawProducts, rawConfig, rawWarehouses, rawTransactions] = await Promise.all([
@@ -464,50 +432,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          }
       };
       loadWatchlists();
-      loadStocks();
       loadCatalogRuntime().catch((error) => console.warn('[CatalogManager] loadCatalogRuntime', error));
 
-      const handleStockUpdate = async () => {
-         if (inventorySyncService.shouldReadInventoryFromOperationalSource()) {
-            const remoteBalances = await inventorySyncService.fetchStockBalancesOnDemand();
-            const nextStocks: ProductStock[] = [];
-
-            for (const product of products) {
-               const matchedBalances = remoteBalances.filter((entry) => productIdMatchesInventoryReference(entry, product, products));
-               const stockBalances = extractWarehouseStockBalances(
-                  matchedBalances,
-                  ...matchedBalances.flatMap((entry: any) => [
-                     entry?.stockBalances,
-                     entry?.stock_balances,
-                     entry?.balances,
-                     entry?.warehouseBalances,
-                     entry?.warehouse_balances,
-                     entry?.metadata?.stockBalances,
-                     entry?.metadata?.stock_balances,
-                  ]),
-               );
-
-               for (const [warehouseId, quantity] of Object.entries(stockBalances)) {
-                  nextStocks.push({
-                     id: `${product.id}_${warehouseId}`,
-                     productId: product.id,
-                     warehouseId,
-                     quantity: Number(quantity || 0),
-                     qtyPhysical: Number(quantity || 0),
-                     qtyCommitted: 0,
-                     qtyAvailable: Number(quantity || 0),
-                     updatedAt: new Date().toISOString(),
-                  });
-               }
-            }
-
-            setProductStocks(nextStocks);
-            return;
-         }
-
-         const stocks = (await db.get('productStocks') || []) as ProductStock[];
-         setProductStocks(stocks);
-      };
       const handleConfigUpdate = async () => {
          const rawConfig = await db.get('config');
          const storedConfig = Array.isArray(rawConfig)
@@ -533,19 +459,38 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
             return nextTransactions;
          });
       };
-      window.addEventListener('productStocksUpdated', handleStockUpdate);
       window.addEventListener('configUpdated', handleConfigUpdate as EventListener);
       window.addEventListener('productsUpdated', handleProductsUpdate as EventListener);
       window.addEventListener('transactionsUpdated', handleTransactionsUpdate as EventListener);
 
       return () => {
          window.removeEventListener('resize', handleResize);
-         window.removeEventListener('productStocksUpdated', handleStockUpdate);
          window.removeEventListener('configUpdated', handleConfigUpdate as EventListener);
          window.removeEventListener('productsUpdated', handleProductsUpdate as EventListener);
          window.removeEventListener('transactionsUpdated', handleTransactionsUpdate as EventListener);
       };
    }, [products]);
+
+   useEffect(() => {
+      if (viewMode !== 'STOCKS') return;
+
+      const loadStocks = async () => {
+         const stocks = (await db.get('productStocks') || []) as ProductStock[];
+         setProductStocks(stocks);
+      };
+
+      const handleStockUpdate = async () => {
+         const stocks = (await db.get('productStocks') || []) as ProductStock[];
+         setProductStocks(stocks);
+      };
+
+      loadStocks();
+      window.addEventListener('productStocksUpdated', handleStockUpdate);
+
+      return () => {
+         window.removeEventListener('productStocksUpdated', handleStockUpdate);
+      };
+   }, [viewMode]);
 
    useEffect(() => {
       if (!initialProductId) {

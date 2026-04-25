@@ -3,7 +3,8 @@ import {
   Warehouse, StockTransfer, CashMovement, InventoryLedgerEntry, LedgerConcept,
   RoleDefinition, ParkedTicket, PurchaseOrder, PurchaseOrderItem, Supplier, Watchlist,
   NCFType, FiscalDocumentCode, FiscalRangeDGII, FiscalAllocation, LocalFiscalBuffer, DocumentSeries,
-  Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment, PaymentMethodDefinition, CartItem
+  Campaign, Coupon, ZReport, Reception, ProductStock, InventoryTracking, Reservation, InventoryCommitment, PaymentMethodDefinition, CartItem,
+  ProductPrice
 } from '../types';
 import {
   MOCK_USERS, RETAIL_PRODUCTS, FOOD_PRODUCTS,
@@ -85,8 +86,8 @@ interface ProcessReceiptPayload {
 
 // --- SEED DATA ---
 const DEFAULT_WAREHOUSES: Warehouse[] = [
-  { id: "wh_central", code: "CEN", name: "Bodega Central", type: "PHYSICAL", address: "Calle Industria #45", allowPosSale: true, allowNegativeStock: false, isMain: true, storeId: "S1" },
-  { id: "wh_norte", code: "NTE", name: "Piso de Venta Norte", type: "PHYSICAL", address: "Plaza Norte, Local 10", allowPosSale: true, allowNegativeStock: false, isMain: false, storeId: "S2" },
+  { id: "wh_central", code: "CEN", name: "Bodega Central", type: "PHYSICAL", address: "Calle Industria #45", allowPosSale: true, allowNegativeStock: false, isMain: true, storeId: "S1", erpWarehouseId: "wh_central" },
+  { id: "wh_norte", code: "NTE", name: "Piso de Venta Norte", type: "PHYSICAL", address: "Plaza Norte, Local 10", allowPosSale: true, allowNegativeStock: false, isMain: false, storeId: "S2", erpWarehouseId: "wh_norte" },
 ];
 
 const SEED_DATA = {
@@ -176,6 +177,7 @@ const SEED_DATA = {
     qtyAvailable: 100,
     updatedAt: new Date().toISOString()
   })) as ProductStock[],
+  productPrices: [] as ProductPrice[],
   reservations: [] as Reservation[],
   inventoryCommitments: [] as InventoryCommitment[],
   supplierProductPrices: [] as any[],
@@ -520,6 +522,7 @@ export const db = {
         'internalSequences',
         'zReports',
         'productStocks',
+        'productPrices',
         'reservations',
         'inventoryCommitments',
         'collections',
@@ -898,6 +901,11 @@ export const db = {
         case 'supplier_product_prices':
           await dbAdapter.saveCollection('supplierProductPrices', []);
           console.log('✅ Supplier product prices cleared');
+          break;
+
+        case 'product_prices':
+          await dbAdapter.saveCollection('productPrices', []);
+          console.log('✅ Product prices cleared');
           break;
 
         default:
