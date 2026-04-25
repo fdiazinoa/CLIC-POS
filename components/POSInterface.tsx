@@ -240,6 +240,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const mobileCartButtonRef = useRef<HTMLButtonElement>(null);
    const desktopActionGridRef = useRef<HTMLDivElement>(null);
    const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
+   const quickActionTouchTimerRef = useRef<number | null>(null);
+   const quickActionTouchStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
+   const lastTouchContextMenuAtRef = useRef(0);
+   const lastProductTouchAtRef = useRef(0);
+   const quickActionOpenedAtRef = useRef(0);
    const [productPrices, setProductPrices] = useState<ProductPrice[]>(externalProductPrices);
 
    useEffect(() => {
@@ -3269,17 +3274,41 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      const isCompactMobileCard = isMobile && !usesExpandedCatalog;
                      const warehouseSaleBlocked = isProductWarehouseBlockedForSale(product);
 
-                     // Long Press Detection Logic
-                     let touchTimer: any;
                      const handleTouchStart = (e: React.TouchEvent) => {
                         const touch = e.touches[0];
+                        if (!touch) return;
                         const { clientX, clientY } = touch;
-                        touchTimer = setTimeout(() => {
+                        lastProductTouchAtRef.current = Date.now();
+                        quickActionTouchStartRef.current = { x: clientX, y: clientY, at: Date.now() };
+                        if (quickActionTouchTimerRef.current) {
+                           window.clearTimeout(quickActionTouchTimerRef.current);
+                        }
+                        quickActionTouchTimerRef.current = window.setTimeout(() => {
+                           quickActionOpenedAtRef.current = Date.now();
+                           lastTouchContextMenuAtRef.current = Date.now();
                            setQuickActionData({ product, x: clientX, y: clientY });
-                        }, 800);
+                           quickActionTouchTimerRef.current = null;
+                        }, 1200);
+                     };
+                     const clearQuickActionTouchTimer = () => {
+                        if (quickActionTouchTimerRef.current) {
+                           window.clearTimeout(quickActionTouchTimerRef.current);
+                           quickActionTouchTimerRef.current = null;
+                        }
+                        quickActionTouchStartRef.current = null;
+                        lastProductTouchAtRef.current = Date.now();
+                     };
+                     const handleTouchMove = (e: React.TouchEvent) => {
+                        const start = quickActionTouchStartRef.current;
+                        const touch = e.touches[0];
+                        if (!start || !touch) return;
+                        const distance = Math.hypot(touch.clientX - start.x, touch.clientY - start.y);
+                        if (distance > 14) {
+                           clearQuickActionTouchTimer();
+                        }
                      };
                      const handleTouchEnd = () => {
-                        clearTimeout(touchTimer);
+                        clearQuickActionTouchTimer();
                      };
 
                      return (
@@ -3292,15 +3321,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  : undefined
                            }
                            onClick={(e) => {
+                              if (Date.now() - quickActionOpenedAtRef.current < 900) return;
                               if (quickActionData) return;
                               handleProductClick(product);
                            }}
                            onContextMenu={(e) => {
                               e.preventDefault();
+                              const now = Date.now();
+                              if (now - lastProductTouchAtRef.current < 900) return;
+                              if (now - lastTouchContextMenuAtRef.current < 900) return;
+                              quickActionOpenedAtRef.current = now;
                               setQuickActionData({ product, x: e.clientX, y: e.clientY });
                            }}
                            onTouchStart={handleTouchStart}
+                           onTouchMove={handleTouchMove}
                            onTouchEnd={handleTouchEnd}
+                           onTouchCancel={handleTouchEnd}
+                           style={{ touchAction: 'manipulation' }}
                           className={`bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 transition-all group relative overflow-hidden ${
                              warehouseSaleBlocked
                                 ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
