@@ -31,6 +31,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const [erpForwardStatus, setErpForwardStatus] = useState<any>(null);
     const [isRetryingErpForward, setIsRetryingErpForward] = useState(false);
     const [jsonCopyStatus, setJsonCopyStatus] = useState<'COPIED' | 'ERROR' | null>(null);
+    const [retryingDocumentKey, setRetryingDocumentKey] = useState<string | null>(null);
+    const [retryFeedback, setRetryFeedback] = useState<{ key: string; type: 'success' | 'error' | 'pending'; message: string } | null>(null);
     const [currentPage, setCurrentPage] = useState(1);
     const [rowsPerPage, setRowsPerPage] = useState(10);
 
@@ -312,6 +314,30 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         setJsonCopyStatus(copied ? 'COPIED' : 'ERROR');
     };
 
+    const resolveRetryResult = async (item: any): Promise<{ status: 'SYNCED' | 'PENDING' | 'ERROR'; error?: string }> => {
+        if (!item?.collection) return { status: 'PENDING' };
+
+        const data = await db.get(item.collection as any);
+        if (!Array.isArray(data)) return { status: 'PENDING' };
+
+        if (item.collection === 'inventoryLedger' && Array.isArray(item.raw?.movements)) {
+            const movementIds = new Set(item.raw.movements.map((movement: any) => movement.id).filter(Boolean));
+            const movements = data.filter((movement: any) => movementIds.has(movement.id));
+            return {
+                status: aggregateDocumentStatus(movements),
+                error: movements.map(resolveDocumentError).find(Boolean)
+            };
+        }
+
+        const document = data.find((entry: any) => entry.id === item.raw?.id) || null;
+        if (!document) return { status: 'PENDING' };
+
+        return {
+            status: resolveDocumentStatus(document),
+            error: resolveDocumentError(document)
+        };
+    };
+
     // Pagination Logic
     const totalPages = Math.ceil(filteredAuditData.length / rowsPerPage);
     const paginatedData = filteredAuditData.slice(
@@ -353,8 +379,11 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     };
 
     const handleRetryDocument = async (item: any) => {
+        const feedbackKey = item?.key || `${item?.collection || 'document'}:${item?.id || item?.raw?.id || Date.now()}`;
         try {
             if (!item?.collection || !item?.raw?.id) return;
+            setRetryingDocumentKey(feedbackKey);
+            setRetryFeedback({ key: feedbackKey, type: 'pending', message: 'Reintentando envio...' });
 
             if (item.collection === 'inventoryLedger' && Array.isArray(item.raw.movements)) {
                 await Promise.all(item.raw.movements.map((movement: any) =>
@@ -377,7 +406,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                 });
             }
 
-            await backgroundSyncManager.triggerSync();
+            await backgroundSyncManager.triggerSyncAndWait();
 
             if (
                 item.collection === 'transactions' &&
@@ -392,9 +421,28 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             }
 
             await loadStatus();
+
+            const result = await resolveRetryResult(item);
+            if (result.status === 'SYNCED') {
+                setRetryFeedback({ key: feedbackKey, type: 'success', message: 'Documento enviado correctamente.' });
+            } else if (result.status === 'ERROR') {
+                const message = result.error || 'El reintento termino con error.';
+                setRetryFeedback({ key: feedbackKey, type: 'error', message });
+                alert('❌ Reintento falló: ' + message);
+            } else {
+                setRetryFeedback({ key: feedbackKey, type: 'pending', message: 'Reintento solicitado. El documento sigue pendiente.' });
+                alert('⏳ Reintento solicitado. El documento sigue pendiente; revisa el estado en unos segundos.');
+            }
         } catch (error) {
             console.error('Error retrying document sync:', error);
+            setRetryFeedback({
+                key: feedbackKey,
+                type: 'error',
+                message: error instanceof Error ? error.message : 'Error desconocido'
+            });
             alert('❌ No se pudo reintentar el documento: ' + (error instanceof Error ? error.message : 'Error desconocido'));
+        } finally {
+            setRetryingDocumentKey(null);
         }
     };
 
@@ -411,9 +459,9 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         setIsRetryingErpForward(true);
         try {
             if (syncManager.isUsingErpOperationalTarget()) {
-                await backgroundSyncManager.triggerSync();
+                await backgroundSyncManager.triggerSyncAndWait();
                 await loadStatus();
-                alert('✅ Reintento solicitado. La caja enviará los documentos pendientes directamente al ERP.');
+                alert('✅ Reintento ejecutado. Revisa el monitor para confirmar si quedaron documentos pendientes o con error.');
                 return;
             }
 
@@ -837,8 +885,13 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-50">
-                                            {paginatedData.map((item, idx) => (
-                                                <tr key={item.key || item.raw.id || `${item.collection}-${idx}`} className="hover:bg-gray-50/50 transition-colors">
+                                            {paginatedData.map((item, idx) => {
+                                                const rowKey = item.key || item.raw.id || `${item.collection}-${idx}`;
+                                                const isRetryingThisDocument = retryingDocumentKey === rowKey;
+                                                const rowRetryFeedback = retryFeedback?.key === rowKey ? retryFeedback : null;
+
+                                                return (
+                                                <tr key={rowKey} className="hover:bg-gray-50/50 transition-colors">
                                                     <td className="py-4 px-6">
                                                         <div className="font-bold text-gray-700 font-mono text-sm">{item.id}</div>
                                                         {item.movementCount > 1 && (
@@ -904,20 +957,38 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                             {item.status !== 'SYNCED' && (
                                                                 <button
                                                                     onClick={() => handleRetryDocument(item)}
+                                                                    disabled={isRetryingThisDocument}
                                                                     className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[10px] font-black uppercase tracking-wider shadow-sm transition-all ${
-                                                                        item.status === 'ERROR'
+                                                                        isRetryingThisDocument
+                                                                            ? 'border-slate-300 bg-slate-200 text-slate-500'
+                                                                            : item.status === 'ERROR'
                                                                             ? 'border-red-700 bg-red-600 text-white hover:bg-red-700'
                                                                             : 'border-amber-600 bg-amber-500 text-white hover:bg-amber-600'
                                                                     }`}
                                                                     title="Reintentar envío"
                                                                 >
-                                                                    <RotateCcw size={14} /> Reenviar
+                                                                    <RotateCcw size={14} className={isRetryingThisDocument ? 'animate-spin' : ''} />
+                                                                    {isRetryingThisDocument ? 'Enviando...' : 'Reenviar'}
                                                                 </button>
                                                             )}
                                                         </div>
+                                                        {rowRetryFeedback && (
+                                                            <div
+                                                                className={`mt-2 text-[10px] font-bold ${
+                                                                    rowRetryFeedback.type === 'success'
+                                                                        ? 'text-emerald-600'
+                                                                        : rowRetryFeedback.type === 'error'
+                                                                            ? 'text-red-600'
+                                                                            : 'text-amber-600'
+                                                                }`}
+                                                            >
+                                                                {rowRetryFeedback.message}
+                                                            </div>
+                                                        )}
                                                     </td>
                                                 </tr>
-                                            ))}
+                                                );
+                                            })}
                                             {filteredAuditData.length === 0 && (
                                                 <tr>
                                                     <td colSpan={6} className="py-12 text-center text-gray-400 italic">
