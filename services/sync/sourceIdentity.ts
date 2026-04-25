@@ -93,8 +93,31 @@ const normalizePaymentEntries = (
             normalizeString(payment?.change_currency_code) ||
             normalizeString(payment?.changeCurrencyCode);
 
+        // Sync only the minimal payment shape required by master/ERP.
+        // Integrated card metadata stays in the local sale, but should not block
+        // slave->master forwarding when processors attach verbose gateway fields.
+        const paymentForSync: PaymentEntry = {
+            id: normalizeString(payment?.id) || normalizeString(payment?.source_payment_id) || `${context.sourceTransactionId}-payment`,
+            method: (payment?.method || payment?.payment_method || 'OTHER') as PaymentEntry['method'],
+            methodId: normalizeString(payment?.methodId),
+            methodLabel: normalizeString(payment?.methodLabel),
+            methodIcon: normalizeString(payment?.methodIcon),
+            creditOverrideApproved: Boolean(payment?.creditOverrideApproved),
+            amount: Number(payment?.amount || 0),
+            timestamp: payment?.timestamp instanceof Date
+                ? payment.timestamp
+                : new Date(payment?.timestamp || new Date().toISOString()),
+            currencyCode,
+            amountOriginal: typeof payment?.amountOriginal === 'number' ? payment.amountOriginal : undefined,
+            exchangeRate,
+            appliedAmount,
+            changeAmount,
+            changeCurrencyCode,
+            amountApplied: appliedAmount,
+        };
+
         return {
-            ...payment,
+            ...paymentForSync,
             source_channel: SOURCE_CHANNEL,
             source_payment_id: normalizeString(payment?.source_payment_id) || normalizeString(payment?.id),
             source_transaction_id: context.sourceTransactionId,

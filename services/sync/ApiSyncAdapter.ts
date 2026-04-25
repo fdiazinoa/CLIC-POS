@@ -1289,13 +1289,50 @@ class ApiSyncAdapter {
             }
 
             if (!response.ok) {
-                let detail = '';
+                const errorText = await response.text();
+                let errBody: any = null;
+                let detail = errorText.slice(0, 400);
                 try {
-                    const errBody = await response.clone().json();
-                    detail = errBody?.message || (errBody?.erpInbox ? JSON.stringify(errBody.erpInbox) : '');
+                    errBody = errorText ? JSON.parse(errorText) : null;
+                    detail =
+                        errBody?.message ||
+                        errBody?.error ||
+                        errBody?.detail ||
+                        (errBody?.erpInbox ? JSON.stringify(errBody.erpInbox) : detail);
                 } catch {
-                    // ignore
+                    // plain-text body
                 }
+
+                const candidateTexts = [
+                    errorText,
+                    errBody?.message,
+                    errBody?.error,
+                    errBody?.detail,
+                    errBody?.erpInbox?.message,
+                    errBody?.erpInbox?.error
+                ]
+                    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                    .map((value) => value.toLowerCase());
+
+                const masterAcceptedLocally =
+                    response.status === 502 &&
+                    ((typeof errBody?.savedLocally === 'boolean' && errBody.savedLocally) ||
+                        (typeof errBody?.persistedLocally === 'boolean' && errBody.persistedLocally) ||
+                        candidateTexts.some((value) =>
+                            value.includes('local master saved the sale') ||
+                            value.includes('saved the sale locally') ||
+                            value.includes('saved locally') ||
+                            value.includes('persisted locally') ||
+                            value.includes('forward to erp failed')
+                        ));
+
+                if (masterAcceptedLocally) {
+                    console.warn(
+                        `[SYNC_TX_PUSH] Master persisted tx=${txId} locally but ERP forwarding failed. Accepting slave sync and leaving ERP retry to master. body=${detail}`
+                    );
+                    return;
+                }
+
                 throw new Error(
                     `Push transaction failed: ${response.status} ${response.statusText}${detail ? ` — ${detail}` : ''}`
                 );

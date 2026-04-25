@@ -294,7 +294,7 @@ const CartItemOptionsModal: React.FC<CartItemOptionsModalProps> = ({
               >
                 <option value="">-- Sin asignar --</option>
                 {salesUsers.map(u => (
-                  <option key={u.id} value={u.id}>{u.name}</option>
+                  <option key={u.id} value={u.id}>{u.roleName ? `${u.name} · ${u.roleName}` : u.name}</option>
                 ))}
               </select>
               <User className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />

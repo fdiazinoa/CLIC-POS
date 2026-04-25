@@ -8,6 +8,7 @@ const DISPLAY_SESSION_KEYS = [
   'USB',
   'NETWORK',
 ] as const;
+const NATIVE_ANDROID_VISOR_URL = 'https://localhost/?view=VISOR';
 
 type DisplayLaunchMode = 'ANDROID_SECONDARY' | 'HDMI' | 'USB' | 'NETWORK';
 
@@ -79,8 +80,14 @@ const buildNetworkVisorUrl = (ipAddress: string): string => {
 
 export const buildCustomerDisplayUrl = (config: CustomerDisplayConfig): string => {
   const normalized = normalizeCustomerDisplayConfig(config);
-  if (normalizeCustomerDisplayConnectionType(normalized.connectionType) === 'NETWORK' && normalized.ipAddress) {
+  const mode = normalizeCustomerDisplayConnectionType(normalized.connectionType);
+
+  if (mode === 'NETWORK' && normalized.ipAddress) {
     return buildNetworkVisorUrl(normalized.ipAddress);
+  }
+
+  if (isAndroidRuntime() && mode !== 'NETWORK') {
+    return NATIVE_ANDROID_VISOR_URL;
   }
 
   const url = new URL(window.location.pathname || '/', window.location.origin);
