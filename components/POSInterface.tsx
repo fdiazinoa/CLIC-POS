@@ -79,6 +79,7 @@ import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, resolveOperationalProductId } from '../utils/productReferences';
+import { productDisplayIdentityKey, resolveProductDisplayImage, scoreProductDisplayCandidate } from '../utils/productDisplay';
 
 // ... existing imports
 
@@ -121,37 +122,12 @@ export interface POSInterfaceProps {
 }
 
 const productSalesIdentityKey = (product: Product): string => {
-   const normalizedId = String(product.id || '').trim().toLowerCase();
-   const operationalId = String(resolveOperationalProductId(product) || '').trim().toLowerCase();
-   if (operationalId && operationalId !== normalizedId) return `op:${operationalId}`;
-
-   const identityCandidate = productIdentityCandidates(product)
-      .map((value) => String(value || '').trim().toLowerCase())
-      .find((value) => value && value !== normalizedId);
-   if (identityCandidate) return `identity:${identityCandidate}`;
-
-   const barcode = typeof product.barcode === 'string' ? product.barcode.trim().toLowerCase() : '';
-   if (barcode) return `barcode:${barcode}`;
-
-   const sku = typeof (product as any).sku === 'string' ? (product as any).sku.trim().toLowerCase() : '';
-   if (sku) return `sku:${sku}`;
-
-   const itemCode = typeof (product as any).item_code === 'string' ? (product as any).item_code.trim().toLowerCase() : '';
-   if (itemCode) return `item_code:${itemCode}`;
-
-   const code = typeof (product as any).code === 'string' ? (product as any).code.trim().toLowerCase() : '';
-   if (code) return `code:${code}`;
-
-   const name = typeof product.name === 'string' ? product.name.trim().toLowerCase() : '';
-   const category = typeof product.category === 'string' ? product.category.trim().toLowerCase() : '';
-   if (name) return `namecat:${name}::${category}`;
-
-   return `id:${String(product.id || '').trim().toLowerCase()}`;
+   return productDisplayIdentityKey(product);
 };
 
 const isSeedCatalogProduct = (product: Product): boolean => {
    const id = String(product.id || '').trim().toLowerCase();
-   return /^prod-\d+$/.test(id) || /^p\d+$/.test(id) || /^f\d+$/.test(id);
+   return /^prod-\d+$/.test(id) || /^p\d+$/.test(id) || /^f\d+$/.test(id) || /^p-var-\d+$/.test(id);
 };
 
 const productBusinessKeys = (product: Product): string[] => {
@@ -173,19 +149,7 @@ const productBusinessKeys = (product: Product): string[] => {
 };
 
 const scoreProductForSales = (product: Product, warehouses: Warehouse[]): number => {
-   const activeWarehouses = resolveProductActiveWarehouseIds(product, warehouses).length;
-   const stockBalanceCount = Object.keys(product.stockBalances || {}).length;
-   const updatedAtScore = new Date((product as any).updatedAt || (product as any).createdAt || 0).getTime() || 0;
-   const seedPenalty = isSeedCatalogProduct(product) ? -50_000 : 0;
-
-   return (
-      seedPenalty +
-      activeWarehouses * 1000 +
-      stockBalanceCount * 100 +
-      (product.is_sellable !== false ? 10 : 0) +
-      (Number.isFinite(Number(product.price)) ? 1 : 0) +
-      updatedAtScore / 1_000_000_000_000
-   );
+   return scoreProductDisplayCandidate(product, warehouses);
 };
 
 const buildCartDigest = (items: CartItem[] = []): string =>
@@ -3307,6 +3271,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      const handleTouchEnd = () => {
                         clearQuickActionTouchTimer();
                      };
+                     const productImage = resolveProductDisplayImage(product);
 
                      return (
 
@@ -3339,7 +3304,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         >
                            {uxConfig.showProductImages && (
                               <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.4rem] mb-0 p-3' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-36 rounded-[1.5rem] mb-3 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-3'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
-                                 {product.image ? <img src={product.image} className={`w-full h-full ${usesSupermarketLayout || usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={usesSupermarketLayout ? 56 : 48} strokeWidth={1} /></div>}
+                                 {productImage ? <img src={productImage} className={`w-full h-full ${usesSupermarketLayout || usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={usesSupermarketLayout ? 56 : 48} strokeWidth={1} /></div>}
 
                                  {/* BADGES DE TIPO DE ARTÍCULO */}
                                  {isWeighted && (

@@ -23,11 +23,10 @@ import ClassificationManager from './ClassificationManager';
 import ErrorBoundary from './ErrorBoundary';
 import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
 import {
-   productIdentityCandidates,
    productIdMatchesInventoryReference,
    resolveInventoryProductStockRow,
-   resolveOperationalProductId,
 } from '../utils/productReferences';
+import { productDisplayIdentityKey, resolveProductDisplayImage, scoreProductDisplayCandidate } from '../utils/productDisplay';
 
 interface CatalogManagerProps {
    products: Product[];
@@ -118,55 +117,19 @@ const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
       .join('|') || 'NO_STOCK';
 };
 
-const normalizeCatalogIdentityToken = (value: unknown): string =>
-   typeof value === 'string' ? value.trim().toLowerCase() : value != null ? String(value).trim().toLowerCase() : '';
-
 const catalogProductIdentityKey = (product: Product): string => {
-   const ownId = normalizeCatalogIdentityToken(product.id);
-   const operationalId = normalizeCatalogIdentityToken(resolveOperationalProductId(product));
-   if (operationalId && operationalId !== ownId) return `op:${operationalId}`;
-
-   const identityCandidate = productIdentityCandidates(product)
-      .map(normalizeCatalogIdentityToken)
-      .find((candidate) => candidate && candidate !== ownId);
-   if (identityCandidate) return `identity:${identityCandidate}`;
-
-   const barcode = normalizeCatalogIdentityToken(product.barcode);
-   if (barcode) return `barcode:${barcode}`;
-
-   const sku = normalizeCatalogIdentityToken((product as any).sku);
-   if (sku) return `sku:${sku}`;
-
-   const itemCode = normalizeCatalogIdentityToken((product as any).item_code);
-   if (itemCode) return `item_code:${itemCode}`;
-
-   const code = normalizeCatalogIdentityToken((product as any).code);
-   if (code) return `code:${code}`;
-
-   const name = normalizeCatalogIdentityToken(product.name);
-   const category = normalizeCatalogIdentityToken(product.category);
-   if (name) return `namecat:${name}::${category}`;
-
-   return `id:${ownId}`;
+   return productDisplayIdentityKey(product);
 };
 
 const scoreCatalogProduct = (product: Product, warehouses: Warehouse[]): number => {
-   const activeWarehouses = Object.keys(product.stockBalances || {}).length;
-   const activeAssignmentCount = warehouses.filter((warehouse) => isProductWarehouseActive(product, warehouse.id, [warehouse])).length;
-   const updatedAtScore = new Date((product as any).updatedAt || (product as any).updated_at || (product as any).createdAt || 0).getTime() || 0;
-   return (
-      activeWarehouses * 1000 +
-      activeAssignmentCount * 100 +
-      (product.is_sellable !== false ? 10 : 0) +
-      (Number.isFinite(Number(product.price)) ? 1 : 0) +
-      updatedAtScore / 1_000_000_000_000
-   );
+   return scoreProductDisplayCandidate(product, warehouses);
 };
 
 // --- SUB-COMPONENT: STOCK ROW ---
 const StockRow: React.FC<{ product: Product; warehouseId: string; warehouses: Warehouse[]; productStocks: ProductStock[]; allProducts: Product[] }> = ({ product, warehouseId, warehouses, productStocks, allProducts }) => {
    const [isExpanded, setIsExpanded] = useState(false);
    const hasVariants = product.variants && product.variants.length > 0;
+   const productImage = resolveProductDisplayImage(product);
 
    // Get stock from detailed collection
    const detailedStock = resolveInventoryProductStockRow(product, warehouseId, productStocks, allProducts);
@@ -196,7 +159,7 @@ const StockRow: React.FC<{ product: Product; warehouseId: string; warehouses: Wa
                   </div>
 
                   <div className="w-10 h-10 rounded-lg bg-gray-100 overflow-hidden border border-gray-200 shrink-0 relative">
-                     {product.image ? <img src={product.image} className="w-full h-full object-cover" /> : <ImageIcon className="m-2 text-gray-300" />}
+                     {productImage ? <img src={productImage} className="w-full h-full object-cover" /> : <ImageIcon className="m-2 text-gray-300" />}
                      {hasVariants && (
                         <div className="absolute bottom-0 right-0 bg-blue-500 text-white p-0.5 rounded-tl-md">
                            <Layers size={8} />
@@ -1138,6 +1101,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                      >
                         {filteredProducts.map(product => {
                            const isSelected = selectedIds.has(product.id);
+                           const productImage = resolveProductDisplayImage(product);
                            return (
                               <div
                                  key={product.id}
@@ -1158,8 +1122,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                  )}
 
                                  <div className="aspect-square bg-[#f8f9fa] rounded-[2.5rem] mb-8 relative overflow-hidden flex items-center justify-center p-10 group-hover:bg-[#f1f3f5] transition-colors">
-                                    {product.image ? (
-                                       <img src={product.image} alt={product.name} className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110" />
+                                    {productImage ? (
+                                       <img src={productImage} alt={product.name} className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110" />
                                     ) : (
                                        <ImageIcon className="text-gray-200" size={80} strokeWidth={1.5} />
                                     )}

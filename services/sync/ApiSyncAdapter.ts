@@ -152,7 +152,7 @@ class ApiSyncAdapter {
     /**
      * Helper: Fetch with Retry and Timeout
      */
-    private async fetchWithRetry(url: string, options: RequestInit = {}, retries = 2, backoff = 500): Promise<Response> {
+    private async fetchWithRetry(url: string, options: RequestInit = {}, retries = 2, backoff = 500, timeoutMs = 5000): Promise<Response> {
         // Add jitter to backoff (±20% randomness)
         const jitter = backoff * 0.2;
         const effectiveBackoff = backoff + (Math.random() * jitter * 2 - jitter);
@@ -170,7 +170,7 @@ class ApiSyncAdapter {
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); // Reduced timeout to 5s
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
         try {
             const response = await fetch(url, { ...options, signal: controller.signal });
@@ -199,7 +199,7 @@ class ApiSyncAdapter {
             if ((response.status === 503 || response.status === 504) && retries > 0) {
                 console.warn(`⚠️ Request failed with ${response.status}, retrying in ${Math.round(effectiveBackoff)}ms...`);
                 await new Promise(r => setTimeout(r, effectiveBackoff));
-                return this.fetchWithRetry(url, options, retries - 1, backoff * 2);
+                return this.fetchWithRetry(url, options, retries - 1, backoff * 2, timeoutMs);
             }
 
             return response;
@@ -226,7 +226,7 @@ class ApiSyncAdapter {
             if ((isConnectionError || isTimeout) && retries > 0 && this.consecutiveFailures < this.MAX_CONSECUTIVE_FAILURES) {
                 console.warn(`⚠️ Connection error (${error.message}), retrying in ${Math.round(effectiveBackoff)}ms...`);
                 await new Promise(r => setTimeout(r, effectiveBackoff));
-                return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5);
+                return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5, timeoutMs);
             }
 
             throw error;
@@ -1208,7 +1208,7 @@ class ApiSyncAdapter {
                 items: [normalizedTransaction],
                 ...(erpBaseUrl ? { erp_base_url: erpBaseUrl } : {})
             })
-        });
+        }, 2, 500, 20000);
 
         if (response.status === 401) {
             await this.authenticate(true);
@@ -1222,7 +1222,7 @@ class ApiSyncAdapter {
                     items: [normalizedTransaction],
                     ...(erpBaseUrl ? { erp_base_url: erpBaseUrl } : {})
                 })
-            });
+            }, 2, 500, 20000);
             if (!retryResponse.ok) {
                 const retryText = await retryResponse.text();
                 throw new Error(`Master transaction sync failed after re-auth: ${retryResponse.status} ${retryResponse.statusText}${retryText ? ` — ${retryText.slice(0, 400)}` : ''}`);
@@ -1263,7 +1263,7 @@ class ApiSyncAdapter {
                             'X-Sync-Token': target.token
                         },
                         body: JSON.stringify({ items: [normalizedTransaction] })
-                    });
+                    }, 2, 500, 20000);
 
                     if (response.status === 401) {
                         this.erpAuthToken = null;
@@ -1278,7 +1278,7 @@ class ApiSyncAdapter {
                                 'X-Sync-Token': target.token
                             },
                             body: JSON.stringify({ items: [normalizedTransaction] })
-                        });
+                        }, 2, 500, 20000);
                     }
 
                     const text = await response.text();
@@ -1350,7 +1350,7 @@ class ApiSyncAdapter {
                     items: [normalizedTransaction],
                     ...(erpBaseUrl ? { erp_base_url: erpBaseUrl } : {})
                 })
-            });
+            }, 2, 500, 20000);
 
             if (response.status === 401) {
                 await this.authenticate();
