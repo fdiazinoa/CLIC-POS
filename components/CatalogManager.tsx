@@ -122,10 +122,10 @@ const normalizeCatalogIdentityToken = (value: unknown): string =>
    typeof value === 'string' ? value.trim().toLowerCase() : value != null ? String(value).trim().toLowerCase() : '';
 
 const catalogProductIdentityKey = (product: Product): string => {
-   const operationalId = normalizeCatalogIdentityToken(resolveOperationalProductId(product));
-   if (operationalId) return `op:${operationalId}`;
-
    const ownId = normalizeCatalogIdentityToken(product.id);
+   const operationalId = normalizeCatalogIdentityToken(resolveOperationalProductId(product));
+   if (operationalId && operationalId !== ownId) return `op:${operationalId}`;
+
    const identityCandidate = productIdentityCandidates(product)
       .map(normalizeCatalogIdentityToken)
       .find((candidate) => candidate && candidate !== ownId);

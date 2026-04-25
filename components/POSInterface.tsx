@@ -121,10 +121,10 @@ export interface POSInterfaceProps {
 }
 
 const productSalesIdentityKey = (product: Product): string => {
-   const operationalId = resolveOperationalProductId(product);
-   if (operationalId) return `op:${operationalId}`;
-
    const normalizedId = String(product.id || '').trim().toLowerCase();
+   const operationalId = String(resolveOperationalProductId(product) || '').trim().toLowerCase();
+   if (operationalId && operationalId !== normalizedId) return `op:${operationalId}`;
+
    const identityCandidate = productIdentityCandidates(product)
       .map((value) => String(value || '').trim().toLowerCase())
       .find((value) => value && value !== normalizedId);
@@ -135,6 +135,9 @@ const productSalesIdentityKey = (product: Product): string => {
 
    const sku = typeof (product as any).sku === 'string' ? (product as any).sku.trim().toLowerCase() : '';
    if (sku) return `sku:${sku}`;
+
+   const itemCode = typeof (product as any).item_code === 'string' ? (product as any).item_code.trim().toLowerCase() : '';
+   if (itemCode) return `item_code:${itemCode}`;
 
    const code = typeof (product as any).code === 'string' ? (product as any).code.trim().toLowerCase() : '';
    if (code) return `code:${code}`;

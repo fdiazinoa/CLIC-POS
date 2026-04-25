@@ -103,6 +103,15 @@ class BackgroundSyncManager {
         if (!navigator.onLine) return;
 
         if (delayMs <= 0) {
+            if (this.isProcessing) {
+                if (!this.retryTimeout) {
+                    this.retryTimeout = setTimeout(() => {
+                        this.retryTimeout = null;
+                        void this.sync();
+                    }, 1000);
+                }
+                return;
+            }
             this.clearRetryTimeout();
             void this.sync();
             return;
