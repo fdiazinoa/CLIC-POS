@@ -1679,6 +1679,45 @@ class ApiSyncAdapter {
         }
     }
 
+    async retryErpForwardQueue(ids?: string[]): Promise<any> {
+        if (!this.config) return null;
+
+        if (!this.authToken) {
+            await this.authenticate();
+        }
+
+        const response = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/erp-forward/retry`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Sync-Token': this.authToken || ''
+            },
+            body: JSON.stringify({ ids: Array.isArray(ids) ? ids : undefined })
+        });
+
+        if (response.status === 401) {
+            await this.authenticate(true);
+            const retryResponse = await this.fetchWithRetry(`${this.config.masterUrl}/api/sync/erp-forward/retry`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Token': this.authToken || ''
+                },
+                body: JSON.stringify({ ids: Array.isArray(ids) ? ids : undefined })
+            });
+            if (!retryResponse.ok) {
+                throw new Error(`ERP forward retry failed: ${retryResponse.status} ${retryResponse.statusText}`);
+            }
+            return retryResponse.json();
+        }
+
+        if (!response.ok) {
+            throw new Error(`ERP forward retry failed: ${response.status} ${response.statusText}`);
+        }
+
+        return response.json();
+    }
+
     /**
      * Pull global configuration from Master
      */

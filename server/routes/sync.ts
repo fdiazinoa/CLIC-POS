@@ -824,6 +824,38 @@ const savePendingErpForwardArray = (items: PendingErpForward[]) => {
     saveSetting(ERP_FORWARD_QUEUE_SETTING, items);
 };
 
+const resolveErpForwardId = (txn: any): string =>
+    normalizeIdentityString(txn?.source_transaction_id) ||
+    normalizeIdentityString(txn?.id) ||
+    normalizeIdentityString(txn?.displayId) ||
+    `ERP-FWD-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const resolveErpForwardAuthTerminalId = (txn: any, fallback?: string | null): string | null =>
+    normalizeIdentityString(fallback) ||
+    normalizeIdentityString(txn?.source_terminal_id) ||
+    normalizeIdentityString(txn?.terminalId) ||
+    normalizeIdentityString(txn?.terminal_id);
+
+const summarizeErpForwardEntry = (entry: PendingErpForward) => ({
+    id: entry.id,
+    displayId:
+        normalizeIdentityString(entry.txn?.displayId) ||
+        normalizeIdentityString(entry.txn?.source_display_id) ||
+        normalizeIdentityString(entry.txn?.sourceDisplayId) ||
+        null,
+    ncf: normalizeIdentityString(entry.txn?.ncf) || normalizeIdentityString(entry.txn?.electronicNcf) || null,
+    terminalId:
+        normalizeIdentityString(entry.txn?.terminalId) ||
+        normalizeIdentityString(entry.txn?.source_terminal_id) ||
+        normalizeIdentityString(entry.authTerminalId) ||
+        null,
+    attempts: entry.attempts || 0,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    nextAttemptAt: entry.nextAttemptAt || null,
+    lastError: entry.lastError || null
+});
+
 const scheduleErpForwardFlush = (delayMs = 0) => {
     if (erpForwardTimer) return;
     erpForwardTimer = setTimeout(() => {
@@ -844,18 +876,14 @@ const enqueueErpForward = (
     const queueById = new Map(queue.map((entry) => [entry.id, entry]));
 
     transactions.forEach((txn: any) => {
-        const id =
-            normalizeIdentityString(txn?.source_transaction_id) ||
-            normalizeIdentityString(txn?.id) ||
-            normalizeIdentityString(txn?.displayId) ||
-            `ERP-FWD-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const id = resolveErpForwardId(txn);
         const existing = queueById.get(id);
 
         queueById.set(id, {
             id,
             txn,
             erpBaseUrlOverride: options.erpBaseUrlOverride ?? existing?.erpBaseUrlOverride ?? null,
-            authTerminalId: options.authTerminalId ?? existing?.authTerminalId ?? null,
+            authTerminalId: resolveErpForwardAuthTerminalId(txn, options.authTerminalId ?? existing?.authTerminalId ?? null),
             attempts: existing?.attempts ?? 0,
             createdAt: existing?.createdAt ?? now,
             updatedAt: now,
@@ -869,12 +897,90 @@ const enqueueErpForward = (
     return transactions.length;
 };
 
+const isForwardableSaleTransaction = (txn: any): boolean => {
+    if (!txn || typeof txn !== 'object') return false;
+    const documentType = (normalizeIdentityString(txn.documentType) || '').toUpperCase();
+    if (documentType && !['TICKET', 'INVOICE', 'REFUND', 'CREDIT_NOTE'].includes(documentType)) return false;
+
+    const id = normalizeIdentityString(txn.id);
+    if (id?.startsWith('ORD-')) return false;
+
+    const dateRaw = normalizeIdentityString(txn.date) || normalizeIdentityString(txn.createdAt) || normalizeIdentityString(txn.updatedAt);
+    const dateMs = dateRaw ? Date.parse(dateRaw) : Date.now();
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    if (Number.isFinite(dateMs) && dateMs < Date.now() - sevenDaysMs) return false;
+
+    const syncStatus = (normalizeIdentityString(txn.syncStatus) || '').toUpperCase();
+    const fiscalSyncStatus = (normalizeIdentityString(txn.fiscalSyncStatus) || '').toUpperCase();
+    return (
+        ['PENDING', 'ERROR', 'SYNCING', ''].includes(syncStatus) ||
+        ['PENDING', 'ERROR'].includes(fiscalSyncStatus)
+    );
+};
+
+const requeueLegacyErpForwardTransactions = (): number => {
+    const existingIds = new Set(asPendingErpForwardArray().map((entry) => entry.id));
+    const candidates = new Map<string, any>();
+
+    const addCandidate = (txn: any) => {
+        if (!isForwardableSaleTransaction(txn)) return;
+        const id = resolveErpForwardId(txn);
+        if (existingIds.has(id) || candidates.has(id)) return;
+        candidates.set(id, coerceTransactionItemsForErp(txn));
+    };
+
+    const pendingTransactions = getSetting('pending_transactions') || [];
+    if (Array.isArray(pendingTransactions)) {
+        pendingTransactions.forEach(addCandidate);
+    }
+
+    const storedTransactions = getCollection('transactions');
+    if (Array.isArray(storedTransactions)) {
+        storedTransactions.forEach(addCandidate);
+    }
+
+    if (!candidates.size) return 0;
+    return enqueueErpForward(Array.from(candidates.values()), {
+        erpBaseUrlOverride: null,
+        authTerminalId: null
+    });
+};
+
+const markErpForwardDelivered = (entry: PendingErpForward) => {
+    const candidateIds = Array.from(new Set([
+        normalizeIdentityString(entry.id),
+        normalizeIdentityString(entry.txn?.id),
+        normalizeIdentityString(entry.txn?.source_transaction_id)
+    ].filter(Boolean) as string[]));
+
+    if (candidateIds.length > 0) {
+        const placeholders = candidateIds.map(() => '?').join(', ');
+        try {
+            db.prepare(`UPDATE transactions SET syncStatus = 'COMPLETED', syncError = NULL WHERE id IN (${placeholders})`).run(...candidateIds);
+        } catch (error) {
+            console.warn(`[ERP_FORWARD_QUEUE] Could not mark local transaction as COMPLETED for ${entry.id}`, error);
+        }
+
+        const pendingTransactions = getSetting('pending_transactions') || [];
+        if (Array.isArray(pendingTransactions)) {
+            saveSetting(
+                'pending_transactions',
+                pendingTransactions.filter((txn: any) => !candidateIds.includes(resolveErpForwardId(txn)))
+            );
+        }
+    }
+};
+
 async function flushPendingErpForwards() {
     if (erpForwardInFlight) return;
     erpForwardInFlight = true;
 
     try {
         let queue = asPendingErpForwardArray();
+        if (!queue.length) {
+            requeueLegacyErpForwardTransactions();
+            queue = asPendingErpForwardArray();
+        }
         if (!queue.length) return;
 
         const nowMs = Date.now();
@@ -893,6 +999,7 @@ async function flushPendingErpForwards() {
                 if (!summary.skipped && !summary.failed) {
                     queue = queue.filter((queued) => queued.id !== entry.id);
                     changed = true;
+                    markErpForwardDelivered(entry);
                     console.log(`[ERP_FORWARD_QUEUE] forwarded tx=${entry.id}`);
                     savePendingErpForwardArray(queue);
                     continue;
@@ -1998,6 +2105,46 @@ router.post('/transactions/pending/ack', async (req, res) => {
 });
 
 /**
+ * POST /api/sync/erp-forward/retry
+ */
+router.post('/erp-forward/retry', async (req, res) => {
+    const authToken = req.headers['x-sync-token'] as string;
+    const tokens = getTerminalTokens();
+
+    if (!authToken || !tokens[authToken]) {
+        return res.status(401).json({ success: false, message: 'Invalid or missing sync token' });
+    }
+
+    try {
+        const requestedIds = Array.isArray(req.body?.ids)
+            ? new Set(req.body.ids.map((id: any) => normalizeIdentityString(id)).filter(Boolean))
+            : null;
+        const legacyQueued = requeueLegacyErpForwardTransactions();
+        const now = new Date().toISOString();
+        const queue = asPendingErpForwardArray().map((entry) => {
+            if (requestedIds && !requestedIds.has(entry.id)) return entry;
+            return {
+                ...entry,
+                updatedAt: now,
+                nextAttemptAt: null,
+                lastError: entry.lastError || null
+            };
+        });
+        savePendingErpForwardArray(queue);
+        scheduleErpForwardFlush(0);
+
+        res.json({
+            success: true,
+            legacyQueued,
+            pending: queue.length,
+            items: queue.slice(0, 25).map(summarizeErpForwardEntry)
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+/**
  * GET /api/sync/operational-status
  */
 router.get('/operational-status', async (req, res) => {
@@ -2015,6 +2162,10 @@ router.get('/operational-status', async (req, res) => {
         const pendingTxns = getSetting('pending_transactions') || [];
         const pendingMovements = getSetting('pending_inventory_movements') || [];
         const syncErrors = getSetting('sync_errors') || [];
+        const erpForwardQueue = asPendingErpForwardArray();
+        const erpForwardItems = erpForwardQueue
+            .map(summarizeErpForwardEntry)
+            .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
 
         const terminalStats: { [key: string]: any } = {};
         const getStat = (tid: string) => {
@@ -2065,7 +2216,14 @@ router.get('/operational-status', async (req, res) => {
             terminals: Object.values(terminalStats),
             globalPending: {
                 transactions: pendingTxns.length,
-                movements: pendingMovements.length
+                movements: pendingMovements.length,
+                erpForward: erpForwardQueue.length
+            },
+            erpForward: {
+                pending: erpForwardQueue.length,
+                due: erpForwardQueue.filter((entry) => !entry.nextAttemptAt || Date.parse(entry.nextAttemptAt) <= Date.now()).length,
+                items: erpForwardItems.slice(0, 25),
+                lastError: erpForwardItems.find((entry) => entry.lastError)?.lastError || null
             }
         });
     } catch (error: any) {
