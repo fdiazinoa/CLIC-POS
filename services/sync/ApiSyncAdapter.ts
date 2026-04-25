@@ -7,6 +7,7 @@ import {
     buildErpWalletEventPayload,
     buildErpZReportPayload
 } from './erpOutboundPayloads';
+import { permissionService } from './PermissionService';
 
 /**
  * API Sync Adapter
@@ -498,6 +499,18 @@ class ApiSyncAdapter {
     }
 
     private resolveOperationalTarget(): { baseUrl: string; terminalId: string; useLocalTarget: boolean } | null {
+        const localMasterTarget: { baseUrl: string; terminalId: string; useLocalTarget: boolean } | null = this.config?.masterUrl && this.config?.terminalId
+            ? {
+                baseUrl: this.buildSyncApiBase(this.config.masterUrl),
+                terminalId: this.config.terminalId,
+                useLocalTarget: true
+            }
+            : null;
+
+        if (localMasterTarget && permissionService.isSlaveTerminal()) {
+            return localMasterTarget;
+        }
+
         const boundErpTerminalId =
             this.operationalTargetHint.terminalId ||
             localStorage.getItem('clic_erp_sync_terminal_id');
@@ -515,15 +528,7 @@ class ApiSyncAdapter {
             };
         }
 
-        if (this.config?.masterUrl && this.config?.terminalId) {
-            return {
-                baseUrl: this.buildSyncApiBase(this.config.masterUrl),
-                terminalId: this.config.terminalId,
-                useLocalTarget: true
-            };
-        }
-
-        return null;
+        return localMasterTarget;
     }
 
     private async authenticateOperationalTarget(force = false): Promise<{

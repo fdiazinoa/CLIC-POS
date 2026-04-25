@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core';
 import { Product, Warehouse } from '../types';
 import { resolveProductActiveWarehouseIds } from './masterIdentity';
 import { productIdentityCandidates, resolveOperationalProductId } from './productReferences';
@@ -5,20 +6,44 @@ import { productIdentityCandidates, resolveOperationalProductId } from './produc
 const normalizeIdentityToken = (value: unknown): string =>
   typeof value === 'string' ? value.trim().toLowerCase() : value != null ? String(value).trim().toLowerCase() : '';
 
+const asTrimmedString = (value: unknown): string =>
+  typeof value === 'string' ? value.trim() : value != null ? String(value).trim() : '';
+
+const isRawLocalFileSrc = (value: string): boolean => /^file:\/\//i.test(value);
+
+const isRenderableImageSrc = (value: string): boolean => Boolean(value) && !isRawLocalFileSrc(value);
+
+const convertLocalFileSrc = (value: string): string => {
+  if (!value || !isRawLocalFileSrc(value)) return value;
+
+  try {
+    return Capacitor.convertFileSrc(value);
+  } catch {
+    return value.replace(/^file:\/\//i, 'https://localhost/_capacitor_file_');
+  }
+};
+
 export const resolveProductDisplayImage = (product?: Partial<Product> | null): string => {
   if (!product) return '';
-  const localPath = normalizeIdentityToken((product as any).imageLocalPath);
-  if (localPath) return String((product as any).imageLocalPath).trim();
+  const image = asTrimmedString((product as any).image);
+  if (isRenderableImageSrc(image)) return image;
 
-  const imageUrl = normalizeIdentityToken((product as any).imageUrl || (product as any).image_url);
-  if (imageUrl) return String((product as any).imageUrl || (product as any).image_url).trim();
+  const images = Array.isArray((product as any).images)
+    ? (product as any).images.map(asTrimmedString)
+    : [];
+  const firstRenderableImage = images.find(isRenderableImageSrc);
+  if (firstRenderableImage) return firstRenderableImage;
 
-  const image = normalizeIdentityToken((product as any).image);
-  if (image) return String((product as any).image).trim();
+  const imageUrl = asTrimmedString((product as any).imageUrl || (product as any).image_url);
+  if (isRenderableImageSrc(imageUrl)) return imageUrl;
 
-  const images = Array.isArray((product as any).images) ? (product as any).images : [];
-  const firstImage = images.find((entry: unknown) => normalizeIdentityToken(entry));
-  return firstImage ? String(firstImage).trim() : '';
+  const localPath = asTrimmedString((product as any).imageLocalPath);
+  if (localPath) return convertLocalFileSrc(localPath);
+  if (image) return convertLocalFileSrc(image);
+  if (imageUrl) return convertLocalFileSrc(imageUrl);
+
+  const firstImage = images.find(Boolean);
+  return firstImage ? convertLocalFileSrc(firstImage) : '';
 };
 
 export const isSeedCatalogProduct = (product?: Partial<Product> | null): boolean => {
