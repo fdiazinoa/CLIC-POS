@@ -49,6 +49,47 @@ const normalizeString = (value?: string | null): string =>
 const normalizeDocumentTypeKey = (value?: string | null): string =>
   normalizeString(value).replace(/[\s-]+/g, '_');
 
+const normalizePrefixKey = (value?: string | null): string =>
+  normalizeString(value).replace(/[^A-Z0-9]+/g, '');
+
+const FORBIDDEN_TICKET_PREFIXES = [
+  'INV',
+  'TR',
+  'REC',
+  'OC',
+  'PO',
+  'ENTCASH',
+  'SALCASH',
+  'ZS',
+  'XS',
+  'CTAS',
+  'RCING',
+  'NCS',
+];
+
+export const isDocumentSeriesCompatibleWithType = (
+  documentType: string,
+  series: Partial<DocumentSeries> | null | undefined
+): boolean => {
+  if (!series) return false;
+  const expectedType = normalizeDocumentTypeKey(documentType);
+  const actualType = normalizeDocumentTypeKey(series.documentType);
+  const prefix = normalizePrefixKey(series.prefix);
+
+  if (actualType && actualType !== expectedType) return false;
+
+  if (expectedType === 'TICKET') {
+    if (FORBIDDEN_TICKET_PREFIXES.some((forbidden) => prefix.startsWith(forbidden))) return false;
+    return actualType === 'TICKET' || prefix.startsWith('TCK') || prefix.startsWith('TKT');
+  }
+
+  if (expectedType === 'REFUND') {
+    return actualType === 'REFUND' || prefix.startsWith('NC');
+  }
+
+  return actualType === expectedType;
+};
+
 const SYSTEM_SERIES_KEYS: Array<{ documentType: DocumentType; prefix: string; canonicalId: string }> = [
   { documentType: 'TICKET', prefix: 'TCK', canonicalId: 'TICKET' },
   { documentType: 'REFUND', prefix: 'NC', canonicalId: 'REFUND' },
@@ -137,11 +178,13 @@ export const resolveEffectiveSeriesIdForDocumentType = (
   if (!key) return undefined;
 
   const byId = availableSeries.find((series) => normalizeDocumentTypeKey(series.id) === key);
-  if (byId?.id) return byId.id;
+  if (byId?.id && isDocumentSeriesCompatibleWithType(documentType, byId)) return byId.id;
 
   const typeNorm = normalizeDocumentTypeKey(documentType);
   const sameType = availableSeries.filter(
-    (series) => normalizeDocumentTypeKey(series.documentType) === typeNorm
+    (series) =>
+      normalizeDocumentTypeKey(series.documentType) === typeNorm &&
+      isDocumentSeriesCompatibleWithType(documentType, series)
   );
   const byPrefix = sameType.filter((series) => normalizeString(series.prefix) === key);
   if (byPrefix.length === 1) return byPrefix[0].id;
@@ -160,10 +203,13 @@ export const resolveDocumentAssignmentId = (
   const exactMatch = normalizedRequestedId
     ? availableSeries.find((series) => normalizeDocumentTypeKey(series.id) === normalizedRequestedId)
     : null;
-  if (exactMatch?.id) return exactMatch.id;
+  if (exactMatch?.id && isDocumentSeriesCompatibleWithType(documentType, exactMatch)) return exactMatch.id;
 
   const candidates = availableSeries
-    .filter((series) => normalizeDocumentTypeKey(series.documentType) === normalizedType)
+    .filter((series) =>
+      normalizeDocumentTypeKey(series.documentType) === normalizedType &&
+      isDocumentSeriesCompatibleWithType(documentType, series)
+    )
     .sort((left, right) => {
       const leftCanonical = getCanonicalSystemSeriesId(left.documentType, left.prefix) === left.id ? 1 : 0;
       const rightCanonical = getCanonicalSystemSeriesId(right.documentType, right.prefix) === right.id ? 1 : 0;
