@@ -1365,6 +1365,7 @@ export interface Transaction {
   // Accounting
   taxAmount?: number;               // Total tax amount
   netAmount?: number;               // Net amount (before tax)
+  taxBreakdown?: any[];             // Fiscal tax lines persisted for provider retries
   discountAmount?: number;
   isTaxIncluded?: boolean;
 

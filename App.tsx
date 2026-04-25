@@ -54,6 +54,7 @@ import { productImageCacheService } from './services/sync/ProductImageCacheServi
 import { calculateZReportStats } from './utils/analytics';
 import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
+import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
 import { extractTerminalOperationalDocumentState } from './utils/terminalConfigSnapshot';
 import { resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
@@ -3698,8 +3699,13 @@ const AppContent: React.FC = () => {
       const fiscalCompliance = getFiscalComplianceConfig(config);
       const environment = getProviderEnvironment(fiscalCompliance, providerId);
       const providerConfig = getFiscalProviderConfig(fiscalCompliance, providerId);
+      const terminalConfig = config.terminals?.find((terminal) => terminal.id === transaction.terminalId)?.config;
+      const fiscalSummary = calculateTransactionFiscalSummary(transaction, config, { terminalConfig });
       const baseTransaction: Transaction = {
         ...transaction,
+        taxAmount: fiscalSummary.taxTotal,
+        netAmount: fiscalSummary.subtotal,
+        taxBreakdown: fiscalSummary.taxBreakdown,
         fiscalSyncStatus: 'PENDING',
         fiscalSyncError: undefined
       };

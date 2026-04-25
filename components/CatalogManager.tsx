@@ -23,8 +23,10 @@ import ClassificationManager from './ClassificationManager';
 import ErrorBoundary from './ErrorBoundary';
 import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
 import {
+   productIdentityCandidates,
    productIdMatchesInventoryReference,
    resolveInventoryProductStockRow,
+   resolveOperationalProductId,
 } from '../utils/productReferences';
 
 interface CatalogManagerProps {
@@ -114,6 +116,51 @@ const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
       .map(([warehouseId, quantity]) => `${warehouseId}:${Number(quantity || 0)}`)
       .sort()
       .join('|') || 'NO_STOCK';
+};
+
+const normalizeCatalogIdentityToken = (value: unknown): string =>
+   typeof value === 'string' ? value.trim().toLowerCase() : value != null ? String(value).trim().toLowerCase() : '';
+
+const catalogProductIdentityKey = (product: Product): string => {
+   const operationalId = normalizeCatalogIdentityToken(resolveOperationalProductId(product));
+   if (operationalId) return `op:${operationalId}`;
+
+   const ownId = normalizeCatalogIdentityToken(product.id);
+   const identityCandidate = productIdentityCandidates(product)
+      .map(normalizeCatalogIdentityToken)
+      .find((candidate) => candidate && candidate !== ownId);
+   if (identityCandidate) return `identity:${identityCandidate}`;
+
+   const barcode = normalizeCatalogIdentityToken(product.barcode);
+   if (barcode) return `barcode:${barcode}`;
+
+   const sku = normalizeCatalogIdentityToken((product as any).sku);
+   if (sku) return `sku:${sku}`;
+
+   const itemCode = normalizeCatalogIdentityToken((product as any).item_code);
+   if (itemCode) return `item_code:${itemCode}`;
+
+   const code = normalizeCatalogIdentityToken((product as any).code);
+   if (code) return `code:${code}`;
+
+   const name = normalizeCatalogIdentityToken(product.name);
+   const category = normalizeCatalogIdentityToken(product.category);
+   if (name) return `namecat:${name}::${category}`;
+
+   return `id:${ownId}`;
+};
+
+const scoreCatalogProduct = (product: Product, warehouses: Warehouse[]): number => {
+   const activeWarehouses = Object.keys(product.stockBalances || {}).length;
+   const activeAssignmentCount = warehouses.filter((warehouse) => isProductWarehouseActive(product, warehouse.id, [warehouse])).length;
+   const updatedAtScore = new Date((product as any).updatedAt || (product as any).updated_at || (product as any).createdAt || 0).getTime() || 0;
+   return (
+      activeWarehouses * 1000 +
+      activeAssignmentCount * 100 +
+      (product.is_sellable !== false ? 10 : 0) +
+      (Number.isFinite(Number(product.price)) ? 1 : 0) +
+      updatedAtScore / 1_000_000_000_000
+   );
 };
 
 // --- SUB-COMPONENT: STOCK ROW ---
@@ -525,12 +572,28 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    const [editingGroup, setEditingGroup] = useState<ProductGroup | null | 'NEW'>(null);
    const [editingSeason, setEditingSeason] = useState<Season | null | 'NEW'>(null);
 
+   const dedupedCatalogProducts = useMemo(() => {
+      return Array.from(
+         products.reduce((map, product) => {
+            if (!product || typeof product !== 'object' || Array.isArray(product)) return map;
+
+            const key = catalogProductIdentityKey(product);
+            const existing = map.get(key);
+            if (!existing || scoreCatalogProduct(product, runtimeWarehouses) > scoreCatalogProduct(existing, runtimeWarehouses)) {
+               map.set(key, product);
+            }
+
+            return map;
+         }, new Map<string, Product>()).values()
+      );
+   }, [products, runtimeWarehouses]);
+
    const categories = useMemo(
-      () => ['ALL', ...Array.from(new Set(products.map((p) => p?.category || 'Sin categoría').filter(Boolean)))],
-      [products]
+      () => ['ALL', ...Array.from(new Set(dedupedCatalogProducts.map((p) => p?.category || 'Sin categoría').filter(Boolean)))],
+      [dedupedCatalogProducts]
    );
    const filteredProducts = useMemo(() => {
-      return products.filter(p => {
+      return dedupedCatalogProducts.filter(p => {
          const normalizedName = typeof p.name === 'string' ? p.name : '';
          const normalizedBarcode = typeof p.barcode === 'string' ? p.barcode : '';
          const normalizedCategory = typeof p.category === 'string' ? p.category : 'Sin categoría';
@@ -538,7 +601,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          const matchesCategory = categoryFilter === 'ALL' || normalizedCategory === categoryFilter;
          return matchesSearch && matchesCategory;
       });
-   }, [products, searchTerm, categoryFilter]);
+   }, [dedupedCatalogProducts, searchTerm, categoryFilter]);
 
    const emptyStateByView: Record<'PRODUCTS' | 'BI_MONITOR' | 'STOCKS' | 'TARIFFS' | 'GROUPS' | 'SEASONS', { title: string; description: string }> = {
       PRODUCTS: {
@@ -662,10 +725,10 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
    };
 
    if (viewMode === 'VARIANTS') return <VariantManager onClose={() => setViewMode('PRODUCTS')} />;
-   if (editingProduct) return <ProductForm key={editingProduct === 'NEW' ? 'NEW' : editingProduct.id} initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={runtimeWarehouses} availableTariffs={tariffs} hasHistory={runtimeTransactions?.some(t => t.items?.some(item => item.id === (editingProduct as any).id)) ?? false} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} transfers={transfers} purchaseOrders={purchaseOrders} suppliers={suppliers} seasons={config.seasons || []} initialTab={initialTab} allProducts={products} />
-   if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={products} config={config} availableTariffs={tariffs} onSave={handleSaveTariff} onUpdateProducts={onUpdateProducts} onClose={() => setEditingTariff(null)} />;
-   if (editingGroup) return <GroupForm initialData={editingGroup === 'NEW' ? null : editingGroup} products={products} onSave={handleSaveGroup} onClose={() => setEditingGroup(null)} />;
-   if (editingSeason) return <SeasonForm initialData={editingSeason === 'NEW' ? null : editingSeason} products={products} onSave={handleSaveSeason} onClose={() => setEditingSeason(null)} />;
+   if (editingProduct) return <ProductForm key={editingProduct === 'NEW' ? 'NEW' : editingProduct.id} initialData={editingProduct === 'NEW' ? null : editingProduct} config={config} warehouses={runtimeWarehouses} availableTariffs={tariffs} hasHistory={runtimeTransactions?.some(t => t.items?.some(item => item.id === (editingProduct as any).id)) ?? false} currentUser={currentUser} roles={roles} onSave={handleSaveProduct} onClose={() => setEditingProduct(null)} transfers={transfers} purchaseOrders={purchaseOrders} suppliers={suppliers} seasons={config.seasons || []} initialTab={initialTab} allProducts={dedupedCatalogProducts} />
+   if (editingTariff) return <TariffForm initialData={editingTariff === 'NEW' ? null : editingTariff} products={dedupedCatalogProducts} config={config} availableTariffs={tariffs} onSave={handleSaveTariff} onUpdateProducts={onUpdateProducts} onClose={() => setEditingTariff(null)} />;
+   if (editingGroup) return <GroupForm initialData={editingGroup === 'NEW' ? null : editingGroup} products={dedupedCatalogProducts} onSave={handleSaveGroup} onClose={() => setEditingGroup(null)} />;
+   if (editingSeason) return <SeasonForm initialData={editingSeason === 'NEW' ? null : editingSeason} products={dedupedCatalogProducts} onSave={handleSaveSeason} onClose={() => setEditingSeason(null)} />;
    if (viewMode === 'CLASSIFICATIONS') return <ClassificationManager config={config} onUpdateConfig={onUpdateConfig} onClose={() => setViewMode('PRODUCTS')} />;
 
    async function handleSaveProduct(savedProduct: Product) {
@@ -1166,7 +1229,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                         </span>
                      </div>
                      <div className="flex-1 space-y-12 pb-40 custom-scrollbar overflow-y-auto pr-4">
-                        {runtimeWarehouses.length === 0 ? renderEmptyState('STOCKS') : runtimeWarehouses.map(warehouse => <WarehouseStockCard key={warehouse.id} warehouse={warehouse} filteredProducts={filteredProducts} productStocks={productStocks} allProducts={products} />)}
+                        {runtimeWarehouses.length === 0 ? renderEmptyState('STOCKS') : runtimeWarehouses.map(warehouse => <WarehouseStockCard key={warehouse.id} warehouse={warehouse} filteredProducts={filteredProducts} productStocks={productStocks} allProducts={dedupedCatalogProducts} />)}
                      </div>
                   </div>
                )}

@@ -90,7 +90,10 @@ export const resolveEffectiveTaxes = (
     .filter(Boolean) as TaxDefinition[];
 
   if (resolvedTaxes.length > 0) {
-    return resolvedTaxes;
+    const resolvedTaxRate = resolvedTaxes.reduce((sum, tax) => sum + Math.max(0, toNumber(tax.rate)), 0);
+    if (resolvedTaxRate > EPSILON || (item as TaxableLineItem).taxable !== true) {
+      return resolvedTaxes;
+    }
   }
 
   const shouldFallbackForTaxableItem = (item as TaxableLineItem).taxable === true;

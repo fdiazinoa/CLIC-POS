@@ -1248,29 +1248,15 @@ class ApiSyncAdapter {
                   : 'none';
 
             if (operationalTarget && !operationalTarget.useLocalTarget) {
-                console.log(
-                    `[SYNC_TX_PUSH] ERP direct start base=${operationalTarget.baseUrl} terminal=${operationalTarget.terminalId} tx=${txId} items=${itemsCount}`
-                );
-                let target = await this.authenticateOperationalTarget();
-                console.log(
-                    `[SYNC_TX_PUSH] ERP direct auth token=${this.maskSyncToken(target.token)} terminal=${target.terminalId}`
-                );
-                let response = await this.fetchWithRetry(`${target.baseUrl}/transactions`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Sync-Token': target.token
-                    },
-                    body: JSON.stringify({ items: [normalizedTransaction] })
-                });
-
-                if (response.status === 401) {
-                    this.erpAuthToken = null;
-                    target = await this.authenticateOperationalTarget(true);
+                try {
                     console.log(
-                        `[SYNC_TX_PUSH] ERP direct re-auth token=${this.maskSyncToken(target.token)} terminal=${target.terminalId}`
+                        `[SYNC_TX_PUSH] ERP direct start base=${operationalTarget.baseUrl} terminal=${operationalTarget.terminalId} tx=${txId} items=${itemsCount}`
                     );
-                    response = await this.fetchWithRetry(`${target.baseUrl}/transactions`, {
+                    let target = await this.authenticateOperationalTarget();
+                    console.log(
+                        `[SYNC_TX_PUSH] ERP direct auth token=${this.maskSyncToken(target.token)} terminal=${target.terminalId}`
+                    );
+                    let response = await this.fetchWithRetry(`${target.baseUrl}/transactions`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -1278,42 +1264,69 @@ class ApiSyncAdapter {
                         },
                         body: JSON.stringify({ items: [normalizedTransaction] })
                     });
-                }
 
-                const text = await response.text();
-                let syncBody: any = null;
-                try {
-                    syncBody = JSON.parse(text);
-                } catch {
-                    // non-JSON response
-                }
-
-                if (!response.ok) {
-                    if (response.status === 401 && this.config?.masterUrl && this.config?.terminalId) {
+                    if (response.status === 401) {
                         this.erpAuthToken = null;
-                        console.warn(
-                            `[SYNC_TX_PUSH] ERP direct rejected token for tx=${txId}. Falling back to local master route. body=${text.slice(0, 240)}`
+                        target = await this.authenticateOperationalTarget(true);
+                        console.log(
+                            `[SYNC_TX_PUSH] ERP direct re-auth token=${this.maskSyncToken(target.token)} terminal=${target.terminalId}`
                         );
+                        response = await this.fetchWithRetry(`${target.baseUrl}/transactions`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Sync-Token': target.token
+                            },
+                            body: JSON.stringify({ items: [normalizedTransaction] })
+                        });
+                    }
+
+                    const text = await response.text();
+                    let syncBody: any = null;
+                    try {
+                        syncBody = JSON.parse(text);
+                    } catch {
+                        // non-JSON response
+                    }
+
+                    if (!response.ok) {
+                        if (response.status === 401 && this.config?.masterUrl && this.config?.terminalId) {
+                            this.erpAuthToken = null;
+                            console.warn(
+                                `[SYNC_TX_PUSH] ERP direct rejected token for tx=${txId}. Falling back to local master route. body=${text.slice(0, 240)}`
+                            );
+                            await this.pushTransactionViaMaster(normalizedTransaction, txId, itemsCount);
+                            return;
+                        }
+                        throw new Error(
+                            `ERP transaction sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`
+                        );
+                    }
+
+                    if (syncBody && typeof syncBody.applyFailedCount === 'number' && syncBody.applyFailedCount > 0) {
+                        console.error(
+                            `[SYNC_TX_PUSH] ERP /api/sync/transactions applyFailedCount=${syncBody.applyFailedCount}`,
+                            syncBody.applyIssues
+                        );
+                        throw new Error(`ERP did not persist sale (apply failures): ${JSON.stringify(syncBody.applyIssues || [])}`);
+                    }
+
+                    console.log(
+                        `[SYNC_TX_PUSH] ERP direct OK tx=${txId} host=${target.baseUrl} terminal=${target.terminalId} body=${text.slice(0, 400)}`
+                    );
+                    return;
+                } catch (directError) {
+                    if (this.config?.masterUrl && this.config?.terminalId && this.isRecoverableConnectionError(directError)) {
+                        console.warn(
+                            `[SYNC_TX_PUSH] ERP direct unavailable for tx=${txId}. Falling back to local master route.`,
+                            directError instanceof Error ? directError.message : directError
+                        );
+                        this.resetCircuitBreaker();
                         await this.pushTransactionViaMaster(normalizedTransaction, txId, itemsCount);
                         return;
                     }
-                    throw new Error(
-                        `ERP transaction sync failed: ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 400)}` : ''}`
-                    );
+                    throw directError;
                 }
-
-                if (syncBody && typeof syncBody.applyFailedCount === 'number' && syncBody.applyFailedCount > 0) {
-                    console.error(
-                        `[SYNC_TX_PUSH] ERP /api/sync/transactions applyFailedCount=${syncBody.applyFailedCount}`,
-                        syncBody.applyIssues
-                    );
-                    throw new Error(`ERP did not persist sale (apply failures): ${JSON.stringify(syncBody.applyIssues || [])}`);
-                }
-
-                console.log(
-                    `[SYNC_TX_PUSH] ERP direct OK tx=${txId} host=${target.baseUrl} terminal=${target.terminalId} body=${text.slice(0, 400)}`
-                );
-                return;
             }
 
             console.log(
