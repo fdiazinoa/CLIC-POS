@@ -26,6 +26,7 @@ import {
    productIdMatchesInventoryReference,
    resolveInventoryProductStockRow,
 } from '../utils/productReferences';
+import { resolveProductImageSrc } from '../utils/entityImage';
 
 interface CatalogManagerProps {
    products: Product[];
@@ -149,7 +150,7 @@ const StockRow: React.FC<{ product: Product; warehouseId: string; warehouses: Wa
                   </div>
 
                   <div className="w-10 h-10 rounded-lg bg-gray-100 overflow-hidden border border-gray-200 shrink-0 relative">
-                     {product.image ? <img src={product.image} className="w-full h-full object-cover" /> : <ImageIcon className="m-2 text-gray-300" />}
+                     {resolveProductImageSrc(product) ? <img src={resolveProductImageSrc(product)} className="w-full h-full object-cover" /> : <ImageIcon className="m-2 text-gray-300" />}
                      {hasVariants && (
                         <div className="absolute bottom-0 right-0 bg-blue-500 text-white p-0.5 rounded-tl-md">
                            <Layers size={8} />
@@ -1095,8 +1096,8 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
                                  )}
 
                                  <div className="aspect-square bg-[#f8f9fa] rounded-[2.5rem] mb-8 relative overflow-hidden flex items-center justify-center p-10 group-hover:bg-[#f1f3f5] transition-colors">
-                                    {product.image ? (
-                                       <img src={product.image} alt={product.name} className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110" />
+                                    {resolveProductImageSrc(product) ? (
+                                       <img src={resolveProductImageSrc(product)} alt={product.name} className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110" />
                                     ) : (
                                        <ImageIcon className="text-gray-200" size={80} strokeWidth={1.5} />
                                     )}

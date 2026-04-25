@@ -799,6 +799,140 @@ const insertChangeStmt = db.prepare(`
     VALUES (?, ?, ?, ?, ?, ?)
 `);
 
+const ERP_FORWARD_QUEUE_SETTING = 'pending_erp_transactions';
+let erpForwardTimer: ReturnType<typeof setTimeout> | null = null;
+let erpForwardInFlight = false;
+
+type PendingErpForward = {
+    id: string;
+    txn: any;
+    erpBaseUrlOverride?: string | null;
+    authTerminalId?: string | null;
+    attempts: number;
+    createdAt: string;
+    updatedAt: string;
+    nextAttemptAt?: string | null;
+    lastError?: string | null;
+};
+
+const asPendingErpForwardArray = (): PendingErpForward[] => {
+    const value = getSetting(ERP_FORWARD_QUEUE_SETTING);
+    return Array.isArray(value) ? value.filter((entry: any) => entry?.id && entry?.txn) : [];
+};
+
+const savePendingErpForwardArray = (items: PendingErpForward[]) => {
+    saveSetting(ERP_FORWARD_QUEUE_SETTING, items);
+};
+
+const scheduleErpForwardFlush = (delayMs = 0) => {
+    if (erpForwardTimer) return;
+    erpForwardTimer = setTimeout(() => {
+        erpForwardTimer = null;
+        void flushPendingErpForwards();
+    }, delayMs);
+    (erpForwardTimer as any).unref?.();
+};
+
+const enqueueErpForward = (
+    transactions: any[],
+    options: { erpBaseUrlOverride?: string | null; authTerminalId?: string | null }
+): number => {
+    if (!transactions.length) return 0;
+
+    const now = new Date().toISOString();
+    const queue = asPendingErpForwardArray();
+    const queueById = new Map(queue.map((entry) => [entry.id, entry]));
+
+    transactions.forEach((txn: any) => {
+        const id =
+            normalizeIdentityString(txn?.source_transaction_id) ||
+            normalizeIdentityString(txn?.id) ||
+            normalizeIdentityString(txn?.displayId) ||
+            `ERP-FWD-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const existing = queueById.get(id);
+
+        queueById.set(id, {
+            id,
+            txn,
+            erpBaseUrlOverride: options.erpBaseUrlOverride ?? existing?.erpBaseUrlOverride ?? null,
+            authTerminalId: options.authTerminalId ?? existing?.authTerminalId ?? null,
+            attempts: existing?.attempts ?? 0,
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now,
+            nextAttemptAt: null,
+            lastError: existing?.lastError ?? null
+        });
+    });
+
+    savePendingErpForwardArray(Array.from(queueById.values()));
+    scheduleErpForwardFlush(0);
+    return transactions.length;
+};
+
+async function flushPendingErpForwards() {
+    if (erpForwardInFlight) return;
+    erpForwardInFlight = true;
+
+    try {
+        let queue = asPendingErpForwardArray();
+        if (!queue.length) return;
+
+        const nowMs = Date.now();
+        let changed = false;
+
+        for (const entry of [...queue]) {
+            const nextAttemptMs = entry.nextAttemptAt ? Date.parse(entry.nextAttemptAt) : 0;
+            if (Number.isFinite(nextAttemptMs) && nextAttemptMs > nowMs) continue;
+
+            try {
+                const summary = await forwardTransactionsToErpInbox([entry.txn], {
+                    erpBaseUrlOverride: entry.erpBaseUrlOverride || null,
+                    authTerminalId: entry.authTerminalId || null
+                });
+
+                if (!summary.skipped && !summary.failed) {
+                    queue = queue.filter((queued) => queued.id !== entry.id);
+                    changed = true;
+                    console.log(`[ERP_FORWARD_QUEUE] forwarded tx=${entry.id}`);
+                    savePendingErpForwardArray(queue);
+                    continue;
+                }
+
+                const error = summary.skipped
+                    ? `SKIPPED:${summary.reason || 'UNKNOWN'}`
+                    : JSON.stringify(summary.results || []).slice(0, 1000);
+                throw new Error(error);
+            } catch (error: any) {
+                const attempts = (entry.attempts || 0) + 1;
+                const backoffMs = Math.min(5 * 60_000, 15_000 * Math.max(1, attempts));
+                const updated: PendingErpForward = {
+                    ...entry,
+                    attempts,
+                    updatedAt: new Date().toISOString(),
+                    nextAttemptAt: new Date(Date.now() + backoffMs).toISOString(),
+                    lastError: error?.message || String(error)
+                };
+                queue = queue.map((queued) => queued.id === entry.id ? updated : queued);
+                changed = true;
+                console.warn(`[ERP_FORWARD_QUEUE] retry scheduled tx=${entry.id} attempts=${attempts} error=${updated.lastError}`);
+                savePendingErpForwardArray(queue);
+            }
+        }
+
+        if (changed) {
+            savePendingErpForwardArray(queue);
+        }
+
+        if (queue.length) {
+            scheduleErpForwardFlush(30_000);
+        }
+    } finally {
+        erpForwardInFlight = false;
+    }
+}
+
+(setInterval(() => void flushPendingErpForwards(), 30_000) as any).unref?.();
+
 const clearChangesForCollection = (collection: string) => {
     db.prepare("DELETE FROM sync_changes WHERE collection = ?").run(collection);
 };
@@ -1794,41 +1928,25 @@ router.post('/transactions', async (req, res) => {
         const normalizedForErp = normalizedItems.map((txn: any) =>
             coerceTransactionItemsForErp(txn)
         );
-        console.log('[SYNC_TX_POST] calling forwardTransactionsToErpInbox...');
-        const erpInbox = await forwardTransactionsToErpInbox(normalizedForErp, {
+        const erpQueuedCount = enqueueErpForward(normalizedForErp, {
             erpBaseUrlOverride: erpBaseFromBody || null,
             authTerminalId: authenticatedTerminalId || null
         });
-
-        if (!erpInbox.skipped && erpInbox.failed) {
-            console.error(
-                '[SYNC_TX_POST] returning 502 — ERP inbox forward failed after local persist',
-                erpInbox.results
-            );
-            return res.status(502).json({
-                success: false,
-                message: 'Local Master saved the sale, but forwarding to ERP failed. Retry sync.',
-                addedCount,
-                conflictResolvedCount,
-                visualCollisionCount,
-                erpInbox
-            });
-        }
-
-        if (erpInbox.skipped) {
-            console.warn('[SYNC_TX_POST] returning 200 with erpInbox.skipped=true (NO_ERP_URL or not configured)');
-        } else {
-            console.log('[SYNC_TX_POST] returning 200 — ERP inbox accepted', erpInbox.erpBaseUrlUsed);
-        }
+        console.log(`[SYNC_TX_POST] returning 200 after local persist; queued ERP forward count=${erpQueuedCount}`);
 
         res.json({
             success: true,
+            savedLocally: true,
             addedCount,
             conflictResolvedCount,
             visualCollisionCount,
             totalCount: (getCollection('transactions')).length,
             inventoryUpdates: 0,
-            erpInbox
+            erpInbox: {
+                deferred: true,
+                queued: erpQueuedCount,
+                erpBaseUrlProvided: Boolean(erpBaseFromBody)
+            }
         });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
