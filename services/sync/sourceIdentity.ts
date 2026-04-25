@@ -93,8 +93,18 @@ const normalizePaymentEntries = (
             normalizeString(payment?.change_currency_code) ||
             normalizeString(payment?.changeCurrencyCode);
 
+        // Keep the gateway metadata needed for audit/reconciliation, but avoid
+        // forwarding large blobs or receipts that can make slave->master sync brittle.
+        const {
+            gatewayRawResponse: _gatewayRawResponse,
+            gatewayReceiptMerchant: _gatewayReceiptMerchant,
+            gatewayReceiptClient: _gatewayReceiptClient,
+            gatewaySignatureData: _gatewaySignatureData,
+            ...paymentForSync
+        } = payment || {};
+
         return {
-            ...payment,
+            ...paymentForSync,
             source_channel: SOURCE_CHANNEL,
             source_payment_id: normalizeString(payment?.source_payment_id) || normalizeString(payment?.id),
             source_transaction_id: context.sourceTransactionId,
