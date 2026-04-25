@@ -4308,6 +4308,10 @@ class SyncManager {
         }
     }
 
+    isUsingErpOperationalTarget(): boolean {
+        return apiSyncAdapter.isUsingErpOperationalTarget();
+    }
+
     /**
      * Start automatic sync (for slave terminals)
      */

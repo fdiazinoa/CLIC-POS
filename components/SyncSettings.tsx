@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { RefreshCw, CheckCircle2, AlertCircle, Clock, UploadCloud, DownloadCloud, Database, Server, ArrowRight, ShieldCheck, X, Wifi, WifiOff, Globe, Monitor, Laptop, Search, Filter, RotateCcw, Code } from 'lucide-react';
+import { RefreshCw, CheckCircle2, AlertCircle, Clock, UploadCloud, DownloadCloud, Database, Server, ArrowRight, ShieldCheck, X, Wifi, WifiOff, Globe, Monitor, Laptop, Search, Filter, RotateCcw, Code, Copy, Check } from 'lucide-react';
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
 import { backgroundSyncManager } from '../services/sync/BackgroundSyncManager';
@@ -30,6 +30,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const [isRefreshingAudit, setIsRefreshingAudit] = useState(false);
     const [erpForwardStatus, setErpForwardStatus] = useState<any>(null);
     const [isRetryingErpForward, setIsRetryingErpForward] = useState(false);
+    const [jsonCopyStatus, setJsonCopyStatus] = useState<'COPIED' | 'ERROR' | null>(null);
     const [currentPage, setCurrentPage] = useState(1);
     const [rowsPerPage, setRowsPerPage] = useState(10);
 
@@ -44,6 +45,26 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         raw?.syncError || raw?.cloudSyncError || raw?.fiscalSyncError || undefined;
 
     const normalizeDocumentRef = (value: any): string => String(value || '').trim().toLowerCase();
+
+    const collectDocumentRefs = (raw: any): string[] => [
+        raw?.id,
+        raw?.displayId,
+        raw?.documentRef,
+        raw?.reference,
+        raw?.source_transaction_id,
+        raw?.source_display_id,
+        raw?.transactionId,
+        raw?.saleId,
+        raw?.ncf,
+        raw?.electronicNcf
+    ]
+        .map(normalizeDocumentRef)
+        .filter(Boolean);
+
+    const isSaleInventoryMovement = (movement: any): boolean => {
+        const concept = normalizeDocumentRef(movement?.concept || movement?.concepto || movement?.type);
+        return concept === 'venta' || concept === 'sale';
+    };
 
     const resolveRetryId = (item: any): string | undefined =>
         item?.raw?.source_transaction_id ||
@@ -113,17 +134,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
 
                 const transactionRefs = new Set<string>();
                 (txns as any[] || []).forEach((t) => {
-                    [
-                        t.id,
-                        t.displayId,
-                        t.source_transaction_id,
-                        t.source_display_id,
-                        t.ncf,
-                        t.electronicNcf
-                    ].forEach((value) => {
-                        const normalized = normalizeDocumentRef(value);
-                        if (normalized) transactionRefs.add(normalized);
-                    });
+                    collectDocumentRefs(t).forEach((normalized) => transactionRefs.add(normalized));
                 });
 
                 const formattedTxns = (txns as any[] || []).map(t => ({
@@ -152,13 +163,25 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
 
                 const inventoryGroups = new Map<string, any[]>();
                 (movements as any[] || []).forEach((m) => {
-                    const movementRef = normalizeDocumentRef(m.documentRef || m.reference || m.source_display_id);
-                    if (movementRef && transactionRefs.has(movementRef)) {
+                    const movementRefs = collectDocumentRefs(m);
+                    const matchesKnownTransaction = movementRefs.some((movementRef) => {
+                        if (transactionRefs.has(movementRef)) return true;
+                        return Array.from(transactionRefs).some((transactionRef) =>
+                            movementRef.length > transactionRef.length &&
+                            (movementRef.startsWith(`${transactionRef}:`) ||
+                                movementRef.startsWith(`${transactionRef}-`) ||
+                                movementRef.startsWith(`${transactionRef}_`))
+                        );
+                    });
+
+                    if (matchesKnownTransaction || isSaleInventoryMovement(m)) {
                         return;
                     }
 
                     const displayRef = m.documentRef || m.reference || m.source_display_id || m.id;
-                    const groupKey = `${displayRef || m.id}::${m.terminalId || '-'}`;
+                    const normalizedGroupRef = normalizeDocumentRef(displayRef || m.id);
+                    const normalizedTerminalId = normalizeDocumentRef(m.terminalId || '-');
+                    const groupKey = `${normalizedGroupRef || normalizeDocumentRef(m.id)}::${normalizedTerminalId || '-'}`;
                     const group = inventoryGroups.get(groupKey) || [];
                     group.push(m);
                     inventoryGroups.set(groupKey, group);
@@ -245,6 +268,50 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
         setCurrentPage(1);
     }, [searchTerm, statusFilter, terminalFilter, rowsPerPage]);
 
+    const selectedJsonText = React.useMemo(() => {
+        if (!selectedJson) return '';
+        return JSON.stringify(selectedJson, null, 2);
+    }, [selectedJson]);
+
+    useEffect(() => {
+        setJsonCopyStatus(null);
+    }, [selectedJson]);
+
+    const copyTextToClipboard = async (text: string): Promise<boolean> => {
+        if (!text) return false;
+
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(text);
+                return true;
+            }
+        } catch {
+            // Fallback below handles Android WebView cases without Clipboard API permission.
+        }
+
+        try {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.setAttribute('readonly', 'true');
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            textarea.style.left = '-9999px';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            const copied = document.execCommand('copy');
+            document.body.removeChild(textarea);
+            return copied;
+        } catch {
+            return false;
+        }
+    };
+
+    const handleCopySelectedJson = async () => {
+        const copied = await copyTextToClipboard(selectedJsonText);
+        setJsonCopyStatus(copied ? 'COPIED' : 'ERROR');
+    };
+
     // Pagination Logic
     const totalPages = Math.ceil(filteredAuditData.length / rowsPerPage);
     const paginatedData = filteredAuditData.slice(
@@ -310,11 +377,20 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                 });
             }
 
-            if (item.collection === 'transactions' && permissionService.isMasterTerminal()) {
-                await syncManager.retryErpForwardQueue([resolveRetryId(item)].filter(Boolean) as string[]);
+            await backgroundSyncManager.triggerSync();
+
+            if (
+                item.collection === 'transactions' &&
+                permissionService.isMasterTerminal() &&
+                !syncManager.isUsingErpOperationalTarget()
+            ) {
+                try {
+                    await syncManager.retryErpForwardQueue([resolveRetryId(item)].filter(Boolean) as string[]);
+                } catch (error) {
+                    console.warn('ERP forward queue retry failed after local requeue:', error);
+                }
             }
 
-            await backgroundSyncManager.triggerSync();
             await loadStatus();
         } catch (error) {
             console.error('Error retrying document sync:', error);
@@ -334,6 +410,13 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const handleRetryErpForward = async () => {
         setIsRetryingErpForward(true);
         try {
+            if (syncManager.isUsingErpOperationalTarget()) {
+                await backgroundSyncManager.triggerSync();
+                await loadStatus();
+                alert('✅ Reintento solicitado. La caja enviará los documentos pendientes directamente al ERP.');
+                return;
+            }
+
             const result = await syncManager.retryErpForwardQueue();
             await loadStatus();
             alert(`✅ Reintento ERP solicitado. En cola: ${result?.pending ?? 0}`);
@@ -813,7 +896,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                         <div className="flex items-center justify-end gap-2">
                                                             <button
                                                                 onClick={() => setSelectedJson(item.raw)}
-                                                                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-500 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                                                                className="inline-flex items-center gap-1.5 rounded-lg border border-blue-700 bg-blue-600 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-white shadow-sm transition-all hover:bg-blue-700"
                                                                 title="Ver JSON"
                                                             >
                                                                 <Code size={14} /> JSON
@@ -823,8 +906,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                                     onClick={() => handleRetryDocument(item)}
                                                                     className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[10px] font-black uppercase tracking-wider shadow-sm transition-all ${
                                                                         item.status === 'ERROR'
-                                                                            ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
-                                                                            : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                                                            ? 'border-red-700 bg-red-600 text-white hover:bg-red-700'
+                                                                            : 'border-amber-600 bg-amber-500 text-white hover:bg-amber-600'
                                                                     }`}
                                                                     title="Reintentar envío"
                                                                 >
@@ -1083,16 +1166,34 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                         <div className="px-8 py-6 border-b flex justify-between items-center bg-gray-50">
                             <div>
                                 <h3 className="text-xl font-black text-gray-800">Detalles del Documento</h3>
-                                <p className="text-xs text-gray-500 mt-1">Audit Data: {selectedJson.displayId || selectedJson.id || selectedJson.code}</p>
+                                <p className="text-xs text-gray-500 mt-1">JSON editable para seleccionar, copiar y enviar: {selectedJson.displayId || selectedJson.id || selectedJson.code}</p>
                             </div>
-                            <button onClick={() => setSelectedJson(null)} className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-400"><X /></button>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={handleCopySelectedJson}
+                                    className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-wider transition-all ${
+                                        jsonCopyStatus === 'COPIED'
+                                            ? 'bg-emerald-100 text-emerald-700'
+                                            : jsonCopyStatus === 'ERROR'
+                                                ? 'bg-red-100 text-red-700'
+                                                : 'bg-blue-600 text-white hover:bg-blue-700'
+                                    }`}
+                                >
+                                    {jsonCopyStatus === 'COPIED' ? <Check size={16} /> : <Copy size={16} />}
+                                    {jsonCopyStatus === 'COPIED' ? 'Copiado' : jsonCopyStatus === 'ERROR' ? 'No copió' : 'Copiar JSON'}
+                                </button>
+                                <button onClick={() => setSelectedJson(null)} className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-400"><X /></button>
+                            </div>
                         </div>
                         <div className="p-8">
-                            <div className="bg-slate-900 rounded-2xl p-6 overflow-auto max-h-[500px]">
-                                <pre className="text-emerald-400 font-mono text-sm leading-relaxed">
-                                    {JSON.stringify(selectedJson, null, 2)}
-                                </pre>
-                            </div>
+                            <textarea
+                                key={selectedJson.displayId || selectedJson.id || selectedJson.code || selectedJsonText.length}
+                                defaultValue={selectedJsonText}
+                                spellCheck={false}
+                                onFocus={(event) => event.currentTarget.select()}
+                                className="h-[500px] w-full resize-none rounded-2xl border border-slate-800 bg-slate-950 p-6 font-mono text-sm leading-relaxed text-emerald-300 outline-none ring-0 selection:bg-emerald-200 selection:text-slate-950"
+                                style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+                            />
                             <div className="mt-8">
                                 <button
                                     onClick={() => setSelectedJson(null)}
