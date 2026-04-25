@@ -26,8 +26,21 @@ Protocolo de coordinación con agentes: [docs/AGENT_RELEASE_PROTOCOL.md](./docs/
 ## Ramas
 
 - Base habitual: **`develop`**. Las ramas **`fix/*`** y **`feat/*`** (o `codex/*`) son para PRs; el nombre describe el cambio.
+- **No generar APK release firmado desde una rama `feature/*` o `fix/*` aislada.** Para releases usa `develop` o una rama `release/*` / `feature/release-*` creada desde `develop` que integre explicitamente todos los PRs/ramas requeridos.
 - **Git no permite** tener la **misma** rama checked out en dos sitios a la vez. Si el worktree firmado usa otra rama que el principal, es normal: alinea código con merge, cherry-pick o **rsync de archivos** según el checklist antes de `assembleRelease`.
 - Antes de un release: confirma que el worktree tiene el mismo código que la rama que vas a integrar (revisa diff frente a `origin`).
+
+## Manifest de release
+
+Antes de firmar un APK, crea o actualiza un manifest en `docs/releases/` con:
+
+- version del APK
+- commit fuente
+- ramas/PRs incluidos
+- validaciones ejecutadas
+- riesgos o smoke tests pendientes
+
+Usa [docs/releases/RELEASE_MANIFEST_TEMPLATE.md](./docs/releases/RELEASE_MANIFEST_TEMPLATE.md) como base.
 
 ## Versión Android
 

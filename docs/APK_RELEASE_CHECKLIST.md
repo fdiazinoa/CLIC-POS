@@ -32,7 +32,26 @@ En otros equipos, sustituye la parte base por tu clon; el worktree firmado debe 
 
    Mejor aún: alinear la worktree firmada al **commit fuente exacto** del release y evitar copias manuales salvo archivos de firma.
 
-4. **Gate duro antes del build**:
+4. **Verificar la rama fuente del release**:
+
+   - permitido: `develop`
+   - permitido: `release/*`
+   - permitido temporalmente: `feature/release-*`
+   - no permitido: `feature/*` o `fix/*` aisladas
+
+   Si el APK necesita cambios de varias ramas, crea una rama de integracion desde `develop` y fusiona ahi todo lo requerido antes de compilar.
+
+5. **Crear/actualizar manifest del release** en `docs/releases/`.
+
+   Usa [docs/releases/RELEASE_MANIFEST_TEMPLATE.md](./releases/RELEASE_MANIFEST_TEMPLATE.md) y registra:
+
+   - version esperada
+   - commit fuente
+   - ramas/PRs incluidos
+   - validaciones ejecutadas
+   - smoke tests pendientes
+
+6. **Gate duro antes del build**:
 
    ```bash
    git status --short
@@ -40,16 +59,16 @@ En otros equipos, sustituye la parte base por tu clon; el worktree firmado debe 
 
    Debe estar vacío. Si no lo está, detener el release y alinear la base.
 
-5. **Firma válida** (solo en el worktree firmado; no mover ni borrar el keystore):
+7. **Firma válida** (solo en el worktree firmado; no mover ni borrar el keystore):
    - `android/key.properties`
    - `android/keys/clic-pos-release.keystore`
 
-6. **Contador de versión** — no restaurar hacia atrás:
+8. **Contador de versión** — no restaurar hacia atrás:
    - Tras decidir la nueva versión, actualizar `android/app/build.gradle` (`versionCode`, `versionName`) en el worktree y **dejarlo persistido**.
    - Confirmar coherencia con `output-metadata.json` tras el build.
    - Si `build.gradle` y `output-metadata.json` difieren, usar `max(versionCode)` entre ambos y sumar 1 para el siguiente release.
 
-7. **Compilación en el worktree firmado** (en orden):
+9. **Compilación en el worktree firmado** (en orden):
 
    ```bash
    npm run build
@@ -58,7 +77,7 @@ En otros equipos, sustituye la parte base por tu clon; el worktree firmado debe 
    ./gradlew clean assembleRelease
    ```
 
-8. **Verificar firma del APK**:
+10. **Verificar firma del APK**:
 
    ```bash
    apksigner verify --print-certs <ruta-al.apk>
@@ -71,7 +90,7 @@ En otros equipos, sustituye la parte base por tu clon; el worktree firmado debe 
    Si `apksigner` no está en el `PATH`, suele estar en  
    `$HOME/Library/Android/sdk/build-tools/<versión>/apksigner`.
 
-9. **APK release** en la carpeta de salida del worktree (punto “Rutas de referencia”).
+11. **APK release** en la carpeta de salida del worktree (punto “Rutas de referencia”).
 
 ### Opción recomendada: script unificado
 
@@ -108,7 +127,7 @@ El script:
   - `output-metadata-<version>.json`
   - `release-report-<version>.txt`
 
-10. **Validar en dispositivo físico**:
+12. **Validar en dispositivo físico**:
    - Login vertical y horizontal
    - Activación de terminal
    - Ventas móvil
@@ -121,12 +140,12 @@ El script:
    - crédito sin cliente se bloquea
    - crédito sobre límite pide autorización o bloquea según rol
 
-11. **Git**:
+13. **Git**:
     - Crear rama desde `develop`
     - Commits pequeños con [Conventional Commits](https://www.conventionalcommits.org/)
     - Abrir PR hacia `develop`
 
-12. **Reportar siempre** al final del release:
+14. **Reportar siempre** al final del release:
     - versión (`versionCode` / `versionName`)
     - commit fuente
     - PRs incluidos

@@ -25,6 +25,13 @@ Antes de compilar, cada fix debe cumplir una de estas dos condiciones:
 - ya está en `develop`, o
 - existe una rama/PR de release explícita identificable por commit
 
+Ademas, no generes APK release desde una rama `feature/*` o `fix/*` aislada. Si el APK debe incluir mas de una linea de trabajo, crea una rama de integracion desde `develop`:
+
+- `release/<tema>`
+- o `feature/release-<tema>` mientras se mantenga ese patron operativo
+
+Esa rama debe integrar explicitamente todas las ramas/PRs requeridos antes de ejecutar el script de release.
+
 ## Rutas
 
 | Uso | Ruta |
@@ -44,13 +51,14 @@ Antes de compilar, cada fix debe cumplir una de estas dos condiciones:
 4. **Definir el commit fuente del release**:
    - ideal: HEAD de `origin/develop`
    - si el release requiere algo no mergeado aún: una release branch o commit explícito
-5. **Alinear la worktree firmada exactamente al commit fuente**.
-6. **Gate duro**: si `git status --short` en la worktree firmada no está vacío antes del build, detenerse.
-7. **Solo entonces**:
+5. **Crear/actualizar manifest de release** en `docs/releases/`.
+6. **Alinear la worktree firmada exactamente al commit fuente**.
+7. **Gate duro**: si `git status --short` en la worktree firmada no está vacío antes del build, detenerse.
+8. **Solo entonces**:
    - subir `versionCode` / `versionName`
    - compilar
    - verificar firma
-8. **Registrar** junto al release:
+9. **Registrar** junto al release:
    - versión
    - commit fuente
    - PRs incluidos
@@ -130,7 +138,9 @@ Antes de compilar el APK:
 2. No tomes fixes desde Polaris o worktrees locales si no están formalizados por commit/PR.
 3. Alinea la worktree firmada `/Users/felixdiaz/.gemini/antigravity/playground/tensor-planetoid/_worktrees/CLIC-POS/CLIC-POS-mobile-sqlite` al commit fuente exacto del release.
 4. Si `git status --short` en la worktree firmada no está limpio, detente.
-5. Sube `versionCode/versionName`, compila, verifica firma y reporta:
+5. No compiles desde una feature/fix aislada; usa `develop` o una rama `release/*` / `feature/release-*`.
+6. Crea o actualiza `docs/releases/<version>.md` con el commit fuente y PRs incluidos.
+7. Sube `versionCode/versionName`, compila, verifica firma y reporta:
    - versión
    - commit fuente
    - PRs incluidos
