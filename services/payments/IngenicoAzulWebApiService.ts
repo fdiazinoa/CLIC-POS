@@ -65,7 +65,7 @@ export class IngenicoAzulWebApiError extends Error {
   }
 }
 
-const DEFAULT_LOCAL_BASE_URL = 'http://127.0.0.1:9001';
+const DEFAULT_LOCAL_BASE_URL = 'http://localhost:9000';
 const DEFAULT_TIMEOUT_MS = 65000;
 
 const isNativeCapacitorRuntime = (): boolean => {
@@ -106,6 +106,29 @@ const getDeepValue = (source: any, path: string): unknown => {
     if (!value || typeof value !== 'object') return undefined;
     return (value as Record<string, unknown>)[segment];
   }, source);
+};
+
+const withClientTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  action: IngenicoAzulWebApiAction | 'TEST'
+): Promise<T> => {
+  let timeoutHandle: number | undefined;
+
+  try {
+    return await Promise.race<T>([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = window.setTimeout(() => {
+          reject(new Error(`Ingenico agotó el tiempo de espera (${Math.round(timeoutMs / 1000)}s) durante ${action}.`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      window.clearTimeout(timeoutHandle);
+    }
+  }
 };
 
 const pickFirstString = (source: IngenicoAzulWebApiGatewayResponse, paths: string[]): string => {
@@ -157,6 +180,27 @@ const extractMessage = (response: IngenicoAzulWebApiGatewayResponse): string => 
   ]) || 'Ingenico no devolvió un mensaje.'
 );
 
+const extractReceiptValue = (
+  response: IngenicoAzulWebApiGatewayResponse,
+  preferredPaths: string[],
+  fallbackPaths: string[] = []
+): string => {
+  const preferred = pickFirstString(response, preferredPaths);
+  if (preferred) return preferred;
+
+  return pickFirstString(response, [
+    ...fallbackPaths,
+    'Receipt',
+    'receipt',
+    'Receipts.Client',
+    'receipts.client',
+    'Receipts.Customer',
+    'receipts.customer',
+    'Receipts.Merchant',
+    'receipts.merchant',
+  ]);
+};
+
 const parseJsonBody = (
   rawBody: unknown,
   action: IngenicoAzulWebApiAction
@@ -188,12 +232,16 @@ const getJson = async (
 
   try {
     if (isNativeCapacitorRuntime()) {
-      const response = await CapacitorHttp.get({
-        url,
-        connectTimeout: timeoutMs,
-        readTimeout: timeoutMs,
-        responseType: 'json',
-      });
+      const response = await withClientTimeout(
+        CapacitorHttp.get({
+          url,
+          connectTimeout: timeoutMs,
+          readTimeout: timeoutMs,
+          responseType: 'text',
+        }),
+        timeoutMs,
+        action
+      );
 
       if (response.status < 200 || response.status >= 300) {
         throw new Error(`Ingenico respondió HTTP ${response.status}.`);
@@ -206,10 +254,14 @@ const getJson = async (
     const timeoutHandle = window.setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        signal: controller.signal,
-      });
+      const response = await withClientTimeout(
+        fetch(url, {
+          method: 'GET',
+          signal: controller.signal,
+        }),
+        timeoutMs,
+        action
+      );
 
       const bodyText = await response.text();
       if (!response.ok) {
@@ -241,12 +293,16 @@ const getText = async (integration: PaymentIntegrationDefinition, path: string):
 
   try {
     if (isNativeCapacitorRuntime()) {
-      const response = await CapacitorHttp.get({
-        url,
-        connectTimeout: timeoutMs,
-        readTimeout: timeoutMs,
-        responseType: 'text',
-      });
+      const response = await withClientTimeout(
+        CapacitorHttp.get({
+          url,
+          connectTimeout: timeoutMs,
+          readTimeout: timeoutMs,
+          responseType: 'text',
+        }),
+        timeoutMs,
+        'TEST'
+      );
 
       if (response.status < 200 || response.status >= 300) {
         throw new Error(`Ingenico respondió HTTP ${response.status}.`);
@@ -259,10 +315,14 @@ const getText = async (integration: PaymentIntegrationDefinition, path: string):
     const timeoutHandle = window.setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        signal: controller.signal,
-      });
+      const response = await withClientTimeout(
+        fetch(url, {
+          method: 'GET',
+          signal: controller.signal,
+        }),
+        timeoutMs,
+        'TEST'
+      );
 
       if (!response.ok) {
         throw new Error(`Ingenico respondió HTTP ${response.status}.`);
@@ -311,21 +371,30 @@ const normalizeResult = (
   maskedPan: pickFirstString(response, ['MaskedPAN', 'maskedPan', 'MaskedPan']),
   cardBrand: pickFirstString(response, ['RangeName', 'rangeName', 'CardBrand', 'cardBrand']),
   entryMode: pickFirstString(response, ['EntryMode', 'entryMode']),
-  receiptMerchant: pickFirstString(response, [
+  receiptMerchant: extractReceiptValue(response, [
     'ReceiptMerchant',
     'receiptMerchant',
     'MerchantReceipt',
     'merchantReceipt',
     'Receipts.Merchant',
     'receipts.merchant',
+  ], [
+    'MerchantVoucher',
+    'merchantVoucher',
   ]),
-  receiptClient: pickFirstString(response, [
+  receiptClient: extractReceiptValue(response, [
     'ReceiptClient',
     'receiptClient',
     'CustomerReceipt',
     'customerReceipt',
     'Receipts.Customer',
     'receipts.customer',
+    'Receipts.Client',
+    'receipts.client',
+    'Voucher',
+    'voucher',
+    'ClientVoucher',
+    'clientVoucher',
   ]),
   responseFields: Object.entries(response || {}).reduce<Record<string, string>>((acc, [key, value]) => {
     if (value === undefined || value === null) return acc;
@@ -391,7 +460,7 @@ export const ingenicoAzulWebApiService = {
     const response = await getJson(
       integration,
       'REFUND',
-      `/api/transaction/lane/Refund/${encodeURIComponent(formatAmount(request.amount))}`
+      `/api/transaction/lane/refund/${encodeURIComponent(formatAmount(request.amount))}`
     );
 
     const normalized = normalizeResult(response);
@@ -414,7 +483,7 @@ export const ingenicoAzulWebApiService = {
     const response = await getJson(
       integration,
       'VOID',
-      `/api/transaction/lane/Void/${encodeURIComponent(request.invoiceNumber)}`
+      `/api/transaction/lane/void/${encodeURIComponent(request.invoiceNumber)}`
     );
 
     const normalized = normalizeResult(response);
@@ -434,7 +503,7 @@ export const ingenicoAzulWebApiService = {
     const response = await getJson(
       integration,
       'CLOSE_TOTALS',
-      '/api/transaction/lane/CloseTotals'
+      '/api/transaction/lane/closetotals'
     );
 
     const normalized = normalizeResult(response);

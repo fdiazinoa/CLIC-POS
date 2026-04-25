@@ -33,12 +33,12 @@ const quantityFromValue = (value: unknown): number | null => {
 };
 
 const WAREHOUSE_ID_KEYS = [
-  'warehouseId',
-  'warehouse_id',
-  'id',
   'code',
   'warehouseCode',
   'warehouse_code',
+  'warehouseId',
+  'warehouse_id',
+  'id',
   'storeId',
   'store_id',
 ];
@@ -52,18 +52,25 @@ const STOCK_QTY_KEYS = [
   'stock',
   'onHand',
   'on_hand',
+  'qtyOnHand',
+  'qty_on_hand',
   'physical',
   'available',
   'qtyAvailable',
   'qty_available',
 ];
 
-const extractWarehouseIdFromRow = (row: Record<string, unknown>): string => {
+const extractWarehouseIdsFromRow = (row: Record<string, unknown>): string[] => {
+  const values: string[] = [];
   for (const key of WAREHOUSE_ID_KEYS) {
     const value = trimValue(row[key]);
-    if (value) return value;
+    if (value) values.push(value);
   }
-  return '';
+  return uniqueValues(values);
+};
+
+const extractWarehouseIdFromRow = (row: Record<string, unknown>): string => {
+  return extractWarehouseIdsFromRow(row)[0] || '';
 };
 
 const extractQuantityFromRow = (row: Record<string, unknown>): number | null => {
@@ -79,10 +86,12 @@ const normalizeStockBalanceSource = (source: unknown): Record<string, number> =>
 
   for (const row of asArray(source)) {
     const record = asRecord(row);
-    const warehouseId = extractWarehouseIdFromRow(record);
     const quantity = extractQuantityFromRow(record);
-    if (warehouseId && quantity != null) {
-      normalized[warehouseId] = quantity;
+    const warehouseIds = extractWarehouseIdsFromRow(record);
+    if (warehouseIds.length > 0 && quantity != null) {
+      for (const warehouseId of warehouseIds) {
+        normalized[warehouseId] = Number(normalized[warehouseId] || 0) + quantity;
+      }
     }
   }
   if (Object.keys(normalized).length > 0) {
@@ -126,6 +135,8 @@ export const productReferenceCandidates = (
 
   return uniqueValues([
     trimValue(record.id),
+    trimValue(record.itemId),
+    trimValue(record.item_id),
     trimValue(record.productId),
     trimValue(record.product_id),
     trimValue(record.sourceProductId),
@@ -139,6 +150,8 @@ export const productReferenceCandidates = (
     trimValue(record.item_code),
     trimValue(record.code),
     trimValue(nestedProduct.id),
+    trimValue(nestedProduct.itemId),
+    trimValue(nestedProduct.item_id),
     trimValue(nestedProduct.productId),
     trimValue(nestedProduct.product_id),
     trimValue(nestedProduct.sourceProductId),
@@ -163,6 +176,8 @@ export const productIdentityCandidates = (
 
   return uniqueValues([
     trimValue(record.id),
+    trimValue(record.itemId),
+    trimValue(record.item_id),
     trimValue(record.productId),
     trimValue(record.product_id),
     trimValue(record.sourceProductId),
@@ -172,6 +187,8 @@ export const productIdentityCandidates = (
     trimValue(record.sourceItemId),
     trimValue(record.source_item_id),
     trimValue(nestedProduct.id),
+    trimValue(nestedProduct.itemId),
+    trimValue(nestedProduct.item_id),
     trimValue(nestedProduct.productId),
     trimValue(nestedProduct.product_id),
     trimValue(nestedProduct.sourceProductId),
@@ -191,6 +208,8 @@ export const resolveOperationalProductId = (
   const nestedProduct = asRecord(record.product);
 
   return uniqueValues([
+    trimValue(record.itemId),
+    trimValue(record.item_id),
     trimValue(record.sourceProductId),
     trimValue(record.source_product_id),
     trimValue(record.erpProductId),
@@ -199,6 +218,8 @@ export const resolveOperationalProductId = (
     trimValue(record.source_item_id),
     trimValue(record.productId),
     trimValue(record.product_id),
+    trimValue(nestedProduct.itemId),
+    trimValue(nestedProduct.item_id),
     trimValue(nestedProduct.sourceProductId),
     trimValue(nestedProduct.source_product_id),
     trimValue(nestedProduct.erpProductId),

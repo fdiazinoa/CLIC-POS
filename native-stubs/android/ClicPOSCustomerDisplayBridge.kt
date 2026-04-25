@@ -10,12 +10,19 @@ import android.os.Looper
 import android.util.Log
 import android.view.Display
 import android.view.ViewGroup
+import android.webkit.MimeTypeMap
 import android.webkit.WebSettings
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.widget.FrameLayout
+import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewClientCompat
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.lang.ref.WeakReference
+import java.net.URLConnection
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -24,6 +31,7 @@ class AndroidCustomerDisplayBridge(
 ) {
     companion object {
         private const val TAG = "ClicPOSCustomerDisplay"
+        private const val DEFAULT_VISOR_URL = "https://localhost/?view=VISOR"
 
         @JvmStatic
         fun injectContractShim(webView: WebView) {
@@ -75,7 +83,7 @@ class AndroidCustomerDisplayBridge(
         return try {
             val payload = JSONObject(payloadJson ?: "{}")
             val requestedMode = payload.optString("mode", "ANDROID_SECONDARY").uppercase()
-            val targetUrl = payload.optString("url", "http://localhost/?view=VISOR").ifBlank { "http://localhost/?view=VISOR" }
+            val targetUrl = normalizeTargetUrl(payload.optString("url", DEFAULT_VISOR_URL))
             val latch = CountDownLatch(1)
             var result = JSONObject().put("success", false).put("message", "Timeout al abrir visor.")
 
@@ -199,8 +207,56 @@ class AndroidCustomerDisplayBridge(
         activePresentation = null
     }
 
+    private fun normalizeTargetUrl(rawUrl: String?): String {
+        val trimmed = rawUrl?.trim().orEmpty()
+        if (trimmed.isBlank()) return DEFAULT_VISOR_URL
+
+        return when {
+            trimmed.startsWith("http://localhost", ignoreCase = true) ->
+                "https://${trimmed.removePrefix("http://")}"
+            trimmed.startsWith("https://localhost", ignoreCase = true) -> trimmed
+            else -> trimmed
+        }
+    }
+
     private fun failure(message: String): String =
         JSONObject().put("success", false).put("message", message).toString()
+
+    class PublicAssetsPathHandler(
+        private val context: Context
+    ) : WebViewAssetLoader.PathHandler {
+        override fun handle(path: String): WebResourceResponse? {
+            val normalizedPath = when {
+                path.isBlank() || path == "/" -> "index.html"
+                else -> path.trimStart('/')
+            }
+
+            val assetPath = "public/$normalizedPath"
+            return try {
+                val inputStream = context.assets.open(assetPath)
+                WebResourceResponse(resolveMimeType(assetPath), "UTF-8", inputStream).apply {
+                    responseHeaders = mapOf("Cache-Control" to "no-cache")
+                }
+            } catch (_: IOException) {
+                null
+            }
+        }
+
+        private fun resolveMimeType(assetPath: String): String {
+            val extension = assetPath.substringAfterLast('.', "")
+            return when (extension.lowercase()) {
+                "js", "mjs" -> "application/javascript"
+                "css" -> "text/css"
+                "html" -> "text/html"
+                "json" -> "application/json"
+                "svg" -> "image/svg+xml"
+                "wasm" -> "application/wasm"
+                else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.lowercase())
+                    ?: URLConnection.guessContentTypeFromName(assetPath)
+                    ?: "application/octet-stream"
+            }
+        }
+    }
 
     class CustomerDisplayPresentation(
         context: Context,
@@ -235,6 +291,11 @@ class AndroidCustomerDisplayBridge(
         }
 
         private fun configureWebView(webView: WebView) {
+            val assetLoader = WebViewAssetLoader.Builder()
+                .setDomain("localhost")
+                .addPathHandler("/", PublicAssetsPathHandler(context.applicationContext))
+                .build()
+
             val settings = webView.settings
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -249,6 +310,15 @@ class AndroidCustomerDisplayBridge(
             }
             webView.isHorizontalScrollBarEnabled = false
             webView.isVerticalScrollBarEnabled = false
+            webView.webViewClient = object : WebViewClientCompat() {
+                override fun shouldInterceptRequest(
+                    view: WebView,
+                    request: WebResourceRequest
+                ): WebResourceResponse? {
+                    return assetLoader.shouldInterceptRequest(request.url)
+                        ?: super.shouldInterceptRequest(view, request)
+                }
+            }
         }
     }
 }

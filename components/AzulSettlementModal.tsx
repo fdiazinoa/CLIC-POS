@@ -11,16 +11,21 @@ import {
 
 import { PaymentIntegrationDefinition } from '../types';
 import { AzulNormalizedResult } from '../services/payments/AzulMcmService';
+import { IngenicoAzulWebApiNormalizedResult } from '../services/payments/IngenicoAzulWebApiService';
+
+type TerminalSettlementResult = AzulNormalizedResult | IngenicoAzulWebApiNormalizedResult;
 
 interface AzulSettlementModalProps {
   integration: PaymentIntegrationDefinition;
   mode: 'TOTALS' | 'SETTLE';
+  providerLabel?: string;
   isLoadingTotals: boolean;
   isSettling: boolean;
-  previewResult: AzulNormalizedResult | null;
-  settledResult: AzulNormalizedResult | null;
+  previewResult: TerminalSettlementResult | null;
+  settledResult: TerminalSettlementResult | null;
   errorMessage: string | null;
   printWarning: string | null;
+  allowSettleWithoutPreview?: boolean;
   onRefreshTotals: () => void;
   onConfirmSettle: () => void;
   onClose: () => void;
@@ -28,7 +33,7 @@ interface AzulSettlementModalProps {
 
 const formatReceipt = (value?: string): string => String(value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
 
-const buildHighlights = (result: AzulNormalizedResult | null, integration: PaymentIntegrationDefinition) => (
+const buildHighlights = (result: TerminalSettlementResult | null, integration: PaymentIntegrationDefinition) => (
   [
     { label: 'Merchant', value: result?.merchantId || integration.merchantId || '' },
     { label: 'Terminal', value: result?.terminalId || integration.terminalId || '' },
@@ -41,12 +46,14 @@ const buildHighlights = (result: AzulNormalizedResult | null, integration: Payme
 const AzulSettlementModal: React.FC<AzulSettlementModalProps> = ({
   integration,
   mode,
+  providerLabel = 'AZUL',
   isLoadingTotals,
   isSettling,
   previewResult,
   settledResult,
   errorMessage,
   printWarning,
+  allowSettleWithoutPreview = false,
   onRefreshTotals,
   onConfirmSettle,
   onClose,
@@ -59,7 +66,7 @@ const AzulSettlementModal: React.FC<AzulSettlementModalProps> = ({
       <div className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-[2rem] bg-white shadow-2xl">
         <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
           <div>
-            <p className="text-xs font-black uppercase tracking-[0.24em] text-sky-500">Operación AZUL</p>
+            <p className="text-xs font-black uppercase tracking-[0.24em] text-sky-500">Operación {providerLabel}</p>
             <h2 className="mt-2 text-2xl font-black text-slate-900">
               {mode === 'TOTALS' ? 'Totales de terminal' : 'Cierre de terminal'}
             </h2>
@@ -79,7 +86,7 @@ const AzulSettlementModal: React.FC<AzulSettlementModalProps> = ({
                 <RefreshCw className="animate-spin text-sky-600" size={20} />
                 <div>
                   <p className="text-sm font-black text-sky-900">
-                    {isSettling ? 'Cerrando lote en AZUL...' : 'Consultando totales de la terminal...'}
+                    {isSettling ? `Cerrando lote en ${providerLabel}...` : 'Consultando totales de la terminal...'}
                   </p>
                   <p className="text-sm text-sky-700">
                     {isSettling
@@ -98,7 +105,7 @@ const AzulSettlementModal: React.FC<AzulSettlementModalProps> = ({
                 <div>
                   <p className="text-base font-black text-emerald-950">Cierre completado correctamente</p>
                   <p className="mt-1 text-sm text-emerald-700">
-                    AZUL confirmó el cierre del lote y el comprobante se envió a impresión automáticamente.
+                    {providerLabel} confirmó el cierre del lote y el comprobante se envió a impresión automáticamente.
                   </p>
                 </div>
               </div>
@@ -149,13 +156,13 @@ const AzulSettlementModal: React.FC<AzulSettlementModalProps> = ({
                   {previewResult.responseMessage || 'Totales consultados'}
                 </span>
               </div>
-              {receipt ? (
+                  {receipt ? (
                 <pre className="mt-4 max-h-[32vh] overflow-auto rounded-3xl border border-slate-100 bg-slate-50 p-4 text-xs font-medium leading-6 text-slate-700 whitespace-pre-wrap">
                   {receipt}
                 </pre>
               ) : (
                 <p className="mt-4 text-sm text-slate-500">
-                  AZUL respondió correctamente, pero no devolvió un comprobante legible para mostrar aquí.
+                  {providerLabel} respondió correctamente, pero no devolvió un comprobante legible para mostrar aquí.
                 </p>
               )}
             </div>
@@ -192,7 +199,7 @@ const AzulSettlementModal: React.FC<AzulSettlementModalProps> = ({
           {mode === 'SETTLE' && !settledResult && (
             <button
               onClick={onConfirmSettle}
-              disabled={isLoadingTotals || isSettling || !previewResult}
+              disabled={isLoadingTotals || isSettling || (!allowSettleWithoutPreview && !previewResult)}
               className="flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-bold text-white transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <CheckCircle2 size={16} />

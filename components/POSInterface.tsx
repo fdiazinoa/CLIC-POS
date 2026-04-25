@@ -19,7 +19,7 @@ import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType, FiscalDocumentCode,
-   PaymentEntry, Table, Reservation, ZReport, Room, Permission
+   PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, Tariff
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import { getFiscalComplianceConfig, getDefaultFiscalProvider, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
@@ -78,6 +78,7 @@ import { resolveProductActiveWarehouseIds } from '../utils/masterIdentity';
 import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
+import { productIdentityCandidates, resolveOperationalProductId } from '../utils/productReferences';
 
 // ... existing imports
 
@@ -116,7 +117,73 @@ export interface POSInterfaceProps {
    onKioskPay?: () => void;
    internalSequences?: any[];
    rooms?: Room[];
+   productPrices?: ProductPrice[];
 }
+
+const productSalesIdentityKey = (product: Product): string => {
+   const operationalId = resolveOperationalProductId(product);
+   if (operationalId) return `op:${operationalId}`;
+
+   const normalizedId = String(product.id || '').trim().toLowerCase();
+   const identityCandidate = productIdentityCandidates(product)
+      .map((value) => String(value || '').trim().toLowerCase())
+      .find((value) => value && value !== normalizedId);
+   if (identityCandidate) return `identity:${identityCandidate}`;
+
+   const barcode = typeof product.barcode === 'string' ? product.barcode.trim().toLowerCase() : '';
+   if (barcode) return `barcode:${barcode}`;
+
+   const sku = typeof (product as any).sku === 'string' ? (product as any).sku.trim().toLowerCase() : '';
+   if (sku) return `sku:${sku}`;
+
+   const code = typeof (product as any).code === 'string' ? (product as any).code.trim().toLowerCase() : '';
+   if (code) return `code:${code}`;
+
+   const name = typeof product.name === 'string' ? product.name.trim().toLowerCase() : '';
+   const category = typeof product.category === 'string' ? product.category.trim().toLowerCase() : '';
+   if (name) return `namecat:${name}::${category}`;
+
+   return `id:${String(product.id || '').trim().toLowerCase()}`;
+};
+
+const isSeedCatalogProduct = (product: Product): boolean => {
+   const id = String(product.id || '').trim().toLowerCase();
+   return /^prod-\d+$/.test(id) || /^p\d+$/.test(id) || /^f\d+$/.test(id);
+};
+
+const productBusinessKeys = (product: Product): string[] => {
+   const keys = new Set<string>();
+   const barcode = typeof product.barcode === 'string' ? product.barcode.trim().toLowerCase() : '';
+   const sku = typeof (product as any).sku === 'string' ? (product as any).sku.trim().toLowerCase() : '';
+   const code = typeof (product as any).code === 'string' ? (product as any).code.trim().toLowerCase() : '';
+   const itemCode = typeof (product as any).item_code === 'string' ? (product as any).item_code.trim().toLowerCase() : '';
+   const name = typeof product.name === 'string' ? product.name.trim().toLowerCase() : '';
+   const category = typeof product.category === 'string' ? product.category.trim().toLowerCase() : '';
+
+   if (barcode) keys.add(`barcode:${barcode}`);
+   if (sku) keys.add(`sku:${sku}`);
+   if (code) keys.add(`code:${code}`);
+   if (itemCode) keys.add(`item_code:${itemCode}`);
+   if (name) keys.add(`namecat:${name}::${category}`);
+
+   return Array.from(keys);
+};
+
+const scoreProductForSales = (product: Product, warehouses: Warehouse[]): number => {
+   const activeWarehouses = resolveProductActiveWarehouseIds(product, warehouses).length;
+   const stockBalanceCount = Object.keys(product.stockBalances || {}).length;
+   const updatedAtScore = new Date((product as any).updatedAt || (product as any).createdAt || 0).getTime() || 0;
+   const seedPenalty = isSeedCatalogProduct(product) ? -50_000 : 0;
+
+   return (
+      seedPenalty +
+      activeWarehouses * 1000 +
+      stockBalanceCount * 100 +
+      (product.is_sellable !== false ? 10 : 0) +
+      (Number.isFinite(Number(product.price)) ? 1 : 0) +
+      updatedAtScore / 1_000_000_000_000
+   );
+};
 
 const buildCartDigest = (items: CartItem[] = []): string =>
    items
@@ -164,7 +231,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    onUpdateActiveTableGuests,
    onKioskPay,
    internalSequences,
-   rooms = []
+   rooms = [],
+   productPrices: externalProductPrices = []
 }) => {
    const cartEndRef = useRef<HTMLDivElement>(null);
    const posRootRef = useRef<HTMLDivElement>(null);
@@ -172,6 +240,34 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const mobileCartButtonRef = useRef<HTMLButtonElement>(null);
    const desktopActionGridRef = useRef<HTMLDivElement>(null);
    const ticketAutoSyncTimeoutRef = useRef<number | null>(null);
+   const [productPrices, setProductPrices] = useState<ProductPrice[]>(externalProductPrices);
+
+   useEffect(() => {
+      setProductPrices(Array.isArray(externalProductPrices) ? externalProductPrices : []);
+   }, [externalProductPrices]);
+
+   useEffect(() => {
+      let cancelled = false;
+
+      const refreshProductPrices = async () => {
+         try {
+            const fresh = await db.get('productPrices') as ProductPrice[] | null;
+            if (!cancelled && Array.isArray(fresh)) {
+               setProductPrices(fresh);
+            }
+         } catch (error) {
+            console.warn('⚠️ POSInterface: Could not load productPrices collection:', error);
+         }
+      };
+
+      void refreshProductPrices();
+      window.addEventListener('productPricesUpdated', refreshProductPrices);
+      return () => {
+         cancelled = true;
+         window.removeEventListener('productPricesUpdated', refreshProductPrices);
+      };
+   }, []);
+
    const isMaster = useMemo(() => {
       const terminal = config.terminals?.find(t => t.id === activeTerminalId);
       return terminal?.config?.isPrimaryNode === true;
@@ -580,6 +676,42 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          setActiveTariffId(desiredTariffId);
       }
    }, [activeTariffId, allowedTariffs, desiredTariffId]);
+
+   const productPriceIndex = useMemo(() => {
+      const index = new Map<string, number>();
+      const normalizeToken = (value: unknown): string =>
+         typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+      for (const record of productPrices) {
+         if (!record || typeof record !== 'object') continue;
+         const price = Number(record.price);
+         if (!Number.isFinite(price)) continue;
+
+         const productTokens = [
+            record.productId,
+            record.itemId,
+            record.erpProductId,
+            record.sourceProductId,
+         ]
+            .map(normalizeToken)
+            .filter(Boolean);
+
+         const tariffTokens = [
+            record.tariffId,
+            record.tariffCode,
+         ]
+            .map(normalizeToken)
+            .filter(Boolean);
+
+         for (const productToken of productTokens) {
+            for (const tariffToken of tariffTokens) {
+               index.set(`${productToken}::${tariffToken}`, price);
+            }
+         }
+      }
+
+      return index;
+   }, [productPrices]);
 
    // FILTER: Only pending transactions (after latest Z close for this terminal)
    const terminalTransactions = useMemo(() => {
@@ -995,12 +1127,31 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    };
 
    const getTariffPrice = useCallback((p: Product) => {
-      const selectedTariff = (config.tariffs || []).find((tariff) => tariff.id === activeTariffId);
+      const selectedTariff = (config.tariffs || []).find((tariff) => tariff.id === activeTariffId) as Tariff | undefined;
       const activeTokens = new Set(
          [activeTariffId, selectedTariff?.id, (selectedTariff as any)?.code]
             .map((value) => (typeof value === 'string' ? value.trim().toLowerCase() : ''))
             .filter(Boolean)
       );
+
+      const productTokens = new Set(
+         [
+            p.id,
+            resolveOperationalProductId(p),
+            ...productIdentityCandidates(p),
+         ]
+            .map((value) => (typeof value === 'string' ? value.trim().toLowerCase() : ''))
+            .filter(Boolean)
+      );
+
+      for (const productToken of productTokens) {
+         for (const activeToken of activeTokens) {
+            const indexedPrice = productPriceIndex.get(`${productToken}::${activeToken}`);
+            if (typeof indexedPrice === 'number' && Number.isFinite(indexedPrice)) {
+               return indexedPrice;
+            }
+         }
+      }
 
       const matchedEntry = (p.tariffs || []).find((entry: any) => {
          const entryTokens = [
@@ -1019,7 +1170,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       const tariffPrice = matchedEntry?.price;
       return typeof tariffPrice === 'number' && Number.isFinite(tariffPrice) ? tariffPrice : null;
-   }, [activeTariffId, config.tariffs]);
+   }, [activeTariffId, config.tariffs, productPriceIndex]);
 
    const productHasActiveTariff = useCallback((p: Product) => getTariffPrice(p) !== null, [getTariffPrice]);
 
@@ -1442,12 +1593,43 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [selectedCustomer, cart, terminalId, activeTerminalConfig?.operational?.fiscalThreshold]);
 
 
+   const salesCatalogProducts = useMemo(() => {
+      const nonSeedBusinessKeys = new Set<string>();
+
+      for (const product of products) {
+         if (!product || typeof product !== 'object' || Array.isArray(product)) continue;
+         if (isSeedCatalogProduct(product)) continue;
+         productBusinessKeys(product).forEach((key) => nonSeedBusinessKeys.add(key));
+      }
+
+      return products.filter((product) => {
+         if (!product || typeof product !== 'object' || Array.isArray(product)) return false;
+         if (!isSeedCatalogProduct(product)) return true;
+
+         const businessKeys = productBusinessKeys(product);
+         return !businessKeys.some((key) => nonSeedBusinessKeys.has(key));
+      });
+   }, [products]);
+
    const filteredProducts = useMemo(() => {
+      const dedupedProducts = Array.from(
+         salesCatalogProducts.reduce((map, product) => {
+            if (!product || typeof product !== 'object' || Array.isArray(product)) return map;
+
+            const key = productSalesIdentityKey(product);
+            const existing = map.get(key);
+            if (!existing || scoreProductForSales(product, warehouses) > scoreProductForSales(existing, warehouses)) {
+               map.set(key, product);
+            }
+            return map;
+         }, new Map<string, Product>()).values()
+      );
+
       const normalizedCategoryFilter = categoryFilter === 'ALL'
          ? 'ALL'
          : canonicalizeCategory(categoryFilter);
 
-      const filtered = products.filter(p => {
+      const filtered = dedupedProducts.filter(p => {
          if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
          const erpWarehouses = resolveProductActiveWarehouseIds(p, warehouses);
          const hasErpWarehouse = erpWarehouses.length > 0;
@@ -1484,12 +1666,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // Defensive: Ensure unique IDs to prevent React key warnings
       const seenIds = new Set();
-      return filtered.filter(p => {
-         if (seenIds.has(p.id)) return false;
-         seenIds.add(p.id);
-         return true;
-      });
-   }, [products, searchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
+         return filtered.filter(p => {
+            if (seenIds.has(p.id)) return false;
+            seenIds.add(p.id);
+            return true;
+         });
+   }, [salesCatalogProducts, searchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
 
    const handleRetailSearchSubmit = useCallback(() => {
       const trimmed = (searchTerm || '').trim();
@@ -1524,10 +1706,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [searchTerm, findProductByAnyCode, addToCart, isReturnMode, filteredProducts, handleProductClick]);
 
    const categories = useMemo(() => {
+      const dedupedProducts = Array.from(
+         salesCatalogProducts.reduce((map, product) => {
+            if (!product || typeof product !== 'object' || Array.isArray(product)) return map;
+
+            const key = productSalesIdentityKey(product);
+            const existing = map.get(key);
+            if (!existing || scoreProductForSales(product, warehouses) > scoreProductForSales(existing, warehouses)) {
+               map.set(key, product);
+            }
+            return map;
+         }, new Map<string, Product>()).values()
+      );
+
       const allowedDisplayCategories = Array.from(
          new Set(Array.from(effectiveAllowedCategorySet).map((category) => displayCategory(category)).filter(Boolean))
       );
-      const availableProducts = products.filter(p => {
+      const availableProducts = dedupedProducts.filter(p => {
          if (!p || p.is_sellable === false) return false;
          if (!productHasActiveTariff(p)) return false;
          const erpWh = resolveProductActiveWarehouseIds(p, warehouses);
@@ -1557,7 +1752,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       const cats = ['ALL', ...scopedCategories];
       console.log('[POS] Categories:', cats);
       return cats;
-   }, [products, canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
+   }, [salesCatalogProducts, canonicalizeCategory, displayCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
 
    useEffect(() => {
       if (categoryFilter !== 'ALL' && !categories.includes(categoryFilter)) {

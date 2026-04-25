@@ -1186,6 +1186,19 @@ export interface ProductStock {
   updatedAt: string;
 }
 
+export interface ProductPrice {
+  id: string; // generateId(productId, tariffId)
+  productId: string;
+  tariffId: string;
+  price: number;
+  updatedAt: string;
+  itemId?: string;
+  erpProductId?: string;
+  sourceProductId?: string;
+  tariffCode?: string;
+  currency?: string;
+}
+
 export interface InventoryCommitment {
   id: string; // productId + '_' + warehouseId
   productId: string;
@@ -1500,6 +1513,12 @@ export interface Warehouse {
   allowNegativeStock: boolean;
   isMain?: boolean;
   storeId?: string;
+  warehouseId?: string;
+  inventoryLocalId?: string;
+  erpWarehouseId: string;
+  sourceWarehouseId?: string;
+  uid?: string;
+  label?: string;
 }
 
 export interface StockTransferItem {
