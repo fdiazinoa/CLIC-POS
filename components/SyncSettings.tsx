@@ -43,6 +43,21 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const resolveDocumentError = (raw: any): string | undefined =>
         raw?.syncError || raw?.cloudSyncError || raw?.fiscalSyncError || undefined;
 
+    const normalizeDocumentRef = (value: any): string => String(value || '').trim().toLowerCase();
+
+    const resolveRetryId = (item: any): string | undefined =>
+        item?.raw?.source_transaction_id ||
+        item?.raw?.id ||
+        item?.raw?.displayId ||
+        item?.id;
+
+    const aggregateDocumentStatus = (items: any[]): 'SYNCED' | 'PENDING' | 'ERROR' => {
+        const statuses = items.map(resolveDocumentStatus);
+        if (statuses.includes('ERROR')) return 'ERROR';
+        if (statuses.includes('PENDING')) return 'PENDING';
+        return 'SYNCED';
+    };
+
     const loadStatus = async () => {
         try {
             const statuses = await syncManager.getSyncStatus();
@@ -96,7 +111,23 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     db.get('zReports')
                 ]);
 
+                const transactionRefs = new Set<string>();
+                (txns as any[] || []).forEach((t) => {
+                    [
+                        t.id,
+                        t.displayId,
+                        t.source_transaction_id,
+                        t.source_display_id,
+                        t.ncf,
+                        t.electronicNcf
+                    ].forEach((value) => {
+                        const normalized = normalizeDocumentRef(value);
+                        if (normalized) transactionRefs.add(normalized);
+                    });
+                });
+
                 const formattedTxns = (txns as any[] || []).map(t => ({
+                    key: `transactions:${t.id}`,
                     collection: 'transactions',
                     id: t.displayId || t.id,
                     terminalId: t.terminalId || '-',
@@ -108,6 +139,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                 }));
 
                 const formattedRes = (reservations as any[] || []).map(r => ({
+                    key: `reservations:${r.id}`,
                     collection: 'reservations',
                     id: r.code || r.id,
                     terminalId: r.terminalId || '-',
@@ -118,18 +150,50 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     raw: r
                 }));
 
-                const formattedMovs = (movements as any[] || []).map(m => ({
-                    collection: 'inventoryLedger',
-                    id: m.documentRef || m.id,
-                    terminalId: m.terminalId || '-',
-                    type: 'INVENTARIO',
-                    date: m.createdAt || m.timestamp,
-                    status: resolveDocumentStatus(m),
-                    error: resolveDocumentError(m),
-                    raw: m
-                }));
+                const inventoryGroups = new Map<string, any[]>();
+                (movements as any[] || []).forEach((m) => {
+                    const movementRef = normalizeDocumentRef(m.documentRef || m.reference || m.source_display_id);
+                    if (movementRef && transactionRefs.has(movementRef)) {
+                        return;
+                    }
+
+                    const displayRef = m.documentRef || m.reference || m.source_display_id || m.id;
+                    const groupKey = `${displayRef || m.id}::${m.terminalId || '-'}`;
+                    const group = inventoryGroups.get(groupKey) || [];
+                    group.push(m);
+                    inventoryGroups.set(groupKey, group);
+                });
+
+                const formattedMovs = Array.from(inventoryGroups.entries()).map(([groupKey, group]) => {
+                    const first = group[0] || {};
+                    const latest = group.reduce((current, movement) => {
+                        const currentTime = new Date(current.createdAt || current.timestamp || 0).getTime();
+                        const movementTime = new Date(movement.createdAt || movement.timestamp || 0).getTime();
+                        return movementTime > currentTime ? movement : current;
+                    }, first);
+                    const id = first.documentRef || first.reference || first.source_display_id || first.id || groupKey;
+                    return {
+                        key: `inventoryLedger:${groupKey}`,
+                        collection: 'inventoryLedger',
+                        id,
+                        terminalId: first.terminalId || '-',
+                        type: 'INVENTARIO',
+                        date: latest.createdAt || latest.timestamp || first.createdAt || first.timestamp,
+                        status: aggregateDocumentStatus(group),
+                        error: group.map(resolveDocumentError).find(Boolean),
+                        movementCount: group.length,
+                        raw: {
+                            ...first,
+                            id: first.id || groupKey,
+                            documentRef: id,
+                            movementCount: group.length,
+                            movements: group
+                        }
+                    };
+                });
 
                 const formattedZs = (zReports as any[] || []).map(z => ({
+                    key: `zReports:${z.id}`,
                     collection: 'zReports',
                     id: z.sequenceNumber || z.id,
                     terminalId: z.terminalId || '-',
@@ -224,19 +288,46 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const handleRetryDocument = async (item: any) => {
         try {
             if (!item?.collection || !item?.raw?.id) return;
-            await db.saveDocument(item.collection as any, {
-                ...item.raw,
-                syncStatus: 'PENDING',
-                syncError: undefined,
-                cloudSyncStatus: undefined,
-                cloudSyncError: undefined,
-                _forceSyncReplay: item.collection === 'transactions' ? true : item.raw?._forceSyncReplay
-            });
+
+            if (item.collection === 'inventoryLedger' && Array.isArray(item.raw.movements)) {
+                await Promise.all(item.raw.movements.map((movement: any) =>
+                    db.saveDocument('inventoryLedger' as any, {
+                        ...movement,
+                        syncStatus: 'PENDING',
+                        syncError: undefined,
+                        cloudSyncStatus: undefined,
+                        cloudSyncError: undefined
+                    })
+                ));
+            } else {
+                await db.saveDocument(item.collection as any, {
+                    ...item.raw,
+                    syncStatus: 'PENDING',
+                    syncError: undefined,
+                    cloudSyncStatus: undefined,
+                    cloudSyncError: undefined,
+                    _forceSyncReplay: item.collection === 'transactions' ? true : item.raw?._forceSyncReplay
+                });
+            }
+
+            if (item.collection === 'transactions' && permissionService.isMasterTerminal()) {
+                await syncManager.retryErpForwardQueue([resolveRetryId(item)].filter(Boolean) as string[]);
+            }
+
             await backgroundSyncManager.triggerSync();
             await loadStatus();
         } catch (error) {
             console.error('Error retrying document sync:', error);
             alert('❌ No se pudo reintentar el documento: ' + (error instanceof Error ? error.message : 'Error desconocido'));
+        }
+    };
+
+    const handleRefreshAudit = async () => {
+        setIsRefreshingAudit(true);
+        try {
+            await loadStatus();
+        } finally {
+            setIsRefreshingAudit(false);
         }
     };
 
@@ -641,7 +732,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                         </select>
                                     </div>
                                     <button
-                                        onClick={() => loadStatus()}
+                                        onClick={handleRefreshAudit}
                                         className="p-2 hover:bg-gray-100 rounded-xl text-blue-600 transition-all"
                                         title="Refrescar lista"
                                     >
@@ -663,10 +754,15 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-50">
-                                            {paginatedData.map((item) => (
-                                                <tr key={item.raw.id} className="hover:bg-gray-50/50 transition-colors group">
+                                            {paginatedData.map((item, idx) => (
+                                                <tr key={item.key || item.raw.id || `${item.collection}-${idx}`} className="hover:bg-gray-50/50 transition-colors">
                                                     <td className="py-4 px-6">
                                                         <div className="font-bold text-gray-700 font-mono text-sm">{item.id}</div>
+                                                        {item.movementCount > 1 && (
+                                                            <div className="text-[10px] text-slate-400 font-bold mt-0.5">
+                                                                {item.movementCount} movimientos agrupados
+                                                            </div>
+                                                        )}
                                                         {item.raw?.ncf && (
                                                             <div className="text-[10px] text-blue-600 font-bold mt-0.5">{item.raw.ncf}</div>
                                                         )}
@@ -714,28 +810,32 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                         </div>
                                                     </td>
                                                     <td className="py-4 px-6 text-right">
-                                                        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <div className="flex items-center justify-end gap-2">
                                                             <button
                                                                 onClick={() => setSelectedJson(item.raw)}
-                                                                className="p-2 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-all"
+                                                                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-500 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
                                                                 title="Ver JSON"
                                                             >
-                                                                <Code size={16} />
+                                                                <Code size={14} /> JSON
                                                             </button>
-                                                            {item.status === 'ERROR' && (
+                                                            {item.status !== 'SYNCED' && (
                                                                 <button
                                                                     onClick={() => handleRetryDocument(item)}
-                                                                    className="p-2 hover:bg-gray-100 rounded-lg text-red-400 hover:text-red-600 transition-all"
+                                                                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[10px] font-black uppercase tracking-wider shadow-sm transition-all ${
+                                                                        item.status === 'ERROR'
+                                                                            ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
+                                                                            : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                                                    }`}
                                                                     title="Reintentar envío"
                                                                 >
-                                                                    <RotateCcw size={16} />
+                                                                    <RotateCcw size={14} /> Reenviar
                                                                 </button>
                                                             )}
                                                         </div>
                                                     </td>
                                                 </tr>
                                             ))}
-                                            {auditData.length === 0 && (
+                                            {filteredAuditData.length === 0 && (
                                                 <tr>
                                                     <td colSpan={6} className="py-12 text-center text-gray-400 italic">
                                                         No se encontraron documentos procesados.
