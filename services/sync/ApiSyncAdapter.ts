@@ -1096,13 +1096,27 @@ class ApiSyncAdapter {
             }
 
             if (!response.ok) {
+                let errBody: any = null;
                 let detail = '';
                 try {
-                    const errBody = await response.clone().json();
+                    errBody = await response.clone().json();
                     detail = errBody?.message || (errBody?.erpInbox ? JSON.stringify(errBody.erpInbox) : '');
                 } catch {
                     // ignore
                 }
+
+                const masterAcceptedLocally =
+                    response.status === 502 &&
+                    typeof errBody?.message === 'string' &&
+                    errBody.message.toLowerCase().includes('local master saved the sale');
+
+                if (masterAcceptedLocally) {
+                    console.warn(
+                        `[SYNC_TX_PUSH] Master persisted tx=${txId} locally but ERP forwarding failed. Accepting slave sync and leaving ERP retry to master.`
+                    );
+                    return;
+                }
+
                 throw new Error(
                     `Push transaction failed: ${response.status} ${response.statusText}${detail ? ` — ${detail}` : ''}`
                 );
