@@ -5,6 +5,7 @@ export interface TerminalSnapshotSeller {
   name: string;
   code?: string;
   email?: string;
+  roleName?: string;
 }
 
 const asObject = (value: unknown): Record<string, any> => (
@@ -60,6 +61,7 @@ export const getTerminalSnapshotSellers = (
       name,
       code: asString(seller.code) || undefined,
       email: asString(seller.email) || undefined,
+      roleName: asString(seller.role_name || seller.roleName) || undefined,
     });
   });
 

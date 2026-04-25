@@ -5,6 +5,7 @@ import {
   DeviceRole,
   DocumentSeries,
   DocumentType,
+  FiscalDocumentCode,
   FiscalAllocation,
   FiscalRangeDGII,
   LoyaltyConfig,
@@ -141,10 +142,10 @@ const normalizeDocumentType = (value: unknown, fallback: DocumentType = 'TICKET'
   return fallback;
 };
 
-const normalizeNcfType = (value: unknown, fallback: NCFType = 'B02'): NCFType => {
+const normalizeNcfType = (value: unknown, fallback: FiscalDocumentCode = 'B02'): FiscalDocumentCode => {
   const raw = asString(value).toUpperCase();
-  const allowed: NCFType[] = ['B01', 'B02', 'B04', 'B14', 'B15'];
-  return allowed.includes(raw as NCFType) ? (raw as NCFType) : fallback;
+  const allowed: FiscalDocumentCode[] = ['B01', 'B02', 'B04', 'B14', 'B15', 'E31', 'E32', 'E34', 'E44', 'E45'];
+  return allowed.includes(raw as FiscalDocumentCode) ? (raw as FiscalDocumentCode) : fallback;
 };
 
 const normalizeStationNumber = (value: unknown): string | undefined => {
