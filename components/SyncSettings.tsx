@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { RefreshCw, CheckCircle2, AlertCircle, Clock, UploadCloud, DownloadCloud, Database, Server, ArrowRight, ShieldCheck, X, Wifi, WifiOff, Globe, Monitor, Laptop, Search, Filter, RotateCcw, Code } from 'lucide-react';
 import { syncManager } from '../services/sync/SyncManager';
 import { permissionService } from '../services/sync/PermissionService';
+import { backgroundSyncManager } from '../services/sync/BackgroundSyncManager';
 import { BusinessConfig } from '../types';
 import SyncProgressModal from './SyncProgressModal';
 import { db } from '../utils/db';
@@ -27,8 +28,20 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const [auditData, setAuditData] = useState<any[]>([]);
     const [selectedJson, setSelectedJson] = useState<any>(null);
     const [isRefreshingAudit, setIsRefreshingAudit] = useState(false);
+    const [erpForwardStatus, setErpForwardStatus] = useState<any>(null);
+    const [isRetryingErpForward, setIsRetryingErpForward] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
     const [rowsPerPage, setRowsPerPage] = useState(10);
+
+    const resolveDocumentStatus = (raw: any): 'SYNCED' | 'PENDING' | 'ERROR' => {
+        const status = String(raw?.syncStatus || raw?.cloudSyncStatus || '').toUpperCase();
+        if (status === 'COMPLETED' || status === 'SYNCED') return 'SYNCED';
+        if (status === 'ERROR') return 'ERROR';
+        return 'PENDING';
+    };
+
+    const resolveDocumentError = (raw: any): string | undefined =>
+        raw?.syncError || raw?.cloudSyncError || raw?.fiscalSyncError || undefined;
 
     const loadStatus = async () => {
         try {
@@ -41,9 +54,11 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             setConnectionStatus(connStatus);
 
             // Load connected terminals if Master
+            let opStatus: any = null;
             if (permissionService.isMasterTerminal()) {
                 const terminals = await syncManager.getConnectedTerminals();
-                const opStatus = await syncManager.getOperationalStatus();
+                opStatus = await syncManager.getOperationalStatus();
+                setErpForwardStatus(opStatus?.erpForward || null);
 
                 const allTerminalIds = new Set([
                     ...terminals.map(t => t.terminalId),
@@ -68,6 +83,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     });
 
                 setConnectedTerminals(mergedTerminals);
+            } else {
+                setErpForwardStatus(null);
             }
 
             // Load Audit Data for Data Monitor
@@ -80,42 +97,46 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                 ]);
 
                 const formattedTxns = (txns as any[] || []).map(t => ({
+                    collection: 'transactions',
                     id: t.displayId || t.id,
                     terminalId: t.terminalId || '-',
                     type: 'VENTA',
                     date: t.date || t.createdAt,
-                    status: t.cloudSyncStatus || 'PENDING',
-                    error: t.cloudSyncError,
+                    status: resolveDocumentStatus(t),
+                    error: resolveDocumentError(t),
                     raw: t
                 }));
 
                 const formattedRes = (reservations as any[] || []).map(r => ({
+                    collection: 'reservations',
                     id: r.code || r.id,
                     terminalId: r.terminalId || '-',
                     type: 'RESERVA',
                     date: r.createdAt,
-                    status: r.cloudSyncStatus || 'PENDING',
-                    error: r.cloudSyncError,
+                    status: resolveDocumentStatus(r),
+                    error: resolveDocumentError(r),
                     raw: r
                 }));
 
                 const formattedMovs = (movements as any[] || []).map(m => ({
+                    collection: 'inventoryLedger',
                     id: m.documentRef || m.id,
                     terminalId: m.terminalId || '-',
                     type: 'INVENTARIO',
                     date: m.createdAt || m.timestamp,
-                    status: m.cloudSyncStatus || 'PENDING',
-                    error: m.cloudSyncError,
+                    status: resolveDocumentStatus(m),
+                    error: resolveDocumentError(m),
                     raw: m
                 }));
 
                 const formattedZs = (zReports as any[] || []).map(z => ({
+                    collection: 'zReports',
                     id: z.sequenceNumber || z.id,
                     terminalId: z.terminalId || '-',
                     type: 'CIERRE_Z',
                     date: z.closedAt,
-                    status: z.cloudSyncStatus || 'PENDING',
-                    error: z.cloudSyncError,
+                    status: resolveDocumentStatus(z),
+                    error: resolveDocumentError(z),
                     raw: z
                 }));
 
@@ -146,7 +167,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     // Memoized Filtered Content
     const filteredAuditData = React.useMemo(() => {
         return auditData.filter(item => {
-            const matchesSearch = item.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            const itemId = String(item.id || '').toLowerCase();
+            const matchesSearch = itemId.includes(searchTerm.toLowerCase()) ||
                 (item.raw?.ncf || '').toLowerCase().includes(searchTerm.toLowerCase());
             const matchesStatus = statusFilter === 'ALL' || item.status === statusFilter;
             const matchesTerminal = terminalFilter === 'ALL' || item.terminalId === terminalFilter;
@@ -196,6 +218,39 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             alert('❌ Error durante la sincronización: ' + (error instanceof Error ? error.message : 'Error desconocido'));
         } finally {
             setIsSyncing(false);
+        }
+    };
+
+    const handleRetryDocument = async (item: any) => {
+        try {
+            if (!item?.collection || !item?.raw?.id) return;
+            await db.saveDocument(item.collection as any, {
+                ...item.raw,
+                syncStatus: 'PENDING',
+                syncError: undefined,
+                cloudSyncStatus: undefined,
+                cloudSyncError: undefined,
+                _forceSyncReplay: item.collection === 'transactions' ? true : item.raw?._forceSyncReplay
+            });
+            await backgroundSyncManager.triggerSync();
+            await loadStatus();
+        } catch (error) {
+            console.error('Error retrying document sync:', error);
+            alert('❌ No se pudo reintentar el documento: ' + (error instanceof Error ? error.message : 'Error desconocido'));
+        }
+    };
+
+    const handleRetryErpForward = async () => {
+        setIsRetryingErpForward(true);
+        try {
+            const result = await syncManager.retryErpForwardQueue();
+            await loadStatus();
+            alert(`✅ Reintento ERP solicitado. En cola: ${result?.pending ?? 0}`);
+        } catch (error) {
+            console.error('Error retrying ERP forward:', error);
+            alert('❌ No se pudo reintentar la cola ERP: ' + (error instanceof Error ? error.message : 'Error desconocido'));
+        } finally {
+            setIsRetryingErpForward(false);
         }
     };
 
@@ -518,6 +573,36 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
 
                         {activeTab === 'MONITOR' && (
                             <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-300">
+                                {isMaster && erpForwardStatus && (
+                                    <div className={`rounded-2xl border p-4 shadow-sm ${erpForwardStatus.pending > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
+                                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                            <div>
+                                                <h3 className={`text-sm font-black uppercase tracking-widest ${erpForwardStatus.pending > 0 ? 'text-amber-800' : 'text-emerald-800'}`}>
+                                                    Cola de envío ERP
+                                                </h3>
+                                                <p className={`mt-1 text-sm font-bold ${erpForwardStatus.pending > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                                                    {erpForwardStatus.pending > 0
+                                                        ? `${erpForwardStatus.pending} documento(s) esperando envío al ERP`
+                                                        : 'Sin documentos pendientes hacia ERP'}
+                                                </p>
+                                                {erpForwardStatus.lastError && (
+                                                    <p className="mt-2 max-w-3xl truncate text-xs font-mono text-red-700" title={erpForwardStatus.lastError}>
+                                                        Último error: {erpForwardStatus.lastError}
+                                                    </p>
+                                                )}
+                                            </div>
+                                            <button
+                                                onClick={handleRetryErpForward}
+                                                disabled={isRetryingErpForward}
+                                                className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-xs font-black uppercase tracking-widest text-white shadow-sm transition-all hover:bg-slate-800 disabled:opacity-50"
+                                            >
+                                                <RotateCcw size={14} className={isRetryingErpForward ? 'animate-spin' : ''} />
+                                                Reintentar ERP
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
                                 {/* Filter Bar */}
                                 <div className="flex flex-wrap items-center gap-4 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
                                     <div className="flex-1 min-w-[200px] relative">
@@ -639,6 +724,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                             </button>
                                                             {item.status === 'ERROR' && (
                                                                 <button
+                                                                    onClick={() => handleRetryDocument(item)}
                                                                     className="p-2 hover:bg-gray-100 rounded-lg text-red-400 hover:text-red-600 transition-all"
                                                                     title="Reintentar envío"
                                                                 >

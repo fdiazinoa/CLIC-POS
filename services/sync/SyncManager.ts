@@ -4297,6 +4297,17 @@ class SyncManager {
         }
     }
 
+    async retryErpForwardQueue(ids?: string[]): Promise<any> {
+        if (!permissionService.isMasterTerminal()) return null;
+
+        try {
+            return await apiSyncAdapter.retryErpForwardQueue(ids);
+        } catch (error) {
+            console.error('Error retrying ERP forward queue:', error);
+            throw error;
+        }
+    }
+
     /**
      * Start automatic sync (for slave terminals)
      */
