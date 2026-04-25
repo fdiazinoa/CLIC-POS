@@ -5,6 +5,7 @@ import { permissionService } from '../services/sync/PermissionService';
 import { BusinessConfig } from '../types';
 import SyncProgressModal from './SyncProgressModal';
 import { db } from '../utils/db';
+import { backgroundSyncManager } from '../services/sync/BackgroundSyncManager';
 
 interface SyncSettingsProps {
     config: BusinessConfig;
@@ -29,6 +30,13 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
     const [isRefreshingAudit, setIsRefreshingAudit] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
     const [rowsPerPage, setRowsPerPage] = useState(10);
+    const [copyFeedback, setCopyFeedback] = useState('');
+
+    const getDocumentSyncStatus = (item: any) =>
+        item?.syncStatus || item?.cloudSyncStatus || 'PENDING';
+
+    const getDocumentSyncError = (item: any) =>
+        item?.syncError || item?.cloudSyncError;
 
     const loadStatus = async () => {
         try {
@@ -84,8 +92,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     terminalId: t.terminalId || '-',
                     type: 'VENTA',
                     date: t.date || t.createdAt,
-                    status: t.cloudSyncStatus || 'PENDING',
-                    error: t.cloudSyncError,
+                    status: getDocumentSyncStatus(t),
+                    error: getDocumentSyncError(t),
                     raw: t
                 }));
 
@@ -94,8 +102,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     terminalId: r.terminalId || '-',
                     type: 'RESERVA',
                     date: r.createdAt,
-                    status: r.cloudSyncStatus || 'PENDING',
-                    error: r.cloudSyncError,
+                    status: getDocumentSyncStatus(r),
+                    error: getDocumentSyncError(r),
                     raw: r
                 }));
 
@@ -104,8 +112,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     terminalId: m.terminalId || '-',
                     type: 'INVENTARIO',
                     date: m.createdAt || m.timestamp,
-                    status: m.cloudSyncStatus || 'PENDING',
-                    error: m.cloudSyncError,
+                    status: getDocumentSyncStatus(m),
+                    error: getDocumentSyncError(m),
                     raw: m
                 }));
 
@@ -114,8 +122,8 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                     terminalId: z.terminalId || '-',
                     type: 'CIERRE_Z',
                     date: z.closedAt,
-                    status: z.cloudSyncStatus || 'PENDING',
-                    error: z.cloudSyncError,
+                    status: getDocumentSyncStatus(z),
+                    error: getDocumentSyncError(z),
                     raw: z
                 }));
 
@@ -196,6 +204,48 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
             alert('❌ Error durante la sincronización: ' + (error instanceof Error ? error.message : 'Error desconocido'));
         } finally {
             setIsSyncing(false);
+        }
+    };
+
+    const getCollectionNameForAuditType = (type: string) => {
+        if (type === 'VENTA') return 'transactions';
+        if (type === 'RESERVA') return 'reservations';
+        if (type === 'INVENTARIO') return 'inventoryLedger';
+        if (type === 'CIERRE_Z') return 'zReports';
+        return null;
+    };
+
+    const handleRetryDocument = async (item: any) => {
+        const collectionName = getCollectionNameForAuditType(item.type);
+        if (!collectionName || !item.raw?.id) {
+            alert('No pudimos identificar el documento para reintentar.');
+            return;
+        }
+
+        const updated = {
+            ...item.raw,
+            syncStatus: 'PENDING',
+            syncError: undefined,
+            cloudSyncStatus: undefined,
+            cloudSyncError: undefined,
+        };
+
+        await db.saveDocument(collectionName as any, updated);
+        await backgroundSyncManager.triggerSync();
+        await loadStatus();
+    };
+
+    const handleCopySelectedJson = async () => {
+        if (!selectedJson) return;
+        const text = JSON.stringify(selectedJson, null, 2);
+
+        try {
+            await navigator.clipboard.writeText(text);
+            setCopyFeedback('Copiado');
+            window.setTimeout(() => setCopyFeedback(''), 1500);
+        } catch {
+            setCopyFeedback('Selecciona el texto y copia manualmente');
+            window.setTimeout(() => setCopyFeedback(''), 2500);
         }
     };
 
@@ -639,6 +689,7 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                                                             </button>
                                                             {item.status === 'ERROR' && (
                                                                 <button
+                                                                    onClick={() => handleRetryDocument(item)}
                                                                     className="p-2 hover:bg-gray-100 rounded-lg text-red-400 hover:text-red-600 transition-all"
                                                                     title="Reintentar envío"
                                                                 >
@@ -902,12 +953,22 @@ const SyncSettings: React.FC<SyncSettingsProps> = ({ config, onClose }) => {
                             <button onClick={() => setSelectedJson(null)} className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-400"><X /></button>
                         </div>
                         <div className="p-8">
-                            <div className="bg-slate-900 rounded-2xl p-6 overflow-auto max-h-[500px]">
-                                <pre className="text-emerald-400 font-mono text-sm leading-relaxed">
-                                    {JSON.stringify(selectedJson, null, 2)}
-                                </pre>
+                            <div className="bg-slate-900 rounded-2xl p-4">
+                                <textarea
+                                    readOnly
+                                    value={JSON.stringify(selectedJson, null, 2)}
+                                    className="h-[500px] w-full resize-none bg-transparent text-emerald-400 font-mono text-sm leading-relaxed outline-none selection:bg-emerald-300 selection:text-slate-950"
+                                    spellCheck={false}
+                                    onFocus={(event) => event.currentTarget.select()}
+                                />
                             </div>
-                            <div className="mt-8">
+                            <div className="mt-8 flex flex-col gap-3">
+                                <button
+                                    onClick={handleCopySelectedJson}
+                                    className="w-full py-4 bg-emerald-600 text-white font-black rounded-2xl active:scale-95 transition-all shadow-lg shadow-emerald-100"
+                                >
+                                    {copyFeedback || 'Copiar JSON'}
+                                </button>
                                 <button
                                     onClick={() => setSelectedJson(null)}
                                     className="w-full py-4 bg-slate-900 text-white font-black rounded-2xl active:scale-95 transition-all shadow-lg shadow-slate-200"

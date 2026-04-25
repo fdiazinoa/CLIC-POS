@@ -324,7 +324,17 @@ class BackgroundSyncManager {
                 await db.saveDocument(collectionName as any, item as any);
 
                 // Attempt push
-                await pushFn(item);
+                try {
+                    await pushFn(item);
+                } catch (error: any) {
+                    const message = error instanceof Error ? error.message : String(error || '');
+                    if (navigator.onLine && message.includes('Circuit Breaker Open')) {
+                        apiSyncAdapter.resetCircuit();
+                        await pushFn(item);
+                    } else {
+                        throw error;
+                    }
+                }
 
                 // Mark as completed
                 item.syncStatus = 'COMPLETED';
