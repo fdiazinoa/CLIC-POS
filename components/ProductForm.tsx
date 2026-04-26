@@ -133,6 +133,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     config.inventoryScope?.visibleWarehouseIds?.[0] || 'ALL'
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inventoryDebugTextareaRef = useRef<HTMLTextAreaElement>(null);
   const lastInitialSyncRef = useRef<string>('');
   const stockSyncRequestIdRef = useRef(0);
 
@@ -322,6 +323,17 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     () => JSON.stringify(inventoryDebugPayload, null, 2),
     [inventoryDebugPayload]
   );
+
+  const handleSelectInventoryDebug = () => {
+    const textarea = inventoryDebugTextareaRef.current;
+    if (!textarea) return;
+
+    textarea.focus();
+    requestAnimationFrame(() => {
+      textarea.setSelectionRange(0, textarea.value.length);
+      textarea.scrollTop = 0;
+    });
+  };
 
   const handleCopyInventoryDebug = async () => {
     try {
@@ -1798,33 +1810,44 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                       <ShieldAlert size={16} className="text-amber-300" />
                       <p className="text-xs font-black uppercase tracking-[0.24em] text-amber-200">Diagnóstico de inventario</p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={handleCopyInventoryDebug}
-                      className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-[11px] font-black uppercase tracking-[0.18em] transition-all ${
-                        inventoryDebugCopyStatus === 'COPIED'
-                          ? 'bg-emerald-500 text-white'
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleSelectInventoryDebug}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-800 px-4 py-2 text-[11px] font-black uppercase tracking-[0.18em] text-slate-100 transition-all hover:bg-slate-700"
+                      >
+                        <ClipboardList size={14} />
+                        Seleccionar todo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCopyInventoryDebug}
+                        className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-[11px] font-black uppercase tracking-[0.18em] transition-all ${
+                          inventoryDebugCopyStatus === 'COPIED'
+                            ? 'bg-emerald-500 text-white'
+                            : inventoryDebugCopyStatus === 'ERROR'
+                              ? 'bg-red-500 text-white'
+                              : 'bg-amber-300 text-slate-950 hover:bg-amber-200'
+                        }`}
+                      >
+                        {inventoryDebugCopyStatus === 'COPIED' ? <Check size={14} /> : <Copy size={14} />}
+                        {inventoryDebugCopyStatus === 'COPIED'
+                          ? 'Copiado'
                           : inventoryDebugCopyStatus === 'ERROR'
-                            ? 'bg-red-500 text-white'
-                            : 'bg-amber-300 text-slate-950 hover:bg-amber-200'
-                      }`}
-                    >
-                      {inventoryDebugCopyStatus === 'COPIED' ? <Check size={14} /> : <Copy size={14} />}
-                      {inventoryDebugCopyStatus === 'COPIED'
-                        ? 'Copiado'
-                        : inventoryDebugCopyStatus === 'ERROR'
-                          ? 'No copió'
-                          : 'Copiar JSON'}
-                    </button>
+                            ? 'No copió'
+                            : 'Copiar JSON'}
+                      </button>
+                    </div>
                   </div>
                   <p className="text-xs text-slate-300">
-                    Esta sección es temporal para validar qué quedó guardado localmente en la caja para este artículo. También puedes tocar el cuadro y seleccionar/copiar manualmente.
+                    Esta sección es temporal para validar qué quedó guardado localmente en la caja para este artículo. Si el emulador no comparte el portapapeles, usa Seleccionar todo y copia desde el menú contextual.
                   </p>
                   <textarea
-                    readOnly
+                    ref={inventoryDebugTextareaRef}
+                    key={inventoryDebugJson}
                     spellCheck={false}
-                    value={inventoryDebugJson}
-                    onFocus={(event) => event.currentTarget.select()}
+                    defaultValue={inventoryDebugJson}
+                    onFocus={(event) => event.currentTarget.setSelectionRange(0, 0)}
                     className="h-80 w-full resize-none overflow-auto rounded-xl border border-slate-800 bg-black/40 p-3 font-mono text-[11px] leading-5 text-emerald-300 outline-none selection:bg-emerald-200 selection:text-slate-950"
                     style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
                   />
