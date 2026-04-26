@@ -7,6 +7,7 @@ import {
   FiscalProviderConfig,
   FiscalProviderEnvironment,
   FiscalProviderId,
+  FiscalReserveAlertConfig,
   NCFType,
   Transaction
 } from '../../types';
@@ -36,7 +37,19 @@ export const DEFAULT_FISCAL_COMPLIANCE_CONFIG: FiscalComplianceConfig = {
   mode: 'LEGACY_B',
   defaultProvider: 'NONE',
   allowLegacyFallback: true,
-  providers: DEFAULT_FISCAL_PROVIDERS
+  providers: DEFAULT_FISCAL_PROVIDERS,
+  reserveAlert: {
+    quantity: 200,
+    percent: 10
+  }
+};
+
+export type FiscalReserveAlert = {
+  tone: 'critical' | 'warning';
+  message: string;
+  remaining: number;
+  total: number;
+  percentRemaining: number;
 };
 
 export const normalizeFiscalCode = (value: unknown): string =>
@@ -205,7 +218,71 @@ export const getFiscalComplianceConfig = (
     mode: incoming.mode || DEFAULT_FISCAL_COMPLIANCE_CONFIG.mode,
     defaultProvider: incoming.defaultProvider || DEFAULT_FISCAL_COMPLIANCE_CONFIG.defaultProvider,
     allowLegacyFallback: incoming.allowLegacyFallback ?? DEFAULT_FISCAL_COMPLIANCE_CONFIG.allowLegacyFallback,
-    providers: mergedProviders
+    providers: mergedProviders,
+    reserveAlert: normalizeFiscalReserveAlertConfig(incoming.reserveAlert)
+  };
+};
+
+export const normalizeFiscalReserveAlertConfig = (
+  value?: Partial<FiscalReserveAlertConfig> | null
+): Required<FiscalReserveAlertConfig> => {
+  const defaults = DEFAULT_FISCAL_COMPLIANCE_CONFIG.reserveAlert || { quantity: 200, percent: 10 };
+  const quantity = Number(value?.quantity);
+  const percent = Number(value?.percent);
+  const fallbackQuantity = Number(defaults.quantity || 0);
+  const fallbackPercent = Number(defaults.percent || 0);
+
+  return {
+    quantity: Number.isFinite(quantity) && quantity >= 0 ? Math.floor(quantity) : fallbackQuantity,
+    percent: Number.isFinite(percent) && percent >= 0 ? Math.min(100, percent) : fallbackPercent
+  };
+};
+
+const resolveFiscalReserveAlertConfig = (
+  source?: BusinessConfig | FiscalComplianceConfig | null
+): Required<FiscalReserveAlertConfig> => {
+  const maybeBusinessConfig = source as BusinessConfig | null | undefined;
+  if (maybeBusinessConfig?.fiscalCompliance) {
+    return normalizeFiscalReserveAlertConfig(getFiscalComplianceConfig(maybeBusinessConfig).reserveAlert);
+  }
+
+  return normalizeFiscalReserveAlertConfig((source as FiscalComplianceConfig | null | undefined)?.reserveAlert);
+};
+
+export const getFiscalReserveAlert = (
+  remaining: number,
+  total: number,
+  source?: BusinessConfig | FiscalComplianceConfig | null
+): FiscalReserveAlert | null => {
+  const safeRemaining = Math.max(0, Number(remaining) || 0);
+  const safeTotal = Math.max(0, Number(total) || 0);
+  if (safeTotal <= 0) return null;
+
+  const percentRemaining = (safeRemaining / safeTotal) * 100;
+  if (safeRemaining <= 0) {
+    return {
+      tone: 'critical',
+      message: 'Sin comprobantes disponibles en este bloque. Solicita una nueva reserva al supervisor.',
+      remaining: safeRemaining,
+      total: safeTotal,
+      percentRemaining
+    };
+  }
+
+  const alertConfig = resolveFiscalReserveAlertConfig(source);
+  const quantityLimit = Number(alertConfig.quantity || 0);
+  const percentLimit = Number(alertConfig.percent || 0);
+  const reachedQuantityLimit = quantityLimit > 0 && safeRemaining <= quantityLimit;
+  const reachedPercentLimit = percentLimit > 0 && percentRemaining <= percentLimit;
+
+  if (!reachedQuantityLimit && !reachedPercentLimit) return null;
+
+  return {
+    tone: 'warning',
+    message: `Quedan ${safeRemaining.toLocaleString()} comprobantes (${percentRemaining.toFixed(1)}%). Avisa al supervisor para reservar otro bloque.`,
+    remaining: safeRemaining,
+    total: safeTotal,
+    percentRemaining
   };
 };
 

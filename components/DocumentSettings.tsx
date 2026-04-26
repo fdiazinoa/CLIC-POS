@@ -24,6 +24,7 @@ import {
 } from '../services/fiscal/fiscalService';
 import {
    FISCAL_DOCUMENT_LABELS,
+   getFiscalReserveAlert,
    getFiscalComplianceConfig,
    SUPPORTED_FISCAL_CODES
 } from '../utils/fiscal/fiscalHelpers';
@@ -45,8 +46,6 @@ const DOCUMENT_TYPE_ORDER = [
 
 const DOCUMENT_TYPE_SET = new Set<string>(DOCUMENT_TYPE_ORDER as readonly string[]);
 const NCF_TYPES: FiscalDocumentCode[] = SUPPORTED_FISCAL_CODES;
-const FISCAL_LOW_REMAINING_ABSOLUTE = 200;
-const FISCAL_LOW_REMAINING_RATIO = 0.1;
 
 const DOCUMENT_TYPE_CONFIG: Record<string, { label: string; icon: React.ComponentType<any>; color: string }> = {
    // Ventas
@@ -81,24 +80,6 @@ const DOCUMENT_TYPE_CONFIG: Record<string, { label: string; icon: React.Componen
 const normalizeDocumentType = (value: unknown): string => {
    if (typeof value !== 'string') return '';
    return value.trim().toUpperCase().replace(/[\s-]+/g, '_');
-};
-
-const getFiscalReserveAlert = (remaining: number, total: number) => {
-   if (total <= 0) return null;
-   const ratio = remaining / total;
-   if (remaining <= 0) {
-      return {
-         tone: 'critical' as const,
-         message: 'Sin comprobantes disponibles en este bloque. Solicita una nueva reserva al supervisor.'
-      };
-   }
-   if (remaining <= FISCAL_LOW_REMAINING_ABSOLUTE || ratio <= FISCAL_LOW_REMAINING_RATIO) {
-      return {
-         tone: 'warning' as const,
-         message: `Quedan ${remaining.toLocaleString()} comprobantes (${(ratio * 100).toFixed(1)}%). Avisa al supervisor para reservar otro bloque.`
-      };
-   }
-   return null;
 };
 
 const inferDocumentType = (series: any): string => {
@@ -531,11 +512,11 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                total,
                consumed,
                remaining,
-               alert: getFiscalReserveAlert(remaining, total),
+               alert: getFiscalReserveAlert(remaining, total, fiscalCompliance),
             };
          })
          .sort((left, right) => normalizeKey(left.allocation.terminalId).localeCompare(normalizeKey(right.allocation.terminalId)));
-   }, [fiscalAllocations, fiscalRangeDetail, terminalBuffers]);
+   }, [fiscalAllocations, fiscalRangeDetail, fiscalCompliance, terminalBuffers]);
 
    // --- FISCAL AUDIT LOGIC ---
    const fiscalConsumption = useMemo(() => {
@@ -1207,6 +1188,60 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                            </label>
                         </div>
 
+                        <div className="rounded-[2rem] border border-amber-200 bg-amber-50/70 p-5">
+                           <div className="flex items-start justify-between gap-4">
+                              <div>
+                                 <p className="text-[11px] font-black text-amber-700 uppercase tracking-[0.2em] mb-2">Alertas de reserva fiscal</p>
+                                 <h4 className="text-lg font-black text-slate-900">Aviso al cajero por comprobantes bajos</h4>
+                                 <p className="mt-1 text-sm font-semibold text-amber-800">
+                                    El aviso aparece en ventas cuando el carrito está vacío y se oculta al agregar artículos.
+                                 </p>
+                              </div>
+                              <AlertTriangle className="h-6 w-6 shrink-0 text-amber-600" />
+                           </div>
+
+                           <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+                              <label>
+                                 <span className="block text-[11px] font-black text-slate-500 uppercase tracking-[0.2em] mb-2">Avisar cuando queden</span>
+                                 <input
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    value={fiscalCompliance.reserveAlert?.quantity ?? 200}
+                                    onChange={(e) => updateFiscalCompliance(current => ({
+                                       ...current,
+                                       reserveAlert: {
+                                          ...(current.reserveAlert || {}),
+                                          quantity: Math.max(0, Number(e.target.value) || 0)
+                                       }
+                                    }))}
+                                    className="w-full p-4 bg-white border border-amber-200 rounded-2xl font-mono font-black text-slate-800"
+                                 />
+                                 <p className="mt-2 text-xs font-semibold text-amber-800">Cantidad de comprobantes. Usa 0 para desactivar este criterio.</p>
+                              </label>
+
+                              <label>
+                                 <span className="block text-[11px] font-black text-slate-500 uppercase tracking-[0.2em] mb-2">O cuando quede menos de (%)</span>
+                                 <input
+                                    type="number"
+                                    min={0}
+                                    max={100}
+                                    step={0.1}
+                                    value={fiscalCompliance.reserveAlert?.percent ?? 10}
+                                    onChange={(e) => updateFiscalCompliance(current => ({
+                                       ...current,
+                                       reserveAlert: {
+                                          ...(current.reserveAlert || {}),
+                                          percent: Math.max(0, Math.min(100, Number(e.target.value) || 0))
+                                       }
+                                    }))}
+                                    className="w-full p-4 bg-white border border-amber-200 rounded-2xl font-mono font-black text-slate-800"
+                                 />
+                                 <p className="mt-2 text-xs font-semibold text-amber-800">Porcentaje del bloque terminal. Usa 0 para desactivar este criterio.</p>
+                              </label>
+                           </div>
+                        </div>
+
                         {selectedFiscalProviderConfig && fiscalCompliance.defaultProvider !== 'NONE' && (
                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                               <div className="md:col-span-4">
@@ -1479,7 +1514,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                               ? Math.max(0, allocationDetails.allocation.reservedEnd - allocationDetails.allocation.reservedStart + 1)
                               : 0;
                            const terminalReserveAlert = allocationDetails
-                              ? getFiscalReserveAlert(allocationDetails.remaining, terminalTotal)
+                              ? getFiscalReserveAlert(allocationDetails.remaining, terminalTotal, fiscalCompliance)
                               : null;
 
                            return (
@@ -1645,7 +1680,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                     </div>
                                     <div>
                                        <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Restantes</p>
-                                       <p className={`mt-1 font-black ${remaining <= FISCAL_LOW_REMAINING_ABSOLUTE ? 'text-amber-600' : 'text-emerald-700'}`}>
+                                       <p className={`mt-1 font-black ${alert ? 'text-amber-600' : 'text-emerald-700'}`}>
                                           {remaining.toLocaleString()}
                                        </p>
                                     </div>
