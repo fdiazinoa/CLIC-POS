@@ -846,7 +846,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }>({
       type: 'B02', hasNCF: false, localBuffer: null, isUsingPool: false
    });
-   const [fiscalAlertBlinking, setFiscalAlertBlinking] = useState(false);
 
    const [showSupervisorAuth, setShowSupervisorAuth] = useState(false);
    const [refundAuthorizedBy, setRefundAuthorizedBy] = useState<{ id: string, name: string } | null>(null);
@@ -1621,17 +1620,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return getFiscalReserveAlert(fiscalStatus.remaining || 0, fiscalStatus.total || 0, config);
    }, [config, fiscalStatus.hasNCF, fiscalStatus.remaining, fiscalStatus.total]);
 
-   useEffect(() => {
-      if (!fiscalReserveAlert || cart.length > 0) {
-         setFiscalAlertBlinking(false);
-         return;
-      }
-
-      setFiscalAlertBlinking(true);
-      const timer = window.setTimeout(() => setFiscalAlertBlinking(false), 4500);
-      return () => window.clearTimeout(timer);
-   }, [cart.length, fiscalReserveAlert?.message]);
-
+   const shouldShowFiscalReserveAlert = Boolean(
+      fiscalReserveAlert &&
+      cart.length === 0 &&
+      searchTerm.trim().length === 0
+   );
 
    const salesCatalogProducts = useMemo(() => {
       const nonSeedBusinessKeys = new Set<string>();
@@ -3050,26 +3043,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div>
          )}
 
-         {cart.length === 0 && fiscalReserveAlert && (
-            <div className="fixed top-24 right-4 md:right-6 z-[95] pointer-events-none animate-in slide-in-from-top-3 fade-in duration-300">
-               <div
-                  className={`max-w-sm rounded-3xl border px-4 py-3 shadow-2xl backdrop-blur ${
-                     fiscalReserveAlert.tone === 'critical'
-                        ? 'border-red-200 bg-red-50/95 text-red-800'
-                        : 'border-amber-200 bg-amber-50/95 text-amber-800'
-                  } ${fiscalAlertBlinking ? 'animate-pulse' : ''}`}
-               >
-                  <div className="flex items-start gap-3">
-                     <AlertTriangle size={18} className="mt-0.5 shrink-0" />
-                     <div>
-                        <p className="text-[10px] font-black uppercase tracking-[0.18em]">Reserva fiscal baja</p>
-                        <p className="mt-1 text-sm font-black leading-snug">{fiscalReserveAlert.message}</p>
-                     </div>
-                  </div>
-               </div>
-            </div>
-         )}
-
          <MobileConfigModal
             isOpen={showMobileConfigModal}
             onClose={() => {
@@ -3822,6 +3795,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      <button onClick={onOpenCustomers} className="w-full flex items-center justify-between p-3 bg-white border-2 border-dashed border-gray-300 rounded-xl text-gray-400 hover:text-blue-500 group"><div className="flex items-center gap-2"><UserPlus size={18} /><span className="text-xs font-bold uppercase">Asignar Cliente</span></div><ChevronRight size={16} /></button>
                   )
                }
+
+               {shouldShowFiscalReserveAlert && fiscalReserveAlert && (
+                  <div
+                     className={`mt-3 mb-2 rounded-2xl border px-3 py-2.5 shadow-sm animate-pulse ${
+                        fiscalReserveAlert.tone === 'critical'
+                           ? 'border-red-200 bg-red-50 text-red-800'
+                           : 'border-amber-200 bg-amber-50 text-amber-800'
+                     }`}
+                  >
+                     <div className="flex items-start gap-2.5">
+                        <AlertTriangle size={17} className="mt-0.5 shrink-0" />
+                        <div className="min-w-0">
+                           <p className="text-[10px] font-black uppercase tracking-[0.18em]">Reserva fiscal baja</p>
+                           <p className="mt-1 text-xs font-black leading-snug">{fiscalReserveAlert.message}</p>
+                        </div>
+                     </div>
+                  </div>
+               )}
 
                <div className={`mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase ${fiscalStatus.hasNCF ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-red-50 text-red-600 border-red-100 animate-pulse'}`}>
                   <Landmark size={12} />
