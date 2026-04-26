@@ -147,11 +147,17 @@ export interface FiscalProviderConfig {
   unitCodeServices?: number;
 }
 
+export interface FiscalReserveAlertConfig {
+  quantity?: number;
+  percent?: number;
+}
+
 export interface FiscalComplianceConfig {
   mode: FiscalMode;
   defaultProvider: FiscalProviderId;
   allowLegacyFallback: boolean;
   providers: FiscalProviderConfig[];
+  reserveAlert?: FiscalReserveAlertConfig;
 }
 
 export interface FiscalRangeDGII {

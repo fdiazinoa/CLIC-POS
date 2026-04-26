@@ -22,7 +22,7 @@ import {
    PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, Tariff
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
-import { getFiscalComplianceConfig, getDefaultFiscalProvider, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
+import { getFiscalComplianceConfig, getDefaultFiscalProvider, getFiscalReserveAlert, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
 import { calculateTransactionTaxSummary } from '../utils/taxSummary';
 import UnifiedPaymentModal from './PaymentModal';
 import {
@@ -842,9 +842,11 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       isUsingPool: boolean;
       isTerminalBlock?: boolean;
       remaining?: number;
+      total?: number;
    }>({
       type: 'B02', hasNCF: false, localBuffer: null, isUsingPool: false
    });
+   const [fiscalAlertBlinking, setFiscalAlertBlinking] = useState(false);
 
    const [showSupervisorAuth, setShowSupervisorAuth] = useState(false);
    const [refundAuthorizedBy, setRefundAuthorizedBy] = useState<{ id: string, name: string } | null>(null);
@@ -1570,11 +1572,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             || (!activeAllocation?.fiscalRangeId && range?.type === type && range?.isActive)
          );
          let fiscalRemaining = 0;
+         let fiscalTotal = 0;
 
          if (localBuffer && Number(localBuffer.currentNumber) <= Number(localBuffer.endNumber)) {
             const current = Number(localBuffer.currentNumber);
-            const remaining = Math.max(0, Number(localBuffer.endNumber) - current + 1);
+            const blockStart = Number(activeAllocation?.reservedStart || localBuffer.startNumber || current);
+            const blockEnd = Number(activeAllocation?.reservedEnd || localBuffer.endNumber || current);
+            const remaining = Math.max(0, blockEnd - current + 1);
+            const total = Math.max(0, blockEnd - blockStart + 1);
             fiscalRemaining = remaining;
+            fiscalTotal = total;
 
             setStatus({
                isConnected: true,
@@ -1586,8 +1593,10 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          } else if (activeAllocation && Number(activeAllocation.nextNumber) <= Number(activeAllocation.reservedEnd)) {
             const current = Number(activeAllocation.nextNumber);
             const remaining = Math.max(0, Number(activeAllocation.reservedEnd) - current + 1);
+            const total = Math.max(0, Number(activeAllocation.reservedEnd) - Number(activeAllocation.reservedStart) + 1);
             const prefix = String(allocationRange?.prefix || type);
             fiscalRemaining = remaining;
+            fiscalTotal = total;
 
             setStatus({
                isConnected: true,
@@ -1602,10 +1611,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const canRequest = await db.canRequestMoreNCF(type, terminalId);
          const hasNCF = hasLocal || canRequest;
          const isTerminalBlock = Boolean(activeAllocation || localBuffer?.allocationId);
-         setFiscalStatus({ type, hasNCF, localBuffer: localBuffer || activeAllocation || null, isUsingPool: !hasLocal && canRequest, isTerminalBlock, remaining: fiscalRemaining });
+         setFiscalStatus({ type, hasNCF, localBuffer: localBuffer || activeAllocation || null, isUsingPool: !hasLocal && canRequest, isTerminalBlock, remaining: fiscalRemaining, total: fiscalTotal });
       };
       checkFiscalStatus();
    }, [selectedCustomer, cart, terminalId, activeTerminalConfig?.operational?.fiscalThreshold]);
+
+   const fiscalReserveAlert = useMemo(() => {
+      if (!fiscalStatus.hasNCF) return null;
+      return getFiscalReserveAlert(fiscalStatus.remaining || 0, fiscalStatus.total || 0, config);
+   }, [config, fiscalStatus.hasNCF, fiscalStatus.remaining, fiscalStatus.total]);
+
+   useEffect(() => {
+      if (!fiscalReserveAlert || cart.length > 0) {
+         setFiscalAlertBlinking(false);
+         return;
+      }
+
+      setFiscalAlertBlinking(true);
+      const timer = window.setTimeout(() => setFiscalAlertBlinking(false), 4500);
+      return () => window.clearTimeout(timer);
+   }, [cart.length, fiscalReserveAlert?.message]);
 
 
    const salesCatalogProducts = useMemo(() => {
@@ -3025,6 +3050,26 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             </div>
          )}
 
+         {cart.length === 0 && fiscalReserveAlert && (
+            <div className="fixed top-24 right-4 md:right-6 z-[95] pointer-events-none animate-in slide-in-from-top-3 fade-in duration-300">
+               <div
+                  className={`max-w-sm rounded-3xl border px-4 py-3 shadow-2xl backdrop-blur ${
+                     fiscalReserveAlert.tone === 'critical'
+                        ? 'border-red-200 bg-red-50/95 text-red-800'
+                        : 'border-amber-200 bg-amber-50/95 text-amber-800'
+                  } ${fiscalAlertBlinking ? 'animate-pulse' : ''}`}
+               >
+                  <div className="flex items-start gap-3">
+                     <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+                     <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.18em]">Reserva fiscal baja</p>
+                        <p className="mt-1 text-sm font-black leading-snug">{fiscalReserveAlert.message}</p>
+                     </div>
+                  </div>
+               </div>
+            </div>
+         )}
+
          <MobileConfigModal
             isOpen={showMobileConfigModal}
             onClose={() => {
@@ -3782,12 +3827,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <Landmark size={12} />
                   <span>Status Fiscal: {fiscalStatus.type} {fiscalStatus.hasNCF ? (fiscalStatus.isTerminalBlock ? 'Bloque Terminal' : (fiscalStatus.isUsingPool ? 'Reservado en Pool' : 'Lote Global Activo')) : 'Agotado'}</span>
                </div>
-               {fiscalStatus.hasNCF && typeof fiscalStatus.remaining === 'number' && fiscalStatus.remaining > 0 && fiscalStatus.remaining <= 200 && (
-                  <div className="mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-[10px] font-black uppercase text-amber-700">
-                     <AlertTriangle size={12} />
-                     <span>Quedan {fiscalStatus.remaining.toLocaleString()} comprobantes. Avisar supervisor.</span>
-                  </div>
-               )}
             </div >
 
             {/* --- CART ITEMS LIST & TAB VIEWS --- */}
