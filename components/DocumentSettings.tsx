@@ -45,6 +45,8 @@ const DOCUMENT_TYPE_ORDER = [
 
 const DOCUMENT_TYPE_SET = new Set<string>(DOCUMENT_TYPE_ORDER as readonly string[]);
 const NCF_TYPES: FiscalDocumentCode[] = SUPPORTED_FISCAL_CODES;
+const FISCAL_LOW_REMAINING_ABSOLUTE = 200;
+const FISCAL_LOW_REMAINING_RATIO = 0.1;
 
 const DOCUMENT_TYPE_CONFIG: Record<string, { label: string; icon: React.ComponentType<any>; color: string }> = {
    // Ventas
@@ -79,6 +81,24 @@ const DOCUMENT_TYPE_CONFIG: Record<string, { label: string; icon: React.Componen
 const normalizeDocumentType = (value: unknown): string => {
    if (typeof value !== 'string') return '';
    return value.trim().toUpperCase().replace(/[\s-]+/g, '_');
+};
+
+const getFiscalReserveAlert = (remaining: number, total: number) => {
+   if (total <= 0) return null;
+   const ratio = remaining / total;
+   if (remaining <= 0) {
+      return {
+         tone: 'critical' as const,
+         message: 'Sin comprobantes disponibles en este bloque. Solicita una nueva reserva al supervisor.'
+      };
+   }
+   if (remaining <= FISCAL_LOW_REMAINING_ABSOLUTE || ratio <= FISCAL_LOW_REMAINING_RATIO) {
+      return {
+         tone: 'warning' as const,
+         message: `Quedan ${remaining.toLocaleString()} comprobantes (${(ratio * 100).toFixed(1)}%). Avisa al supervisor para reservar otro bloque.`
+      };
+   }
+   return null;
 };
 
 const inferDocumentType = (series: any): string => {
@@ -260,6 +280,7 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
    const [fiscalAllocations, setFiscalAllocations] = useState<FiscalAllocation[]>([]);
    const [localFiscalBuffers, setLocalFiscalBuffers] = useState<LocalFiscalBuffer[]>([]);
    const [activeTerminalId, setActiveTerminalId] = useState('');
+   const [fiscalRangeDetail, setFiscalRangeDetail] = useState<FiscalRangeDGII | null>(null);
 
    const [transactions, setTransactions] = useState<Transaction[]>([]);
    const credentialMetaRequestSeq = useRef(0);
@@ -476,6 +497,45 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
 
       return stats;
    }, [terminalAllocations, terminalBuffers]);
+
+   const fiscalRangeDetailRows = useMemo(() => {
+      if (!fiscalRangeDetail) return [];
+      return (Array.isArray(fiscalAllocations) ? fiscalAllocations : [])
+         .filter((allocation) => {
+            if (allocation.fiscalRangeId && fiscalRangeDetail.id) {
+               return allocation.fiscalRangeId === fiscalRangeDetail.id;
+            }
+            return allocation.ncfType === fiscalRangeDetail.type;
+         })
+         .map((allocation) => {
+            const buffer = terminalBuffers.find((candidate) =>
+               candidate.type === allocation.ncfType &&
+               (!candidate.terminalId || normalizeKey(candidate.terminalId) === normalizeKey(allocation.terminalId))
+            ) || null;
+            const currentNumber = buffer
+               ? Math.max(allocation.reservedStart, Number(buffer.currentNumber || allocation.nextNumber || allocation.reservedStart))
+               : Math.max(allocation.reservedStart, Number(allocation.nextNumber || allocation.reservedStart));
+            const boundedCurrent = Math.min(currentNumber, allocation.reservedEnd + 1);
+            const total = Math.max(0, allocation.reservedEnd - allocation.reservedStart + 1);
+            const consumed = Math.max(0, boundedCurrent - allocation.reservedStart);
+            const remaining = Math.max(0, allocation.reservedEnd - boundedCurrent + 1);
+            const prefix = fiscalRangeDetail.prefix || allocation.prefix || allocation.ncfType;
+
+            return {
+               allocation,
+               prefix,
+               currentNumber: boundedCurrent,
+               nextLabel: boundedCurrent <= allocation.reservedEnd
+                  ? `${prefix}${boundedCurrent.toString().padStart(8, '0')}`
+                  : 'Agotado',
+               total,
+               consumed,
+               remaining,
+               alert: getFiscalReserveAlert(remaining, total),
+            };
+         })
+         .sort((left, right) => normalizeKey(left.allocation.terminalId).localeCompare(normalizeKey(right.allocation.terminalId)));
+   }, [fiscalAllocations, fiscalRangeDetail, terminalBuffers]);
 
    // --- FISCAL AUDIT LOGIC ---
    const fiscalConsumption = useMemo(() => {
@@ -1415,6 +1475,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                            const progress = totalAutorizado > 0 ? Math.min((usedInCajas / totalAutorizado) * 100, 100) : 0;
                            const disponiblesEnServidor = Math.max(0, totalAutorizado - usedInCajas);
                            const canDeleteRange = rawUsedInCajas === 0;
+                           const terminalTotal = allocationDetails
+                              ? Math.max(0, allocationDetails.allocation.reservedEnd - allocationDetails.allocation.reservedStart + 1)
+                              : 0;
+                           const terminalReserveAlert = allocationDetails
+                              ? getFiscalReserveAlert(allocationDetails.remaining, terminalTotal)
+                              : null;
 
                            return (
                               <div key={range.id} className={`bg-white p-6 rounded-3xl border-2 transition-all ${range.isActive ? 'border-gray-100 shadow-sm' : 'border-dashed border-gray-200 opacity-60'}`}>
@@ -1473,7 +1539,10 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                        </p>
                                     </div>
                                     <div className="text-right">
-                                       <button className="text-[10px] font-black text-blue-600 uppercase hover:underline flex items-center gap-1 justify-end">
+                                       <button
+                                          onClick={() => setFiscalRangeDetail(range)}
+                                          className="text-[10px] font-black text-blue-600 uppercase hover:underline flex items-center gap-1 justify-end"
+                                       >
                                           Ver Detalle de Cajas <ChevronRight size={10} />
                                        </button>
                                     </div>
@@ -1505,6 +1574,17 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                                        </div>
                                     </div>
                                  )}
+
+                                 {terminalReserveAlert && (
+                                    <div className={`mt-4 flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm font-bold ${
+                                       terminalReserveAlert.tone === 'critical'
+                                          ? 'border-rose-200 bg-rose-50 text-rose-700'
+                                          : 'border-amber-200 bg-amber-50 text-amber-800'
+                                    }`}>
+                                       <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+                                       <span>{terminalReserveAlert.message}</span>
+                                    </div>
+                                 )}
                               </div>
                            );
                         })}
@@ -1514,6 +1594,85 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
 
             </div>
          </div>
+
+         {/* MODAL DETALLE DE RESERVAS FISCALES */}
+         {fiscalRangeDetail && (
+            <div className="fixed inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+               <div className="bg-white rounded-[2.5rem] w-full max-w-5xl shadow-2xl overflow-hidden animate-in zoom-in-95">
+                  <div className="p-6 border-b bg-gray-50 flex justify-between items-start gap-4">
+                     <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-600">Detalle de cajas</p>
+                        <h3 className="mt-1 text-2xl font-black text-gray-800">
+                           {fiscalRangeDetail.type} · {fiscalRangeDetail.prefix}-XXXXXXX
+                        </h3>
+                        <p className="mt-1 text-sm font-semibold text-gray-500">
+                           Rango base {fiscalRangeDetail.startNumber.toLocaleString()} - {fiscalRangeDetail.endNumber.toLocaleString()} · Vence {new Date(fiscalRangeDetail.expiryDate).toLocaleDateString()}
+                        </p>
+                     </div>
+                     <button onClick={() => setFiscalRangeDetail(null)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20} /></button>
+                  </div>
+
+                  <div className="max-h-[70vh] overflow-auto p-6">
+                     {fiscalRangeDetailRows.length === 0 ? (
+                        <div className="rounded-3xl border border-dashed border-gray-200 bg-gray-50 p-8 text-center">
+                           <p className="text-lg font-black text-gray-700">No hay reservas terminales para este tipo.</p>
+                           <p className="mt-2 text-sm font-semibold text-gray-500">
+                              Las reservas se crean desde ERP en Terminales &gt; Lotes Fiscales &gt; Reservar bloque por tipo.
+                           </p>
+                        </div>
+                     ) : (
+                        <div className="space-y-3">
+                           {fiscalRangeDetailRows.map(({ allocation, nextLabel, total, consumed, remaining, alert }) => (
+                              <div key={allocation.id} className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm">
+                                 <div className="grid gap-4 md:grid-cols-6">
+                                    <div>
+                                       <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Terminal</p>
+                                       <p className="mt-1 font-black text-gray-800">{allocation.terminalId || 'Esta caja'}</p>
+                                    </div>
+                                    <div>
+                                       <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Bloque</p>
+                                       <p className="mt-1 font-mono font-black text-gray-800">
+                                          {allocation.reservedStart.toLocaleString()} - {allocation.reservedEnd.toLocaleString()}
+                                       </p>
+                                    </div>
+                                    <div>
+                                       <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Próximo</p>
+                                       <p className="mt-1 font-mono font-black text-emerald-700">{nextLabel}</p>
+                                    </div>
+                                    <div>
+                                       <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Consumidos</p>
+                                       <p className="mt-1 font-black text-gray-800">{consumed.toLocaleString()} / {total.toLocaleString()}</p>
+                                    </div>
+                                    <div>
+                                       <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Restantes</p>
+                                       <p className={`mt-1 font-black ${remaining <= FISCAL_LOW_REMAINING_ABSOLUTE ? 'text-amber-600' : 'text-emerald-700'}`}>
+                                          {remaining.toLocaleString()}
+                                       </p>
+                                    </div>
+                                    <div>
+                                       <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Estado</p>
+                                       <p className="mt-1 font-black text-gray-800">{allocation.status}</p>
+                                    </div>
+                                 </div>
+
+                                 {alert && (
+                                    <div className={`mt-4 flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm font-bold ${
+                                       alert.tone === 'critical'
+                                          ? 'border-rose-200 bg-rose-50 text-rose-700'
+                                          : 'border-amber-200 bg-amber-50 text-amber-800'
+                                    }`}>
+                                       <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+                                       <span>{alert.message}</span>
+                                    </div>
+                                 )}
+                              </div>
+                           ))}
+                        </div>
+                     )}
+                  </div>
+               </div>
+            </div>
+         )}
 
          {/* MODAL EDITAR/NUEVA SERIE INTERNA */}
          {editingSeries && (

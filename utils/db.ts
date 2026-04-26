@@ -309,6 +309,14 @@ const normalizeFiscalAllocationRecord = (
   const reservedStart = Math.max(1, Number(allocation.reservedStart) || 1);
   const reservedEnd = Math.max(reservedStart, Number(allocation.reservedEnd) || reservedStart);
   const nextNumber = Number(allocation.nextNumber);
+  const boundedNextNumber = Number.isFinite(nextNumber)
+    ? Math.max(reservedStart, Math.min(nextNumber, reservedEnd + 1))
+    : reservedStart;
+  const normalizedStatus = normalizeFiscalAllocationStatus(allocation.status);
+  const effectiveStatus =
+    normalizedStatus === 'EXHAUSTED' && boundedNextNumber <= reservedEnd
+      ? 'ACTIVE'
+      : normalizedStatus;
 
   return {
     id: String(allocation.id || `${terminalIdFallback || 'terminal'}-${allocation.ncfType || 'B02'}`),
@@ -318,12 +326,10 @@ const normalizeFiscalAllocationRecord = (
     prefix: typeof allocation.prefix === 'string' ? allocation.prefix : undefined,
     reservedStart,
     reservedEnd,
-    nextNumber: Number.isFinite(nextNumber)
-      ? Math.max(reservedStart, Math.min(nextNumber, reservedEnd + 1))
-      : reservedStart,
+    nextNumber: boundedNextNumber,
     releasedAt: allocation.releasedAt ?? null,
     metadata: allocation.metadata || {},
-    status: normalizeFiscalAllocationStatus(allocation.status),
+    status: effectiveStatus,
   };
 };
 
@@ -407,7 +413,7 @@ const mergeFiscalAllocationsState = (
     const mergedStatus =
       mergedNextNumber > incoming.reservedEnd
         ? 'EXHAUSTED'
-        : (!sameOperationalState ? incoming.status : (existing.status === 'EXHAUSTED' ? 'EXHAUSTED' : incoming.status));
+        : (!sameOperationalState ? incoming.status : incoming.status);
 
     return normalizeFiscalAllocationRecord({
       ...incoming,
