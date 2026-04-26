@@ -449,9 +449,18 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
 
       terminalAllocations.forEach((allocation) => {
          const buffer = terminalBuffers.find((candidate) => candidate.type === allocation.ncfType) || null;
-         const currentNumber = buffer
-            ? Math.max(allocation.reservedStart, Number(buffer.currentNumber || allocation.nextNumber || allocation.reservedStart))
-            : Math.max(allocation.reservedStart, Number(allocation.nextNumber || allocation.reservedStart));
+         const allocationNextNumber = Math.max(
+            allocation.reservedStart,
+            Number(allocation.nextNumber || allocation.reservedStart)
+         );
+         const bufferCurrentNumber = Number(buffer?.currentNumber || 0);
+         const staleExhaustedBuffer =
+            Boolean(buffer) &&
+            bufferCurrentNumber > allocation.reservedEnd + 1 &&
+            allocationNextNumber <= allocation.reservedEnd;
+         const currentNumber = buffer && !staleExhaustedBuffer
+            ? Math.max(allocation.reservedStart, bufferCurrentNumber || allocationNextNumber)
+            : allocationNextNumber;
          const boundedCurrent = Math.min(currentNumber, allocation.reservedEnd + 1);
          const consumed = Math.max(0, boundedCurrent - allocation.reservedStart);
          const remaining = Math.max(0, allocation.reservedEnd - boundedCurrent + 1);
@@ -1400,11 +1409,12 @@ const DocumentSettings: React.FC<DocumentSettingsProps> = ({ onClose, config: co
                      <div className="grid grid-cols-1 gap-4 pb-20">
                         {fiscalRanges.map(range => {
                            const allocationDetails = allocationStatsByType.get(range.type);
-                           const usedInCajas = Math.max(0, range.currentGlobal - (range.startNumber - 1));
-                           const totalAutorizado = range.endNumber - range.startNumber + 1;
-                           const progress = totalAutorizado > 0 ? (usedInCajas / totalAutorizado) * 100 : 0;
-                           const disponiblesEnServidor = range.endNumber - range.currentGlobal;
-                           const canDeleteRange = usedInCajas === 0;
+                           const rawUsedInCajas = Math.max(0, range.currentGlobal - (range.startNumber - 1));
+                           const totalAutorizado = Math.max(0, range.endNumber - range.startNumber + 1);
+                           const usedInCajas = totalAutorizado > 0 ? Math.min(rawUsedInCajas, totalAutorizado) : 0;
+                           const progress = totalAutorizado > 0 ? Math.min((usedInCajas / totalAutorizado) * 100, 100) : 0;
+                           const disponiblesEnServidor = Math.max(0, totalAutorizado - usedInCajas);
+                           const canDeleteRange = rawUsedInCajas === 0;
 
                            return (
                               <div key={range.id} className={`bg-white p-6 rounded-3xl border-2 transition-all ${range.isActive ? 'border-gray-100 shadow-sm' : 'border-dashed border-gray-200 opacity-60'}`}>
