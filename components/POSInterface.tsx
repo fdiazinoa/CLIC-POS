@@ -841,6 +841,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       localBuffer: any;
       isUsingPool: boolean;
       isTerminalBlock?: boolean;
+      remaining?: number;
    }>({
       type: 'B02', hasNCF: false, localBuffer: null, isUsingPool: false
    });
@@ -1556,16 +1557,24 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const activeAllocation: any = (Array.isArray(allocations) ? allocations : []).find((allocation: any) =>
             allocation?.ncfType === type &&
             allocation?.terminalId === terminalId &&
-            allocation?.status === 'ACTIVE'
+            (
+               allocation?.status === 'ACTIVE' ||
+               (
+                  allocation?.status === 'EXHAUSTED' &&
+                  Number(allocation?.nextNumber) <= Number(allocation?.reservedEnd)
+               )
+            )
          );
          const allocationRange: any = (Array.isArray(ranges) ? ranges : []).find((range: any) =>
             (activeAllocation?.fiscalRangeId && range?.id === activeAllocation.fiscalRangeId)
             || (!activeAllocation?.fiscalRangeId && range?.type === type && range?.isActive)
          );
+         let fiscalRemaining = 0;
 
          if (localBuffer && Number(localBuffer.currentNumber) <= Number(localBuffer.endNumber)) {
             const current = Number(localBuffer.currentNumber);
             const remaining = Math.max(0, Number(localBuffer.endNumber) - current + 1);
+            fiscalRemaining = remaining;
 
             setStatus({
                isConnected: true,
@@ -1578,6 +1587,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const current = Number(activeAllocation.nextNumber);
             const remaining = Math.max(0, Number(activeAllocation.reservedEnd) - current + 1);
             const prefix = String(allocationRange?.prefix || type);
+            fiscalRemaining = remaining;
 
             setStatus({
                isConnected: true,
@@ -1592,7 +1602,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const canRequest = await db.canRequestMoreNCF(type, terminalId);
          const hasNCF = hasLocal || canRequest;
          const isTerminalBlock = Boolean(activeAllocation || localBuffer?.allocationId);
-         setFiscalStatus({ type, hasNCF, localBuffer: localBuffer || activeAllocation || null, isUsingPool: !hasLocal && canRequest, isTerminalBlock });
+         setFiscalStatus({ type, hasNCF, localBuffer: localBuffer || activeAllocation || null, isUsingPool: !hasLocal && canRequest, isTerminalBlock, remaining: fiscalRemaining });
       };
       checkFiscalStatus();
    }, [selectedCustomer, cart, terminalId, activeTerminalConfig?.operational?.fiscalThreshold]);
@@ -3772,6 +3782,12 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   <Landmark size={12} />
                   <span>Status Fiscal: {fiscalStatus.type} {fiscalStatus.hasNCF ? (fiscalStatus.isTerminalBlock ? 'Bloque Terminal' : (fiscalStatus.isUsingPool ? 'Reservado en Pool' : 'Lote Global Activo')) : 'Agotado'}</span>
                </div>
+               {fiscalStatus.hasNCF && typeof fiscalStatus.remaining === 'number' && fiscalStatus.remaining > 0 && fiscalStatus.remaining <= 200 && (
+                  <div className="mt-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-[10px] font-black uppercase text-amber-700">
+                     <AlertTriangle size={12} />
+                     <span>Quedan {fiscalStatus.remaining.toLocaleString()} comprobantes. Avisar supervisor.</span>
+                  </div>
+               )}
             </div >
 
             {/* --- CART ITEMS LIST & TAB VIEWS --- */}
