@@ -24,6 +24,7 @@ import ErrorBoundary from './ErrorBoundary';
 import { getWarehouseScopedNumber, isProductWarehouseActive } from '../utils/masterIdentity';
 import {
    productIdMatchesInventoryReference,
+   productIdentityCandidates,
    resolveInventoryProductStockRow,
 } from '../utils/productReferences';
 import { resolveProductImageSrc } from '../utils/entityImage';
@@ -115,6 +116,53 @@ const buildStockSyncMarker = (product?: Partial<Product> | null): string => {
       .map(([warehouseId, quantity]) => `${warehouseId}:${Number(quantity || 0)}`)
       .sort()
       .join('|') || 'NO_STOCK';
+};
+
+const productTimestamp = (product?: Product | null): number => {
+   const raw = (product as any)?.updatedAt || (product as any)?.updated_at || (product as any)?.createdAt || (product as any)?.created_at || '';
+   const parsed = new Date(raw).getTime();
+   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const productCompletenessScore = (product?: Product | null): number => {
+   if (!product) return 0;
+   let score = 0;
+   if (product.name) score += 4;
+   if (product.barcode) score += 2;
+   if ((product as any).sku || (product as any).code || (product as any).item_code) score += 2;
+   if (Array.isArray(product.images) && product.images.length > 0) score += 3;
+   if (Array.isArray(product.tariffs) && product.tariffs.length > 0) score += 3;
+   if (Array.isArray(product.variants) && product.variants.length > 0) score += 1;
+   score += Object.keys(product.stockBalances || {}).length;
+   return score;
+};
+
+const dedupeCatalogProducts = (items: Product[]): Product[] => {
+   const byIdentity = new Map<string, Product>();
+
+   for (const product of items) {
+      const identity =
+         productIdentityCandidates(product)[0]
+         || String(product?.id || '').trim();
+      if (!identity) continue;
+
+      const key = identity.toLowerCase();
+      const existing = byIdentity.get(key);
+      if (!existing) {
+         byIdentity.set(key, product);
+         continue;
+      }
+
+      const existingScore = productCompletenessScore(existing);
+      const incomingScore = productCompletenessScore(product);
+      const shouldReplace =
+         incomingScore > existingScore
+         || (incomingScore === existingScore && productTimestamp(product) >= productTimestamp(existing));
+
+      byIdentity.set(key, shouldReplace ? product : existing);
+   }
+
+   return Array.from(byIdentity.values());
 };
 
 // --- SUB-COMPONENT: STOCK ROW ---
@@ -309,7 +357,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       const propProducts = Array.isArray(productsProp)
          ? productsProp.filter((entry): entry is Product => Boolean(entry && typeof entry === 'object' && (entry as any).id))
          : [];
-      return localProducts.length > 0 ? localProducts : propProducts;
+      return dedupeCatalogProducts(localProducts.length > 0 ? localProducts : propProducts);
    }, [catalogProducts, productsProp]);
    const config = useMemo(
       () => pickRicherBusinessConfig(catalogConfig, configProp) || catalogConfig || configProp,
@@ -351,7 +399,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
       setCatalogProducts((previous) => {
          const incoming = Array.isArray(productsProp) ? productsProp : [];
          if (incoming.length === 0 && previous.length > 0) return previous;
-         return incoming;
+         return dedupeCatalogProducts(incoming.filter((entry): entry is Product => Boolean(entry && typeof entry === 'object' && (entry as any).id)));
       });
    }, [productsProp]);
 
@@ -413,7 +461,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
 
          const storedProducts = (Array.isArray(rawProducts) ? rawProducts : []) as Product[];
          if (storedProducts.length > 0) {
-            setCatalogProducts(storedProducts);
+            setCatalogProducts(dedupeCatalogProducts(storedProducts));
          }
 
          const storedConfig = Array.isArray(rawConfig)
@@ -449,7 +497,7 @@ const CatalogManager: React.FC<CatalogManagerProps> = ({
          setCatalogProducts((previous) => {
             const nextProducts = (Array.isArray(rawProducts) ? rawProducts : []) as Product[];
             if (nextProducts.length === 0 && previous.length > 0) return previous;
-            return nextProducts;
+            return dedupeCatalogProducts(nextProducts);
          });
       };
       const handleTransactionsUpdate = async () => {
