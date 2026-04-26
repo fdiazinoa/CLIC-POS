@@ -937,43 +937,71 @@ class SyncManager {
         const counts = manifest.counts && typeof manifest.counts === 'object' && !Array.isArray(manifest.counts)
             ? manifest.counts as Record<string, any>
             : {};
+        const normalizeScope = (scope: unknown): TerminalManifestScope | null => {
+            const token = typeof scope === 'string'
+                ? scope.trim().toLowerCase().replace(/[\s-]+/g, '_')
+                : '';
+            if (!token) return null;
+            if (['inventory', 'inventories', 'inventory_stock', 'inventory_stocks', 'stock', 'stocks', 'stock_balance', 'stock_balances'].includes(token)) {
+                return 'inventory';
+            }
+            if (['product_price', 'product_prices', 'price', 'prices', 'tariff', 'tariffs', 'tarifa', 'tarifas'].includes(token)) {
+                return 'product_prices';
+            }
+            return ['terminal', 'items', 'customers', 'suppliers', 'sellers', 'purchase_orders', 'transfers'].includes(token)
+                ? token as TerminalManifestScope
+                : null;
+        };
+        const readCursor = (...keys: string[]): string | null => {
+            for (const key of keys) {
+                const value = cursorMap[key];
+                if (typeof value === 'string' && value.trim()) return value.trim();
+            }
+            return null;
+        };
+        const readBoolean = (...keys: string[]): boolean => keys.some((key) => Boolean(changed[key]));
+        const readCount = (...keys: string[]): number => {
+            for (const key of keys) {
+                const value = Number(counts[key]);
+                if (Number.isFinite(value)) return value;
+            }
+            return 0;
+        };
 
         return {
             cursor_map: {
-                terminal: typeof cursorMap.terminal === 'string' ? cursorMap.terminal.trim() || null : null,
-                items: typeof cursorMap.items === 'string' ? cursorMap.items.trim() || null : null,
-                customers: typeof cursorMap.customers === 'string' ? cursorMap.customers.trim() || null : null,
-                suppliers: typeof cursorMap.suppliers === 'string' ? cursorMap.suppliers.trim() || null : null,
-                purchase_orders: typeof cursorMap.purchase_orders === 'string' ? cursorMap.purchase_orders.trim() || null : null,
-                transfers: typeof cursorMap.transfers === 'string' ? cursorMap.transfers.trim() || null : null,
-                inventory: typeof cursorMap.inventory === 'string' ? cursorMap.inventory.trim() || null : null,
-                product_prices: typeof cursorMap.product_prices === 'string' ? cursorMap.product_prices.trim() || null : null,
+                terminal: readCursor('terminal'),
+                items: readCursor('items'),
+                customers: readCursor('customers'),
+                suppliers: readCursor('suppliers'),
+                purchase_orders: readCursor('purchase_orders', 'purchaseOrders'),
+                transfers: readCursor('transfers'),
+                inventory: readCursor('inventory', 'stock', 'stocks', 'stock_balances', 'inventory_stock'),
+                product_prices: readCursor('product_prices', 'productPrices', 'prices', 'tariffs', 'tarifas'),
             },
             changed: {
-                terminal: Boolean(changed.terminal),
-                items: Boolean(changed.items),
-                customers: Boolean(changed.customers),
-                suppliers: Boolean(changed.suppliers),
-                purchase_orders: Boolean(changed.purchase_orders),
-                transfers: Boolean(changed.transfers),
-                inventory: Boolean(changed.inventory),
-                product_prices: Boolean(changed.product_prices),
+                terminal: readBoolean('terminal'),
+                items: readBoolean('items'),
+                customers: readBoolean('customers'),
+                suppliers: readBoolean('suppliers'),
+                purchase_orders: readBoolean('purchase_orders', 'purchaseOrders'),
+                transfers: readBoolean('transfers'),
+                inventory: readBoolean('inventory', 'stock', 'stocks', 'stock_balances', 'inventory_stock'),
+                product_prices: readBoolean('product_prices', 'productPrices', 'prices', 'tariffs', 'tarifas'),
             },
             changed_blocks: Array.isArray(manifest.changed_blocks)
                 ? manifest.changed_blocks
-                    .map((scope: unknown) => (typeof scope === 'string' ? scope.trim() : ''))
-                    .filter((scope: string): scope is TerminalManifestScope =>
-                        ['terminal', 'items', 'customers', 'suppliers', 'sellers', 'purchase_orders', 'transfers', 'inventory', 'product_prices'].includes(scope),
-                    )
+                    .map((scope: unknown) => normalizeScope(scope))
+                    .filter((scope: TerminalManifestScope | null): scope is TerminalManifestScope => Boolean(scope))
                 : [],
             counts: {
-                items: Number.isFinite(Number(counts.items)) ? Number(counts.items) : 0,
-                customers: Number.isFinite(Number(counts.customers)) ? Number(counts.customers) : 0,
-                suppliers: Number.isFinite(Number(counts.suppliers)) ? Number(counts.suppliers) : 0,
-                purchase_orders: Number.isFinite(Number(counts.purchase_orders)) ? Number(counts.purchase_orders) : 0,
-                transfers: Number.isFinite(Number(counts.transfers)) ? Number(counts.transfers) : 0,
-                inventory: Number.isFinite(Number(counts.inventory)) ? Number(counts.inventory) : 0,
-                product_prices: Number.isFinite(Number(counts.product_prices)) ? Number(counts.product_prices) : 0,
+                items: readCount('items'),
+                customers: readCount('customers'),
+                suppliers: readCount('suppliers'),
+                purchase_orders: readCount('purchase_orders', 'purchaseOrders'),
+                transfers: readCount('transfers'),
+                inventory: readCount('inventory', 'stock', 'stocks', 'stock_balances', 'inventory_stock'),
+                product_prices: readCount('product_prices', 'productPrices', 'prices', 'tariffs', 'tarifas'),
             },
             snapshot_at: typeof manifest.snapshot_at === 'string' ? manifest.snapshot_at.trim() || null : null,
         };
@@ -1355,10 +1383,7 @@ class SyncManager {
             const inventoryChanged = Boolean(manifest.changed.inventory) || changedBlocks.includes('inventory');
             const productPricesChanged = Boolean(manifest.changed.product_prices) || changedBlocks.includes('product_prices');
             const shouldBootstrapBlocks = Boolean(options?.markStartupCompleted || options?.bootstrapBlocks);
-            const bootstrapInventoryOnStartup = Boolean(
-                shouldBootstrapBlocks &&
-                (manifest.cursor_map.inventory || apiSyncAdapter.isUsingErpOperationalTarget())
-            );
+            const bootstrapInventoryOnStartup = Boolean(shouldBootstrapBlocks);
             const bootstrapProductPricesOnStartup = Boolean(shouldBootstrapBlocks);
             const terminalChanged = Boolean(manifest.changed.terminal);
 
