@@ -124,6 +124,35 @@ const buildErpScopedStockBalanceMap = (
   return scoped;
 };
 
+const resolveWarehouseStockFromRecord = (
+  balances: Record<string, unknown> | null | undefined,
+  warehouse: Warehouse
+): number | undefined => {
+  const candidates = [
+    resolveWarehouseErpId(warehouse),
+    warehouse.id,
+    (warehouse as any).erpWarehouseId,
+    (warehouse as any).inventoryLocalId,
+    (warehouse as any).sourceWarehouseId,
+    (warehouse as any).warehouseId,
+    warehouse.code,
+  ];
+
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const key = typeof candidate === 'string' ? candidate.trim() : candidate != null ? String(candidate).trim() : '';
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+
+    const value = readNumericBalance(balances, key);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+
+  return undefined;
+};
+
 const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availableTariffs, warehouses = [], transfers = [], purchaseOrders = [], hasHistory = false, currentUser, roles = [], onSave, onClose, suppliers = [], seasons = [], initialTab = 'GENERAL', allProducts = [] }) => {
   const MAX_IMAGE_BYTES = 700 * 1024; // ~700 KB to avoid oversized base64 blobs blocking saves
   const isNativeAndroidRuntime = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -249,6 +278,10 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     () => resolveLinkedInventoryProductIds(formData, allProducts),
     [formData, allProducts]
   );
+  const operationalProductId = useMemo(
+    () => resolveOperationalProductId(formData),
+    [formData]
+  );
   const erpScopedFormStockBalances = useMemo(
     () => buildErpScopedStockBalanceMap(formData.stockBalances as Record<string, unknown>, warehouses),
     [formData.stockBalances, warehouses]
@@ -269,7 +302,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     sourceItemId: (formData as any).sourceItemId || null,
     source_item_id: (formData as any).source_item_id || null,
     erpProductId: (formData as any).erpProductId || null,
-    operationalProductId: resolveOperationalProductId(formData),
+    operationalProductId,
     readsOperationalInventory,
     erpBaseUrl: localStorage.getItem('CLIC_ERP_BASE_URL') || localStorage.getItem('erp_base_url') || null,
     erpSyncUrl: localStorage.getItem('CLIC_ERP_SYNC_URL') || null,
@@ -288,12 +321,11 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
       warehouseId: (warehouse as any).warehouseId || null,
       inventoryLocalId: (warehouse as any).inventoryLocalId || null,
       sourceWarehouseId: (warehouse as any).sourceWarehouseId || null,
-      lookupStock: (() => {
-        const erpWarehouseId = resolveWarehouseErpId(warehouse);
-        return remoteStockBalances[erpWarehouseId]
-          ?? erpScopedFormStockBalances[erpWarehouseId]
-          ?? Number.NaN;
-      })(),
+      lookupStock:
+        resolveWarehouseStockFromRecord(remoteStockBalances, warehouse)
+        ?? resolveWarehouseStockFromRecord(erpScopedFormStockBalances, warehouse)
+        ?? resolveWarehouseStockFromRecord(formData.stockBalances as Record<string, unknown>, warehouse)
+        ?? Number.NaN,
     })),
     detailedStocks: detailedStocks.map((stock) => ({
       id: stock.id,
@@ -309,6 +341,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     inventoryCursorMap,
   }), [
     formData,
+    operationalProductId,
     linkedProductIds,
     erpScopedFormStockBalances,
     stockBalanceSource,
@@ -492,13 +525,24 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     if (activeTab !== 'STOCKS') return;
 
     const handleStockSync = async () => {
+      const requestId = ++stockSyncRequestIdRef.current;
       const allStocks = await db.get('productStocks') as ProductStock[] || [];
       const myStocks = allStocks.filter((stock) => linkedProductIds.includes(String(stock?.productId || '').trim()));
+      if (requestId !== stockSyncRequestIdRef.current) return;
+
       setDetailedStocks(myStocks);
-      setRemoteStockBalances({});
       if (myStocks.length === 0) {
         setDetailedStocks([]);
       }
+
+      if (!readsOperationalInventory) {
+        setRemoteStockBalances({});
+        return;
+      }
+
+      const remoteMap = await inventorySyncService.fetchStockBalanceMapOnDemand(operationalProductId || formData.id);
+      if (requestId !== stockSyncRequestIdRef.current) return;
+      setRemoteStockBalances(remoteMap);
     };
     window.addEventListener('productStocksUpdated', handleStockSync);
 
@@ -508,7 +552,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     return () => {
       window.removeEventListener('productStocksUpdated', handleStockSync);
     };
-  }, [activeTab, linkedProductIds]);
+  }, [activeTab, linkedProductIds, readsOperationalInventory, operationalProductId, formData.id]);
 
   // --- DYNAMIC LEDGER SUMMARY (For Cards & Table) ---
   const { entriesWithDynamicBalance, currentViewStock, currentViewCost } = useMemo(() => {
@@ -1753,8 +1797,9 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                     const detailedStock = resolveInventoryProductStockRow(formData, wh.id, detailedStocks, allProducts);
                     const erpWarehouseId = resolveWarehouseErpId(wh);
                     const finalStock =
-                      remoteStockBalances[erpWarehouseId]
-                      ?? erpScopedFormStockBalances[erpWarehouseId]
+                      resolveWarehouseStockFromRecord(remoteStockBalances, wh)
+                      ?? resolveWarehouseStockFromRecord(erpScopedFormStockBalances, wh)
+                      ?? resolveWarehouseStockFromRecord(formData.stockBalances as Record<string, unknown>, wh)
                       ?? (detailedStock ? detailedStock.quantity : 0)
                       ?? 0;
                     const isActive = normalizedActiveWarehouseIds.includes(wh.id);
