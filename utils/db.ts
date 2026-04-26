@@ -20,6 +20,8 @@ let initPromise: Promise<any> | null = null;
 const INVENTORY_CLOSE_LOCK_MESSAGE = 'Acción denegada: El inventario a esta fecha ya ha sido cerrado y auditado.';
 const getFiscalSequencePadding = (type: FiscalDocumentCode): number =>
   type.startsWith('E') ? 10 : 8;
+// Fiscal allocations already belong to one terminal; reserving local batches creates visible NCF gaps if buffers are reset by sync.
+const FISCAL_ISSUE_BATCH_SIZE = 1;
 
 const getSnapshotLockDate = (snapshot: any): number => {
   const lockRef = snapshot?.lockDate || snapshot?.cutoffDate || snapshot?.closedAt || snapshot?.createdAt;
@@ -480,6 +482,55 @@ const getFiscalRangeForEmission = (
   return (ranges || []).find((range) =>
     normalizeSequenceKey(range.type) === normalizedType && Boolean(range.isActive)
   ) || null;
+};
+
+const parseFiscalSequenceNumber = (ncf: unknown, prefix: string): number | null => {
+  const normalizedNcf = typeof ncf === 'string' ? ncf.trim().toUpperCase() : '';
+  const normalizedPrefix = normalizeSequenceKey(prefix);
+  if (!normalizedNcf || !normalizedPrefix || !normalizedNcf.startsWith(normalizedPrefix)) {
+    return null;
+  }
+
+  const numericPart = normalizedNcf.slice(normalizedPrefix.length);
+  if (!/^\d+$/.test(numericPart)) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(numericPart, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const getMaxIssuedFiscalNumber = async (type: FiscalDocumentCode, prefix: string): Promise<number> => {
+  const normalizedType = normalizeSequenceKey(type);
+  const [activeTransactions, archivedTransactions] = await Promise.all([
+    dbAdapter.getCollection<Transaction>('transactions').catch(() => [] as Transaction[]),
+    dbAdapter.getCollection<Transaction>('transactionHistory').catch(() => [] as Transaction[]),
+  ]);
+  const issuedNumbers = [...(activeTransactions || []), ...(archivedTransactions || [])]
+    .filter((transaction) => normalizeSequenceKey(transaction?.ncfType) === normalizedType)
+    .map((transaction) => parseFiscalSequenceNumber(transaction?.ncf || transaction?.electronicNcf, prefix))
+    .filter((value): value is number => typeof value === 'number');
+
+  return issuedNumbers.length > 0 ? Math.max(...issuedNumbers) : 0;
+};
+
+const getNextFiscalNumberFromHistory = async (
+  type: FiscalDocumentCode,
+  prefix: string,
+  startNumber: number,
+  endNumber: number,
+): Promise<number | null> => {
+  const maxIssued = await getMaxIssuedFiscalNumber(type, prefix);
+  if (maxIssued <= 0) {
+    return null;
+  }
+
+  const nextNumber = maxIssued + 1;
+  if (nextNumber < startNumber || nextNumber > endNumber) {
+    return null;
+  }
+
+  return nextNumber;
 };
 
 export const db = {
@@ -1157,7 +1208,7 @@ export const db = {
     return range.currentGlobal < range.endNumber;
   },
 
-  requestFiscalBatch: async (terminalId: string, type: FiscalDocumentCode, batchSize: number): Promise<LocalFiscalBuffer | null> => {
+  requestFiscalBatch: async (terminalId: string, type: FiscalDocumentCode, _batchSize: number): Promise<LocalFiscalBuffer | null> => {
     const [ranges, rawAllocations] = await Promise.all([
       dbAdapter.getCollection<FiscalRangeDGII>('fiscalRanges'),
       dbAdapter.getCollection<FiscalAllocation>('fiscalAllocations'),
@@ -1165,13 +1216,21 @@ export const db = {
     const allocations = rawAllocations || [];
     const allocation = getTerminalFiscalAllocation(allocations, terminalId, type as any);
     const range = getFiscalRangeForEmission(ranges || [], type as any, allocation);
+    const effectiveBatchSize = FISCAL_ISSUE_BATCH_SIZE;
 
     if (allocation) {
       const allocationIndex = allocations.findIndex((candidate) => candidate.id === allocation.id);
       if (allocationIndex === -1) return null;
       if (allocation.status !== 'ACTIVE') return null;
+      const prefix = range?.prefix || allocation.prefix || type;
+      const historyNextNumber = await getNextFiscalNumberFromHistory(
+        type,
+        prefix,
+        allocation.reservedStart,
+        allocation.reservedEnd,
+      );
 
-      if (allocation.nextNumber > allocation.reservedEnd) {
+      if (allocation.nextNumber > allocation.reservedEnd && historyNextNumber === null) {
         allocations[allocationIndex] = {
           ...normalizeFiscalAllocationRecord(allocation, terminalId),
           status: 'EXHAUSTED',
@@ -1180,13 +1239,13 @@ export const db = {
         return null;
       }
 
-      const start = Math.max(allocation.reservedStart, allocation.nextNumber);
-      const end = Math.min(allocation.reservedEnd, start + batchSize - 1);
+      const start = historyNextNumber ?? Math.max(allocation.reservedStart, allocation.nextNumber);
+      const end = Math.min(allocation.reservedEnd, start + effectiveBatchSize - 1);
       const nextNumber = end + 1;
 
       allocations[allocationIndex] = {
         ...normalizeFiscalAllocationRecord(allocation, terminalId),
-        prefix: allocation.prefix || range?.prefix,
+        prefix,
         nextNumber,
         status: nextNumber > allocation.reservedEnd ? 'EXHAUSTED' : allocation.status,
       };
@@ -1194,7 +1253,7 @@ export const db = {
       const localBuffer: LocalFiscalBuffer = {
         id: type,
         type,
-        prefix: range?.prefix || allocation.prefix || type,
+        prefix,
         currentNumber: start,
         endNumber: end,
         expiryDate: range?.expiryDate || '',
@@ -1216,10 +1275,22 @@ export const db = {
     }
 
     const legacyRange = ranges?.find((r: FiscalRangeDGII) => r.type === type && r.isActive);
-    if (!legacyRange || legacyRange.currentGlobal >= legacyRange.endNumber) return null;
+    if (!legacyRange) return null;
+
+    const legacyHistoryNextNumber = await getNextFiscalNumberFromHistory(
+      type,
+      legacyRange.prefix,
+      Math.max(1, legacyRange.startNumber || 1),
+      legacyRange.endNumber,
+    );
+    if (legacyRange.currentGlobal >= legacyRange.endNumber && legacyHistoryNextNumber === null) return null;
+
+    if (legacyHistoryNextNumber !== null) {
+      legacyRange.currentGlobal = legacyHistoryNextNumber - 1;
+    }
 
     const start = legacyRange.currentGlobal + 1;
-    const end = Math.min(legacyRange.endNumber, start + batchSize - 1);
+    const end = Math.min(legacyRange.endNumber, start + effectiveBatchSize - 1);
     legacyRange.currentGlobal = end;
 
     const localBuffer: LocalFiscalBuffer = {
@@ -1246,14 +1317,35 @@ export const db = {
     return localBuffer;
   },
 
-  getNextNCF: async (type: FiscalDocumentCode, terminalId: string, customBatchSize?: number): Promise<string | null> => {
+  getNextNCF: async (type: FiscalDocumentCode, terminalId: string, _customBatchSize?: number): Promise<string | null> => {
     let buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
     let buffer = (buffers || []).find((b: LocalFiscalBuffer) =>
       b.type === type && (!terminalId || !b.terminalId || normalizeSequenceKey(b.terminalId) === normalizeSequenceKey(terminalId))
     );
 
+    if (buffer) {
+      const maxIssuedNumber = await getMaxIssuedFiscalNumber(type, buffer.prefix || type);
+      const historyNextNumber = maxIssuedNumber > 0 ? maxIssuedNumber + 1 : null;
+
+      if (historyNextNumber !== null) {
+        const bufferStart = Math.max(1, Number(buffer.startNumber || buffer.currentNumber) || 1);
+        if (historyNextNumber < buffer.currentNumber) {
+          buffer.currentNumber = historyNextNumber >= bufferStart && historyNextNumber <= buffer.endNumber
+            ? historyNextNumber
+            : buffer.endNumber + 1;
+          await dbAdapter.saveCollection('localFiscalBuffer', buffers);
+        } else if (historyNextNumber > buffer.currentNumber && historyNextNumber <= buffer.endNumber) {
+          buffer.currentNumber = historyNextNumber;
+          await dbAdapter.saveCollection('localFiscalBuffer', buffers);
+        } else if (historyNextNumber > buffer.endNumber && buffer.currentNumber <= maxIssuedNumber) {
+          buffer.currentNumber = buffer.endNumber + 1;
+          await dbAdapter.saveCollection('localFiscalBuffer', buffers);
+        }
+      }
+    }
+
     if (!buffer || buffer.currentNumber > buffer.endNumber) {
-      buffer = await db.requestFiscalBatch(terminalId, type, customBatchSize || 100) as LocalFiscalBuffer;
+      buffer = await db.requestFiscalBatch(terminalId, type, FISCAL_ISSUE_BATCH_SIZE) as LocalFiscalBuffer;
       if (!buffer) return null;
       // Refresh buffers after request
       buffers = await dbAdapter.getCollection<LocalFiscalBuffer>('localFiscalBuffer') || [];
