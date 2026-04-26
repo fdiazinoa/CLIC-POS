@@ -129,6 +129,7 @@ class BackgroundSyncManager {
             normalized.includes('invalid or missing sync token') ||
             normalized.includes('erp transaction sync failed: 401') ||
             normalized.includes('circuit breaker open') ||
+            normalized.includes('erp temporalmente no disponible') ||
             normalized.includes('failed to fetch') ||
             normalized.includes('networkerror') ||
             normalized.includes('load failed') ||

@@ -77,31 +77,82 @@ interface TerminalInventoryPayload {
     };
 }
 
+type CircuitBreakerChannel = 'sales' | 'background';
+
+const ERP_TEMPORARILY_UNAVAILABLE_ERROR = 'ERP temporalmente no disponible';
+
+class SyncCircuitBreaker {
+    private consecutiveFailures = 0;
+    private openedAt = 0;
+
+    constructor(
+        private readonly channel: CircuitBreakerChannel,
+        private readonly maxConsecutiveFailures = 3,
+        private readonly resetTimeoutMs = 30000
+    ) {}
+
+    assertAvailable() {
+        if (this.consecutiveFailures < this.maxConsecutiveFailures) return;
+
+        const elapsed = Date.now() - this.openedAt;
+        if (elapsed < this.resetTimeoutMs) {
+            console.warn(`[SYNC_HTTP] circuit=${this.channel} open message="${ERP_TEMPORARILY_UNAVAILABLE_ERROR}"`);
+            throw new Error(ERP_TEMPORARILY_UNAVAILABLE_ERROR);
+        }
+
+        console.log(`[SYNC_HTTP] circuit=${this.channel} half-open after cooldown; retrying ERP connectivity.`);
+        this.consecutiveFailures = 0;
+        this.openedAt = 0;
+    }
+
+    recordSuccess(): boolean {
+        const wasOpen = this.consecutiveFailures >= this.maxConsecutiveFailures;
+        this.reset();
+        return wasOpen;
+    }
+
+    recordConnectionFailure(): boolean {
+        this.consecutiveFailures += 1;
+        if (this.consecutiveFailures < this.maxConsecutiveFailures) return false;
+
+        this.openedAt = Date.now();
+        console.error(
+            `[SYNC_HTTP] circuit=${this.channel} opened message="${ERP_TEMPORARILY_UNAVAILABLE_ERROR}" failures=${this.consecutiveFailures}`
+        );
+        return true;
+    }
+
+    canRetry(): boolean {
+        return this.consecutiveFailures < this.maxConsecutiveFailures;
+    }
+
+    reset() {
+        this.consecutiveFailures = 0;
+        this.openedAt = 0;
+    }
+}
+
 class ApiSyncAdapter {
     private config: SyncConfig | null = null;
     private authToken: string | null = null;
     private erpAuthToken: string | null = null;
     private operationalTargetHint: { terminalId: string | null; baseUrl: string | null } = { terminalId: null, baseUrl: null };
     private isOnline: boolean = true;
-    private authInFlight: Promise<void> | null = null;
-    private erpAuthInFlight: Promise<string> | null = null;
+    private authInFlight: Record<CircuitBreakerChannel, Promise<void> | null> = { sales: null, background: null };
+    private erpAuthInFlight: Record<CircuitBreakerChannel, Promise<string> | null> = { sales: null, background: null };
     private lastOperationalStockBalanceMaps = new Map<string, Record<string, number>>();
     private onlineListener: (() => void) | null = null;
     private offlineListener: (() => void) | null = null;
 
-    // Circuit Breaker State
-    private consecutiveFailures: number = 0;
-    private circuitOpenTimeStamp: number = 0;
-    private readonly MAX_CONSECUTIVE_FAILURES = 3;
-    private readonly CIRCUIT_RESET_TIMEOUT = 30000; // 30 seconds
-    private readonly CIRCUIT_BREAKER_OPEN_ERROR = 'Circuit Breaker Open: Master unreachable';
+    private readonly salesCircuitBreaker = new SyncCircuitBreaker('sales');
+    private readonly backgroundCircuitBreaker = new SyncCircuitBreaker('background');
     private onConnectionRestored: (() => void) | null = null;
     private lastAuthLogAt: Record<'master' | 'erp', number> = { master: 0, erp: 0 };
     private readonly AUTH_LOG_THROTTLE_MS = 5000;
 
     private isCircuitBreakerOpenError(error: unknown): boolean {
         const message = error instanceof Error ? error.message : String(error || '');
-        return message.includes(this.CIRCUIT_BREAKER_OPEN_ERROR);
+        return message.includes(ERP_TEMPORARILY_UNAVAILABLE_ERROR);
     }
 
     private onConnectionLostCallback: (() => void) | null = null;
@@ -131,10 +182,10 @@ class ApiSyncAdapter {
     }
 
     resetCircuitBreaker() {
-        this.consecutiveFailures = 0;
-        this.circuitOpenTimeStamp = 0;
+        this.salesCircuitBreaker.reset();
+        this.backgroundCircuitBreaker.reset();
         this.isOnline = true;
-        console.log('🔄 ApiSyncAdapter: Circuit Breaker manually RESET.');
+        console.log('🔄 ApiSyncAdapter: ERP circuit breakers manually RESET.');
     }
 
     /**
@@ -150,25 +201,25 @@ class ApiSyncAdapter {
         return error.name === 'AbortError' || error.message === 'Failed to fetch';
     }
 
+    private getCircuitBreaker(channel: CircuitBreakerChannel): SyncCircuitBreaker {
+        return channel === 'sales' ? this.salesCircuitBreaker : this.backgroundCircuitBreaker;
+    }
+
     /**
      * Helper: Fetch with Retry and Timeout
      */
-    private async fetchWithRetry(url: string, options: RequestInit = {}, retries = 2, backoff = 500): Promise<Response> {
+    private async fetchWithRetry(
+        url: string,
+        options: RequestInit = {},
+        retries = 2,
+        backoff = 500,
+        channel: CircuitBreakerChannel = 'background'
+    ): Promise<Response> {
         // Add jitter to backoff (±20% randomness)
         const jitter = backoff * 0.2;
         const effectiveBackoff = backoff + (Math.random() * jitter * 2 - jitter);
-        // Circuit Breaker Check
-        if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
-            const timeSinceOpen = Date.now() - this.circuitOpenTimeStamp;
-            if (timeSinceOpen < this.CIRCUIT_RESET_TIMEOUT) {
-                console.warn('⚠️ Circuit Breaker OPEN. Rejecting request to avoid freeze.');
-                throw new Error(this.CIRCUIT_BREAKER_OPEN_ERROR);
-            } else {
-                // Reset circuit on timeout test
-                console.log('🔄 Circuit Breaker Reset: Retrying connection...');
-                this.consecutiveFailures = 0;
-            }
-        }
+        const circuitBreaker = this.getCircuitBreaker(channel);
+        circuitBreaker.assertAvailable();
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000); // Reduced timeout to 5s
@@ -179,28 +230,23 @@ class ApiSyncAdapter {
 
             // Success resets the breaker
             if (response.ok) {
-                const wasBreakerOpen = this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES;
-                this.consecutiveFailures = 0;
-
+                const wasBreakerOpen = circuitBreaker.recordSuccess();
                 if (wasBreakerOpen && this.onConnectionRestored) {
                     console.log('📶 ApiSyncAdapter: Connection restored, notifying listeners.');
                     this.onConnectionRestored();
                 }
             }
 
-            // If 401 Unauthorized, clear token and potentially re-auth
             if (response.status === 401) {
-                console.warn(`⚠️ ApiSyncAdapter: 401 Unauthorized at ${url}. Clearing token.`);
                 this.authToken = null;
-                // We don't re-auth here to avoid recursion, 
-                // but the next call will trigger it via ensureAuthenticated()
+                console.warn(`[SYNC_HTTP] 401 Unauthorized at ${url}. Caller must re-authenticate and replay if safe.`);
             }
 
             // If 503 Service Unavailable or 504 Gateway Timeout, retry
             if ((response.status === 503 || response.status === 504) && retries > 0) {
                 console.warn(`⚠️ Request failed with ${response.status}, retrying in ${Math.round(effectiveBackoff)}ms...`);
                 await new Promise(r => setTimeout(r, effectiveBackoff));
-                return this.fetchWithRetry(url, options, retries - 1, backoff * 2);
+                return this.fetchWithRetry(url, options, retries - 1, backoff * 2, channel);
             }
 
             return response;
@@ -212,11 +258,8 @@ class ApiSyncAdapter {
 
             // Increment failure count on network errors
             if (isConnectionError || isTimeout) {
-                this.consecutiveFailures++;
-                if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
-                    this.circuitOpenTimeStamp = Date.now();
-                    console.error('🚨 Circuit Breaker TRIPPED: Too many connection failures.');
-
+                const opened = circuitBreaker.recordConnectionFailure();
+                if (opened) {
                     // Notify listeners about connection loss to trigger auto-discovery
                     if (this.onConnectionLostCallback) {
                         this.onConnectionLostCallback();
@@ -224,10 +267,10 @@ class ApiSyncAdapter {
                 }
             }
 
-            if ((isConnectionError || isTimeout) && retries > 0 && this.consecutiveFailures < this.MAX_CONSECUTIVE_FAILURES) {
+            if ((isConnectionError || isTimeout) && retries > 0 && circuitBreaker.canRetry()) {
                 console.warn(`⚠️ Connection error (${error.message}), retrying in ${Math.round(effectiveBackoff)}ms...`);
                 await new Promise(r => setTimeout(r, effectiveBackoff));
-                return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5);
+                return this.fetchWithRetry(url, options, retries - 1, backoff * 1.5, channel);
             }
 
             throw error;
@@ -272,7 +315,7 @@ class ApiSyncAdapter {
     /**
      * Authenticate with the Master terminal
      */
-    async authenticate(force = false): Promise<void> {
+    async authenticate(force = false, channel: CircuitBreakerChannel = 'background'): Promise<void> {
         this.ensureConfig();
         if (!this.config) throw new Error('ApiSyncAdapter not initialized'); // Should be caught by ensureConfig
 
@@ -280,8 +323,8 @@ class ApiSyncAdapter {
             return;
         }
 
-        if (!force && this.authInFlight) {
-            return this.authInFlight;
+        if (!force && this.authInFlight[channel]) {
+            return this.authInFlight[channel]!;
         }
 
         const authPromise = (async () => {
@@ -293,7 +336,7 @@ class ApiSyncAdapter {
                         terminalId: this.config!.terminalId,
                         deviceToken: localStorage.getItem('CLIC_POS_DEVICE_TOKEN')
                     })
-                });
+                }, 2, 500, channel);
 
                 if (!response.ok) {
                     let errorMessage = `Authentication failed: ${response.status} ${response.statusText}`;
@@ -316,7 +359,7 @@ class ApiSyncAdapter {
                 console.log(`✅ Authenticated with Master terminal: ${this.config!.terminalId}`);
             } catch (error: unknown) {
                 if (this.isCircuitBreakerOpenError(error)) {
-                    console.warn('⚠️ Authentication deferred: circuit breaker open, waiting before retry.');
+                    console.warn(`⚠️ Authentication deferred: ${ERP_TEMPORARILY_UNAVAILABLE_ERROR}, waiting before retry.`);
                 } else {
                     this.logAuthFailure('master', error);
                 }
@@ -325,11 +368,11 @@ class ApiSyncAdapter {
             }
         })();
 
-        this.authInFlight = authPromise.finally(() => {
-            this.authInFlight = null;
+        this.authInFlight[channel] = authPromise.finally(() => {
+            this.authInFlight[channel] = null;
         });
 
-        return this.authInFlight;
+        return this.authInFlight[channel]!;
     }
 
     private buildSyncApiBase(url: string): string {
@@ -548,10 +591,6 @@ class ApiSyncAdapter {
             }
             : null;
 
-        if (localMasterTarget && permissionService.isSlaveTerminal()) {
-            return localMasterTarget;
-        }
-
         const boundErpTerminalId =
             this.operationalTargetHint.terminalId ||
             localStorage.getItem('clic_erp_sync_terminal_id');
@@ -569,10 +608,14 @@ class ApiSyncAdapter {
             };
         }
 
+        if (localMasterTarget && permissionService.isSlaveTerminal()) {
+            return localMasterTarget;
+        }
+
         return localMasterTarget;
     }
 
-    private async authenticateOperationalTarget(force = false): Promise<{
+    private async authenticateOperationalTarget(force = false, channel: CircuitBreakerChannel = 'background'): Promise<{
         baseUrl: string;
         terminalId: string;
         token: string;
@@ -585,7 +628,7 @@ class ApiSyncAdapter {
 
         if (target.useLocalTarget) {
             if (!this.authToken || force) {
-                await this.authenticate(force);
+                await this.authenticate(force, channel);
             }
 
             if (!this.authToken) {
@@ -609,8 +652,8 @@ class ApiSyncAdapter {
             };
         }
 
-        if (!force && this.erpAuthInFlight) {
-            const token = await this.erpAuthInFlight;
+        if (!force && this.erpAuthInFlight[channel]) {
+            const token = await this.erpAuthInFlight[channel]!;
             return {
                 ...target,
                 token
@@ -625,7 +668,7 @@ class ApiSyncAdapter {
                     terminalId: target.terminalId,
                     deviceToken: localStorage.getItem('CLIC_POS_DEVICE_TOKEN')
                 })
-            });
+            }, 2, 500, channel);
 
             if (!response.ok) {
                 let errorMessage = `ERP authentication failed: ${response.status} ${response.statusText}`;
@@ -642,12 +685,12 @@ class ApiSyncAdapter {
             return String(data.token || '');
         })();
 
-        this.erpAuthInFlight = erpAuthPromise.finally(() => {
-            this.erpAuthInFlight = null;
+        this.erpAuthInFlight[channel] = erpAuthPromise.finally(() => {
+            this.erpAuthInFlight[channel] = null;
         });
 
         try {
-            this.erpAuthToken = await this.erpAuthInFlight;
+            this.erpAuthToken = await this.erpAuthInFlight[channel]!;
         } catch (error) {
             this.logAuthFailure('erp', error);
             throw error;
@@ -745,7 +788,7 @@ class ApiSyncAdapter {
      * Ensure operational push channels never fail silently.
      * If adapter is marked offline but browser has network, force re-auth recovery.
      */
-    private async ensurePushReady(): Promise<void> {
+    private async ensurePushReady(channel: CircuitBreakerChannel = 'background'): Promise<void> {
         this.ensureConfig();
 
         if (!navigator.onLine) {
@@ -758,7 +801,7 @@ class ApiSyncAdapter {
             this.authToken = null;
         }
 
-        await this.ensureAuthenticated();
+        await this.ensureAuthenticated(channel);
         this.isOnline = true;
     }
 
@@ -789,10 +832,10 @@ class ApiSyncAdapter {
     /**
      * Ensure we have a valid auth token
      */
-    private async ensureAuthenticated(): Promise<void> {
+    private async ensureAuthenticated(channel: CircuitBreakerChannel = 'background'): Promise<void> {
         if (!this.authToken) {
             console.log("🔄 ApiSyncAdapter: No token found, authenticating...");
-            await this.authenticate();
+            await this.authenticate(false, channel);
         }
     }
 
@@ -1236,11 +1279,117 @@ class ApiSyncAdapter {
         return `${token.slice(0, 4)}…${token.slice(-4)}`;
     }
 
+    private logCriticalSalesRequest(input: {
+        authUrl: string;
+        postUrl: string;
+        terminalId: string;
+        retryCount: number;
+        token: string | null;
+        txId?: string;
+    }) {
+        console.log(
+            `[SYNC_SALES_HTTP] authUrl=${input.authUrl} postUrl=${input.postUrl} terminalId=${input.terminalId} retryCount=${input.retryCount} token=${this.maskSyncToken(input.token)} tx=${input.txId || 'n/a'}`
+        );
+    }
+
+    private async postErpSalesTransactionWithSmartAuth(
+        normalizedTransaction: any,
+        txId: string
+    ): Promise<{
+        target: { baseUrl: string; terminalId: string; token: string; useLocalTarget: boolean };
+        response: Response;
+        text: string;
+    }> {
+        let target = await this.authenticateOperationalTarget(false, 'sales');
+        const postUrl = `${target.baseUrl}/transactions`;
+        const authUrl = `${target.baseUrl}/auth`;
+
+        for (let retryCount = 0; retryCount <= 1; retryCount += 1) {
+            const requestBody = this.buildOperationalPostBody(target, { items: [normalizedTransaction] });
+            this.logCriticalSalesRequest({
+                authUrl,
+                postUrl,
+                terminalId: target.terminalId,
+                retryCount,
+                token: target.token,
+                txId
+            });
+            const response = await this.fetchWithRetry(postUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Token': target.token
+                },
+                body: JSON.stringify(requestBody)
+            }, 2, 500, 'sales');
+            const text = await response.text();
+
+            if (response.status !== 401 || retryCount === 1) {
+                return { target, response, text };
+            }
+
+            console.warn(`[SYNC_SALES_HTTP] 401 for tx=${txId}; refreshing ERP sync token and replaying request immediately.`);
+            this.erpAuthToken = null;
+            target = await this.authenticateOperationalTarget(true, 'sales');
+        }
+
+        throw new Error('ERP transaction sync failed: request was not attempted');
+    }
+
+    private async postLocalSalesTransactionWithSmartAuth(
+        normalizedTransaction: any,
+        txId: string,
+        itemsCount: number | string
+    ): Promise<Response> {
+        await this.ensurePushReady('sales');
+        const erpBaseUrl = this.resolveClientErpBaseUrlForInbox();
+        const postUrl = `${this.config!.masterUrl}/api/sync/transactions`;
+        const authUrl = `${this.config!.masterUrl}/api/sync/auth`;
+
+        for (let retryCount = 0; retryCount <= 1; retryCount += 1) {
+            if (!this.authToken || retryCount > 0) {
+                this.authToken = null;
+                await this.authenticate(true, 'sales');
+            }
+
+            this.logCriticalSalesRequest({
+                authUrl,
+                postUrl,
+                terminalId: this.config!.terminalId,
+                retryCount,
+                token: this.authToken,
+                txId
+            });
+            console.log(
+                `[SYNC_TX_PUSH] POST ${postUrl} tx=${txId} source_tx=${normalizedTransaction.source_transaction_id} source_terminal=${normalizedTransaction.source_terminal_id || normalizedTransaction.terminalId} items=${itemsCount} erp_base_url=${erpBaseUrl ? 'sent' : 'MISSING'}`
+            );
+            const response = await this.fetchWithRetry(postUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Token': this.authToken || ''
+                },
+                body: JSON.stringify({
+                    items: [normalizedTransaction],
+                    ...(erpBaseUrl ? { erp_base_url: erpBaseUrl } : {})
+                })
+            }, 2, 500, 'sales');
+
+            if (response.status !== 401 || retryCount === 1) {
+                return response;
+            }
+
+            console.warn(`[SYNC_SALES_HTTP] 401 for local sales tx=${txId}; refreshing sync token and replaying request immediately.`);
+        }
+
+        throw new Error('ERP transaction sync failed: request was not attempted');
+    }
+
     async pushTransaction(transaction: any): Promise<void> {
         try {
             const normalizedTransaction = buildErpSalePayload(transaction);
             const operationalTarget = this.resolveOperationalTarget();
-            const txId = normalizedTransaction.source_transaction_id || normalizedTransaction.id;
+            const txId = String(normalizedTransaction.source_transaction_id || normalizedTransaction.id || transaction?.id || 'unknown');
             const itemsCount = Array.isArray((normalizedTransaction as any).items)
                 ? (normalizedTransaction as any).items.length
                 : typeof (normalizedTransaction as any).items === 'string'
@@ -1251,42 +1400,7 @@ class ApiSyncAdapter {
                 console.log(
                     `[SYNC_TX_PUSH] ERP direct start base=${operationalTarget.baseUrl} terminal=${operationalTarget.terminalId} tx=${txId} items=${itemsCount}`
                 );
-                let target: { baseUrl: string; terminalId: string; token: string; useLocalTarget: boolean } | null = null;
-                let response: Response | null = null;
-                const maxAuthAttempts = 3;
-
-                for (let attempt = 0; attempt < maxAuthAttempts; attempt += 1) {
-                    if (attempt > 0) {
-                        this.erpAuthToken = null;
-                        await new Promise(resolve => setTimeout(resolve, 650 * attempt));
-                    }
-
-                    target = await this.authenticateOperationalTarget(attempt > 0);
-                    console.log(
-                        `[SYNC_TX_PUSH] ERP direct auth attempt=${attempt + 1}/${maxAuthAttempts} token=${this.maskSyncToken(target.token)} terminal=${target.terminalId}`
-                    );
-                    const requestBody = this.buildOperationalPostBody(target, { items: [normalizedTransaction] });
-                    response = await this.fetchWithRetry(`${target.baseUrl}/transactions`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-Sync-Token': target.token
-                        },
-                        body: JSON.stringify(requestBody)
-                    });
-
-                    if (response.status !== 401) break;
-
-                    console.warn(
-                        `[SYNC_TX_PUSH] ERP direct token rejected tx=${txId}; refreshing token before declaring failure. attempt=${attempt + 1}/${maxAuthAttempts}`
-                    );
-                }
-
-                if (!target || !response) {
-                    throw new Error('ERP transaction sync failed: request was not attempted');
-                }
-
-                const text = await response.text();
+                const { target, response, text } = await this.postErpSalesTransactionWithSmartAuth(normalizedTransaction, txId);
                 let syncBody: any = null;
                 try {
                     syncBody = JSON.parse(text);
@@ -1317,30 +1431,7 @@ class ApiSyncAdapter {
             console.log(
                 `[SYNC_TX_PUSH] pre-auth masterUrl=${this.config?.masterUrl || 'n/a'} terminalId=${this.config?.terminalId || 'n/a'} hasToken=${!!this.authToken}`
             );
-            await this.ensurePushReady();
-            console.log(
-                `[SYNC_TX_PUSH] post-auth hasToken=${!!this.authToken} X-Sync-Token=${this.maskSyncToken(this.authToken)}`
-            );
-            const erpBaseUrl = this.resolveClientErpBaseUrlForInbox();
-            console.log(
-                `[SYNC_TX_PUSH] POST ${this.config?.masterUrl}/api/sync/transactions tx=${txId} source_tx=${normalizedTransaction.source_transaction_id} source_terminal=${normalizedTransaction.source_terminal_id || normalizedTransaction.terminalId} items=${itemsCount} erp_base_url=${erpBaseUrl ? 'sent' : 'MISSING'}`
-            );
-            const response = await this.fetchWithRetry(`${this.config!.masterUrl}/api/sync/transactions`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Sync-Token': this.authToken || ''
-                },
-                body: JSON.stringify({
-                    items: [normalizedTransaction],
-                    ...(erpBaseUrl ? { erp_base_url: erpBaseUrl } : {})
-                })
-            });
-
-            if (response.status === 401) {
-                await this.authenticate();
-                return this.pushTransaction(transaction);
-            }
+            const response = await this.postLocalSalesTransactionWithSmartAuth(normalizedTransaction, txId, itemsCount);
 
             if (!response.ok) {
                 const errorText = await response.text();
