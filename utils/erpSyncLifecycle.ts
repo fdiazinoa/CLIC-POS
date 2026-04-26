@@ -565,12 +565,33 @@ const persistPendingTerminalConfigSnapshot = (event: SyncOutboxEvent) => {
     const payload = asObject<Record<string, unknown>>(event.payload);
     const terminalConfig = asObject<Record<string, unknown>>(payload.terminal_config);
     const requestedScopes = extractTerminalConfigRequestedScopes(payload);
+    const binding = getStoredErpSyncBinding();
 
     if (Object.keys(terminalConfig).length === 0) {
+        if (requestedScopes.selective) {
+            window.dispatchEvent(new CustomEvent('terminalConfigSyncRequested', {
+                detail: {
+                    source: 'erp_outbox',
+                    eventId: normalizeOptional(event.id || null) || null,
+                    terminalId:
+                        normalizeOptional(String(payload.terminal_id || ''))
+                        || normalizeOptional(String(payload.terminalId || ''))
+                        || binding.terminalId
+                        || null,
+                    localTerminalId:
+                        normalizeOptional(String(payload.local_terminal_id || ''))
+                        || binding.localTerminalId
+                        || null,
+                    masterScopes: requestedScopes.masterScopes || [],
+                    blockScopes: requestedScopes.blockScopes || [],
+                    resolvedScopes: requestedScopes.resolvedScopes || [],
+                    selective: true,
+                },
+            }));
+        }
         return;
     }
 
-    const binding = getStoredErpSyncBinding();
     const pendingSnapshot = {
         receivedAt: new Date().toISOString(),
         eventId: normalizeOptional(event.id || null) || null,

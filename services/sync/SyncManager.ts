@@ -1355,8 +1355,11 @@ class SyncManager {
             const inventoryChanged = Boolean(manifest.changed.inventory) || changedBlocks.includes('inventory');
             const productPricesChanged = Boolean(manifest.changed.product_prices) || changedBlocks.includes('product_prices');
             const shouldBootstrapBlocks = Boolean(options?.markStartupCompleted || options?.bootstrapBlocks);
-            const bootstrapInventoryOnStartup = Boolean(shouldBootstrapBlocks && manifest.cursor_map.inventory);
-            const bootstrapProductPricesOnStartup = Boolean(shouldBootstrapBlocks && manifest.cursor_map.product_prices);
+            const bootstrapInventoryOnStartup = Boolean(
+                shouldBootstrapBlocks &&
+                (manifest.cursor_map.inventory || apiSyncAdapter.isUsingErpOperationalTarget())
+            );
+            const bootstrapProductPricesOnStartup = Boolean(shouldBootstrapBlocks);
             const terminalChanged = Boolean(manifest.changed.terminal);
 
             if (!terminalChanged && changedMasterScopes.length === 0 && !inventoryChanged && !bootstrapInventoryOnStartup && !productPricesChanged && !bootstrapProductPricesOnStartup) {
@@ -1418,17 +1421,34 @@ class SyncManager {
             }
 
             if (productPricesChanged || bootstrapProductPricesOnStartup) {
-                const productPricesPayload = await this.fetchTerminalProductPricesBlock(
-                    context,
-                    productPricesChanged ? (storedCursorMap.product_prices || null) : null,
-                );
-                if (productPricesPayload?.cursor) {
-                    manifest.cursor_map.product_prices = productPricesPayload.cursor;
-                }
-                if (productPricesPayload?.has_changes) {
-                    await this.applyTerminalProductPricesBlock(
-                        Array.isArray(productPricesPayload.prices) ? productPricesPayload.prices : [],
+                try {
+                    const productPricesPayload = await this.fetchTerminalProductPricesBlock(
+                        context,
+                        productPricesChanged ? (storedCursorMap.product_prices || null) : null,
                     );
+                    if (productPricesPayload?.cursor) {
+                        manifest.cursor_map.product_prices = productPricesPayload.cursor;
+                    }
+
+                    const productPrices = Array.isArray(productPricesPayload?.prices) ? productPricesPayload.prices : [];
+                    const shouldApplyProductPrices =
+                        productPrices.length > 0 &&
+                        (Boolean(productPricesPayload?.has_changes) || bootstrapProductPricesOnStartup || Boolean(options?.bootstrapBlocks));
+                    let productPricesAppliedCount = 0;
+
+                    if (shouldApplyProductPrices) {
+                        productPricesAppliedCount = await this.applyTerminalProductPricesBlock(productPrices);
+                    }
+
+                    posCatalogDebugLog('product prices block: apply completed', {
+                        productPricesChanged,
+                        bootstrapProductPricesOnStartup,
+                        payloadPriceCount: productPrices.length,
+                        payloadHasChanges: productPricesPayload?.has_changes ?? null,
+                        productPricesAppliedCount,
+                    });
+                } catch (error) {
+                    console.warn('⚠️ SyncManager: product prices block refresh failed:', error);
                 }
             }
 
@@ -2359,11 +2379,16 @@ class SyncManager {
                     product_prices: productPricesPayload.cursor,
                 };
             }
-            if (productPricesPayload?.has_changes) {
-                await this.applyTerminalProductPricesBlock(
-                    Array.isArray(productPricesPayload.prices) ? productPricesPayload.prices : [],
-                );
+            const productPrices = Array.isArray(productPricesPayload?.prices) ? productPricesPayload.prices : [];
+            let productPricesAppliedCount = 0;
+            if (productPrices.length > 0) {
+                productPricesAppliedCount = await this.applyTerminalProductPricesBlock(productPrices);
             }
+            posCatalogDebugLog('refreshTerminalResolvedConfig: product prices block applied', {
+                payloadPriceCount: productPrices.length,
+                payloadHasChanges: productPricesPayload?.has_changes ?? null,
+                productPricesAppliedCount,
+            });
         }
 
         if (JSON.stringify(nextTerminalCursorMap) !== JSON.stringify(currentTerminalCursorMap)) {
