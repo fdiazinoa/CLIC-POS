@@ -3820,7 +3820,10 @@ const AppContent: React.FC = () => {
     backgroundSyncManager.triggerSync().catch(console.error);
 
     // Update inventory locally (simple stock tracking) AND Record Ledger
-    const defaultWarehouseId = config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId || 'wh_central';
+    const defaultWarehouseId =
+      currentTerminal?.config?.inventoryScope?.defaultSalesWarehouseId ||
+      config.terminals[0]?.config.inventoryScope?.defaultSalesWarehouseId ||
+      'wh_central';
 
     // Calculate and Record Inventory Deductions (Recursive & UOM Aware)
     for (const item of txn.items) {

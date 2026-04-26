@@ -779,6 +779,10 @@ router.get('/:terminalId/manifest', async (req, res) => {
     if (typeof req.query.items_cursor === 'string') params.set('items_cursor', asString(req.query.items_cursor));
     if (typeof req.query.customers_cursor === 'string') params.set('customers_cursor', asString(req.query.customers_cursor));
     if (typeof req.query.suppliers_cursor === 'string') params.set('suppliers_cursor', asString(req.query.suppliers_cursor));
+    if (typeof req.query.purchase_orders_cursor === 'string') params.set('purchase_orders_cursor', asString(req.query.purchase_orders_cursor));
+    if (typeof req.query.transfers_cursor === 'string') params.set('transfers_cursor', asString(req.query.transfers_cursor));
+    if (typeof req.query.inventory_cursor === 'string') params.set('inventory_cursor', asString(req.query.inventory_cursor));
+    if (typeof req.query.product_prices_cursor === 'string') params.set('product_prices_cursor', asString(req.query.product_prices_cursor));
 
     const payload = await fetchErpJson(
       req,

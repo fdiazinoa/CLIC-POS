@@ -1384,9 +1384,37 @@ class SyncManager {
                 if (inventoryPayload?.cursor) {
                     manifest.cursor_map.inventory = inventoryPayload.cursor;
                 }
-                if (inventoryPayload?.has_changes && Array.isArray(inventoryPayload.balances) && inventoryPayload.balances.length > 0) {
-                    await this.applyTerminalInventoryBlock(inventoryPayload.balances);
+                const inventoryBalances = Array.isArray(inventoryPayload?.balances) ? inventoryPayload.balances : [];
+                const shouldApplyInventoryPayload =
+                    inventoryBalances.length > 0 &&
+                    (Boolean(inventoryPayload?.has_changes) || bootstrapInventoryOnStartup || Boolean(options?.bootstrapBlocks));
+                let inventoryAppliedCount = 0;
+
+                if (shouldApplyInventoryPayload) {
+                    inventoryAppliedCount = await this.applyTerminalInventoryBlock(inventoryBalances);
                 }
+
+                if (apiSyncAdapter.isUsingErpOperationalTarget()) {
+                    const shouldForceDirectInventoryRefresh =
+                        bootstrapInventoryOnStartup ||
+                        Boolean(options?.bootstrapBlocks) ||
+                        inventoryAppliedCount === 0;
+
+                    if (shouldForceDirectInventoryRefresh) {
+                        const directRefreshCount = await this.refreshOperationalInventorySnapshot();
+                        if (directRefreshCount > 0) {
+                            inventoryAppliedCount = directRefreshCount;
+                        }
+                    }
+                }
+
+                posCatalogDebugLog('inventory block: apply completed', {
+                    inventoryChanged,
+                    bootstrapInventoryOnStartup,
+                    payloadBalanceCount: inventoryBalances.length,
+                    payloadHasChanges: inventoryPayload?.has_changes ?? null,
+                    inventoryAppliedCount,
+                });
             }
 
             if (productPricesChanged || bootstrapProductPricesOnStartup) {
@@ -2302,9 +2330,22 @@ class SyncManager {
                     inventory: inventoryPayload.cursor,
                 };
             }
-            if (inventoryPayload?.has_changes) {
-                await this.applyTerminalInventoryBlock(Array.isArray(inventoryPayload.balances) ? inventoryPayload.balances : []);
+            const inventoryBalances = Array.isArray(inventoryPayload?.balances) ? inventoryPayload.balances : [];
+            let inventoryAppliedCount = 0;
+            if (inventoryBalances.length > 0) {
+                inventoryAppliedCount = await this.applyTerminalInventoryBlock(inventoryBalances);
             }
+            if (apiSyncAdapter.isUsingErpOperationalTarget()) {
+                const directRefreshCount = await this.refreshOperationalInventorySnapshot();
+                if (directRefreshCount > 0) {
+                    inventoryAppliedCount = directRefreshCount;
+                }
+            }
+            posCatalogDebugLog('refreshTerminalResolvedConfig: inventory block applied', {
+                payloadBalanceCount: inventoryBalances.length,
+                payloadHasChanges: inventoryPayload?.has_changes ?? null,
+                inventoryAppliedCount,
+            });
         }
 
         if (requestedBlockScopes?.includes('product_prices')) {
