@@ -21,6 +21,7 @@ class BackgroundSyncManager {
     private offlineHandler: (() => void) | null = null;
     private focusHandler: (() => void) | null = null;
     private visibilityHandler: (() => void) | null = null;
+    private nextRetryDelayMs: number | null = null;
     private state: SyncState = {
         pendingCount: 0,
         isSyncing: false,
@@ -29,6 +30,7 @@ class BackgroundSyncManager {
     };
     private readonly WORKER_INTERVAL_MS = 30000;
     private readonly FAST_RETRY_DELAY_MS = 5000;
+    private readonly RECOVERABLE_TRANSACTION_RETRY_DELAY_MS = 15000;
 
     /**
      * Initialize the background sync manager
@@ -116,6 +118,24 @@ class BackgroundSyncManager {
         }, delayMs);
     }
 
+    private isRecoverableTransactionSyncError(error: unknown): boolean {
+        const message = error instanceof Error
+            ? error.message
+            : typeof error === 'string'
+                ? error
+                : '';
+        const normalized = message.toLowerCase();
+        return (
+            normalized.includes('invalid or missing sync token') ||
+            normalized.includes('erp transaction sync failed: 401') ||
+            normalized.includes('circuit breaker open') ||
+            normalized.includes('failed to fetch') ||
+            normalized.includes('networkerror') ||
+            normalized.includes('load failed') ||
+            normalized.includes('aborterror')
+        );
+    }
+
     private isErpOperationalPushConfigured(): boolean {
         try {
             const erpBaseUrl =
@@ -189,6 +209,7 @@ class BackgroundSyncManager {
 
         this.isProcessing = true;
         this.clearRetryTimeout();
+        this.nextRetryDelayMs = null;
         this.updateState({ isSyncing: true, hasError: false });
 
         const collectionErrors: string[] = [];
@@ -257,7 +278,7 @@ class BackgroundSyncManager {
             this.isProcessing = false;
             await this.updatePendingCount();
             if (navigator.onLine && (shouldRetrySoon || this.state.pendingCount > 0)) {
-                this.scheduleSync(this.FAST_RETRY_DELAY_MS);
+                this.scheduleSync(this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS);
             }
         }
     }
@@ -270,6 +291,7 @@ class BackgroundSyncManager {
         syncStatus?: SyncStatus,
         syncError?: string,
         _forceSyncReplay?: boolean,
+        syncRetryAfter?: string,
         createdAt?: string,
         timestamp?: string,
         date?: string,
@@ -285,6 +307,15 @@ class BackgroundSyncManager {
 
         // Filter pending items and sort by date (FIFO)
         const isSyncPending = (item: T): boolean => {
+            const retryAfter = Date.parse(String((item as any).syncRetryAfter || ''));
+            if (Number.isFinite(retryAfter) && retryAfter > Date.now()) {
+                const delay = Math.max(1000, retryAfter - Date.now());
+                this.nextRetryDelayMs = this.nextRetryDelayMs === null
+                    ? delay
+                    : Math.min(this.nextRetryDelayMs, delay);
+                return false;
+            }
+
             const status = item.syncStatus;
             if (status === 'PENDING' || status === 'ERROR' || status === 'SYNCING') return true;
             // Legacy safeguard: older transactions may not have syncStatus set.
@@ -321,6 +352,7 @@ class BackgroundSyncManager {
             try {
                 // Mark as syncing
                 item.syncStatus = 'SYNCING';
+                delete (item as any).syncRetryAfter;
                 await db.saveDocument(collectionName as any, item as any);
 
                 // Attempt push
@@ -332,6 +364,7 @@ class BackgroundSyncManager {
                 if (item._forceSyncReplay) {
                     item._forceSyncReplay = false;
                 }
+                delete (item as any).syncRetryAfter;
                 await db.saveDocument(collectionName as any, item as any);
                 if (collectionName === 'transactions') {
                     const transaction = item as any;
@@ -340,6 +373,22 @@ class BackgroundSyncManager {
                     );
                 }
             } catch (error: any) {
+                if (collectionName === 'transactions' && this.isRecoverableTransactionSyncError(error)) {
+                    console.warn(
+                        `⏳ BackgroundSyncManager: Deferred recoverable transaction sync ${item.id}:`,
+                        error?.message || error
+                    );
+                    item.syncStatus = 'PENDING';
+                    item.syncError = undefined;
+                    item._forceSyncReplay = true;
+                    (item as any).syncRetryAfter = new Date(Date.now() + this.RECOVERABLE_TRANSACTION_RETRY_DELAY_MS).toISOString();
+                    this.nextRetryDelayMs = this.nextRetryDelayMs === null
+                        ? this.RECOVERABLE_TRANSACTION_RETRY_DELAY_MS
+                        : Math.min(this.nextRetryDelayMs, this.RECOVERABLE_TRANSACTION_RETRY_DELAY_MS);
+                    await db.saveDocument(collectionName as any, item as any);
+                    break;
+                }
+
                 console.error(`❌ BackgroundSyncManager: Failed to sync ${collectionName} item ${item.id}:`, error);
                 item.syncStatus = 'ERROR';
                 item.syncError = error.message;

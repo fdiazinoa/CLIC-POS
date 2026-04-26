@@ -1251,35 +1251,39 @@ class ApiSyncAdapter {
                 console.log(
                     `[SYNC_TX_PUSH] ERP direct start base=${operationalTarget.baseUrl} terminal=${operationalTarget.terminalId} tx=${txId} items=${itemsCount}`
                 );
-                let target = await this.authenticateOperationalTarget();
-                console.log(
-                    `[SYNC_TX_PUSH] ERP direct auth token=${this.maskSyncToken(target.token)} terminal=${target.terminalId}`
-                );
-                const requestBody = this.buildOperationalPostBody(target, { items: [normalizedTransaction] });
-                let response = await this.fetchWithRetry(`${target.baseUrl}/transactions`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Sync-Token': target.token
-                    },
-                    body: JSON.stringify(requestBody)
-                });
+                let target: { baseUrl: string; terminalId: string; token: string; useLocalTarget: boolean } | null = null;
+                let response: Response | null = null;
+                const maxAuthAttempts = 3;
 
-                if (response.status === 401) {
-                    this.erpAuthToken = null;
-                    target = await this.authenticateOperationalTarget(true);
+                for (let attempt = 0; attempt < maxAuthAttempts; attempt += 1) {
+                    if (attempt > 0) {
+                        this.erpAuthToken = null;
+                        await new Promise(resolve => setTimeout(resolve, 650 * attempt));
+                    }
+
+                    target = await this.authenticateOperationalTarget(attempt > 0);
                     console.log(
-                        `[SYNC_TX_PUSH] ERP direct re-auth token=${this.maskSyncToken(target.token)} terminal=${target.terminalId}`
+                        `[SYNC_TX_PUSH] ERP direct auth attempt=${attempt + 1}/${maxAuthAttempts} token=${this.maskSyncToken(target.token)} terminal=${target.terminalId}`
                     );
-                    const retryBody = this.buildOperationalPostBody(target, { items: [normalizedTransaction] });
+                    const requestBody = this.buildOperationalPostBody(target, { items: [normalizedTransaction] });
                     response = await this.fetchWithRetry(`${target.baseUrl}/transactions`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
                             'X-Sync-Token': target.token
                         },
-                        body: JSON.stringify(retryBody)
+                        body: JSON.stringify(requestBody)
                     });
+
+                    if (response.status !== 401) break;
+
+                    console.warn(
+                        `[SYNC_TX_PUSH] ERP direct token rejected tx=${txId}; refreshing token before declaring failure. attempt=${attempt + 1}/${maxAuthAttempts}`
+                    );
+                }
+
+                if (!target || !response) {
+                    throw new Error('ERP transaction sync failed: request was not attempted');
                 }
 
                 const text = await response.text();
