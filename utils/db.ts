@@ -352,6 +352,30 @@ const fiscalAllocationIdentityKey = (allocation: Partial<FiscalAllocation>) => {
   ].join('::');
 };
 
+const resolveMergedFiscalAllocationNextNumber = (
+  existing: FiscalAllocation,
+  incoming: FiscalAllocation,
+  sameOperationalState: boolean,
+): number => {
+  if (!sameOperationalState) {
+    return incoming.nextNumber;
+  }
+
+  const existingNext = Number(existing.nextNumber) || incoming.reservedStart;
+  const incomingNext = Number(incoming.nextNumber) || incoming.reservedStart;
+  const reservedEnd = Number(incoming.reservedEnd) || 0;
+  const existingExhausted = existingNext > reservedEnd || existing.status === 'EXHAUSTED';
+  const incomingHasOpenCapacity = incomingNext <= reservedEnd && incoming.status !== 'EXHAUSTED';
+
+  // A previous POS build could advance terminal fiscal allocations by a whole batch.
+  // When ERP later sends the corrected pointer, accept it instead of keeping the stale local EXHAUSTED state.
+  if (existingExhausted && incomingHasOpenCapacity) {
+    return incomingNext;
+  }
+
+  return Math.max(existingNext, incomingNext);
+};
+
 const mergeFiscalAllocationsState = (
   existingAllocations: FiscalAllocation[],
   incomingAllocations: FiscalAllocation[],
@@ -379,9 +403,7 @@ const mergeFiscalAllocationsState = (
     const sameOperationalState =
       isOperationalFiscalAllocationStatus(existing.status) &&
       isOperationalFiscalAllocationStatus(incoming.status);
-    const mergedNextNumber = sameOperationalState
-      ? Math.max(Number(existing.nextNumber) || incoming.reservedStart, Number(incoming.nextNumber) || incoming.reservedStart)
-      : incoming.nextNumber;
+    const mergedNextNumber = resolveMergedFiscalAllocationNextNumber(existing, incoming, sameOperationalState);
     const mergedStatus =
       mergedNextNumber > incoming.reservedEnd
         ? 'EXHAUSTED'
