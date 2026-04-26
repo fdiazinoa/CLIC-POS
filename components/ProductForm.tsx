@@ -9,7 +9,7 @@ import {
   ShieldAlert, AlertCircle, Check, LayoutTemplate, ClipboardList, ListTree,
   Truck, ArrowDownToLine, Building2, Search, Filter, AlertTriangle,
   Scale, Ban, ShieldCheck, Zap, History, MapPin, ChevronRight, ChevronDown, Settings,
-  Keyboard, BookOpen, ArrowUpRight, ArrowDownLeft, Calendar, Award, Sparkles, TrendingUp, ScanBarcode, Printer
+  Keyboard, BookOpen, ArrowUpRight, ArrowDownLeft, Calendar, Award, Sparkles, TrendingUp, ScanBarcode, Printer, Copy
 } from 'lucide-react';
 import { calculateOptimalInventoryLevels, InventoryCalculation } from '../utils/inventoryEngine';
 import {
@@ -143,6 +143,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
   const [isSaving, setIsSaving] = useState(false);
   const [isPastingImage, setIsPastingImage] = useState(false);
   const [pendingOption, setPendingOption] = useState<Record<string, string>>({});
+  const [inventoryDebugCopyStatus, setInventoryDebugCopyStatus] = useState<'IDLE' | 'COPIED' | 'ERROR'>('IDLE');
 
   // Kardex Filter State
   const [kardexTerminal, setKardexTerminal] = useState<string>('ALL');
@@ -317,6 +318,36 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
     activeTerminalId,
     inventoryCursorMap,
   ]);
+  const inventoryDebugJson = useMemo(
+    () => JSON.stringify(inventoryDebugPayload, null, 2),
+    [inventoryDebugPayload]
+  );
+
+  const handleCopyInventoryDebug = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(inventoryDebugJson);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = inventoryDebugJson;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setInventoryDebugCopyStatus('COPIED');
+      window.setTimeout(() => setInventoryDebugCopyStatus('IDLE'), 1800);
+    } catch (error) {
+      console.warn('[Inventory Debug] No se pudo copiar el diagnostico', error);
+      setInventoryDebugCopyStatus('ERROR');
+      window.setTimeout(() => setInventoryDebugCopyStatus('IDLE'), 2200);
+    }
+  };
 
   const resolveErpBaseUrl = () => {
     const env = (import.meta as any)?.env || {};
@@ -1762,16 +1793,41 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialData, config, availabl
                 </div>
 
                 <div className="bg-slate-950 text-slate-100 p-4 rounded-2xl border border-slate-800 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <ShieldAlert size={16} className="text-amber-300" />
-                    <p className="text-xs font-black uppercase tracking-[0.24em] text-amber-200">Diagnóstico de inventario</p>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-2">
+                      <ShieldAlert size={16} className="text-amber-300" />
+                      <p className="text-xs font-black uppercase tracking-[0.24em] text-amber-200">Diagnóstico de inventario</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleCopyInventoryDebug}
+                      className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-[11px] font-black uppercase tracking-[0.18em] transition-all ${
+                        inventoryDebugCopyStatus === 'COPIED'
+                          ? 'bg-emerald-500 text-white'
+                          : inventoryDebugCopyStatus === 'ERROR'
+                            ? 'bg-red-500 text-white'
+                            : 'bg-amber-300 text-slate-950 hover:bg-amber-200'
+                      }`}
+                    >
+                      {inventoryDebugCopyStatus === 'COPIED' ? <Check size={14} /> : <Copy size={14} />}
+                      {inventoryDebugCopyStatus === 'COPIED'
+                        ? 'Copiado'
+                        : inventoryDebugCopyStatus === 'ERROR'
+                          ? 'No copió'
+                          : 'Copiar JSON'}
+                    </button>
                   </div>
                   <p className="text-xs text-slate-300">
-                    Esta sección es temporal para validar qué quedó guardado localmente en la caja para este artículo.
+                    Esta sección es temporal para validar qué quedó guardado localmente en la caja para este artículo. También puedes tocar el cuadro y seleccionar/copiar manualmente.
                   </p>
-                  <pre className="max-h-80 overflow-auto rounded-xl bg-black/40 p-3 text-[11px] leading-5 whitespace-pre-wrap break-all">
-{JSON.stringify(inventoryDebugPayload, null, 2)}
-                  </pre>
+                  <textarea
+                    readOnly
+                    spellCheck={false}
+                    value={inventoryDebugJson}
+                    onFocus={(event) => event.currentTarget.select()}
+                    className="h-80 w-full resize-none overflow-auto rounded-xl border border-slate-800 bg-black/40 p-3 font-mono text-[11px] leading-5 text-emerald-300 outline-none selection:bg-emerald-200 selection:text-slate-950"
+                    style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+                  />
                 </div>
               </div>
             </div>
