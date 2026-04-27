@@ -1364,11 +1364,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          return;
       }
 
-      if (!canAddItemToCart(product)) return;
       const productName = product.name || '';
       const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
       const hasVariants = product.attributes && product.attributes.length > 0;
       const hasModifiers = (product.availableModifiers || []).length > 0;
+      const requiresConfigurationBeforeAdd = isWeighted || hasVariants || hasModifiers;
+
+      if (requiresConfigurationBeforeAdd && !canAddItemToCart(product)) return;
 
       if (isWeighted) setProductForScale(product);
       else if (hasVariants) setSelectedProductForVariants(product);
@@ -1534,22 +1536,38 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       enabled: !isAnyModalOpen
    });
 
+   const fiscalCompliance = useMemo(() => getFiscalComplianceConfig(config), [config.fiscalCompliance]);
+   const fiscalCartGrossTotal = useMemo(
+      () => (cart || []).reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0),
+      [cart]
+   );
+   const fiscalThresholdBucket = useMemo(() => {
+      const threshold = Number(activeTerminalConfig?.operational?.fiscalThreshold || 0);
+      return threshold > 0 && fiscalCartGrossTotal > threshold ? 'OVER_THRESHOLD' : 'BASE';
+   }, [activeTerminalConfig?.operational?.fiscalThreshold, fiscalCartGrossTotal]);
+   const requiredSaleFiscalType = useMemo<FiscalDocumentCode>(() => {
+      const baseLegacyType: NCFType = fiscalThresholdBucket === 'OVER_THRESHOLD'
+         ? 'B01'
+         : (selectedCustomer?.defaultNcfType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02'));
+      return resolveSaleFiscalCode(fiscalCompliance.mode, baseLegacyType);
+   }, [
+      fiscalCompliance.mode,
+      fiscalThresholdBucket,
+      selectedCustomer?.defaultNcfType,
+      selectedCustomer?.requiresFiscalInvoice
+   ]);
 
    useEffect(() => {
-      const checkFiscalStatus = async () => {
-         const threshold = activeTerminalConfig?.operational?.fiscalThreshold || 0;
-         const isOverThreshold = threshold > 0 && cartTotal > threshold;
-         const fiscalCompliance = getFiscalComplianceConfig(config);
+      let cancelled = false;
 
-         const baseLegacyType: NCFType = isOverThreshold
-            ? 'B01'
-            : (selectedCustomer?.defaultNcfType || (selectedCustomer?.requiresFiscalInvoice ? 'B01' : 'B02'));
-         const type = resolveSaleFiscalCode(fiscalCompliance.mode, baseLegacyType);
+      const checkFiscalStatus = async () => {
+         const type = requiredSaleFiscalType;
          const [buffers, allocations, ranges] = await Promise.all([
             db.get('localFiscalBuffer'),
             db.get('fiscalAllocations'),
             db.get('fiscalRanges'),
          ]);
+         if (cancelled) return;
 
          const localBuffer: any = (Array.isArray(buffers) ? buffers : []).find((buffer: any) =>
             buffer?.type === type &&
@@ -1607,18 +1625,30 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
 
          const hasLocal = Boolean(localBuffer && Number(localBuffer.currentNumber) <= Number(localBuffer.endNumber));
-         const canRequest = await db.canRequestMoreNCF(type, terminalId);
+         const allocationCanIssue = Boolean(activeAllocation && Number(activeAllocation.nextNumber) <= Number(activeAllocation.reservedEnd));
+         const rangeCanIssue = Boolean(
+            !activeAllocation &&
+            (Array.isArray(ranges) ? ranges : []).some((range: any) =>
+               range?.type === type &&
+               range?.isActive &&
+               Number(range?.currentGlobal || 0) < Number(range?.endNumber || 0)
+            )
+         );
+         const canRequest = allocationCanIssue || rangeCanIssue;
          const hasNCF = hasLocal || canRequest;
          const isTerminalBlock = Boolean(activeAllocation || localBuffer?.allocationId);
          setFiscalStatus({ type, hasNCF, localBuffer: localBuffer || activeAllocation || null, isUsingPool: !hasLocal && canRequest, isTerminalBlock, remaining: fiscalRemaining, total: fiscalTotal });
       };
       checkFiscalStatus();
-   }, [selectedCustomer, cart, terminalId, activeTerminalConfig?.operational?.fiscalThreshold]);
+      return () => {
+         cancelled = true;
+      };
+   }, [requiredSaleFiscalType, terminalId]);
 
    const fiscalReserveAlert = useMemo(() => {
       if (!fiscalStatus.hasNCF) return null;
-      return getFiscalReserveAlert(fiscalStatus.remaining || 0, fiscalStatus.total || 0, config);
-   }, [config, fiscalStatus.hasNCF, fiscalStatus.remaining, fiscalStatus.total]);
+      return getFiscalReserveAlert(fiscalStatus.remaining || 0, fiscalStatus.total || 0, fiscalCompliance);
+   }, [fiscalCompliance, fiscalStatus.hasNCF, fiscalStatus.remaining, fiscalStatus.total]);
 
    const shouldShowFiscalReserveAlert = Boolean(
       fiscalReserveAlert &&
