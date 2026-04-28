@@ -197,6 +197,155 @@ const buildCartDigest = (items: CartItem[] = []): string =>
       )
       .join('||');
 
+interface ProductGridCardProps {
+   product: Product;
+   usesSupermarketLayout: boolean;
+   usesExpandedCatalog: boolean;
+   isMobile: boolean;
+   showProductImages: boolean;
+   baseCurrencySymbol: string;
+   isProductWarehouseBlockedForSale: (product: Product) => boolean;
+   getTerminalWarehouseName: () => string;
+   getProductPrice: (product: Product) => number;
+   hasPromotionForProduct: (product: Product) => boolean;
+   onProductClick: (product: Product) => void;
+   onOpenPromotion: (product: Product) => void;
+   onProductTouchStart: (product: Product, clientX: number, clientY: number) => void;
+   onProductTouchMove: (clientX: number, clientY: number) => void;
+   onProductTouchEnd: () => void;
+   onProductContextMenu: (product: Product, event: React.MouseEvent<HTMLDivElement>) => void;
+}
+
+const ProductGridCard = React.memo(({
+   product,
+   usesSupermarketLayout,
+   usesExpandedCatalog,
+   isMobile,
+   showProductImages,
+   baseCurrencySymbol,
+   isProductWarehouseBlockedForSale,
+   getTerminalWarehouseName,
+   getProductPrice,
+   hasPromotionForProduct,
+   onProductClick,
+   onOpenPromotion,
+   onProductTouchStart,
+   onProductTouchMove,
+   onProductTouchEnd,
+   onProductContextMenu,
+}: ProductGridCardProps) => {
+   const productName = product.name || '';
+   const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
+   const hasVariants = product.attributes && product.attributes.length > 0;
+   const isCompactMobileCard = isMobile && !usesExpandedCatalog;
+   const warehouseSaleBlocked = isProductWarehouseBlockedForSale(product);
+   const imageSrc = showProductImages ? resolveProductImageSrc(product) : '';
+   const hasPromotion = hasPromotionForProduct(product);
+   const price = getProductPrice(product);
+
+   const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+      const touch = e.touches[0];
+      if (!touch) return;
+      onProductTouchStart(product, touch.clientX, touch.clientY);
+   }, [onProductTouchStart, product]);
+
+   const handleTouchMove = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+      const touch = e.touches[0];
+      if (!touch) return;
+      onProductTouchMove(touch.clientX, touch.clientY);
+   }, [onProductTouchMove]);
+
+   const handlePromoClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+      e.stopPropagation();
+      onOpenPromotion(product);
+   }, [onOpenPromotion, product]);
+
+   return (
+      <div
+         title={
+            warehouseSaleBlocked
+               ? `No vendible en ${getTerminalWarehouseName()}: habilite este artículo en el almacén de ventas de esta caja (ERP).`
+               : undefined
+         }
+         onClick={() => onProductClick(product)}
+         onContextMenu={(event) => onProductContextMenu(product, event)}
+         onTouchStart={handleTouchStart}
+         onTouchMove={handleTouchMove}
+         onTouchEnd={onProductTouchEnd}
+         onTouchCancel={onProductTouchEnd}
+         style={{ touchAction: 'manipulation' }}
+         className={`bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 transition-all group relative overflow-hidden ${
+            warehouseSaleBlocked
+               ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
+               : 'cursor-pointer hover:border-purple-300 hover:-translate-y-1 active:scale-95'
+         } ${(usesSupermarketLayout && showProductImages) ? 'rounded-[1.75rem] p-4 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[256px] grid grid-rows-[56%_44%]' : (usesExpandedCatalog && showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[228px] grid grid-rows-[52%_48%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[204px] flex flex-col h-full' : isCompactMobileCard ? `rounded-[2rem] p-3.5 min-h-[246px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}` : `rounded-[2rem] p-3 min-h-[228px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
+      >
+         {showProductImages && (
+            <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.4rem] mb-0 p-3' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-36 rounded-[1.5rem] mb-3 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-3'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
+               {imageSrc ? <img src={imageSrc} className={`w-full h-full ${usesSupermarketLayout || usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={usesSupermarketLayout ? 56 : 48} strokeWidth={1} /></div>}
+
+               {isWeighted && (
+                  <div className="absolute top-2 left-2 bg-emerald-500 text-white p-1.5 rounded-lg shadow-lg z-10 animate-in zoom-in-50" title="Requiere Balanza">
+                     <ScaleIcon size={14} strokeWidth={3} />
+                  </div>
+               )}
+               {!isWeighted && hasVariants && (
+                  <div className="absolute top-2 left-2 bg-blue-600 text-white p-1.5 rounded-lg shadow-lg z-10 animate-in zoom-in-50" title="Tiene Variantes">
+                     <Layers size={14} strokeWidth={3} />
+                  </div>
+               )}
+
+               {hasPromotion && (
+                  <div
+                     className="absolute top-0 right-0 cursor-pointer z-20"
+                     onClick={handlePromoClick}
+                  >
+                     <div className="bg-red-500 text-white text-[10px] font-black px-2 py-1 rounded-bl-xl shadow-md flex items-center gap-1 animate-in slide-in-from-top-2 hover:bg-red-600 transition-colors">
+                        <Tag size={10} className="fill-white" />
+                        <span>OFERTA</span>
+                     </div>
+                  </div>
+               )}
+            </div>
+         )}
+
+         {!showProductImages && hasPromotion && (
+            <div
+               className="absolute top-0 right-0 cursor-pointer z-20"
+               onClick={handlePromoClick}
+            >
+               <div className="bg-red-500 text-white text-[10px] font-black px-3 py-1.5 rounded-bl-2xl shadow-sm flex items-center gap-1 hover:bg-red-600 transition-colors">
+                  <Tag size={12} className="fill-white" />
+                  <span>OFERTA</span>
+               </div>
+            </div>
+         )}
+         <div className={`flex flex-col ${usesExpandedCatalog ? 'min-h-0 h-full pt-1 justify-between' : 'flex-1 justify-between gap-3'}`}>
+            <div className={usesSupermarketLayout ? 'space-y-1.5' : usesExpandedCatalog ? 'space-y-1' : 'space-y-1.5'}>
+               <span className={`block font-bold text-purple-500 uppercase opacity-60 line-clamp-1 ${usesSupermarketLayout ? 'text-[11px]' : usesExpandedCatalog ? 'text-[10px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[8px]'}`}>{product.category}</span>
+               <h3 className={`font-bold text-gray-800 dark:text-white leading-tight line-clamp-2 ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[3rem]' : usesExpandedCatalog ? 'text-[1.05rem] min-h-[2.3rem]' : isCompactMobileCard ? 'text-[1.05rem] min-h-[2.8rem]' : 'text-sm min-h-[2.5rem]'}`}>{product.name}</h3>
+            </div>
+            <div className={`${usesSupermarketLayout ? 'mt-2 pt-2 border-t border-gray-100 dark:border-slate-700' : usesExpandedCatalog ? 'mt-1 pt-1 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-2 border-t border-gray-50 dark:border-slate-700'}`}>
+               <span className={`font-black text-gray-900 dark:text-white leading-none ${usesSupermarketLayout ? 'text-[2rem]' : usesExpandedCatalog ? 'text-[1.75rem]' : isCompactMobileCard ? 'text-[1.95rem]' : 'text-lg'}`}>{baseCurrencySymbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            </div>
+         </div>
+         {warehouseSaleBlocked && (
+            <div
+               className="pointer-events-none absolute inset-x-0 bottom-0 z-[25] flex justify-center px-2 pb-2 pt-10 bg-gradient-to-t from-slate-900/10 to-transparent dark:from-black/25 rounded-b-[1.5rem]"
+               aria-hidden
+            >
+               <span className="inline-flex max-w-[calc(100%-0.5rem)] items-center gap-1 truncate rounded-lg bg-amber-600 px-2 py-1 text-center text-[9px] font-black uppercase tracking-wide text-white shadow-md">
+                  <MapPin size={10} strokeWidth={3} className="shrink-0 opacity-95" />
+                  Sin almacén en esta caja
+               </span>
+            </div>
+         )}
+      </div>
+   );
+});
+
+ProductGridCard.displayName = 'ProductGridCard';
+
 const POSInterface: React.FC<POSInterfaceProps> = ({
    config,
    currentUser,
@@ -1378,6 +1527,69 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       else addToCart(product, isReturnMode ? -1 : 1);
    }, [isMobile, defaultSalesWarehouseId, canAddItemToCart, addToCart, isReturnMode]);
 
+   const handleProductClickRef = useRef(handleProductClick);
+   const quickActionDataRef = useRef(quickActionData);
+
+   handleProductClickRef.current = handleProductClick;
+   quickActionDataRef.current = quickActionData;
+
+   const clearQuickActionTouchTimer = useCallback(() => {
+      if (quickActionTouchTimerRef.current) {
+         window.clearTimeout(quickActionTouchTimerRef.current);
+         quickActionTouchTimerRef.current = null;
+      }
+      quickActionTouchStartRef.current = null;
+      lastProductTouchAtRef.current = Date.now();
+   }, []);
+
+   const handleProductCardTouchStart = useCallback((product: Product, clientX: number, clientY: number) => {
+      lastProductTouchAtRef.current = Date.now();
+      quickActionTouchStartRef.current = { x: clientX, y: clientY, at: Date.now() };
+      if (quickActionTouchTimerRef.current) {
+         window.clearTimeout(quickActionTouchTimerRef.current);
+      }
+      quickActionTouchTimerRef.current = window.setTimeout(() => {
+         quickActionOpenedAtRef.current = Date.now();
+         lastTouchContextMenuAtRef.current = Date.now();
+         setQuickActionData({ product, x: clientX, y: clientY });
+         quickActionTouchTimerRef.current = null;
+      }, 1200);
+   }, []);
+
+   const handleProductCardTouchMove = useCallback((clientX: number, clientY: number) => {
+      const start = quickActionTouchStartRef.current;
+      if (!start) return;
+      const distance = Math.hypot(clientX - start.x, clientY - start.y);
+      if (distance > 14) {
+         clearQuickActionTouchTimer();
+      }
+   }, [clearQuickActionTouchTimer]);
+
+   const handleProductCardClick = useCallback((product: Product) => {
+      if (Date.now() - quickActionOpenedAtRef.current < 900) return;
+      if (quickActionDataRef.current) return;
+      handleProductClickRef.current(product);
+   }, []);
+
+   const handleProductCardContextMenu = useCallback((product: Product, event: React.MouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const now = Date.now();
+      if (now - lastProductTouchAtRef.current < 900) return;
+      if (now - lastTouchContextMenuAtRef.current < 900) return;
+      quickActionOpenedAtRef.current = now;
+      setQuickActionData({ product, x: event.clientX, y: event.clientY });
+   }, []);
+
+   const hasPromotionForProduct = useCallback(
+      (product: Product) => hasProductPromotion(product, config, activeTerminalId),
+      [config, activeTerminalId]
+   );
+
+   const openProductPromotionSheet = useCallback((product: Product) => {
+      setSelectedPromoProduct(product);
+      setShowPromoSheet(true);
+   }, []);
+
    // --- SEARCH LOGIC (Auto-Add Variantes) ---
    const findProductByAnyCode = useCallback((code: string) => {
       let quantity = 1;
@@ -1858,9 +2070,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    );
 
    const isTaxIncluded = activeTariff?.taxIncluded || false;
-   const grossLineTotal = processedCart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+   const grossLineTotal = useMemo(
+      () => processedCart.reduce((sum, item) => sum + (item.price * item.quantity), 0),
+      [processedCart]
+   );
 
-   const discountAmount = globalDiscount.type === 'PERCENT' ? grossLineTotal * (globalDiscount.value / 100) : Math.min(globalDiscount.value, grossLineTotal);
+   const discountAmount = useMemo(
+      () => globalDiscount.type === 'PERCENT'
+         ? grossLineTotal * (globalDiscount.value / 100)
+         : Math.min(globalDiscount.value, grossLineTotal),
+      [globalDiscount.type, globalDiscount.value, grossLineTotal]
+   );
 
    const taxBreakdown = useMemo(() => {
       return calculateTaxBreakdownFromItems(processedCart, config, {
@@ -1903,21 +2123,35 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       return totalMatch || guestMatch;
    }, [isRestaurantMode, serviceCharge, grossLineTotal, discountAmount, activeTable]);
 
-   const legalTipRate = shouldApplyServiceCharge ? (serviceCharge?.percentage || 0) / 100 : 0;
-   const cartTip = (grossLineTotal - discountAmount) * legalTipRate;
+   const {
+      legalTipRate,
+      cartTip,
+      cartTotalWithoutTip,
+      netSubtotal,
+      cartTotal,
+   } = useMemo(() => {
+      const nextLegalTipRate = shouldApplyServiceCharge ? (serviceCharge?.percentage || 0) / 100 : 0;
+      const nextCartTip = (grossLineTotal - discountAmount) * nextLegalTipRate;
 
-   let cartTotalWithoutTip = 0;
-   let netSubtotal = 0;
+      let nextCartTotalWithoutTip = 0;
+      let nextNetSubtotal = 0;
 
-   if (isTaxIncluded) {
-      cartTotalWithoutTip = grossLineTotal - discountAmount;
-      netSubtotal = cartTotalWithoutTip - cartTax;
-   } else {
-      netSubtotal = grossLineTotal - discountAmount;
-      cartTotalWithoutTip = netSubtotal + cartTax;
-   }
+      if (isTaxIncluded) {
+         nextCartTotalWithoutTip = grossLineTotal - discountAmount;
+         nextNetSubtotal = nextCartTotalWithoutTip - cartTax;
+      } else {
+         nextNetSubtotal = grossLineTotal - discountAmount;
+         nextCartTotalWithoutTip = nextNetSubtotal + cartTax;
+      }
 
-   const cartTotal = cartTotalWithoutTip + cartTip;
+      return {
+         legalTipRate: nextLegalTipRate,
+         cartTip: nextCartTip,
+         cartTotalWithoutTip: nextCartTotalWithoutTip,
+         netSubtotal: nextNetSubtotal,
+         cartTotal: nextCartTotalWithoutTip + nextCartTip,
+      };
+   }, [cartTax, discountAmount, grossLineTotal, isTaxIncluded, serviceCharge?.percentage, shouldApplyServiceCharge]);
 
    // Alias for compatibility if needed, though netSubtotal is what we usually display as "Subtotal"
    const cartSubtotal = grossLineTotal; // This represents the sum of list prices
@@ -3325,157 +3559,27 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                style={bottomAwareScrollStyle}
             >
                <div className={gridClass}>
-                  {filteredProducts.map((product, idx) => {
-                     const productName = product.name || '';
-                     const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
-                     const hasVariants = product.attributes && product.attributes.length > 0;
-                     const isCompactMobileCard = isMobile && !usesExpandedCatalog;
-                     const warehouseSaleBlocked = isProductWarehouseBlockedForSale(product);
-
-                     const handleTouchStart = (e: React.TouchEvent) => {
-                        const touch = e.touches[0];
-                        if (!touch) return;
-                        const { clientX, clientY } = touch;
-                        lastProductTouchAtRef.current = Date.now();
-                        quickActionTouchStartRef.current = { x: clientX, y: clientY, at: Date.now() };
-                        if (quickActionTouchTimerRef.current) {
-                           window.clearTimeout(quickActionTouchTimerRef.current);
-                        }
-                        quickActionTouchTimerRef.current = window.setTimeout(() => {
-                           quickActionOpenedAtRef.current = Date.now();
-                           lastTouchContextMenuAtRef.current = Date.now();
-                           setQuickActionData({ product, x: clientX, y: clientY });
-                           quickActionTouchTimerRef.current = null;
-                        }, 1200);
-                     };
-                     const clearQuickActionTouchTimer = () => {
-                        if (quickActionTouchTimerRef.current) {
-                           window.clearTimeout(quickActionTouchTimerRef.current);
-                           quickActionTouchTimerRef.current = null;
-                        }
-                        quickActionTouchStartRef.current = null;
-                        lastProductTouchAtRef.current = Date.now();
-                     };
-                     const handleTouchMove = (e: React.TouchEvent) => {
-                        const start = quickActionTouchStartRef.current;
-                        const touch = e.touches[0];
-                        if (!start || !touch) return;
-                        const distance = Math.hypot(touch.clientX - start.x, touch.clientY - start.y);
-                        if (distance > 14) {
-                           clearQuickActionTouchTimer();
-                        }
-                     };
-                     const handleTouchEnd = () => {
-                        clearQuickActionTouchTimer();
-                     };
-
-                     return (
-
-                        <div
-                           key={product.id || `prod-${idx}`}
-                           title={
-                              warehouseSaleBlocked
-                                 ? `No vendible en ${getTerminalWarehouseName()}: habilite este artículo en el almacén de ventas de esta caja (ERP).`
-                                 : undefined
-                           }
-                           onClick={(e) => {
-                              if (Date.now() - quickActionOpenedAtRef.current < 900) return;
-                              if (quickActionData) return;
-                              handleProductClick(product);
-                           }}
-                           onContextMenu={(e) => {
-                              e.preventDefault();
-                              const now = Date.now();
-                              if (now - lastProductTouchAtRef.current < 900) return;
-                              if (now - lastTouchContextMenuAtRef.current < 900) return;
-                              quickActionOpenedAtRef.current = now;
-                              setQuickActionData({ product, x: e.clientX, y: e.clientY });
-                           }}
-                           onTouchStart={handleTouchStart}
-                           onTouchMove={handleTouchMove}
-                           onTouchEnd={handleTouchEnd}
-                           onTouchCancel={handleTouchEnd}
-                           style={{ touchAction: 'manipulation' }}
-                          className={`bg-white dark:bg-slate-800 dark:border-slate-700 border border-gray-100 transition-all group relative overflow-hidden ${
-                             warehouseSaleBlocked
-                                ? 'cursor-not-allowed opacity-[0.82] saturate-[0.72] ring-1 ring-inset ring-amber-300/50 dark:ring-amber-800/45 border-amber-100/90 dark:border-amber-900/30'
-                                : 'cursor-pointer hover:border-purple-300 hover:-translate-y-1 active:scale-95'
-                           } ${(usesSupermarketLayout && uxConfig.showProductImages) ? 'rounded-[1.75rem] p-4 shadow-[0_10px_26px_rgba(15,23,42,0.08)] min-h-[256px] grid grid-rows-[56%_44%]' : (usesExpandedCatalog && uxConfig.showProductImages) ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] h-[228px] grid grid-rows-[52%_48%]' : usesExpandedCatalog ? 'rounded-[1.6rem] p-3 shadow-[0_1px_6px_rgba(15,23,42,0.06)] min-h-[204px] flex flex-col h-full' : isCompactMobileCard ? `rounded-[2rem] p-3.5 min-h-[246px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}` : `rounded-[2rem] p-3 min-h-[228px] shadow-sm flex flex-col ${warehouseSaleBlocked ? '' : 'hover:shadow-xl'}`}`}
-                        >
-                           {uxConfig.showProductImages && (
-                              <div className={`${usesSupermarketLayout ? 'h-full rounded-[1.4rem] mb-0 p-3' : usesExpandedCatalog ? 'h-full rounded-[1.25rem] mb-0 p-2' : isCompactMobileCard ? 'h-36 rounded-[1.5rem] mb-3 p-2.5' : 'h-28 md:h-32 rounded-[1.5rem] mb-3'} bg-gray-50 dark:bg-slate-800 overflow-hidden relative flex items-center justify-center`}>
-                                 {resolveProductImageSrc(product) ? <img src={resolveProductImageSrc(product)} className={`w-full h-full ${usesSupermarketLayout || usesExpandedCatalog || isCompactMobileCard ? 'object-contain' : 'object-cover object-center'}`} /> : <div className="w-full h-full flex items-center justify-center text-gray-200 dark:text-slate-700"><Grid size={usesSupermarketLayout ? 56 : 48} strokeWidth={1} /></div>}
-
-                                 {/* BADGES DE TIPO DE ARTÍCULO */}
-                                 {isWeighted && (
-                                    <div className="absolute top-2 left-2 bg-emerald-500 text-white p-1.5 rounded-lg shadow-lg z-10 animate-in zoom-in-50" title="Requiere Balanza">
-                                       <ScaleIcon size={14} strokeWidth={3} />
-                                    </div>
-                                 )}
-                                 {!isWeighted && hasVariants && (
-                                    <div className="absolute top-2 left-2 bg-blue-600 text-white p-1.5 rounded-lg shadow-lg z-10 animate-in zoom-in-50" title="Tiene Variantes">
-                                       <Layers size={14} strokeWidth={3} />
-                                    </div>
-                                 )}
-
-                                 {/* PROMO BADGE */}
-                                 {hasProductPromotion(product, config, activeTerminalId) && (
-                                    <div
-                                       className="absolute top-0 right-0 cursor-pointer z-20"
-                                       onClick={(e) => {
-                                          e.stopPropagation();
-                                          setSelectedPromoProduct(product);
-                                          setShowPromoSheet(true);
-                                       }}
-                                    >
-                                       <div className="bg-red-500 text-white text-[10px] font-black px-2 py-1 rounded-bl-xl shadow-md flex items-center gap-1 animate-in slide-in-from-top-2 hover:bg-red-600 transition-colors">
-                                          <Tag size={10} className="fill-white" />
-                                          <span>OFERTA</span>
-                                       </div>
-                                    </div>
-                                 )}
-                              </div>
-                           )}
-
-                           {/* FALLBACK BADGES (NO IMAGE MODE) */}
-                           {!uxConfig.showProductImages && hasProductPromotion(product, config, activeTerminalId) && (
-                              <div
-                                 className="absolute top-0 right-0 cursor-pointer z-20"
-                                 onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSelectedPromoProduct(product);
-                                    setShowPromoSheet(true);
-                                 }}
-                              >
-                                 <div className="bg-red-500 text-white text-[10px] font-black px-3 py-1.5 rounded-bl-2xl shadow-sm flex items-center gap-1 hover:bg-red-600 transition-colors">
-                                    <Tag size={12} className="fill-white" />
-                                    <span>OFERTA</span>
-                                 </div>
-                              </div>
-                           )}
-                           <div className={`flex flex-col ${usesExpandedCatalog ? 'min-h-0 h-full pt-1 justify-between' : 'flex-1 justify-between gap-3'}`}>
-                              <div className={usesSupermarketLayout ? 'space-y-1.5' : usesExpandedCatalog ? 'space-y-1' : 'space-y-1.5'}>
-                                 <span className={`block font-bold text-purple-500 uppercase opacity-60 line-clamp-1 ${usesSupermarketLayout ? 'text-[11px]' : usesExpandedCatalog ? 'text-[10px]' : isCompactMobileCard ? 'text-[10px]' : 'text-[8px]'}`}>{product.category}</span>
-                                 <h3 className={`font-bold text-gray-800 dark:text-white leading-tight line-clamp-2 ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[3rem]' : usesExpandedCatalog ? 'text-[1.05rem] min-h-[2.3rem]' : isCompactMobileCard ? 'text-[1.05rem] min-h-[2.8rem]' : 'text-sm min-h-[2.5rem]'}`}>{product.name}</h3>
-                              </div>
-                              <div className={`${usesSupermarketLayout ? 'mt-2 pt-2 border-t border-gray-100 dark:border-slate-700' : usesExpandedCatalog ? 'mt-1 pt-1 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-2 border-t border-gray-50 dark:border-slate-700'}`}>
-                                 <span className={`font-black text-gray-900 dark:text-white leading-none ${usesSupermarketLayout ? 'text-[2rem]' : usesExpandedCatalog ? 'text-[1.75rem]' : isCompactMobileCard ? 'text-[1.95rem]' : 'text-lg'}`}>{baseCurrency.symbol}{getProductPrice(product).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                              </div>
-                           </div>
-                           {warehouseSaleBlocked && (
-                              <div
-                                 className="pointer-events-none absolute inset-x-0 bottom-0 z-[25] flex justify-center px-2 pb-2 pt-10 bg-gradient-to-t from-slate-900/10 to-transparent dark:from-black/25 rounded-b-[1.5rem]"
-                                 aria-hidden
-                              >
-                                 <span className="inline-flex max-w-[calc(100%-0.5rem)] items-center gap-1 truncate rounded-lg bg-amber-600 px-2 py-1 text-center text-[9px] font-black uppercase tracking-wide text-white shadow-md">
-                                    <MapPin size={10} strokeWidth={3} className="shrink-0 opacity-95" />
-                                    Sin almacén en esta caja
-                                 </span>
-                              </div>
-                           )}
-                        </div>
-                     );
-                  })}
+                  {filteredProducts.map((product, idx) => (
+                     <ProductGridCard
+                        key={product.id || `prod-${idx}`}
+                        product={product}
+                        usesSupermarketLayout={usesSupermarketLayout}
+                        usesExpandedCatalog={usesExpandedCatalog}
+                        isMobile={isMobile}
+                        showProductImages={uxConfig.showProductImages}
+                        baseCurrencySymbol={baseCurrency.symbol}
+                        isProductWarehouseBlockedForSale={isProductWarehouseBlockedForSale}
+                        getTerminalWarehouseName={getTerminalWarehouseName}
+                        getProductPrice={getProductPrice}
+                        hasPromotionForProduct={hasPromotionForProduct}
+                        onProductClick={handleProductCardClick}
+                        onOpenPromotion={openProductPromotionSheet}
+                        onProductTouchStart={handleProductCardTouchStart}
+                        onProductTouchMove={handleProductCardTouchMove}
+                        onProductTouchEnd={clearQuickActionTouchTimer}
+                        onProductContextMenu={handleProductCardContextMenu}
+                     />
+                  ))}
                </div>
             </div>
             {/* VIRTUAL KEYBOARD SLOT */}
