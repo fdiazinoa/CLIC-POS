@@ -4246,7 +4246,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
 
                         {/* --- CONDITIONAL FOOTER --- */}
-                        {isKioskMode ? (
+                        {(rightSidebarTab === 'CART' || isMobile) && (isKioskMode ? (
                            <div className="mt-auto pt-6 space-y-6">
                               {/* Simple Kiosk Totals */}
                               <div className="flex justify-between items-end px-2">
@@ -4401,7 +4401,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                  )}
                               </div>
                            </>
-                        )}
+                        ))}
                      </>
                   )
                }
