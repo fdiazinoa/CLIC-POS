@@ -7,6 +7,7 @@ export interface RedemptionResult {
         value: number;
         description: string;
     };
+    coupon?: Coupon;
     error?: string;
     updatedConfig?: BusinessConfig;
 }
@@ -46,10 +47,13 @@ export const couponService = {
         ticketId: string,
         terminalId: string,
         config: BusinessConfig,
-        cartTotal: number = 0
+        cartTotal: number = 0,
+        customerId?: string | null
     ): RedemptionResult => {
+        const normalizedCode = code.trim().toUpperCase();
+        const selectedCustomerId = customerId?.trim();
         // 1. Find Coupon
-        const coupon = config.coupons?.find(c => c.code === code);
+        const coupon = config.coupons?.find(c => c.code.trim().toUpperCase() === normalizedCode);
 
         if (!coupon) {
             return { success: false, error: 'Cupón no encontrado.' };
@@ -62,6 +66,21 @@ export const couponService = {
 
         if (coupon.status === 'EXPIRED') {
             return { success: false, error: 'Este cupón ha expirado.' };
+        }
+
+        const assignedTo = coupon.assignedTo?.trim();
+        if (assignedTo && !selectedCustomerId) {
+            return {
+                success: false,
+                error: 'Este cupón está asignado a un cliente. Seleccione el cliente correcto antes de canjearlo.'
+            };
+        }
+
+        if (assignedTo && assignedTo !== selectedCustomerId) {
+            return {
+                success: false,
+                error: 'Este cupón está asignado a otro cliente. Verifique el cliente seleccionado e intente nuevamente.'
+            };
         }
 
         // 3. Find Campaign
@@ -127,6 +146,7 @@ export const couponService = {
                 value: campaign.benefitValue,
                 description: campaign.description || campaign.name
             },
+            coupon: updatedCoupon,
             updatedConfig
         };
     }

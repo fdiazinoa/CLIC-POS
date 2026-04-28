@@ -293,6 +293,8 @@ class TransactionService {
             netAmount: normalizedFiscalAmounts.netAmount,
             discountAmount: data.discountAmount,
             isTaxIncluded: data.isTaxIncluded,
+            couponCode: data.couponCode,
+            coupons: data.coupons,
             ncf: data.ncf,
             ncfType: data.ncfType,
             legacyNcf: data.legacyNcf,

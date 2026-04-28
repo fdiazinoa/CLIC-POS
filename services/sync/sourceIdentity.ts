@@ -16,6 +16,22 @@ const normalizeNumber = (value: unknown): number | undefined => {
     return Number.isFinite(parsed) ? parsed : undefined;
 };
 
+const normalizeCouponRefs = (value: unknown): Transaction['coupons'] | undefined => {
+    if (!Array.isArray(value)) return undefined;
+    const coupons = value
+        .map((coupon: any) => {
+            const code = normalizeString(coupon?.code || coupon?.couponCode || coupon?.coupon_code);
+            if (!code) return null;
+            return {
+                id: normalizeString(coupon?.id || coupon?.couponId || coupon?.coupon_id) || code,
+                code,
+                campaignId: normalizeString(coupon?.campaignId || coupon?.campaign_id)
+            };
+        })
+        .filter(Boolean) as NonNullable<Transaction['coupons']>;
+    return coupons.length > 0 ? coupons : undefined;
+};
+
 const normalizeTransactionItems = (items: CartItem[]): CartItem[] => {
     return items.map((item) => {
         const price = Number(item?.price || 0);
@@ -218,6 +234,11 @@ export const normalizeTransactionForSync = (transaction: Transaction): Transacti
     const settlementChangeCurrencyCode =
         normalizeString((transaction as any).settlement_change_currency_code) ||
         normalizeString((transaction as any).settlementChangeCurrencyCode);
+    const coupons = normalizeCouponRefs((transaction as any).coupons);
+    const couponCode =
+        normalizeString((transaction as any).couponCode) ||
+        normalizeString((transaction as any).coupon_code) ||
+        coupons?.[0]?.code;
 
     return {
         ...transaction,
@@ -243,6 +264,8 @@ export const normalizeTransactionForSync = (transaction: Transaction): Transacti
         settlement_applied_base: settlementAppliedBase,
         settlement_change_base: settlementChangeBase,
         settlement_change_currency_code: settlementChangeCurrencyCode,
+        couponCode,
+        coupons,
         items: normalizeTransactionItems(Array.isArray(transaction.items) ? transaction.items : []),
         payments: normalizePaymentEntries(Array.isArray(transaction.payments) ? transaction.payments : [], {
             sourceTransactionId,
