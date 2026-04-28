@@ -1,4 +1,12 @@
-export type TerminalConfigPushMasterScope = 'items' | 'customers' | 'suppliers' | 'sellers';
+export type TerminalConfigPushMasterScope =
+    | 'items'
+    | 'customers'
+    | 'suppliers'
+    | 'sellers'
+    | 'users'
+    | 'pos_users'
+    | 'roles'
+    | 'pos_roles';
 export type TerminalConfigPushBlockScope = 'inventory' | 'product_prices';
 export type TerminalConfigPushResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions';
 
@@ -13,9 +21,40 @@ export type TerminalConfigSyncRequestDetail = {
     selective?: boolean;
 };
 
-const TERMINAL_CONFIG_MASTER_SCOPE_SET = new Set<TerminalConfigPushMasterScope>(['items', 'customers', 'suppliers', 'sellers']);
+const TERMINAL_CONFIG_MASTER_SCOPE_SET = new Set<TerminalConfigPushMasterScope>([
+    'items',
+    'customers',
+    'suppliers',
+    'sellers',
+    'users',
+    'pos_users',
+    'roles',
+    'pos_roles',
+]);
 const TERMINAL_CONFIG_BLOCK_SCOPE_SET = new Set<TerminalConfigPushBlockScope>(['inventory', 'product_prices']);
 const TERMINAL_CONFIG_RESOLVED_SCOPE_SET = new Set<TerminalConfigPushResolvedScope>(['pricing', 'inventory', 'documents', 'catalog', 'promotions']);
+const TERMINAL_CONFIG_MASTER_SCOPE_ALIASES: Record<string, TerminalConfigPushMasterScope> = {
+    user: 'users',
+    usuarios: 'users',
+    usuario: 'users',
+    operador: 'users',
+    operadores: 'users',
+    operator: 'users',
+    operators: 'users',
+    pos_user: 'pos_users',
+    pos_users: 'pos_users',
+    usuarios_pos: 'pos_users',
+    usuario_pos: 'pos_users',
+    pos_operator: 'pos_users',
+    pos_operators: 'pos_users',
+    role: 'roles',
+    roles: 'roles',
+    rol: 'roles',
+    pos_role: 'pos_roles',
+    pos_roles: 'pos_roles',
+    rol_pos: 'pos_roles',
+    roles_pos: 'pos_roles',
+};
 const TERMINAL_CONFIG_BLOCK_SCOPE_ALIASES: Record<string, TerminalConfigPushBlockScope> = {
     inventory: 'inventory',
     inventories: 'inventory',
@@ -100,7 +139,11 @@ export const extractTerminalConfigRequestedScopes = (value: unknown) => {
 
     return {
         selective: true,
-        masterScopes: normalizeScopes(record.masterScopes ?? record.master_scopes, TERMINAL_CONFIG_MASTER_SCOPE_SET),
+        masterScopes: normalizeScopes(
+            record.masterScopes ?? record.master_scopes,
+            TERMINAL_CONFIG_MASTER_SCOPE_SET,
+            TERMINAL_CONFIG_MASTER_SCOPE_ALIASES,
+        ),
         blockScopes: normalizeScopes(
             mergeScopeInputs(record.blockScopes, record.block_scopes, record.blocks, record.scopes),
             TERMINAL_CONFIG_BLOCK_SCOPE_SET,

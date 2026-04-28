@@ -755,6 +755,16 @@ const AppContent: React.FC = () => {
         if (Array.isArray(refreshedProducts)) {
           setProducts(refreshedProducts);
         }
+
+        const refreshedUsers = await db.get('users') as User[];
+        if (Array.isArray(refreshedUsers)) {
+          setUsers(refreshedUsers);
+        }
+
+        const refreshedRoles = await db.get('roles') as RoleDefinition[];
+        if (Array.isArray(refreshedRoles)) {
+          setRoles(refreshedRoles);
+        }
       } catch (error) {
         console.warn('⚠️ Failed to apply terminal config refresh requested by ERP outbox:', error);
       }
@@ -2617,6 +2627,8 @@ const AppContent: React.FC = () => {
           break;
         case 'customers': setCustomers(freshData as Customer[]); break;
         case 'suppliers': setSuppliers(freshData as Supplier[]); break;
+        case 'users': setUsers(Array.isArray(freshData) ? freshData as User[] : []); break;
+        case 'roles': setRoles(Array.isArray(freshData) ? freshData as RoleDefinition[] : DEFAULT_ROLES); break;
         case 'purchaseOrders': setPurchaseOrders(Array.isArray(freshData) ? freshData as PurchaseOrder[] : []); break;
         case 'transfers': setTransfers(Array.isArray(freshData) ? freshData as StockTransfer[] : []); break;
         case 'internalSequences': /* No state for this, used directly from DB */ break;
@@ -2634,7 +2646,7 @@ const AppContent: React.FC = () => {
       }
     };
 
-    const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'purchaseOrdersUpdated', 'transfersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'cashMovementsUpdated', 'zReportsUpdated', 'warehousesUpdated', 'productStocksUpdated', 'tablesUpdated'];
+    const syncEvents = ['productsUpdated', 'customersUpdated', 'suppliersUpdated', 'usersUpdated', 'rolesUpdated', 'purchaseOrdersUpdated', 'transfersUpdated', 'internalSequencesUpdated', 'transactionsUpdated', 'cashMovementsUpdated', 'zReportsUpdated', 'warehousesUpdated', 'productStocksUpdated', 'tablesUpdated'];
     syncEvents.forEach(e => window.addEventListener(e, handleSyncUpdate));
 
     return () => {
