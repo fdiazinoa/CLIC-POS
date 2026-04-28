@@ -19,7 +19,7 @@ import { Html5Qrcode } from "html5-qrcode";
 import {
    BusinessConfig, User as UserType, RoleDefinition,
    Customer, Product, CartItem, Transaction, ParkedTicket, Warehouse, NCFType, FiscalDocumentCode,
-   PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, Tariff
+   PaymentEntry, Table, Reservation, ZReport, Room, Permission, ProductPrice, Tariff, RedeemedCouponRef
 } from '../types';
 import { hasProductPromotion } from '../utils/promotionEngine';
 import { getFiscalComplianceConfig, getDefaultFiscalProvider, getFiscalReserveAlert, resolveCreditNoteFiscalCode, resolveSaleFiscalCode } from '../utils/fiscal/fiscalHelpers';
@@ -929,6 +929,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const [showGlobalDiscount, setShowGlobalDiscount] = useState(false);
    const [showCouponModal, setShowCouponModal] = useState(false);
    const [couponCode, setCouponCode] = useState('');
+   const [redeemedCoupon, setRedeemedCoupon] = useState<RedeemedCouponRef | null>(null);
 
    const [syncState, setSyncState] = useState<SyncState>(backgroundSyncManager.getState());
 
@@ -1257,10 +1258,23 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    }, [activeReservations, reservationSearchTerm, reservationCustomerFilterId]);
 
    const handleRedeemCoupon = () => {
-      if (!couponCode) return;
+      const normalizedCouponCode = couponCode.trim().toUpperCase();
+      if (!normalizedCouponCode) return;
+
+      if (redeemedCoupon) {
+         alert(`Ya hay un cupón aplicado en este ticket: ${redeemedCoupon.code}. Finalice o limpie el ticket antes de aplicar otro.`);
+         return;
+      }
 
       const cartSubtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-      const result = couponService.redeemCoupon(couponCode, `TICKET-${Date.now()}`, terminalId, config, cartSubtotal);
+      const result = couponService.redeemCoupon(
+         normalizedCouponCode,
+         `TICKET-${Date.now()}`,
+         terminalId,
+         config,
+         cartSubtotal,
+         effectiveSelectedCustomer?.id
+      );
 
       if (result.success) {
          if (result.updatedConfig) {
@@ -1272,6 +1286,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                setGlobalDiscount({ type: 'PERCENT', value: result.benefit.value });
             } else if (result.benefit.type === 'FIXED_AMOUNT') {
                setGlobalDiscount({ type: 'FIXED', value: result.benefit.value });
+            }
+            if (result.coupon) {
+               setRedeemedCoupon({
+                  id: result.coupon.id,
+                  code: result.coupon.code,
+                  campaignId: result.coupon.campaignId,
+                  assignedTo: result.coupon.assignedTo
+               });
             }
             alert(`¡Cupón Canjeado!\n${result.benefit.description}`);
             setShowCouponModal(false);
@@ -2359,6 +2381,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
    }, [cart.length, activeRecoveredReservation]);
 
+   useEffect(() => {
+      if (cart.length > 0 || !redeemedCoupon) return;
+      setRedeemedCoupon(null);
+      setCouponCode('');
+      setGlobalDiscount({ type: 'PERCENT', value: 0 });
+   }, [cart.length, redeemedCoupon]);
+
 
 
    const updateCartItem = async (updatedItem: CartItem | null, cartIdToDelete?: string) => {
@@ -2432,6 +2461,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          const terminalId = activeTerminalId || 't1';
          const fiscalCompliance = getFiscalComplianceConfig(config);
          const customerForCheckout = effectiveSelectedCustomer;
+         const couponAssignedTo = redeemedCoupon?.assignedTo?.trim();
+         if (couponAssignedTo && couponAssignedTo !== customerForCheckout?.id) {
+            alert('El cupón aplicado está asignado a un cliente específico. Seleccione ese cliente antes de finalizar la venta.');
+            return null;
+         }
+         const couponSyncFields = redeemedCoupon
+            ? {
+               couponCode: redeemedCoupon.code,
+               coupons: [{
+                  id: redeemedCoupon.id,
+                  code: redeemedCoupon.code,
+                  campaignId: redeemedCoupon.campaignId
+               }]
+            }
+            : {};
          const hasReturns = processedCart.some(i => i.quantity < 0);
          const hasSales = processedCart.some(i => i.quantity > 0);
          const productsById = new Map(products.map(product => [product.id, product] as const));
@@ -2600,6 +2644,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         serviceChargeAmount: isRestaurantMode ? cartTip : undefined,
                         voluntaryTipAmount: voluntaryTip,
                         ...saleSettlement,
+                        ...couponSyncFields,
                         userId: currentUser.id,
                         userName: currentUser.name,
                         terminalId: terminalId,
@@ -2683,6 +2728,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   }
 
                   onUpdateCart([]);
+                  if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
+                  setRedeemedCoupon(null);
+                  setCouponCode('');
                   onSelectCustomer(null);
                   setIsReturnMode(false);
                   setRefundAuthorizedBy(null);
@@ -2698,6 +2746,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                const data = await withTimeout(response.json(), 4000, 'TIMEOUT_SPLIT_PARSE');
                if (data.success) {
                   onUpdateCart([]);
+                  if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
+                  setRedeemedCoupon(null);
+                  setCouponCode('');
                   onSelectCustomer(null);
                   setIsReturnMode(false);
                   setRefundAuthorizedBy(null);
@@ -2746,6 +2797,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   taxAmount: taxAmount,
                   netAmount: netAmount,
                   discountAmount: discountAmount,
+                  ...(isRefundOnly ? {} : couponSyncFields),
                   customerSnapshot: customerForCheckout ? {
                      name: customerForCheckout.name,
                      taxId: customerForCheckout.taxId,
@@ -2856,6 +2908,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                }
 
                onUpdateCart([]);
+               if (redeemedCoupon) setGlobalDiscount({ type: 'PERCENT', value: 0 });
+               setRedeemedCoupon(null);
+               setCouponCode('');
                onSelectCustomer(null);
                setIsReturnMode(false);
                setRefundAuthorizedBy(null);

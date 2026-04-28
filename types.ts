@@ -1378,6 +1378,8 @@ export interface Transaction {
   taxBreakdown?: any[];             // Fiscal tax lines persisted for provider retries
   discountAmount?: number;
   isTaxIncluded?: boolean;
+  couponCode?: string;
+  coupons?: RedeemedCouponRef[];
 
   // Fiscal
   ncf?: string;                     // NCF final del documento
@@ -1965,6 +1967,13 @@ export interface Coupon {
   ticketRef?: string;
   terminalId?: string;
   createdAt: string;
+}
+
+export interface RedeemedCouponRef {
+  id: string;
+  code: string;
+  campaignId?: string;
+  assignedTo?: string;
 }
 
 
