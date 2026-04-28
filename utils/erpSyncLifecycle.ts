@@ -1,5 +1,6 @@
 import { getStoredTenantIdentity } from './cloudMasterRegistry';
 import { extractTerminalConfigRequestedScopes } from './terminalConfigPushScopes';
+import { mergeTerminalConfigSnapshots } from './terminalConfigSnapshot';
 import { db } from './db';
 import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
 import { getDefaultRoleConfig } from './deviceRoleHelpers';
@@ -9,6 +10,7 @@ import {
     DeviceRole,
     DeviceRoleConfig,
     TerminalConfig,
+    TerminalConfigSnapshot,
 } from '../types';
 
 type TenantIdentity = {
@@ -111,6 +113,7 @@ type SyncTerminalSnapshot = {
     terminal_name?: string | null;
     device_id?: string | null;
     role?: string | null;
+    masters?: Record<string, unknown> | null;
     config?: Record<string, unknown> | null;
     resolved?: Record<string, unknown> | null;
 };
@@ -764,8 +767,15 @@ const applyErpConfigPushToLocalTerminal = async ({
 }): Promise<boolean> => {
     const snapshot = asObject<SyncTerminalSnapshot>(payload.terminal_config);
     const incomingConfig = asObject<Record<string, unknown>>(snapshot.config);
+    const incomingMasters = asObject<Record<string, unknown>>(snapshot.masters);
+    const incomingResolved = asObject<Record<string, unknown>>(snapshot.resolved);
 
-    if (!snapshot.terminal_id && Object.keys(incomingConfig).length === 0) {
+    if (
+        !snapshot.terminal_id &&
+        Object.keys(incomingConfig).length === 0 &&
+        Object.keys(incomingMasters).length === 0 &&
+        Object.keys(incomingResolved).length === 0
+    ) {
         return false;
     }
 
@@ -790,6 +800,7 @@ const applyErpConfigPushToLocalTerminal = async ({
     }
 
     const targetTerminal = localConfig.terminals[targetIndex];
+    const localTerminalId = targetTerminal.id || resolvedTerminalId || fallbackTerminalId || '';
     const currentConfig: TerminalConfig = targetTerminal.config || ({} as TerminalConfig);
     const incomingOperational = asObject<Record<string, unknown>>(incomingConfig.operational);
     const incomingCatalog = asObject<Record<string, unknown>>(incomingConfig.catalog);
@@ -827,6 +838,15 @@ const applyErpConfigPushToLocalTerminal = async ({
         ...(currentConfig.documentAssignments || {}),
         ...incomingAssignments,
     } as NonNullable<TerminalConfig['documentAssignments']>;
+    const existingSnapshot =
+        currentConfig.erpSnapshot ||
+        (localTerminalId ? localConfig.terminalSnapshots?.[localTerminalId] : null) ||
+        (resolvedTerminalId ? localConfig.terminalSnapshots?.[resolvedTerminalId] : null) ||
+        null;
+    const nextErpSnapshot = mergeTerminalConfigSnapshots(
+        existingSnapshot,
+        snapshot as TerminalConfigSnapshot
+    ) || (snapshot as TerminalConfigSnapshot);
     const nextTerminalConfig: TerminalConfig = {
         ...currentConfig,
         deviceRole: buildCompatibleDeviceRoleConfig(currentConfig.deviceRole, incomingConfig.deviceRole),
@@ -835,6 +855,18 @@ const applyErpConfigPushToLocalTerminal = async ({
         pricing: nextPricing,
         documentAssignments: nextDocumentAssignments,
         inventoryScope: buildCompatibleInventoryScope(currentConfig.inventoryScope, resolvedInventory),
+        erpBinding: {
+            ...(currentConfig.erpBinding || {}),
+            terminalId: normalizeOptional(snapshot.terminal_id || currentConfig.erpBinding?.terminalId || null) || undefined,
+            terminalName:
+                normalizeOptional(snapshot.terminal_name || currentConfig.erpBinding?.terminalName || null) ||
+                currentConfig.terminalName ||
+                localTerminalId ||
+                undefined,
+            deviceId: normalizeOptional(snapshot.device_id || currentConfig.erpBinding?.deviceId || deviceId || null) || undefined,
+            role: normalizeOptional(snapshot.role || currentConfig.erpBinding?.role || null) || undefined,
+        },
+        erpSnapshot: nextErpSnapshot,
     };
 
     const nextTerminals = localConfig.terminals.map((terminal, index) => {
@@ -844,14 +876,21 @@ const applyErpConfigPushToLocalTerminal = async ({
 
         return {
             ...terminal,
-            id: resolvedTerminalId || terminal.id,
+            id: terminal.id || resolvedTerminalId,
             config: nextTerminalConfig,
         };
     });
 
+    const terminalSnapshots = {
+        ...(localConfig.terminalSnapshots || {}),
+        ...(localTerminalId ? { [localTerminalId]: nextErpSnapshot } : {}),
+        ...(resolvedTerminalId ? { [resolvedTerminalId]: nextErpSnapshot } : {}),
+    };
+
     const nextConfig: BusinessConfig = {
         ...localConfig,
         terminals: nextTerminals,
+        terminalSnapshots,
     };
 
     await db.save('config', nextConfig);

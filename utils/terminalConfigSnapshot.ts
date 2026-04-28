@@ -562,6 +562,7 @@ export const extractTerminalConfigSnapshot = (payload: unknown): TerminalConfigS
     const snapshot = asObject(candidate);
     if (
       asString(snapshot.terminal_id) ||
+      Object.keys(asObject(snapshot.masters)).length > 0 ||
       Object.keys(asObject(snapshot.resolved)).length > 0 ||
       Object.keys(asObject(snapshot.config)).length > 0 ||
       snapshot.resolution_error != null
@@ -571,6 +572,67 @@ export const extractTerminalConfigSnapshot = (payload: unknown): TerminalConfigS
   }
 
   return null;
+};
+
+export const mergeTerminalConfigSnapshots = (
+  cachedSnapshot?: TerminalConfigSnapshot | null,
+  incomingSnapshot?: TerminalConfigSnapshot | null
+): TerminalConfigSnapshot | null => {
+  const cached = asObject(cachedSnapshot);
+  const incoming = asObject(incomingSnapshot);
+  const hasCached = Object.keys(cached).length > 0;
+  const hasIncoming = Object.keys(incoming).length > 0;
+
+  if (!hasCached && !hasIncoming) {
+    return null;
+  }
+
+  const merged = cloneDeep({
+    ...cached,
+    ...incoming,
+  }) as TerminalConfigSnapshot;
+
+  const cachedMasters = asObject(cached.masters);
+  const incomingMasters = asObject(incoming.masters);
+  if (Object.keys(cachedMasters).length > 0 || Object.keys(incomingMasters).length > 0) {
+    merged.masters = {
+      ...cachedMasters,
+      ...incomingMasters,
+    };
+  }
+
+  const cachedResolved = asObject(cached.resolved);
+  const incomingResolved = asObject(incoming.resolved);
+  if (Object.keys(cachedResolved).length > 0 || Object.keys(incomingResolved).length > 0) {
+    const resolved = {
+      ...cachedResolved,
+      ...incomingResolved,
+    } as Record<string, any>;
+
+    ['pricing', 'inventory', 'documents', 'catalog', 'loyalty'].forEach((key) => {
+      const cachedSection = asObject(cachedResolved[key]);
+      const incomingSection = asObject(incomingResolved[key]);
+      if (Object.keys(cachedSection).length > 0 || Object.keys(incomingSection).length > 0) {
+        resolved[key] = {
+          ...cachedSection,
+          ...incomingSection,
+        };
+      }
+    });
+
+    merged.resolved = resolved as TerminalConfigSnapshot['resolved'];
+  }
+
+  const cachedConfig = asObject(cached.config);
+  const incomingConfig = asObject(incoming.config);
+  if (Object.keys(cachedConfig).length > 0 || Object.keys(incomingConfig).length > 0) {
+    merged.config = {
+      ...cachedConfig,
+      ...incomingConfig,
+    };
+  }
+
+  return merged;
 };
 
 const resolveTerminalTemplate = (config: BusinessConfig, terminalId: string): TerminalConfig => {
@@ -615,9 +677,10 @@ export const applyTerminalConfigSnapshot = (
   const { terminalId, posDeviceId, bindingMode, incomingSnapshot, cachedSnapshot } = options;
   const nextConfig = cloneDeep(baseConfig);
   const incoming = incomingSnapshot || null;
+  const cached = cachedSnapshot || null;
+  const mergedSnapshot = mergeTerminalConfigSnapshots(cached, incoming);
   const incomingResolved = asObject(incoming?.resolved);
   const incomingFallbackConfig = asObject(incoming?.config);
-  const cached = cachedSnapshot || null;
   const cachedResolved = asObject(cached?.resolved);
   const hasResolutionError = Boolean(incoming?.resolution_error != null);
   const hasIncomingResolved = Object.keys(incomingResolved).length > 0;
@@ -625,7 +688,7 @@ export const applyTerminalConfigSnapshot = (
   const hasCachedResolved = Object.keys(cachedResolved).length > 0;
 
   let snapshotSource: SnapshotSource = 'existing_config';
-  let effectiveSnapshot: TerminalConfigSnapshot | null = incoming;
+  let effectiveSnapshot: TerminalConfigSnapshot | null = mergedSnapshot || incoming;
   let effectiveResolved = incomingResolved;
   let effectiveFallbackConfig = incomingFallbackConfig;
 
@@ -635,7 +698,7 @@ export const applyTerminalConfigSnapshot = (
     snapshotSource = 'fallback_config';
   } else if (hasCachedResolved) {
     snapshotSource = 'cached_snapshot';
-    effectiveSnapshot = cached;
+    effectiveSnapshot = mergedSnapshot || cached;
     effectiveResolved = cachedResolved;
     effectiveFallbackConfig = asObject(cached?.config);
   }
