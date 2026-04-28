@@ -1,7 +1,20 @@
 import { CartItem } from '../types';
 
+export interface VisorCartItem {
+    id?: string;
+    cartId?: string;
+    name: string;
+    quantity: number;
+    price: number;
+    originalPrice?: number;
+    discountAmount?: number;
+    discountRate?: number;
+    adjustmentSource?: string;
+    appliedPromotionName?: string;
+}
+
 export interface VisorState {
-    cart: CartItem[];
+    cart: VisorCartItem[];
     subtotal: number;
     tax: number;
     discountAmount: number;
@@ -11,11 +24,65 @@ export interface VisorState {
     currencySymbol: string;
 }
 
+export type VisorStateInput = Omit<VisorState, 'cart'> & {
+    cart: Array<CartItem | VisorCartItem>;
+};
+
 const CHANNEL_NAME = 'clic-pos-visor-sync';
 const STORAGE_KEY = 'clic_pos_visor_state';
+const WRITE_DEBOUNCE_MS = 300;
+
+const toNumber = (value: unknown): number => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : 0;
+};
+
+const stripCartItemForVisor = (item: CartItem | VisorCartItem): VisorCartItem => {
+    const source = item as any;
+    const stripped: VisorCartItem = {
+        id: typeof source.id === 'string' ? source.id : undefined,
+        cartId: typeof source.cartId === 'string' ? source.cartId : undefined,
+        name: typeof source.name === 'string' ? source.name : 'Artículo',
+        quantity: toNumber(source.quantity),
+        price: toNumber(source.price),
+    };
+
+    if (Number.isFinite(Number(source.originalPrice))) {
+        stripped.originalPrice = toNumber(source.originalPrice);
+    }
+    if (Number.isFinite(Number(source.discountAmount))) {
+        stripped.discountAmount = toNumber(source.discountAmount);
+    }
+    if (Number.isFinite(Number(source.discountRate))) {
+        stripped.discountRate = toNumber(source.discountRate);
+    }
+    if (typeof source.adjustmentSource === 'string') {
+        stripped.adjustmentSource = source.adjustmentSource;
+    }
+    if (typeof source.appliedPromotionName === 'string') {
+        stripped.appliedPromotionName = source.appliedPromotionName;
+    }
+
+    return stripped;
+};
+
+const stripStateForVisor = (state: VisorStateInput): VisorState => ({
+    cart: Array.isArray(state.cart) ? state.cart.map(stripCartItemForVisor) : [],
+    subtotal: toNumber(state.subtotal),
+    tax: toNumber(state.tax),
+    discountAmount: toNumber(state.discountAmount),
+    total: toNumber(state.total),
+    welcomeMessage: state.welcomeMessage,
+    ads: Array.isArray(state.ads)
+        ? state.ads.map((ad) => ({ id: ad.id, url: ad.url, active: Boolean(ad.active) }))
+        : undefined,
+    currencySymbol: state.currencySymbol || '$',
+});
 
 class VisorSyncService {
     private channel: BroadcastChannel | null = null;
+    private pendingState: VisorState | null = null;
+    private writeTimer: number | null = null;
 
     constructor() {
         if (typeof window !== 'undefined') {
@@ -26,13 +93,50 @@ class VisorSyncService {
     /**
      * Send the current POS state to the visor
      */
-    public pushState(state: VisorState) {
-        if (typeof window !== 'undefined') {
+    public pushState(state: VisorStateInput) {
+        if (typeof window === 'undefined') return;
+
+        this.pendingState = stripStateForVisor(state);
+
+        if (this.writeTimer) {
+            window.clearTimeout(this.writeTimer);
+        }
+
+        this.writeTimer = window.setTimeout(() => {
+            this.writeTimer = null;
+            this.scheduleIdleFlush();
+        }, WRITE_DEBOUNCE_MS);
+    }
+
+    private scheduleIdleFlush() {
+        if (typeof window === 'undefined') return;
+
+        const flush = () => this.flushPendingState();
+        const requestIdle = (window as any).requestIdleCallback as
+            | ((callback: () => void, options?: { timeout?: number }) => number)
+            | undefined;
+
+        if (typeof requestIdle === 'function') {
+            requestIdle(flush, { timeout: 500 });
+            return;
+        }
+
+        window.setTimeout(flush, 0);
+    }
+
+    private flushPendingState() {
+        if (typeof window === 'undefined' || !this.pendingState) return;
+
+        const state = this.pendingState;
+        this.pendingState = null;
+
+        try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        } catch (error) {
+            console.warn('[visorSync] No se pudo guardar el estado del visor:', error);
         }
-        if (this.channel) {
-            this.channel.postMessage({ type: 'STATE_UPDATE', payload: state });
-        }
+
+        this.channel?.postMessage({ type: 'STATE_UPDATE', payload: state });
     }
 
     /**
@@ -96,6 +200,11 @@ class VisorSyncService {
     }
 
     public close() {
+        if (this.writeTimer && typeof window !== 'undefined') {
+            window.clearTimeout(this.writeTimer);
+            this.writeTimer = null;
+        }
+        this.pendingState = null;
         this.channel?.close();
     }
 }
