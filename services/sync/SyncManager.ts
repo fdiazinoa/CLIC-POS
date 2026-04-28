@@ -15,7 +15,8 @@ import { permissionService } from './PermissionService';
 import { realtimeNotificationService } from './RealtimeNotificationService';
 import { productImageCacheService } from './ProductImageCacheService';
 import { masterDataImageCacheService, type ImageBackedCollection } from './MasterDataImageCacheService';
-import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer, ProductStock, ProductPrice, TariffPrice, Warehouse } from '../../types';
+import { DEFAULT_ROLES } from '../../constants';
+import { Product, Customer, Supplier, DocumentSeries, BusinessConfig, SyncConfig, TerminalConfig, PurchaseOrder, StockTransfer, ProductStock, ProductPrice, TariffPrice, Warehouse, User, RoleDefinition, Permission } from '../../types';
 import {
     applyTerminalConfigSnapshot,
     extractTerminalConfigSnapshot,
@@ -54,7 +55,7 @@ interface SyncStatus {
     error?: string;
 }
 
-type TerminalManifestMasterScope = 'items' | 'customers' | 'suppliers' | 'sellers' | 'purchase_orders' | 'transfers';
+type TerminalManifestMasterScope = 'items' | 'customers' | 'suppliers' | 'sellers' | 'users' | 'pos_users' | 'roles' | 'pos_roles' | 'purchase_orders' | 'transfers';
 type TerminalManifestBlockScope = 'inventory' | 'product_prices';
 type TerminalManifestResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions' | 'loyalty';
 type TerminalManifestScope = 'terminal' | TerminalManifestMasterScope | TerminalManifestBlockScope;
@@ -65,6 +66,10 @@ interface TerminalCursorMap {
     items?: string | null;
     customers?: string | null;
     suppliers?: string | null;
+    users?: string | null;
+    pos_users?: string | null;
+    roles?: string | null;
+    pos_roles?: string | null;
     purchase_orders?: string | null;
     transfers?: string | null;
     inventory?: string | null;
@@ -1377,7 +1382,7 @@ class SyncManager {
                 return null;
             }
 
-            const changedMasterScopes: TerminalManifestMasterScope[] = (['items', 'customers', 'suppliers', 'sellers', 'purchase_orders', 'transfers'] as TerminalManifestMasterScope[])
+            const changedMasterScopes: TerminalManifestMasterScope[] = (['items', 'customers', 'suppliers', 'sellers', 'users', 'pos_users', 'roles', 'pos_roles', 'purchase_orders', 'transfers'] as TerminalManifestMasterScope[])
                 .filter((scope) => manifest.changed?.[scope]);
             const changedBlocks = Array.isArray(manifest.changed_blocks) ? manifest.changed_blocks : [];
             const inventoryChanged = Boolean(manifest.changed.inventory) || changedBlocks.includes('inventory');
@@ -2297,7 +2302,14 @@ class SyncManager {
             } else {
                 await this.applySnapshotProducts(snapshot);
             }
-            const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta);
+            const structuredMasterData = await this.refreshTerminalStructuredMasterData(snapshot, catalogDelta, {
+                terminalIds: [
+                    context.terminalId,
+                    snapshotTerminalId,
+                    context.localTerminalId,
+                    context.posDeviceId,
+                ],
+            });
             await posCatalogDebugLogDbRows('after refreshTerminalResolvedConfig product apply');
             posCatalogDebugLog('refreshTerminalResolvedConfig: product apply success', {
                 usedCatalogDelta: Boolean(catalogDelta),
@@ -2767,7 +2779,16 @@ class SyncManager {
 
     private snapshotMasterRows(
         snapshot: unknown,
-        key: 'customers' | 'suppliers' | 'purchaseOrders' | 'purchase_orders' | 'transfers'
+        key:
+            | 'customers'
+            | 'suppliers'
+            | 'users'
+            | 'pos_users'
+            | 'roles'
+            | 'pos_roles'
+            | 'purchaseOrders'
+            | 'purchase_orders'
+            | 'transfers'
     ): unknown[] | null {
         const masters = snapshot && typeof snapshot === 'object'
             ? (snapshot as Record<string, any>).masters
@@ -2784,6 +2805,311 @@ class SyncManager {
         return Array.isArray((masters as Record<string, unknown>)[key])
             ? ((masters as Record<string, unknown>)[key] as unknown[])
             : [];
+    }
+
+    private collectSnapshotMasterRows(
+        snapshot: unknown,
+        keys: Array<'users' | 'pos_users' | 'roles' | 'pos_roles'>
+    ): unknown[] | null {
+        let found = false;
+        const rows: unknown[] = [];
+
+        for (const key of keys) {
+            const snapshotRows = this.snapshotMasterRows(snapshot, key);
+            if (snapshotRows === null) continue;
+            found = true;
+            rows.push(...snapshotRows);
+        }
+
+        return found ? rows : null;
+    }
+
+    private snapshotText(value: unknown): string {
+        if (typeof value === 'string') return value.trim();
+        if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+        return '';
+    }
+
+    private snapshotBool(value: unknown): boolean | null {
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            if (value === 1) return true;
+            if (value === 0) return false;
+        }
+        if (typeof value === 'string') {
+            const token = value.trim().toLowerCase();
+            if (['true', '1', 'yes', 'si', 'sí', 'y'].includes(token)) return true;
+            if (['false', '0', 'no', 'n'].includes(token)) return false;
+        }
+        return null;
+    }
+
+    private normalizePosPin(value: unknown): string {
+        const raw = this.snapshotText(value);
+        const digits = raw.replace(/\D/g, '');
+        return /^\d{4}$/.test(digits) ? digits : '';
+    }
+
+    private terminalScopeMatches(row: Record<string, unknown>, terminalIds: Array<string | null | undefined>): boolean {
+        const scope = this.snapshotText(row.terminal_scope ?? row.terminalScope).toUpperCase();
+        const rawTerminalIds = row.terminal_ids ?? row.terminalIds ?? row.terminals ?? row.terminal_id ?? row.terminalId;
+        const values = Array.isArray(rawTerminalIds)
+            ? rawTerminalIds
+            : rawTerminalIds
+                ? [rawTerminalIds]
+                : [];
+        const allowedTerminalIds = values
+            .map((entry) => {
+                if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+                    const record = entry as Record<string, unknown>;
+                    return this.snapshotText(
+                        record.id ??
+                        record.terminal_id ??
+                        record.terminalId ??
+                        record.local_terminal_id ??
+                        record.localTerminalId ??
+                        record.device_id ??
+                        record.deviceId
+                    );
+                }
+                return this.snapshotText(entry);
+            })
+            .filter(Boolean);
+
+        if (scope === 'ALL') {
+            return true;
+        }
+
+        if (scope !== 'SELECTED' && allowedTerminalIds.length === 0) {
+            return true;
+        }
+
+        const candidates = new Set(
+            terminalIds
+                .map((id) => this.snapshotText(id).toLowerCase())
+                .filter(Boolean)
+        );
+
+        return allowedTerminalIds.some((id) => candidates.has(id.toLowerCase()));
+    }
+
+    private normalizeSnapshotRoleId(row: Record<string, unknown>): string {
+        const roleObject = row.role && typeof row.role === 'object' && !Array.isArray(row.role)
+            ? row.role as Record<string, unknown>
+            : {};
+
+        return this.snapshotText(
+            row.pos_role_id ??
+            row.posRoleId ??
+            row.pos_role_code ??
+            row.posRoleCode ??
+            row.roleId ??
+            row.role_id ??
+            row.role_code ??
+            row.roleCode ??
+            roleObject.id ??
+            roleObject.code ??
+            row.role
+        ) || 'CASHIER';
+    }
+
+    private normalizeSnapshotPosUser(
+        raw: unknown,
+        terminalIds: Array<string | null | undefined>
+    ): (User & { syncSource?: 'ERP_SNAPSHOT' }) | null {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+            return null;
+        }
+
+        const row = raw as Record<string, unknown>;
+        const canOperatePos = this.snapshotBool(
+            row.puede_operar_pos ??
+            row.can_operate_pos ??
+            row.canOperatePos ??
+            row.allow_pos_access ??
+            row.allowPosAccess ??
+            row.pos_enabled ??
+            row.posEnabled
+        );
+        if (canOperatePos === false || !this.terminalScopeMatches(row, terminalIds)) {
+            return null;
+        }
+
+        const pin = this.normalizePosPin(row.pos_pin ?? row.posPin ?? row.pin ?? row.pin_code ?? row.pinCode);
+        if (!pin) {
+            return null;
+        }
+
+        const id = this.snapshotText(
+            row.id ??
+            row.user_id ??
+            row.userId ??
+            row.employee_id ??
+            row.employeeId ??
+            row.code ??
+            row.email ??
+            row.username
+        );
+        const name = this.snapshotText(
+            row.name ??
+            row.nombre ??
+            row.full_name ??
+            row.fullName ??
+            row.display_name ??
+            row.displayName ??
+            row.username ??
+            row.email
+        );
+        if (!id || !name) {
+            return null;
+        }
+
+        const roleId = this.normalizeSnapshotRoleId(row);
+        const photo = this.snapshotText(
+            row.photo ??
+            row.avatar ??
+            row.image ??
+            row.image_url ??
+            row.imageUrl ??
+            row.photo_url ??
+            row.photoUrl
+        );
+
+        return {
+            id,
+            name,
+            pin,
+            role: roleId,
+            roleId,
+            ...(photo ? { photo } : {}),
+            syncSource: 'ERP_SNAPSHOT',
+        };
+    }
+
+    private normalizeSnapshotPermissions(value: unknown, fallback: Permission[]): Permission[] {
+        const values = Array.isArray(value)
+            ? value
+            : typeof value === 'string'
+                ? value.split(/[,\s|]+/)
+                : [];
+        const permissions = Array.from(new Set(
+            values
+                .map((permission) => this.snapshotText(permission).toUpperCase())
+                .filter(Boolean)
+        )) as Permission[];
+
+        return permissions.length > 0 ? permissions : fallback;
+    }
+
+    private normalizeSnapshotPosRole(raw: unknown): (RoleDefinition & { syncSource?: 'ERP_SNAPSHOT' }) | null {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+            return null;
+        }
+
+        const row = raw as Record<string, unknown>;
+        const id = this.snapshotText(
+            row.id ??
+            row.pos_role_id ??
+            row.posRoleId ??
+            row.pos_role_code ??
+            row.posRoleCode ??
+            row.role_id ??
+            row.roleId ??
+            row.code
+        );
+        if (!id) {
+            return null;
+        }
+
+        const fallbackRole = DEFAULT_ROLES.find((role) => role.id === id);
+        const name = this.snapshotText(row.name ?? row.nombre ?? row.label ?? row.description) || fallbackRole?.name || id;
+        const permissions = this.normalizeSnapshotPermissions(
+            row.permissions ?? row.permission_keys ?? row.permissionKeys ?? row.pos_permissions ?? row.posPermissions,
+            fallbackRole?.permissions || []
+        );
+        const maxDiscount = Number(row.maxDiscountPercent ?? row.max_discount_percent ?? fallbackRole?.maxDiscountPercent);
+        const isSystem = this.snapshotBool(row.isSystem ?? row.is_system) ?? fallbackRole?.isSystem;
+
+        return {
+            ...(fallbackRole || {}),
+            id,
+            name,
+            permissions,
+            ...(Number.isFinite(maxDiscount) ? { maxDiscountPercent: maxDiscount } : {}),
+            ...(typeof isSystem === 'boolean' ? { isSystem } : {}),
+            syncSource: 'ERP_SNAPSHOT',
+        };
+    }
+
+    private async applySnapshotPosRoles(incomingItems: unknown[]): Promise<number> {
+        const normalizedRoles = (Array.isArray(incomingItems) ? incomingItems : [])
+            .map((item) => this.normalizeSnapshotPosRole(item))
+            .filter(Boolean) as Array<RoleDefinition & { syncSource?: 'ERP_SNAPSHOT' }>;
+
+        if (normalizedRoles.length === 0) {
+            return 0;
+        }
+
+        const existingRoles = ((await db.get('roles')) as Array<RoleDefinition & { syncSource?: 'ERP_SNAPSHOT' }>) || [];
+        const rolesById = new Map<string, RoleDefinition & { syncSource?: 'ERP_SNAPSHOT' }>();
+        [...DEFAULT_ROLES, ...(Array.isArray(existingRoles) ? existingRoles : [])].forEach((role) => {
+            if (role?.id) rolesById.set(role.id, role as RoleDefinition & { syncSource?: 'ERP_SNAPSHOT' });
+        });
+
+        normalizedRoles.forEach((role) => {
+            const existing = rolesById.get(role.id);
+            rolesById.set(role.id, {
+                ...(existing || {}),
+                ...role,
+                permissions: role.permissions.length > 0 ? role.permissions : existing?.permissions || [],
+            });
+        });
+
+        await db.save('roles', Array.from(rolesById.values()));
+        window.dispatchEvent(new CustomEvent('rolesUpdated'));
+        return normalizedRoles.length;
+    }
+
+    private async applySnapshotPosUsers(
+        incomingItems: unknown[],
+        terminalIds: Array<string | null | undefined>,
+        replaceSnapshotSet = true
+    ): Promise<number> {
+        const normalizedUsers = (Array.isArray(incomingItems) ? incomingItems : [])
+            .map((item) => this.normalizeSnapshotPosUser(item, terminalIds))
+            .filter(Boolean) as Array<User & { syncSource?: 'ERP_SNAPSHOT' }>;
+        const incomingIds = new Set(normalizedUsers.map((user) => user.id));
+        const existingUsers = ((await db.get('users')) as Array<User & { syncSource?: 'ERP_SNAPSHOT' }>) || [];
+        const existingById = new Map<string, User & { syncSource?: 'ERP_SNAPSHOT' }>(
+            (Array.isArray(existingUsers) ? existingUsers : [])
+                .filter((user) => Boolean(user?.id))
+                .map((user) => [user.id, user])
+        );
+        const nextById = new Map<string, User & { syncSource?: 'ERP_SNAPSHOT' }>();
+
+        (Array.isArray(existingUsers) ? existingUsers : []).forEach((user) => {
+            if (!user?.id || incomingIds.has(user.id)) {
+                return;
+            }
+            if (replaceSnapshotSet && user.syncSource === 'ERP_SNAPSHOT') {
+                return;
+            }
+            nextById.set(user.id, user);
+        });
+
+        normalizedUsers.forEach((user) => {
+            const existing = existingById.get(user.id);
+            nextById.set(user.id, {
+                ...(existing || {}),
+                ...user,
+                photo: user.photo || existing?.photo,
+                biometrics: existing?.biometrics,
+            });
+        });
+
+        await db.save('users', Array.from(nextById.values()));
+        window.dispatchEvent(new CustomEvent('usersUpdated'));
+        return normalizedUsers.length;
     }
 
     private async applySnapshotImageBackedCollection(
@@ -3023,16 +3349,33 @@ class SyncManager {
 
     private async refreshTerminalStructuredMasterData(
         snapshot: unknown,
-        catalogDelta?: Record<string, unknown> | null
+        catalogDelta?: Record<string, unknown> | null,
+        options?: {
+            terminalIds?: Array<string | null | undefined>;
+        }
     ): Promise<{
+        users: number;
+        roles: number;
         purchaseOrders: number;
         transfers: number;
     }> {
         const startedAt = posCatalogDebugNow();
         const results = {
+            users: 0,
+            roles: 0,
             purchaseOrders: 0,
             transfers: 0,
         };
+
+        const roleRows = this.collectSnapshotMasterRows(snapshot, ['pos_roles', 'roles']);
+        if (roleRows !== null) {
+            results.roles = await this.applySnapshotPosRoles(roleRows);
+        }
+
+        const userRows = this.collectSnapshotMasterRows(snapshot, ['pos_users', 'users']);
+        if (userRows !== null) {
+            results.users = await this.applySnapshotPosUsers(userRows, options?.terminalIds || []);
+        }
 
         const collections: Array<{
             resultKey: 'purchaseOrders' | 'transfers';
@@ -3100,6 +3443,8 @@ class SyncManager {
         }
 
         posCatalogDebugLog('refreshTerminalResolvedConfig: structured master data complete', {
+            users: results.users,
+            roles: results.roles,
             purchaseOrders: results.purchaseOrders,
             transfers: results.transfers,
             elapsedMs: posCatalogDebugElapsedMs(startedAt),

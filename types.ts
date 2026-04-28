@@ -478,6 +478,10 @@ export interface TerminalConfigSnapshot {
     customers?: Customer[];
     suppliers?: Supplier[];
     sellers?: Array<Record<string, any>>;
+    users?: Array<Record<string, any>>;
+    pos_users?: Array<Record<string, any>>;
+    roles?: Array<Record<string, any>>;
+    pos_roles?: Array<Record<string, any>>;
     purchaseOrders?: PurchaseOrder[];
     transfers?: StockTransfer[];
     [key: string]: any;
