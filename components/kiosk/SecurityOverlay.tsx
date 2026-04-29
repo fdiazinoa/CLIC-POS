@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ShieldAlert, ShieldCheck, Lock, RefreshCw, Trash2, CheckCircle2, Delete } from 'lucide-react';
+import { AlertTriangle, ShieldAlert, ShieldCheck, Lock, RefreshCw, Trash2, CheckCircle2, Delete, KeyRound } from 'lucide-react';
 import { SecurityLockReason } from '../../hooks/useKioskSecurity';
 
 interface SecurityOverlayProps {
@@ -100,12 +100,6 @@ const SecurityOverlay: React.FC<SecurityOverlayProps> = ({
   return (
     <div className={`fixed inset-0 z-[140] ${theme.overlay} backdrop-blur-sm flex items-center justify-center p-6`}>
       <div className={`w-full max-w-2xl rounded-3xl border-2 shadow-2xl ${theme.panel} relative overflow-hidden`}>
-        <div
-          className="absolute top-0 left-0 w-24 h-24 opacity-0"
-          onClick={() => setShowPinPad(true)}
-          aria-hidden="true"
-        />
-
         <div className="p-8 text-center">
           <div className="mx-auto w-24 h-24 rounded-full bg-white/70 flex items-center justify-center mb-6 shadow-sm">
             {lockReason === 'SCALE_DISCREPANCY' ? (
@@ -147,8 +141,17 @@ const SecurityOverlay: React.FC<SecurityOverlayProps> = ({
           )}
 
           {!isSupervisorGranted ? (
-            <div className="mt-8 text-sm text-slate-500">
-              Esperando autorización de supervisor...
+            <div className="mt-8 space-y-4">
+              <div className="text-sm text-slate-500">
+                Esperando autorización de supervisor...
+              </div>
+              <button
+                onClick={() => setShowPinPad(true)}
+                className={`mx-auto min-h-[58px] px-6 rounded-2xl text-white font-black flex items-center justify-center gap-2 shadow-lg ${theme.accent}`}
+              >
+                <KeyRound size={20} />
+                Autorizar con PIN
+              </button>
             </div>
           ) : (
             <div className="mt-8 space-y-3">
