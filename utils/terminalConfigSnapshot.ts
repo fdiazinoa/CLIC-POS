@@ -28,6 +28,7 @@ import {
   resolveDocumentAssignmentId,
   resolveDocumentSeriesDisplayPrefix,
 } from './documentSeriesIdentity';
+import { normalizeDeviceRoleValue } from './deviceRoleHelpers';
 import { resolveTariffId, resolveWarehouseId } from './masterIdentity';
 
 const asObject = (value: unknown): Record<string, any> => {
@@ -714,6 +715,7 @@ export const applyTerminalConfigSnapshot = (
 
   const fallbackOperational = asObject(effectiveFallbackConfig.operational);
   const fallbackDeviceRole = asObject(effectiveFallbackConfig.deviceRole);
+  const fallbackDeviceRoleSnake = asObject(effectiveFallbackConfig.device_role);
   const fallbackSecurity = asObject(effectiveFallbackConfig.security);
   const fallbackSession = asObject(effectiveFallbackConfig.session);
   const fallbackWorkflowSessionPatch = asObject(asObject(effectiveFallbackConfig.workflow).session);
@@ -833,6 +835,21 @@ export const applyTerminalConfigSnapshot = (
     resolveWarehouseId(asString(resolvedInventory.default_warehouse_id), effectiveWarehouses) ||
     effectiveAllowedWarehouseIds[0] ||
     '';
+  const effectiveDeviceRole = normalizeDeviceRoleValue(
+    resolvedIdentity.role ??
+    resolvedIdentity.device_role ??
+    resolvedIdentity.deviceRole ??
+    resolvedIdentity.role_code ??
+    effectiveFallbackConfig.role ??
+    effectiveFallbackConfig.device_role ??
+    effectiveFallbackConfig.deviceRole ??
+    effectiveFallbackConfig.role_code ??
+    fallbackDeviceRole.role ??
+    fallbackDeviceRoleSnake.role ??
+    fallbackDeviceRoleSnake.role_code ??
+    terminalTemplate.deviceRole?.role,
+    terminalTemplate.deviceRole?.role || DeviceRole.STANDARD_POS
+  );
 
   const effectiveDocumentSeries = mergeDocumentSeriesCollection(
     documentSeries.length > 0 ? documentSeries : terminalTemplate.documentSeries || DEFAULT_DOCUMENT_SERIES
@@ -873,32 +890,35 @@ export const applyTerminalConfigSnapshot = (
       null,
     deviceRole: {
       ...(terminalTemplate.deviceRole || {}),
-      role:
-        (asString(resolvedIdentity.role) as DeviceRole) ||
-        (asString(fallbackDeviceRole.role) as DeviceRole) ||
-        terminalTemplate.deviceRole?.role ||
-        DeviceRole.STANDARD_POS,
+      role: effectiveDeviceRole,
       authLevel:
         fallbackDeviceRole.authLevel ||
+        fallbackDeviceRoleSnake.authLevel ||
         terminalTemplate.deviceRole?.authLevel ||
         'USER_REQUIRED',
       uiSettings: {
         ...(terminalTemplate.deviceRole?.uiSettings || {}),
         ...asObject(fallbackDeviceRole.uiSettings),
+        ...asObject(fallbackDeviceRoleSnake.uiSettings),
       },
       hardwareConfig: {
         ...(terminalTemplate.deviceRole?.hardwareConfig || {}),
         ...asObject(fallbackDeviceRole.hardwareConfig),
+        ...asObject(fallbackDeviceRoleSnake.hardwareConfig),
       },
       allowedModules:
         asArray<string>(fallbackDeviceRole.allowedModules).length > 0
           ? asArray<string>(fallbackDeviceRole.allowedModules)
-          : terminalTemplate.deviceRole?.allowedModules || [],
+          : asArray<string>(fallbackDeviceRoleSnake.allowedModules).length > 0
+            ? asArray<string>(fallbackDeviceRoleSnake.allowedModules)
+            : terminalTemplate.deviceRole?.allowedModules || [],
       apiToken:
         asString(fallbackDeviceRole.apiToken) ||
+        asString(fallbackDeviceRoleSnake.apiToken) ||
         terminalTemplate.deviceRole?.apiToken,
       defaultRoute:
         asString(fallbackDeviceRole.defaultRoute) ||
+        asString(fallbackDeviceRoleSnake.defaultRoute) ||
         terminalTemplate.deviceRole?.defaultRoute,
     },
     fiscal: {
@@ -984,7 +1004,7 @@ export const applyTerminalConfigSnapshot = (
         normalizeStationNumber(resolvedIdentity.station_number) ||
         terminalTemplate.erpBinding?.stationNumber,
       role:
-        asString(resolvedIdentity.role) ||
+        asString(resolvedIdentity.role ?? resolvedIdentity.device_role ?? resolvedIdentity.role_code) ||
         terminalTemplate.erpBinding?.role,
     },
     erpSnapshot: effectiveSnapshot || undefined,

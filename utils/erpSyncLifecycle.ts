@@ -3,7 +3,7 @@ import { extractTerminalConfigRequestedScopes } from './terminalConfigPushScopes
 import { mergeTerminalConfigSnapshots } from './terminalConfigSnapshot';
 import { db } from './db';
 import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
-import { getDefaultRoleConfig } from './deviceRoleHelpers';
+import { getDefaultRoleConfig, normalizeDeviceRoleValue } from './deviceRoleHelpers';
 import {
     AuthLevel,
     BusinessConfig,
@@ -240,21 +240,7 @@ const pickBoolean = (...values: unknown[]): boolean | undefined => {
     return undefined;
 };
 const resolveDeviceRole = (value: unknown): DeviceRole => {
-    const normalized = normalizeOptional(String(value || '')).toUpperCase();
-
-    switch (normalized) {
-        case DeviceRole.SELF_CHECKOUT:
-            return DeviceRole.SELF_CHECKOUT;
-        case DeviceRole.PRICE_CHECKER:
-            return DeviceRole.PRICE_CHECKER;
-        case DeviceRole.HANDHELD_INVENTORY:
-            return DeviceRole.HANDHELD_INVENTORY;
-        case DeviceRole.KITCHEN_DISPLAY:
-            return DeviceRole.KITCHEN_DISPLAY;
-        case DeviceRole.STANDARD_POS:
-        default:
-            return DeviceRole.STANDARD_POS;
-    }
+    return normalizeDeviceRoleValue(value);
 };
 const resolveAuthLevel = (value: unknown): AuthLevel | null => {
     const normalized = normalizeOptional(String(value || '')).toUpperCase();
@@ -721,6 +707,35 @@ const buildCompatibleDeviceRoleConfig = (
     };
 };
 
+const buildIncomingConfigPushDeviceRole = (
+    snapshot: Record<string, unknown>,
+    incomingConfig: Record<string, unknown>
+): Record<string, unknown> => {
+    const camelRole = asObject<Record<string, unknown>>(incomingConfig.deviceRole);
+    const snakeRole = asObject<Record<string, unknown>>(incomingConfig.device_role);
+    const roleValue =
+        snapshot.role ??
+        snapshot.device_role ??
+        snapshot.deviceRole ??
+        snapshot.role_code ??
+        incomingConfig.role ??
+        incomingConfig.device_role_code ??
+        (typeof incomingConfig.deviceRole === 'string' ? incomingConfig.deviceRole : undefined) ??
+        (typeof incomingConfig.device_role === 'string' ? incomingConfig.device_role : undefined) ??
+        camelRole.role ??
+        camelRole.device_role ??
+        camelRole.role_code ??
+        snakeRole.role ??
+        snakeRole.device_role ??
+        snakeRole.role_code;
+
+    return {
+        ...camelRole,
+        ...snakeRole,
+        ...(roleValue !== undefined && roleValue !== null ? { role: roleValue } : {}),
+    };
+};
+
 const buildCompatibleInventoryScope = (
     currentInventoryScope: TerminalConfig['inventoryScope'],
     resolvedInventory: Record<string, unknown>
@@ -766,6 +781,7 @@ const applyErpConfigPushToLocalTerminal = async ({
     payload: Record<string, unknown>;
 }): Promise<boolean> => {
     const snapshot = asObject<SyncTerminalSnapshot>(payload.terminal_config);
+    const snapshotRecord = snapshot as unknown as Record<string, unknown>;
     const incomingConfig = asObject<Record<string, unknown>>(snapshot.config);
     const incomingMasters = asObject<Record<string, unknown>>(snapshot.masters);
     const incomingResolved = asObject<Record<string, unknown>>(snapshot.resolved);
@@ -792,6 +808,8 @@ const applyErpConfigPushToLocalTerminal = async ({
     const resolvedTerminalId = normalizeOptional(snapshot.terminal_id || fallbackTerminalId || null);
     const targetIndex = localConfig.terminals.findIndex((terminal) =>
         (resolvedTerminalId && terminal.id === resolvedTerminalId)
+        || (resolvedTerminalId && terminal.config?.erpTerminalId === resolvedTerminalId)
+        || (resolvedTerminalId && terminal.config?.erpBinding?.terminalId === resolvedTerminalId)
         || terminal.config?.currentDeviceId === deviceId
     );
 
@@ -806,6 +824,7 @@ const applyErpConfigPushToLocalTerminal = async ({
     const incomingCatalog = asObject<Record<string, unknown>>(incomingConfig.catalog);
     const incomingPricing = asObject<Record<string, unknown>>(incomingConfig.pricing);
     const incomingDocuments = asObject<Record<string, unknown>>(incomingConfig.documents);
+    const incomingDeviceRole = buildIncomingConfigPushDeviceRole(snapshotRecord, incomingConfig);
     const resolvedSnapshot = asObject<Record<string, unknown>>(snapshot.resolved);
     const resolvedInventory = asObject<Record<string, unknown>>(resolvedSnapshot.inventory);
     const allowedCategories = Array.isArray(incomingCatalog.allowedCategories)
@@ -849,7 +868,7 @@ const applyErpConfigPushToLocalTerminal = async ({
     ) || (snapshot as TerminalConfigSnapshot);
     const nextTerminalConfig: TerminalConfig = {
         ...currentConfig,
-        deviceRole: buildCompatibleDeviceRoleConfig(currentConfig.deviceRole, incomingConfig.deviceRole),
+        deviceRole: buildCompatibleDeviceRoleConfig(currentConfig.deviceRole, incomingDeviceRole),
         operational: nextOperational,
         catalog: nextCatalog,
         pricing: nextPricing,
@@ -864,7 +883,17 @@ const applyErpConfigPushToLocalTerminal = async ({
                 localTerminalId ||
                 undefined,
             deviceId: normalizeOptional(snapshot.device_id || currentConfig.erpBinding?.deviceId || deviceId || null) || undefined,
-            role: normalizeOptional(snapshot.role || currentConfig.erpBinding?.role || null) || undefined,
+            role:
+                normalizeOptional(
+                    String(
+                        snapshot.role ||
+                        snapshotRecord.device_role ||
+                        snapshotRecord.role_code ||
+                        incomingDeviceRole.role ||
+                        currentConfig.erpBinding?.role ||
+                        ''
+                    )
+                ) || undefined,
         },
         erpSnapshot: nextErpSnapshot,
     };

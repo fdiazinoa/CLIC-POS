@@ -6,6 +6,81 @@
 
 import { DeviceRole, AuthLevel, DeviceRoleConfig } from '../types';
 
+const normalizeRoleKey = (value: unknown): string => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const data = value as Record<string, unknown>;
+        return normalizeRoleKey(
+            data.role ??
+            data.deviceRole ??
+            data.device_role ??
+            data.roleCode ??
+            data.role_code ??
+            data.code ??
+            data.name
+        );
+    }
+
+    return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+};
+
+export function normalizeDeviceRoleValue(value: unknown, fallback: DeviceRole = DeviceRole.STANDARD_POS): DeviceRole {
+    const normalized = normalizeRoleKey(value);
+
+    switch (normalized) {
+        case 'SELF_CHECKOUT':
+        case 'SELFCHECKOUT':
+        case 'SELF_SERVICE':
+        case 'SELFSERVICE':
+        case 'KIOSK':
+        case 'AUTOPAGO':
+        case 'AUTO_PAGO':
+        case 'AUTOSERVICIO':
+        case 'AUTO_SERVICIO':
+            return DeviceRole.SELF_CHECKOUT;
+
+        case 'PRICE_CHECKER':
+        case 'PRICECHECKER':
+        case 'CHECKER':
+        case 'VERIFICADOR_PRECIO':
+        case 'VERIFICADOR_DE_PRECIO':
+        case 'CONSULTA_PRECIOS':
+            return DeviceRole.PRICE_CHECKER;
+
+        case 'HANDHELD_INVENTORY':
+        case 'HANDHELDINVENTORY':
+        case 'INVENTORY_HANDHELD':
+        case 'PDA':
+        case 'MOBILE_INVENTORY':
+        case 'INVENTARIO_MOVIL':
+            return DeviceRole.HANDHELD_INVENTORY;
+
+        case 'KITCHEN_DISPLAY':
+        case 'KITCHENDISPLAY':
+        case 'KDS':
+        case 'COCINA':
+        case 'PANTALLA_COCINA':
+            return DeviceRole.KITCHEN_DISPLAY;
+
+        case 'STANDARD_POS':
+        case 'STANDARDPOS':
+        case 'POS':
+        case 'CAJA':
+        case 'CAJERO':
+        case 'CASHIER':
+        case 'STANDARD':
+            return DeviceRole.STANDARD_POS;
+
+        default:
+            return fallback;
+    }
+}
+
 /**
  * Get default configuration for a device role
  */
