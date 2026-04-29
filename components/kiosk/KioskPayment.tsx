@@ -20,9 +20,20 @@ export type KioskResolvedPaymentMethod = {
     integrationMode?: 'MANUAL' | 'INTEGRATED';
 };
 
+export type KioskPaymentTotals = {
+    subtotal: number;
+    tax: number;
+    total: number;
+    subtotalBeforeDiscounts: number;
+    totalSavings: number;
+    taxIncluded: boolean;
+    taxLabel?: string;
+};
+
 interface KioskPaymentProps {
     cart: CartItem[];
     paymentMethods: KioskResolvedPaymentMethod[];
+    totals?: KioskPaymentTotals;
     onBack: () => void;
     onPaymentComplete: (paymentMethod: KioskResolvedPaymentMethod) => Promise<Transaction | null>;
     onPrintReceipt: (transaction: Transaction) => Promise<boolean>;
@@ -116,6 +127,7 @@ const getPaymentSupportText = (method: KioskResolvedPaymentMethod) => {
 const KioskPayment: React.FC<KioskPaymentProps> = ({
     cart,
     paymentMethods,
+    totals,
     onBack,
     onPaymentComplete,
     onPrintReceipt,
@@ -130,12 +142,13 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
     const [emailSent, setEmailSent] = useState(false);
 
     // Calculate totals
-    const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    const subtotalBeforeDiscounts = cart.reduce((sum, item) => sum + ((item.originalPrice || item.price) * item.quantity), 0);
-    const totalSavings = subtotalBeforeDiscounts - subtotal;
-
-    const tax = subtotal * 0.18; // 18% ITBIS
-    const total = subtotal + tax;
+    const cartGrossTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const rawSubtotalBeforeDiscounts = cart.reduce((sum, item) => sum + ((item.originalPrice || item.price) * item.quantity), 0);
+    const subtotal = totals?.subtotal ?? cartGrossTotal;
+    const totalSavings = totals?.totalSavings ?? Math.max(0, rawSubtotalBeforeDiscounts - cartGrossTotal);
+    const tax = totals?.tax ?? cartGrossTotal * 0.18; // 18% ITBIS fallback
+    const total = totals?.total ?? (cartGrossTotal + tax);
+    const taxLabel = totals?.taxLabel || (totals?.taxIncluded ? 'ITBIS incluido' : 'ITBIS');
     const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
     const availablePaymentMethods = useMemo(
         () => paymentMethods.length > 0
@@ -458,7 +471,7 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
                             <div className="border-t-2 border-dashed border-gray-100 pt-4 space-y-2">
                                 <div className="flex justify-between text-gray-500">
                                     <span>Subtotal</span>
-                                    <span>${subtotalBeforeDiscounts.toFixed(2)}</span>
+                                    <span>${subtotal.toFixed(2)}</span>
                                 </div>
 
                                 {totalSavings > 0 && (
@@ -469,7 +482,7 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
                                 )}
 
                                 <div className="flex justify-between text-gray-500">
-                                    <span>ITBIS (18%)</span>
+                                    <span>{taxLabel}</span>
                                     <span>${tax.toFixed(2)}</span>
                                 </div>
                                 <div className="flex justify-between text-3xl font-black text-gray-900 pt-2">
