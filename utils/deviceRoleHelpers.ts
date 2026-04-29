@@ -35,9 +35,7 @@ const normalizeRoleKey = (value: unknown): string => {
         .replace(/^_+|_+$/g, '');
 };
 
-export function normalizeDeviceRoleValue(value: unknown, fallback: DeviceRole = DeviceRole.STANDARD_POS): DeviceRole {
-    const normalized = normalizeRoleKey(value);
-
+const normalizeKnownDeviceRole = (normalized: string): DeviceRole | null => {
     switch (normalized) {
         case 'SELF_CHECKOUT':
         case 'SELF_CHECK_OUT':
@@ -88,8 +86,23 @@ export function normalizeDeviceRoleValue(value: unknown, fallback: DeviceRole = 
             return DeviceRole.STANDARD_POS;
 
         default:
-            return fallback;
+            return null;
     }
+};
+
+export function normalizeDeviceRoleValue(value: unknown, fallback: DeviceRole = DeviceRole.STANDARD_POS): DeviceRole {
+    return normalizeKnownDeviceRole(normalizeRoleKey(value)) || fallback;
+}
+
+export function resolveDeviceRoleValue(values: unknown[]): DeviceRole | undefined;
+export function resolveDeviceRoleValue(values: unknown[], fallback: DeviceRole): DeviceRole;
+export function resolveDeviceRoleValue(values: unknown[], fallback?: DeviceRole): DeviceRole | undefined {
+    for (const value of values) {
+        const role = normalizeKnownDeviceRole(normalizeRoleKey(value));
+        if (role) return role;
+    }
+
+    return fallback;
 }
 
 /**

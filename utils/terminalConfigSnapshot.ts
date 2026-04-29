@@ -28,7 +28,7 @@ import {
   resolveDocumentAssignmentId,
   resolveDocumentSeriesDisplayPrefix,
 } from './documentSeriesIdentity';
-import { getDefaultRoleConfig, normalizeDeviceRoleValue } from './deviceRoleHelpers';
+import { getDefaultRoleConfig, resolveDeviceRoleValue } from './deviceRoleHelpers';
 import { resolveTariffId, resolveWarehouseId } from './masterIdentity';
 
 const asObject = (value: unknown): Record<string, any> => {
@@ -842,27 +842,34 @@ export const applyTerminalConfigSnapshot = (
     resolveWarehouseId(asString(resolvedInventory.default_warehouse_id), effectiveWarehouses) ||
     effectiveAllowedWarehouseIds[0] ||
     '';
-  const effectiveDeviceRole = normalizeDeviceRoleValue(
-    resolvedIdentity.role ??
-    resolvedIdentity.device_role ??
-    resolvedIdentity.deviceRole ??
-    resolvedIdentity.role_code ??
-    resolvedIdentity.device_role_code ??
-    effectiveResolved.role ??
-    effectiveResolved.device_role ??
-    effectiveResolved.deviceRole ??
-    effectiveResolved.role_code ??
-    effectiveResolved.device_role_code ??
-    effectiveFallbackConfig.role ??
-    effectiveFallbackConfig.device_role ??
-    effectiveFallbackConfig.deviceRole ??
-    effectiveFallbackConfig.role_code ??
-    fallbackDeviceRole.role ??
-    fallbackDeviceRoleSnake.role ??
-    fallbackDeviceRoleSnake.role_code ??
+  const effectiveDeviceRole = resolveDeviceRoleValue([
+    fallbackDeviceRole.role,
+    fallbackDeviceRole.device_role,
+    fallbackDeviceRole.deviceRole,
+    fallbackDeviceRole.role_code,
+    fallbackDeviceRole.device_role_code,
+    fallbackDeviceRoleSnake.role,
+    fallbackDeviceRoleSnake.device_role,
+    fallbackDeviceRoleSnake.deviceRole,
+    fallbackDeviceRoleSnake.role_code,
+    fallbackDeviceRoleSnake.device_role_code,
+    effectiveFallbackConfig.deviceRole,
+    effectiveFallbackConfig.device_role,
+    effectiveResolved.deviceRole,
+    effectiveResolved.device_role,
+    resolvedIdentity.deviceRole,
+    resolvedIdentity.device_role,
+    resolvedIdentity.role_code,
+    resolvedIdentity.device_role_code,
+    effectiveResolved.role_code,
+    effectiveResolved.device_role_code,
+    effectiveFallbackConfig.role_code,
+    effectiveFallbackConfig.device_role_code,
+    resolvedIdentity.role,
+    effectiveResolved.role,
+    effectiveFallbackConfig.role,
     terminalTemplate.deviceRole?.role,
-    terminalTemplate.deviceRole?.role || DeviceRole.STANDARD_POS
-  );
+  ], terminalTemplate.deviceRole?.role || DeviceRole.STANDARD_POS);
   const deviceRoleDefaults = getDefaultRoleConfig(effectiveDeviceRole);
   const templateDeviceRole = terminalTemplate.deviceRole;
   const deviceRoleChanged = Boolean(templateDeviceRole?.role) && templateDeviceRole.role !== effectiveDeviceRole;
@@ -870,6 +877,13 @@ export const applyTerminalConfigSnapshot = (
   const templateDeviceRoleHardware = !deviceRoleChanged ? asObject(templateDeviceRole?.hardwareConfig) : {};
   const fallbackAllowedModules = asArray<string>(fallbackDeviceRole.allowedModules);
   const fallbackAllowedModulesSnake = asArray<string>(fallbackDeviceRoleSnake.allowedModules);
+  const fallbackAuthLevel = fallbackDeviceRole.authLevel || fallbackDeviceRoleSnake.authLevel;
+  const effectiveAuthLevel =
+    deviceRoleChanged && deviceRoleDefaults.authLevel === 'HEADLESS' && fallbackAuthLevel === 'USER_REQUIRED'
+      ? deviceRoleDefaults.authLevel
+      : fallbackAuthLevel ||
+        (!deviceRoleChanged ? terminalTemplate.deviceRole?.authLevel : undefined) ||
+        deviceRoleDefaults.authLevel;
 
   const effectiveDocumentSeries = mergeDocumentSeriesCollection(
     documentSeries.length > 0 ? documentSeries : terminalTemplate.documentSeries || DEFAULT_DOCUMENT_SERIES
@@ -912,11 +926,7 @@ export const applyTerminalConfigSnapshot = (
       ...deviceRoleDefaults,
       ...(deviceRoleChanged ? {} : terminalTemplate.deviceRole || {}),
       role: effectiveDeviceRole,
-      authLevel:
-        fallbackDeviceRole.authLevel ||
-        fallbackDeviceRoleSnake.authLevel ||
-        (!deviceRoleChanged ? terminalTemplate.deviceRole?.authLevel : undefined) ||
-        deviceRoleDefaults.authLevel,
+      authLevel: effectiveAuthLevel,
       uiSettings: {
         ...deviceRoleDefaults.uiSettings,
         ...templateDeviceRoleUi,
