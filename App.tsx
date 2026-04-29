@@ -1625,6 +1625,13 @@ const AppContent: React.FC = () => {
       [DeviceRole.PRICE_CHECKER]: 'CHECKER_SCAN',
       [DeviceRole.KITCHEN_DISPLAY]: 'KITCHEN_ORDERS',
     };
+    const roleAllowedViews: Partial<Record<DeviceRole, ViewState[]>> = {
+      [DeviceRole.SELF_CHECKOUT]: ['KIOSK_WELCOME', 'KIOSK_BROWSER', 'KIOSK_PAYMENT'],
+      [DeviceRole.PRICE_CHECKER]: ['CHECKER_SCAN'],
+      [DeviceRole.KITCHEN_DISPLAY]: ['KITCHEN_ORDERS'],
+    };
+    if (roleAllowedViews[role]?.includes(currentView)) return;
+
     const targetView = roleDefaultView[role];
     if (!targetView || currentView === targetView) return;
 
