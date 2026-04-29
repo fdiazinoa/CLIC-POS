@@ -571,6 +571,56 @@ const createKioskGatewayOrderNumber = (): string => {
   return base.slice(-8);
 };
 
+const roundMoney = (value: number): number =>
+  Math.round(((Number(value) || 0) + Number.EPSILON) * 100) / 100;
+
+const resolveKioskActiveTariff = (
+  config: BusinessConfig,
+  terminalConfig?: BusinessConfig['terminals'][number]['config']
+): Tariff | undefined => {
+  const tariffId =
+    terminalConfig?.pricing?.defaultTariffId ||
+    (terminalConfig as any)?.defaultTariffId ||
+    (config as any).defaultTariffId ||
+    config.tariffs?.find((tariff) => tariff.active)?.id ||
+    config.tariffs?.[0]?.id;
+
+  return config.tariffs?.find((tariff) => tariff.id === tariffId)
+    || config.tariffs?.find((tariff) => tariff.active)
+    || config.tariffs?.[0];
+};
+
+const buildKioskPaymentTotals = (
+  cart: CartItem[],
+  config: BusinessConfig,
+  terminalConfig?: BusinessConfig['terminals'][number]['config']
+) => {
+  const activeTariff = resolveKioskActiveTariff(config, terminalConfig);
+  const isTaxIncluded = activeTariff?.taxIncluded ?? true;
+  const defaultTaxRate = Math.max(0, Number(config.taxRate) || 0.18);
+  const summary = calculateTransactionTaxSummary(
+    cart,
+    config.taxes || [],
+    isTaxIncluded,
+    defaultTaxRate
+  );
+  const subtotalBeforeDiscounts = roundMoney(cart.reduce((sum, item) => {
+    const quantity = Math.abs(Number(item.quantity) || 0);
+    const originalPrice = Number(item.originalPrice ?? item.price) || 0;
+    return sum + originalPrice * quantity;
+  }, 0));
+
+  return {
+    subtotal: summary.netAmount,
+    tax: summary.taxAmount,
+    total: summary.total,
+    subtotalBeforeDiscounts,
+    totalSavings: roundMoney(Math.max(0, subtotalBeforeDiscounts - summary.grossAmount)),
+    taxIncluded: isTaxIncluded,
+    taxLabel: `ITBIS${isTaxIncluded ? ' incluido' : ''} (${roundMoney(defaultTaxRate * 100)}%)`,
+  };
+};
+
 const App: React.FC = () => {
   return (
     <ThemeProvider>
@@ -5754,29 +5804,34 @@ const AppContent: React.FC = () => {
 
       case 'KIOSK_PAYMENT':
         const kioskPaymentMethods = resolveKioskPaymentMethods(config);
+        const kioskTerminal = getCurrentTerminal();
+        const kioskActiveConfig = kioskTerminal?.config;
+        const kioskTotals = buildKioskPaymentTotals(cart, config, kioskActiveConfig);
         return (
           <KioskPayment
             cart={cart}
             paymentMethods={kioskPaymentMethods}
+            totals={kioskTotals}
             onBack={() => handleViewChange('KIOSK_BROWSER')}
             onPaymentComplete={async (method) => {
               console.log(`Payment completed with ${method.label} (${method.type})`);
 
               // Get current terminal and config
-              const currentTerminal = getCurrentTerminal();
+              const currentTerminal = kioskTerminal || getCurrentTerminal();
               const activeConfig = currentTerminal?.config;
+              const kioskOperator: Pick<User, 'id' | 'name'> = currentUser
+                || users.find((user) => /self|kiosk|autoservicio/i.test(`${user.name} ${user.role} ${user.roleId || ''}`))
+                || { id: 'self-checkout', name: 'Self Checkout' };
 
-              if (!activeConfig || !currentUser) {
-                console.error("Missing config or user for kiosk transaction");
-                setCart([]);
-                handleViewChange('KIOSK_WELCOME');
-                return;
+              if (!currentTerminal || !activeConfig) {
+                console.error("Missing terminal config for kiosk transaction");
+                throw new Error('Esta terminal no tiene configuración activa para completar el pago.');
               }
 
               // Calculate totals
-              const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-              const tax = subtotal * 0.18; // TODO: Use real tax logic from config
-              const total = subtotal + tax;
+              const subtotal = kioskTotals.subtotal;
+              const tax = kioskTotals.tax;
+              const total = kioskTotals.total;
               const baseCurrency = config.currencies?.find(currency => currency.isBase)?.code || 'DOP';
               const configuredMethod = (config.paymentMethods || []).find(paymentMethod => paymentMethod.id === method.id)
                 || (config.paymentMethods || []).find(paymentMethod => paymentMethod.type === method.type && paymentMethod.name === method.label)
@@ -5786,13 +5841,18 @@ const AppContent: React.FC = () => {
                 ? config.integrations?.find(integration => integration.id === configuredMethod.integrationId)
                 : (configuredMethod?.integration && configuredMethod.integration !== 'NONE'
                     ? config.integrations?.find(integration => integration.provider === configuredMethod.integration)
-                    : undefined);
+                  : undefined);
 
               // Get assigned sequence
-              const seriesId = activeConfig.documentAssignments?.['TICKET'];
+              const availableSeries = mergeDocumentSeriesCollection([
+                ...internalSequences,
+                ...(activeConfig.documentSeries || [])
+              ]);
+              const assignedSeriesId = activeConfig.documentAssignments?.['TICKET'];
+              const seriesId = resolveDocumentAssignmentId('TICKET', availableSeries, assignedSeriesId)
+                || assignedSeriesId;
               if (!seriesId) {
-                alert("Error: No hay secuencia de TICKET asignada a esta terminal.");
-                return;
+                throw new Error('No hay secuencia de TICKET asignada a esta terminal.');
               }
 
               try {
@@ -5862,15 +5922,15 @@ const AppContent: React.FC = () => {
                     currency: config.currencySymbol,
                     ...gatewayPaymentFields,
                   }],
-                  userId: currentUser.id,
-                  userName: currentUser.name,
+                  userId: kioskOperator.id,
+                  userName: kioskOperator.name,
                   terminalId: currentTerminal.id,
                   status: 'COMPLETED',
                   // Kiosk usually doesn't have selected customer, use generic or guest
                   customerName: 'Cliente General',
                   taxAmount: tax,
                   netAmount: subtotal,
-                  isTaxIncluded: false // TODO: Check tariff
+                  isTaxIncluded: kioskTotals.taxIncluded
                 });
 
                 // Save and Sync
@@ -5878,7 +5938,7 @@ const AppContent: React.FC = () => {
                 return txn;
               } catch (error) {
                 console.error("Error creating kiosk transaction:", error);
-                throw new Error("Error al guardar la transacción. Por favor intente de nuevo.");
+                throw new Error(error instanceof Error ? error.message : "Error al guardar la transacción. Por favor intente de nuevo.");
               }
             }}
             onPrintReceipt={async (transaction) => {
