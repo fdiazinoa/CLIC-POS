@@ -57,7 +57,17 @@ interface SyncStatus {
 
 type TerminalManifestMasterScope = 'items' | 'customers' | 'suppliers' | 'sellers' | 'users' | 'pos_users' | 'roles' | 'pos_roles' | 'purchase_orders' | 'transfers';
 type TerminalManifestBlockScope = 'inventory' | 'product_prices';
-type TerminalManifestResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions' | 'loyalty';
+type TerminalManifestResolvedScope =
+    | 'identity'
+    | 'terminal'
+    | 'device_role'
+    | 'role'
+    | 'pricing'
+    | 'inventory'
+    | 'documents'
+    | 'catalog'
+    | 'promotions'
+    | 'loyalty';
 type TerminalManifestScope = 'terminal' | TerminalManifestMasterScope | TerminalManifestBlockScope;
 type TerminalManifestCountScope = TerminalManifestMasterScope | TerminalManifestBlockScope;
 
@@ -1405,7 +1415,9 @@ class SyncManager {
                 refreshedConfig = await this.refreshTerminalResolvedConfig(undefined, {
                     forceRemoteFetch: true,
                     masterScopes: changedMasterScopes,
-                    resolvedScopes: terminalChanged ? ['pricing', 'inventory', 'documents', 'catalog', 'promotions', 'loyalty'] : [],
+                    resolvedScopes: terminalChanged
+                        ? ['identity', 'terminal', 'device_role', 'role', 'pricing', 'inventory', 'documents', 'catalog', 'promotions', 'loyalty']
+                        : [],
                 });
             }
 

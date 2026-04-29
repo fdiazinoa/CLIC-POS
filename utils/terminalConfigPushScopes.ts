@@ -8,7 +8,17 @@ export type TerminalConfigPushMasterScope =
     | 'roles'
     | 'pos_roles';
 export type TerminalConfigPushBlockScope = 'inventory' | 'product_prices';
-export type TerminalConfigPushResolvedScope = 'pricing' | 'inventory' | 'documents' | 'catalog' | 'promotions';
+export type TerminalConfigPushResolvedScope =
+    | 'identity'
+    | 'terminal'
+    | 'device_role'
+    | 'role'
+    | 'pricing'
+    | 'inventory'
+    | 'documents'
+    | 'catalog'
+    | 'promotions'
+    | 'loyalty';
 
 export type TerminalConfigSyncRequestDetail = {
     source?: string;
@@ -32,7 +42,18 @@ const TERMINAL_CONFIG_MASTER_SCOPE_SET = new Set<TerminalConfigPushMasterScope>(
     'pos_roles',
 ]);
 const TERMINAL_CONFIG_BLOCK_SCOPE_SET = new Set<TerminalConfigPushBlockScope>(['inventory', 'product_prices']);
-const TERMINAL_CONFIG_RESOLVED_SCOPE_SET = new Set<TerminalConfigPushResolvedScope>(['pricing', 'inventory', 'documents', 'catalog', 'promotions']);
+const TERMINAL_CONFIG_RESOLVED_SCOPE_SET = new Set<TerminalConfigPushResolvedScope>([
+    'identity',
+    'terminal',
+    'device_role',
+    'role',
+    'pricing',
+    'inventory',
+    'documents',
+    'catalog',
+    'promotions',
+    'loyalty',
+]);
 const TERMINAL_CONFIG_MASTER_SCOPE_ALIASES: Record<string, TerminalConfigPushMasterScope> = {
     user: 'users',
     usuarios: 'users',
@@ -72,6 +93,24 @@ const TERMINAL_CONFIG_BLOCK_SCOPE_ALIASES: Record<string, TerminalConfigPushBloc
     tariffs: 'product_prices',
     tarifa: 'product_prices',
     tarifas: 'product_prices',
+};
+const TERMINAL_CONFIG_RESOLVED_SCOPE_ALIASES: Record<string, TerminalConfigPushResolvedScope> = {
+    terminal_config: 'terminal',
+    terminal_settings: 'terminal',
+    terminal_profile: 'terminal',
+    terminal_role: 'device_role',
+    device_role: 'device_role',
+    device_role_code: 'device_role',
+    devicerole: 'device_role',
+    devicerolecode: 'device_role',
+    role_code: 'role',
+    rol: 'role',
+    roles: 'role',
+    loyalty_config: 'loyalty',
+    coupon: 'loyalty',
+    coupons: 'loyalty',
+    campaign: 'loyalty',
+    campaigns: 'loyalty',
 };
 
 const asObject = (value: unknown): Record<string, unknown> => (
@@ -149,7 +188,11 @@ export const extractTerminalConfigRequestedScopes = (value: unknown) => {
             TERMINAL_CONFIG_BLOCK_SCOPE_SET,
             TERMINAL_CONFIG_BLOCK_SCOPE_ALIASES,
         ),
-        resolvedScopes: normalizeScopes(record.resolvedScopes ?? record.resolved_scopes, TERMINAL_CONFIG_RESOLVED_SCOPE_SET),
+        resolvedScopes: normalizeScopes(
+            mergeScopeInputs(record.resolvedScopes, record.resolved_scopes, record.scopes),
+            TERMINAL_CONFIG_RESOLVED_SCOPE_SET,
+            TERMINAL_CONFIG_RESOLVED_SCOPE_ALIASES,
+        ),
     };
 };
 
@@ -163,11 +206,22 @@ export const buildTerminalConfigRefreshRequest = (value: unknown) => {
         };
     }
 
+    const masterScopes = scopes.masterScopes ?? [];
+    const blockScopes = scopes.blockScopes ?? [];
+    const resolvedScopes = scopes.resolvedScopes ?? [];
+
+    if (masterScopes.length === 0 && blockScopes.length === 0 && resolvedScopes.length === 0) {
         return {
             forceRemoteFetch: true as const,
             forceFullCatalog: false,
-            masterScopes: scopes.masterScopes ?? [],
-            blockScopes: scopes.blockScopes ?? [],
-            resolvedScopes: scopes.resolvedScopes ?? [],
         };
+    }
+
+    return {
+        forceRemoteFetch: true as const,
+        forceFullCatalog: false,
+        masterScopes,
+        blockScopes,
+        resolvedScopes,
+    };
 };

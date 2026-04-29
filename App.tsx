@@ -1612,6 +1612,30 @@ const AppContent: React.FC = () => {
   }, [currentUser]);
 
   useKioskMode(getCurrentDeviceRole() === DeviceRole.SELF_CHECKOUT);
+
+  useEffect(() => {
+    if (!isDataLoaded || isAdminMode) return;
+    if (['VISOR', 'ACTIVATION', 'SETTINGS', 'TERMINAL_PAIRING', 'TERMINAL_BINDING', 'SETUP', 'VERTICAL_SELECTOR'].includes(currentView)) {
+      return;
+    }
+
+    const role = getCurrentDeviceRole();
+    const roleDefaultView: Partial<Record<DeviceRole, ViewState>> = {
+      [DeviceRole.SELF_CHECKOUT]: 'KIOSK_WELCOME',
+      [DeviceRole.PRICE_CHECKER]: 'CHECKER_SCAN',
+      [DeviceRole.KITCHEN_DISPLAY]: 'KITCHEN_ORDERS',
+    };
+    const targetView = roleDefaultView[role];
+    if (!targetView || currentView === targetView) return;
+
+    if (role === DeviceRole.SELF_CHECKOUT) {
+      clearSecurityState();
+      setCurrentUser(null);
+      setCart([]);
+    }
+    setCurrentView(targetView);
+  }, [clearSecurityState, currentView, getCurrentDeviceRole, isAdminMode, isDataLoaded]);
+
   const scannerEnabledViews = currentView === 'POS'
     || currentView === 'HISTORY'
     || currentView === 'KIOSK_BROWSER'
