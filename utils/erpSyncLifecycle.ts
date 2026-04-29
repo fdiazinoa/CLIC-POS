@@ -711,13 +711,34 @@ const buildIncomingConfigPushDeviceRole = (
     snapshot: Record<string, unknown>,
     incomingConfig: Record<string, unknown>
 ): Record<string, unknown> => {
+    const resolved = asObject<Record<string, unknown>>(snapshot.resolved);
+    const resolvedIdentity = asObject<Record<string, unknown>>(resolved.identity);
+    const resolvedTerminal = asObject<Record<string, unknown>>(resolved.terminal);
     const camelRole = asObject<Record<string, unknown>>(incomingConfig.deviceRole);
     const snakeRole = asObject<Record<string, unknown>>(incomingConfig.device_role);
+    const resolvedCamelRole = asObject<Record<string, unknown>>(resolved.deviceRole);
+    const resolvedSnakeRole = asObject<Record<string, unknown>>(resolved.device_role);
     const roleValue =
         snapshot.role ??
         snapshot.device_role ??
         snapshot.deviceRole ??
         snapshot.role_code ??
+        snapshot.device_role_code ??
+        resolvedIdentity.role ??
+        resolvedIdentity.device_role ??
+        resolvedIdentity.deviceRole ??
+        resolvedIdentity.role_code ??
+        resolvedIdentity.device_role_code ??
+        resolvedTerminal.role ??
+        resolvedTerminal.device_role ??
+        resolvedTerminal.deviceRole ??
+        resolvedTerminal.role_code ??
+        resolvedTerminal.device_role_code ??
+        resolved.role ??
+        resolved.device_role ??
+        resolved.deviceRole ??
+        resolved.role_code ??
+        resolved.device_role_code ??
         incomingConfig.role ??
         incomingConfig.device_role_code ??
         (typeof incomingConfig.deviceRole === 'string' ? incomingConfig.deviceRole : undefined) ??
@@ -725,11 +746,23 @@ const buildIncomingConfigPushDeviceRole = (
         camelRole.role ??
         camelRole.device_role ??
         camelRole.role_code ??
+        camelRole.device_role_code ??
         snakeRole.role ??
         snakeRole.device_role ??
-        snakeRole.role_code;
+        snakeRole.role_code ??
+        snakeRole.device_role_code ??
+        resolvedCamelRole.role ??
+        resolvedCamelRole.device_role ??
+        resolvedCamelRole.role_code ??
+        resolvedCamelRole.device_role_code ??
+        resolvedSnakeRole.role ??
+        resolvedSnakeRole.device_role ??
+        resolvedSnakeRole.role_code ??
+        resolvedSnakeRole.device_role_code;
 
     return {
+        ...resolvedCamelRole,
+        ...resolvedSnakeRole,
         ...camelRole,
         ...snakeRole,
         ...(roleValue !== undefined && roleValue !== null ? { role: roleValue } : {}),
@@ -785,9 +818,13 @@ const applyErpConfigPushToLocalTerminal = async ({
     const incomingConfig = asObject<Record<string, unknown>>(snapshot.config);
     const incomingMasters = asObject<Record<string, unknown>>(snapshot.masters);
     const incomingResolved = asObject<Record<string, unknown>>(snapshot.resolved);
+    const incomingIdentity = asObject<Record<string, unknown>>(incomingResolved.identity);
+    const incomingTerminal = asObject<Record<string, unknown>>(incomingResolved.terminal);
 
     if (
         !snapshot.terminal_id &&
+        Object.keys(incomingIdentity).length === 0 &&
+        Object.keys(incomingTerminal).length === 0 &&
         Object.keys(incomingConfig).length === 0 &&
         Object.keys(incomingMasters).length === 0 &&
         Object.keys(incomingResolved).length === 0
@@ -805,13 +842,32 @@ const applyErpConfigPushToLocalTerminal = async ({
         return false;
     }
 
-    const resolvedTerminalId = normalizeOptional(snapshot.terminal_id || fallbackTerminalId || null);
-    const targetIndex = localConfig.terminals.findIndex((terminal) =>
+    const resolvedTerminalId = normalizeOptional(String(
+        snapshot.terminal_id ||
+        incomingIdentity.terminal_id ||
+        incomingIdentity.id ||
+        incomingTerminal.terminal_id ||
+        incomingTerminal.id ||
+        fallbackTerminalId ||
+        ''
+    ));
+    const resolvedDeviceId = normalizeOptional(String(
+        snapshot.device_id ||
+        incomingIdentity.device_id ||
+        incomingTerminal.device_id ||
+        incomingConfig.device_id ||
+        ''
+    ));
+    const exactTargetIndex = localConfig.terminals.findIndex((terminal) =>
         (resolvedTerminalId && terminal.id === resolvedTerminalId)
         || (resolvedTerminalId && terminal.config?.erpTerminalId === resolvedTerminalId)
         || (resolvedTerminalId && terminal.config?.erpBinding?.terminalId === resolvedTerminalId)
-        || terminal.config?.currentDeviceId === deviceId
     );
+    const canFallbackToDevice = !resolvedTerminalId || !resolvedDeviceId || resolvedDeviceId === deviceId;
+    const deviceTargetIndex = canFallbackToDevice
+        ? localConfig.terminals.findIndex((terminal) => terminal.config?.currentDeviceId === deviceId)
+        : -1;
+    const targetIndex = exactTargetIndex !== -1 ? exactTargetIndex : deviceTargetIndex;
 
     if (targetIndex === -1) {
         return false;
@@ -889,6 +945,22 @@ const applyErpConfigPushToLocalTerminal = async ({
                         snapshot.role ||
                         snapshotRecord.device_role ||
                         snapshotRecord.role_code ||
+                        snapshotRecord.device_role_code ||
+                        incomingIdentity.role ||
+                        incomingIdentity.device_role ||
+                        incomingIdentity.deviceRole ||
+                        incomingIdentity.role_code ||
+                        incomingIdentity.device_role_code ||
+                        incomingTerminal.role ||
+                        incomingTerminal.device_role ||
+                        incomingTerminal.deviceRole ||
+                        incomingTerminal.role_code ||
+                        incomingTerminal.device_role_code ||
+                        incomingResolved.role ||
+                        incomingResolved.device_role ||
+                        incomingResolved.deviceRole ||
+                        incomingResolved.role_code ||
+                        incomingResolved.device_role_code ||
                         incomingDeviceRole.role ||
                         currentConfig.erpBinding?.role ||
                         ''
@@ -921,6 +993,14 @@ const applyErpConfigPushToLocalTerminal = async ({
         terminals: nextTerminals,
         terminalSnapshots,
     };
+
+    console.info('[ERP SYNC] CONFIG_PUSH terminal role applied', {
+        localTerminalId,
+        erpTerminalId: resolvedTerminalId || null,
+        currentDeviceId: deviceId,
+        incomingRole: incomingDeviceRole.role || null,
+        appliedRole: nextTerminalConfig.deviceRole?.role || null,
+    });
 
     await db.save('config', nextConfig);
     window.dispatchEvent(new CustomEvent('configUpdated', { detail: nextConfig }));

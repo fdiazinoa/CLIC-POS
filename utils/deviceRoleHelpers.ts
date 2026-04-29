@@ -13,9 +13,15 @@ const normalizeRoleKey = (value: unknown): string => {
             data.role ??
             data.deviceRole ??
             data.device_role ??
+            data.deviceRoleCode ??
+            data.device_role_code ??
             data.roleCode ??
             data.role_code ??
+            data.value ??
             data.code ??
+            data.label ??
+            data.roleName ??
+            data.role_name ??
             data.name
         );
     }
@@ -34,10 +40,15 @@ export function normalizeDeviceRoleValue(value: unknown, fallback: DeviceRole = 
 
     switch (normalized) {
         case 'SELF_CHECKOUT':
+        case 'SELF_CHECK_OUT':
         case 'SELFCHECKOUT':
+        case 'SELFCHECK_OUT':
         case 'SELF_SERVICE':
         case 'SELFSERVICE':
         case 'KIOSK':
+        case 'AUTOCHECKOUT':
+        case 'AUTO_CHECKOUT':
+        case 'AUTO_CHECK_OUT':
         case 'AUTOPAGO':
         case 'AUTO_PAGO':
         case 'AUTOSERVICIO':
