@@ -31,6 +31,7 @@ import {
   Table,
   Collection,
   PaymentEntry,
+  RedeemedCouponRef,
   RefundProcessingOptions,
   PaymentMethodDefinition
 } from './types';
@@ -150,6 +151,7 @@ import {
 } from './utils/fiscal/fiscalHelpers';
 import { getFiscalDocumentStatus, issueFiscalDocument } from './services/fiscal/fiscalService';
 import { azulMcmService } from './services/payments/AzulMcmService';
+import { couponService } from './utils/couponService';
 
 type ReceivableRepairSummary = {
   scannedTransactions: number;
@@ -543,27 +545,41 @@ const toPositiveNumber = (value: unknown): number => {
   return num;
 };
 
-const resolveKioskPaymentMethods = (config: BusinessConfig): KioskResolvedPaymentMethod[] => {
+const resolveKioskPaymentMethods = (config: BusinessConfig, customer?: Customer | null): KioskResolvedPaymentMethod[] => {
   const enabledMethods = (config.paymentMethods || [])
     .filter((method: PaymentMethodDefinition) => method.isEnabled)
     .filter((method: PaymentMethodDefinition) => !['CREDIT', 'ADVANCE', 'STORE_CREDIT'].includes(String(method.type || '').toUpperCase()));
 
-  if (enabledMethods.length === 0) {
-    return [
+  const fallbackMethods: KioskResolvedPaymentMethod[] = [
       { key: 'CARD', id: 'CARD', type: 'CARD', label: 'Tarjeta', iconName: 'CreditCard' },
       { key: 'CASH', id: 'CASH', type: 'CASH', label: 'Efectivo', iconName: 'Banknote' },
-    ];
+  ];
+
+  const methods: KioskResolvedPaymentMethod[] = enabledMethods.length === 0
+    ? fallbackMethods
+    : enabledMethods.map((method) => ({
+      key: method.id || `${method.type}-${method.name}`,
+      id: method.id || method.type,
+      type: method.type,
+      label: method.name,
+      iconName: method.icon,
+      integrationProvider: method.integration !== 'NONE' ? method.integration : undefined,
+      integrationMode: method.integrationMode || 'MANUAL',
+    }));
+
+  const walletBalance = Number(customer?.wallet?.balance || 0);
+  const hasWalletMethod = methods.some((method) => method.type === 'WALLET');
+  if (customer?.wallet?.status === 'ACTIVE' && walletBalance > 0 && !hasWalletMethod) {
+    methods.push({
+      key: 'WALLET',
+      id: 'WALLET',
+      type: 'WALLET',
+      label: 'Wallet / Saldo',
+      iconName: 'Wallet',
+    });
   }
 
-  return enabledMethods.map((method) => ({
-    key: method.id || `${method.type}-${method.name}`,
-    id: method.id || method.type,
-    type: method.type,
-    label: method.name,
-    iconName: method.icon,
-    integrationProvider: method.integration !== 'NONE' ? method.integration : undefined,
-    integrationMode: method.integrationMode || 'MANUAL',
-  }));
+  return methods;
 };
 
 const createKioskGatewayOrderNumber = (): string => {
@@ -573,6 +589,37 @@ const createKioskGatewayOrderNumber = (): string => {
 
 const roundMoney = (value: number): number =>
   Math.round(((Number(value) || 0) + Number.EPSILON) * 100) / 100;
+
+type KioskCouponBenefit = {
+  type: 'PERCENT' | 'FIXED_AMOUNT' | 'FREE_ITEM';
+  value: number;
+  description: string;
+};
+
+const normalizeKioskLookupValue = (value: unknown): string =>
+  String(value ?? '').trim().toLowerCase();
+
+const digitsOnly = (value: unknown): string =>
+  String(value ?? '').replace(/\D/g, '');
+
+const resetPromotionLineForRepricing = (item: CartItem): CartItem => {
+  if (item.adjustmentSource !== 'PROMOTION') return item;
+
+  return {
+    ...item,
+    price: Number(item.originalPrice ?? item.price) || 0,
+    originalPrice: undefined,
+    discountAmount: undefined,
+    discountRate: undefined,
+    adjustmentSource: undefined,
+    appliedPromotionId: undefined,
+    appliedPromotionCode: undefined,
+    appliedPromotionName: undefined,
+  };
+};
+
+const resetPromotionCartForRepricing = (items: CartItem[]): CartItem[] =>
+  items.map(resetPromotionLineForRepricing);
 
 const resolveKioskActiveTariff = (
   config: BusinessConfig,
@@ -593,29 +640,42 @@ const resolveKioskActiveTariff = (
 const buildKioskPaymentTotals = (
   cart: CartItem[],
   config: BusinessConfig,
-  terminalConfig?: BusinessConfig['terminals'][number]['config']
+  terminalConfig?: BusinessConfig['terminals'][number]['config'],
+  discountAmount = 0
 ) => {
   const activeTariff = resolveKioskActiveTariff(config, terminalConfig);
   const isTaxIncluded = activeTariff?.taxIncluded ?? true;
   const defaultTaxRate = Math.max(0, Number(config.taxRate) || 0.18);
-  const summary = calculateTransactionTaxSummary(
-    cart,
-    config.taxes || [],
-    isTaxIncluded,
-    defaultTaxRate
-  );
   const subtotalBeforeDiscounts = roundMoney(cart.reduce((sum, item) => {
     const quantity = Math.abs(Number(item.quantity) || 0);
     const originalPrice = Number(item.originalPrice ?? item.price) || 0;
     return sum + originalPrice * quantity;
   }, 0));
+  const grossLineTotal = roundMoney(cart.reduce((sum, item) => {
+    const quantity = Math.abs(Number(item.quantity) || 0);
+    const price = Number(item.price) || 0;
+    return sum + Math.abs(price * quantity);
+  }, 0));
+  const safeDiscountAmount = roundMoney(Math.min(Math.max(0, discountAmount), grossLineTotal));
+  const summary = calculateTransactionFiscalSummary(
+    {
+      items: cart,
+      total: 0,
+      discountAmount: safeDiscountAmount,
+      isTaxIncluded,
+      taxAmount: defaultTaxRate > 0 ? 1 : 0,
+    } as Transaction,
+    config,
+    { terminalConfig }
+  );
 
   return {
-    subtotal: summary.netAmount,
-    tax: summary.taxAmount,
+    subtotal: summary.subtotal,
+    tax: summary.taxTotal,
     total: summary.total,
     subtotalBeforeDiscounts,
-    totalSavings: roundMoney(Math.max(0, subtotalBeforeDiscounts - summary.grossAmount)),
+    discountAmount: safeDiscountAmount,
+    totalSavings: roundMoney(Math.max(0, subtotalBeforeDiscounts - summary.total)),
     taxIncluded: isTaxIncluded,
     taxLabel: `ITBIS${isTaxIncluded ? ' incluido' : ''} (${roundMoney(defaultTaxRate * 100)}%)`,
   };
@@ -1484,6 +1544,8 @@ const AppContent: React.FC = () => {
   const [viewData, setViewData] = useState<any>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [kioskRedeemedCoupon, setKioskRedeemedCoupon] = useState<RedeemedCouponRef | null>(null);
+  const [kioskCouponBenefit, setKioskCouponBenefit] = useState<KioskCouponBenefit | null>(null);
   useEffect(() => {
     if (!selectedCustomer?.id) return;
     const refreshedCustomer = customers.find(customer => customer.id === selectedCustomer.id);
@@ -1505,6 +1567,147 @@ const AppContent: React.FC = () => {
       setSelectedCustomer(refreshedCustomer);
     }
   }, [customers, selectedCustomer]);
+
+  const findCustomerByKioskLookup = useCallback((rawValue: string): Customer | null => {
+    const token = normalizeKioskLookupValue(rawValue);
+    const digits = digitsOnly(rawValue);
+    if (!token && !digits) return null;
+
+    return (customers || []).find((customer) => {
+      const customerTokens = [
+        customer.id,
+        customer.taxId,
+        customer.email,
+        customer.phone,
+        customer.loyalty?.cardNumber,
+      ].map(normalizeKioskLookupValue);
+      const cardMatch = (customer.cards || []).some((card) =>
+        card.status === 'ACTIVE' && normalizeKioskLookupValue(card.cardNumber) === token
+      );
+      const tokenMatch = token ? customerTokens.includes(token) : false;
+      const digitMatch = digits
+        ? [customer.phone, customer.taxId, customer.loyalty?.cardNumber]
+            .map(digitsOnly)
+            .filter(Boolean)
+            .includes(digits)
+        : false;
+
+      return cardMatch || tokenMatch || digitMatch;
+    }) || null;
+  }, [customers]);
+
+  const applyKioskCartPromotions = useCallback((
+    items: CartItem[],
+    customerOverride: Customer | null = selectedCustomer
+  ): CartItem[] => {
+    const currentTerminalId = getCurrentTerminal()?.id || 'T1';
+    return applyPromotions(
+      resetPromotionCartForRepricing(items),
+      config,
+      currentTerminalId,
+      customerOverride || undefined
+    );
+  }, [config, getCurrentTerminal, selectedCustomer]);
+
+  const clearKioskCoupon = useCallback(() => {
+    setKioskRedeemedCoupon(null);
+    setKioskCouponBenefit(null);
+  }, []);
+
+  const handleKioskCustomerLookup = useCallback((value: string) => {
+    const customer = findCustomerByKioskLookup(value);
+    if (!customer) {
+      return {
+        success: false,
+        message: 'Cliente no encontrado. Verifique el ID, tarjeta, RNC o teléfono.',
+      };
+    }
+
+    setSelectedCustomer(customer);
+    setCart(prev => applyKioskCartPromotions(prev, customer));
+
+    return {
+      success: true,
+      message: `OK: Cliente identificado: ${customer.name}`,
+    };
+  }, [applyKioskCartPromotions, findCustomerByKioskLookup]);
+
+  const clearKioskCustomerSelection = useCallback(() => {
+    setSelectedCustomer(null);
+    setCart(prev => applyKioskCartPromotions(prev, null));
+    if (kioskRedeemedCoupon?.assignedTo) {
+      clearKioskCoupon();
+    }
+  }, [applyKioskCartPromotions, clearKioskCoupon, kioskRedeemedCoupon?.assignedTo]);
+
+  const handleKioskCouponRedeem = useCallback((code: string) => {
+    const normalizedCode = code.trim().toUpperCase();
+    if (!normalizedCode) {
+      return { success: false, message: 'Digite o escanee un cupón válido.' };
+    }
+
+    if (kioskRedeemedCoupon) {
+      return {
+        success: false,
+        message: `Ya hay un cupón aplicado: ${kioskRedeemedCoupon.code}.`,
+      };
+    }
+
+    const currentTerminalId = getCurrentTerminal()?.id || 'T1';
+    const cartGrossTotal = roundMoney(cart.reduce((sum, item) => {
+      return sum + Math.abs((Number(item.price) || 0) * (Number(item.quantity) || 0));
+    }, 0));
+    const result = couponService.redeemCoupon(
+      normalizedCode,
+      `KIOSK-${Date.now()}`,
+      currentTerminalId,
+      config,
+      cartGrossTotal,
+      selectedCustomer?.id
+    );
+
+    if (!result.success) {
+      return {
+        success: false,
+        message: result.error || 'No se pudo canjear el cupón.',
+      };
+    }
+
+    if (result.updatedConfig) {
+      setConfig(result.updatedConfig);
+      db.save('config', result.updatedConfig).catch((error) => {
+        console.warn('No se pudo persistir el cupón canjeado en self-checkout:', error);
+      });
+    }
+
+    if (result.coupon) {
+      setKioskRedeemedCoupon({
+        id: result.coupon.id,
+        code: result.coupon.code,
+        campaignId: result.coupon.campaignId,
+        assignedTo: result.coupon.assignedTo,
+      });
+    }
+    if (result.benefit) {
+      setKioskCouponBenefit(result.benefit);
+    }
+
+    return {
+      success: true,
+      message: `OK: ${result.benefit?.description || 'Cupón aplicado'}`,
+    };
+  }, [cart, config, getCurrentTerminal, kioskRedeemedCoupon, selectedCustomer?.id]);
+
+  const getKioskCouponDiscountAmount = useCallback((cartTotal: number): number => {
+    if (!kioskCouponBenefit) return 0;
+    if (kioskCouponBenefit.type === 'PERCENT') {
+      return roundMoney(cartTotal * (Math.max(0, kioskCouponBenefit.value) / 100));
+    }
+    if (kioskCouponBenefit.type === 'FIXED_AMOUNT') {
+      return roundMoney(Math.min(Math.max(0, kioskCouponBenefit.value), cartTotal));
+    }
+    return 0;
+  }, [kioskCouponBenefit]);
 
   const normalizeTerminalId = (value?: string | null) => (value || '').trim().toLowerCase();
   const isRestaurantVertical = (value?: string | null) => value === 'RESTAURANT' || value === 'RESTAURANTE';
@@ -5720,6 +5923,8 @@ const AppContent: React.FC = () => {
           <KioskWelcome
             onStartShopping={() => {
               clearSecurityState();
+              setSelectedCustomer(null);
+              clearKioskCoupon();
               handleViewChange('KIOSK_BROWSER');
             }}
             storeName={config.companyInfo?.name}
@@ -5756,23 +5961,25 @@ const AppContent: React.FC = () => {
               } else {
                 newCart = [...cart, { ...product, quantity }];
               }
-              const currentTerminalId = getCurrentTerminal()?.id || 'T1';
-              setCart(applyPromotions(newCart, config, currentTerminalId));
+              setCart(applyKioskCartPromotions(newCart));
             }}
             onRemoveFromCart={(productId) => {
               const newCart = cart.filter(item => item.id !== productId);
-              const currentTerminalId = getCurrentTerminal()?.id || 'T1';
-              setCart(applyPromotions(newCart, config, currentTerminalId));
+              setCart(applyKioskCartPromotions(newCart));
             }}
             onCheckout={() => handleViewChange('KIOSK_PAYMENT')}
             onCancel={() => {
               clearSecurityState();
               setCart([]);
+              setSelectedCustomer(null);
+              clearKioskCoupon();
               handleViewChange('KIOSK_WELCOME');
             }}
             config={config}
             terminalId={getCurrentTerminal()?.id || 'T1'}
             customerConfidenceIndex={selectedCustomer ? 1 : 0.75}
+            selectedCustomer={selectedCustomer}
+            redeemedCoupon={kioskRedeemedCoupon}
           />
         );
 
@@ -5803,15 +6010,26 @@ const AppContent: React.FC = () => {
         );
 
       case 'KIOSK_PAYMENT':
-        const kioskPaymentMethods = resolveKioskPaymentMethods(config);
         const kioskTerminal = getCurrentTerminal();
         const kioskActiveConfig = kioskTerminal?.config;
-        const kioskTotals = buildKioskPaymentTotals(cart, config, kioskActiveConfig);
+        const kioskCartGrossTotal = roundMoney(cart.reduce((sum, item) => {
+          return sum + Math.abs((Number(item.price) || 0) * (Number(item.quantity) || 0));
+        }, 0));
+        const kioskCouponDiscountAmount = getKioskCouponDiscountAmount(kioskCartGrossTotal);
+        const kioskPaymentMethods = resolveKioskPaymentMethods(config, selectedCustomer);
+        const kioskTotals = buildKioskPaymentTotals(cart, config, kioskActiveConfig, kioskCouponDiscountAmount);
         return (
           <KioskPayment
             cart={cart}
             paymentMethods={kioskPaymentMethods}
             totals={kioskTotals}
+            selectedCustomer={selectedCustomer}
+            redeemedCoupon={kioskRedeemedCoupon}
+            onLookupCustomerByCode={handleKioskCustomerLookup}
+            onLookupCustomerByPhone={handleKioskCustomerLookup}
+            onRedeemCoupon={handleKioskCouponRedeem}
+            onClearCustomer={clearKioskCustomerSelection}
+            onClearCoupon={clearKioskCoupon}
             onBack={() => handleViewChange('KIOSK_BROWSER')}
             onPaymentComplete={async (method) => {
               console.log(`Payment completed with ${method.label} (${method.type})`);
@@ -5832,6 +6050,16 @@ const AppContent: React.FC = () => {
               const subtotal = kioskTotals.subtotal;
               const tax = kioskTotals.tax;
               const total = kioskTotals.total;
+              const isWalletPayment = method.type === 'WALLET';
+              const walletBalance = Number(selectedCustomer?.wallet?.balance || 0);
+              if (isWalletPayment) {
+                if (!selectedCustomer?.id || selectedCustomer.wallet?.status !== 'ACTIVE') {
+                  throw new Error('Seleccione un cliente con wallet activo para pagar con saldo.');
+                }
+                if (walletBalance + 0.01 < total) {
+                  throw new Error(`Saldo insuficiente en wallet. Disponible: ${walletBalance.toFixed(2)}.`);
+                }
+              }
               const baseCurrency = config.currencies?.find(currency => currency.isBase)?.code || 'DOP';
               const configuredMethod = (config.paymentMethods || []).find(paymentMethod => paymentMethod.id === method.id)
                 || (config.paymentMethods || []).find(paymentMethod => paymentMethod.type === method.type && paymentMethod.name === method.label)
@@ -5926,12 +6154,69 @@ const AppContent: React.FC = () => {
                   userName: kioskOperator.name,
                   terminalId: currentTerminal.id,
                   status: 'COMPLETED',
-                  // Kiosk usually doesn't have selected customer, use generic or guest
-                  customerName: 'Cliente General',
+                  customerId: selectedCustomer?.id,
+                  customerName: selectedCustomer?.name || 'Cliente General',
+                  customerSnapshot: selectedCustomer ? {
+                    name: selectedCustomer.name,
+                    taxId: selectedCustomer.taxId,
+                    address: selectedCustomer.address,
+                    phone: selectedCustomer.phone,
+                    email: selectedCustomer.email,
+                  } : undefined,
                   taxAmount: tax,
                   netAmount: subtotal,
-                  isTaxIncluded: kioskTotals.taxIncluded
+                  discountAmount: kioskTotals.discountAmount,
+                  isTaxIncluded: kioskTotals.taxIncluded,
+                  couponCode: kioskRedeemedCoupon?.code,
+                  coupons: kioskRedeemedCoupon ? [{
+                    id: kioskRedeemedCoupon.id,
+                    code: kioskRedeemedCoupon.code,
+                    campaignId: kioskRedeemedCoupon.campaignId,
+                  }] : undefined,
+                  walletPaymentAmount: isWalletPayment ? total : undefined,
                 });
+
+                if (kioskRedeemedCoupon) {
+                  const finalTicketRef = txn.displayId || txn.id;
+                  const configWithFinalCouponRef: BusinessConfig = {
+                    ...config,
+                    coupons: (config.coupons || []).map((coupon) =>
+                      coupon.id === kioskRedeemedCoupon.id
+                        ? {
+                          ...coupon,
+                          status: 'REDEEMED',
+                          ticketRef: finalTicketRef,
+                          terminalId: currentTerminal.id,
+                          redeemedAt: coupon.redeemedAt || new Date().toISOString(),
+                        }
+                        : coupon
+                    ),
+                  };
+                  setConfig(configWithFinalCouponRef);
+                  await db.save('config', configWithFinalCouponRef);
+                }
+
+                if (isWalletPayment && selectedCustomer?.id) {
+                  await transactionService.updateWalletBalance(
+                    selectedCustomer.id,
+                    -total,
+                    'PAYMENT',
+                    txn.displayId || txn.id
+                  );
+                  const nextWalletBalance = roundMoney(walletBalance - total);
+                  const updatedCustomer: Customer = {
+                    ...selectedCustomer,
+                    wallet: selectedCustomer.wallet ? {
+                      ...selectedCustomer.wallet,
+                      balance: nextWalletBalance,
+                      lastActivity: new Date().toISOString(),
+                    } : selectedCustomer.wallet,
+                    updatedAt: new Date().toISOString(),
+                  };
+                  setSelectedCustomer(updatedCustomer);
+                  setCustomers(prev => prev.map(customer => customer.id === updatedCustomer.id ? updatedCustomer : customer));
+                  await db.saveDocument('customers', updatedCustomer);
+                }
 
                 // Save and Sync
                 await handleTransactionComplete(txn);
@@ -5955,6 +6240,8 @@ const AppContent: React.FC = () => {
             onCancel={() => {
               clearSecurityState();
               setCart([]);
+              setSelectedCustomer(null);
+              clearKioskCoupon();
               handleViewChange('KIOSK_WELCOME');
             }}
           />
@@ -6084,6 +6371,8 @@ const AppContent: React.FC = () => {
               if (currentView !== 'KIOSK_WELCOME') {
                 clearSecurityState();
                 setCart([]);
+                setSelectedCustomer(null);
+                clearKioskCoupon();
                 setCurrentView('KIOSK_WELCOME');
               }
             }}

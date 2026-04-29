@@ -18,7 +18,7 @@ import {
   CreditCard,
   Sparkles
 } from 'lucide-react';
-import { Product, CartItem, BusinessConfig, ProductPrice, Tariff, Warehouse } from '../../types';
+import { Product, CartItem, BusinessConfig, ProductPrice, Tariff, Warehouse, Customer, RedeemedCouponRef } from '../../types';
 import { hasProductPromotion } from '../../utils/promotionEngine';
 import { parseScaleBarcode } from '../../utils/barcodeParser';
 import { db } from '../../utils/db';
@@ -108,6 +108,8 @@ interface KioskProductBrowserProps {
   config: BusinessConfig;
   terminalId?: string;
   customerConfidenceIndex?: number;
+  selectedCustomer?: Customer | null;
+  redeemedCoupon?: RedeemedCouponRef | null;
 }
 
 const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
@@ -120,7 +122,9 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
   onCancel,
   config,
   terminalId,
-  customerConfidenceIndex = 0.75
+  customerConfidenceIndex = 0.75,
+  selectedCustomer,
+  redeemedCoupon
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [lastScanned, setLastScanned] = useState<string | null>(null);
@@ -902,6 +906,20 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
             <h2 className="text-3xl font-black">Tu Carrito</h2>
           </div>
           <p className="text-blue-100 text-lg font-semibold">{itemCount} {itemCount === 1 ? 'articulo' : 'articulos'}</p>
+          {(selectedCustomer || redeemedCoupon) && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {selectedCustomer && (
+                <span className="inline-flex items-center rounded-full bg-white/15 px-3 py-1 text-xs font-black uppercase tracking-wide text-white">
+                  Cliente: {selectedCustomer.name}
+                </span>
+              )}
+              {redeemedCoupon && (
+                <span className="inline-flex items-center rounded-full bg-emerald-300 px-3 py-1 text-xs font-black uppercase tracking-wide text-emerald-950">
+                  Cupon: {redeemedCoupon.code}
+                </span>
+              )}
+            </div>
+          )}
           {(needsVerification || auditTriggered) && (
             <div className="mt-3 inline-flex items-center gap-2 text-xs font-black uppercase px-3 py-1 rounded-full bg-amber-200 text-amber-900">
               {needsVerification ? 'Mantenida para verificación' : 'Auditoría aleatoria pendiente'}

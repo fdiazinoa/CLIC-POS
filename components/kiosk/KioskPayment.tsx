@@ -7,8 +7,8 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { CreditCard, Banknote, ArrowLeft, CheckCircle, User, Smartphone, Printer, Mail, XCircle, QrCode, Wallet, DollarSign, Zap } from 'lucide-react';
-import { CartItem, PaymentMethod, Transaction } from '../../types';
+import { CreditCard, Banknote, ArrowLeft, CheckCircle, User, Smartphone, Printer, Mail, XCircle, QrCode, Wallet, DollarSign, Zap, Search, Ticket, X } from 'lucide-react';
+import { CartItem, Customer, PaymentMethod, RedeemedCouponRef, Transaction } from '../../types';
 
 export type KioskResolvedPaymentMethod = {
     key: string;
@@ -26,14 +26,29 @@ export type KioskPaymentTotals = {
     total: number;
     subtotalBeforeDiscounts: number;
     totalSavings: number;
+    discountAmount?: number;
     taxIncluded: boolean;
     taxLabel?: string;
+};
+
+type KioskLookupMode = 'ID' | 'PHONE' | 'COUPON';
+
+export type KioskActionResult = {
+    success: boolean;
+    message: string;
 };
 
 interface KioskPaymentProps {
     cart: CartItem[];
     paymentMethods: KioskResolvedPaymentMethod[];
     totals?: KioskPaymentTotals;
+    selectedCustomer?: Customer | null;
+    redeemedCoupon?: RedeemedCouponRef | null;
+    onLookupCustomerByCode?: (code: string) => KioskActionResult;
+    onLookupCustomerByPhone?: (phone: string) => KioskActionResult;
+    onRedeemCoupon?: (code: string) => KioskActionResult;
+    onClearCustomer?: () => void;
+    onClearCoupon?: () => void;
     onBack: () => void;
     onPaymentComplete: (paymentMethod: KioskResolvedPaymentMethod) => Promise<Transaction | null>;
     onPrintReceipt: (transaction: Transaction) => Promise<boolean>;
@@ -121,6 +136,10 @@ const getPaymentSupportText = (method: KioskResolvedPaymentMethod) => {
         return 'Efectivo configurado en Métodos de Pago';
     }
 
+    if (method.type === 'WALLET' || method.type === 'STORE_CREDIT') {
+        return 'Usa el saldo disponible del cliente identificado';
+    }
+
     return 'Método configurado en Métodos de Pago';
 };
 
@@ -128,6 +147,13 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
     cart,
     paymentMethods,
     totals,
+    selectedCustomer,
+    redeemedCoupon,
+    onLookupCustomerByCode,
+    onLookupCustomerByPhone,
+    onRedeemCoupon,
+    onClearCustomer,
+    onClearCoupon,
     onBack,
     onPaymentComplete,
     onPrintReceipt,
@@ -140,6 +166,9 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
     const [email, setEmail] = useState('');
     const [sendingEmail, setSendingEmail] = useState(false);
     const [emailSent, setEmailSent] = useState(false);
+    const [lookupMode, setLookupMode] = useState<KioskLookupMode | null>(null);
+    const [lookupValue, setLookupValue] = useState('');
+    const [lookupMessage, setLookupMessage] = useState('');
 
     // Calculate totals
     const cartGrossTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
@@ -159,6 +188,54 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
             ],
         [paymentMethods]
     );
+    const walletBalance = Number(selectedCustomer?.wallet?.balance || 0);
+    const hasWallet = selectedCustomer?.wallet?.status === 'ACTIVE' && walletBalance > 0;
+
+    const lookupConfig = {
+        ID: {
+            title: 'Escanear ID / Tarjeta',
+            label: 'ID, tarjeta o QR',
+            placeholder: 'Escanea o digita...',
+            action: onLookupCustomerByCode,
+        },
+        PHONE: {
+            title: 'Ingresar telefono',
+            label: 'Telefono del cliente',
+            placeholder: '809...',
+            action: onLookupCustomerByPhone,
+        },
+        COUPON: {
+            title: 'Escanear cupon',
+            label: 'Codigo del cupon',
+            placeholder: 'XXXX-XXXX',
+            action: onRedeemCoupon,
+        },
+    } as const;
+
+    const openLookup = (mode: KioskLookupMode) => {
+        setLookupMode(mode);
+        setLookupValue('');
+        setLookupMessage('');
+    };
+
+    const closeLookup = () => {
+        setLookupMode(null);
+        setLookupValue('');
+        setLookupMessage('');
+    };
+
+    const handleLookupSubmit = () => {
+        if (!lookupMode || !lookupValue.trim()) return;
+        const config = lookupConfig[lookupMode];
+        const result = config.action?.(lookupValue.trim()) || {
+            success: false,
+            message: 'Esta opcion todavia no esta configurada.',
+        };
+        setLookupMessage(result.message);
+        if (result.success) {
+            setTimeout(closeLookup, 650);
+        }
+    };
 
     // Handle payment
     const handlePayment = async (method: KioskResolvedPaymentMethod) => {
@@ -257,19 +334,65 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
                         Acumula puntos y obtén descuentos exclusivos en esta compra.
                     </p>
 
-                    <div className="grid grid-cols-2 gap-6 w-full max-w-3xl mb-12">
-                        <button className="flex flex-col items-center justify-center p-8 bg-blue-50 hover:bg-blue-100 border-2 border-blue-200 rounded-3xl transition-all group">
+                    {(selectedCustomer || redeemedCoupon) && (
+                        <div className="w-full max-w-3xl mb-8 grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {selectedCustomer && (
+                                <div className="rounded-2xl bg-emerald-50 border-2 border-emerald-200 p-4 text-left">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <p className="text-xs font-black uppercase tracking-widest text-emerald-600">Cliente identificado</p>
+                                            <p className="text-xl font-black text-emerald-900">{selectedCustomer.name}</p>
+                                            {hasWallet && (
+                                                <p className="text-sm font-bold text-emerald-700">Wallet disponible: ${walletBalance.toFixed(2)}</p>
+                                            )}
+                                        </div>
+                                        {onClearCustomer && (
+                                            <button onClick={onClearCustomer} className="p-2 rounded-xl bg-white/80 text-emerald-700">
+                                                <X size={18} />
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {redeemedCoupon && (
+                                <div className="rounded-2xl bg-blue-50 border-2 border-blue-200 p-4 text-left">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <p className="text-xs font-black uppercase tracking-widest text-blue-600">Cupon aplicado</p>
+                                            <p className="text-xl font-black text-blue-900">{redeemedCoupon.code}</p>
+                                        </div>
+                                        {onClearCoupon && (
+                                            <button onClick={onClearCoupon} className="p-2 rounded-xl bg-white/80 text-blue-700">
+                                                <X size={18} />
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-5xl mb-12">
+                        <button onClick={() => openLookup('ID')} className="flex flex-col items-center justify-center p-8 bg-blue-50 hover:bg-blue-100 border-2 border-blue-200 rounded-3xl transition-all group">
                             <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mb-4 shadow-sm group-hover:scale-110 transition-transform">
-                                <div className="text-3xl">📷</div>
+                                <Search size={32} className="text-blue-600" />
                             </div>
                             <span className="text-xl font-bold text-blue-800">Escanear ID</span>
                         </button>
 
-                        <button className="flex flex-col items-center justify-center p-8 bg-blue-50 hover:bg-blue-100 border-2 border-blue-200 rounded-3xl transition-all group">
+                        <button onClick={() => openLookup('PHONE')} className="flex flex-col items-center justify-center p-8 bg-blue-50 hover:bg-blue-100 border-2 border-blue-200 rounded-3xl transition-all group">
                             <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mb-4 shadow-sm group-hover:scale-110 transition-transform">
                                 <Smartphone size={32} className="text-blue-600" />
                             </div>
                             <span className="text-xl font-bold text-blue-800">Ingresar Teléfono</span>
+                        </button>
+
+                        <button onClick={() => openLookup('COUPON')} className="flex flex-col items-center justify-center p-8 bg-blue-50 hover:bg-blue-100 border-2 border-blue-200 rounded-3xl transition-all group">
+                            <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mb-4 shadow-sm group-hover:scale-110 transition-transform">
+                                <Ticket size={32} className="text-blue-600" />
+                            </div>
+                            <span className="text-xl font-bold text-blue-800">Escanear Cupón</span>
                         </button>
                     </div>
 
@@ -280,6 +403,46 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
                         Continuar como invitado
                     </button>
                 </div>
+
+                {lookupMode && (
+                    <div className="fixed inset-0 z-[170] bg-black/50 backdrop-blur-sm flex items-center justify-center p-6">
+                        <div className="w-full max-w-lg rounded-3xl bg-white shadow-2xl p-6 animate-in fade-in zoom-in-95">
+                            <div className="flex items-center justify-between mb-5">
+                                <h3 className="text-2xl font-black text-gray-800">{lookupConfig[lookupMode].title}</h3>
+                                <button onClick={closeLookup} className="w-11 h-11 rounded-xl bg-gray-100 hover:bg-gray-200 flex items-center justify-center">
+                                    <X size={20} />
+                                </button>
+                            </div>
+                            <label className="block text-xs font-black uppercase tracking-widest text-gray-400 mb-2">
+                                {lookupConfig[lookupMode].label}
+                            </label>
+                            <input
+                                autoFocus
+                                value={lookupValue}
+                                onChange={(event) => {
+                                    setLookupValue(lookupMode === 'COUPON' ? event.target.value.toUpperCase() : event.target.value);
+                                    setLookupMessage('');
+                                }}
+                                onKeyDown={(event) => event.key === 'Enter' && handleLookupSubmit()}
+                                placeholder={lookupConfig[lookupMode].placeholder}
+                                className="w-full text-center text-2xl font-black tracking-widest p-5 bg-gray-50 border-2 border-gray-200 rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all placeholder-gray-300"
+                            />
+                            {lookupMessage && (
+                                <p className={`mt-3 text-center font-bold ${lookupMessage.startsWith('OK') ? 'text-emerald-600' : 'text-red-600'}`}>
+                                    {lookupMessage.replace(/^OK:\s*/, '')}
+                                </p>
+                            )}
+                            <button
+                                onClick={handleLookupSubmit}
+                                disabled={!lookupValue.trim()}
+                                className="w-full min-h-[64px] mt-5 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-black text-lg flex items-center justify-center gap-2"
+                            >
+                                <CheckCircle size={20} />
+                                Validar
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
         );
     }
@@ -326,7 +489,7 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
                         ¡Pago Exitoso!
                     </h1>
 
-                    <div className="bg-white p-6 rounded-3xl shadow-lg text-center w-full max-w-md mb-12">
+                        <div className="bg-white p-6 rounded-3xl shadow-lg text-center w-full max-w-md mb-12">
                         <div className="text-4xl font-black text-green-600 mb-1">
                             ${total.toFixed(2)}
                         </div>
@@ -518,6 +681,37 @@ const KioskPayment: React.FC<KioskPaymentProps> = ({
 
                     {/* Right Column: Payment Methods */}
                     <div className="space-y-4">
+                        {(selectedCustomer || redeemedCoupon) && (
+                            <div className="rounded-3xl bg-white border border-gray-100 p-5 shadow-sm">
+                                {selectedCustomer && (
+                                    <div className="flex items-center justify-between text-left">
+                                        <div>
+                                            <p className="text-xs font-black uppercase tracking-widest text-gray-400">Cliente</p>
+                                            <p className="font-black text-gray-800">{selectedCustomer.name}</p>
+                                        </div>
+                                        {hasWallet && (
+                                            <span className="rounded-full bg-emerald-50 px-3 py-1 text-sm font-black text-emerald-700">
+                                                Wallet ${walletBalance.toFixed(2)}
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
+                                {redeemedCoupon && (
+                                    <div className={`${selectedCustomer ? 'mt-3 pt-3 border-t border-gray-100' : ''} flex items-center justify-between text-left`}>
+                                        <div>
+                                            <p className="text-xs font-black uppercase tracking-widest text-gray-400">Cupon</p>
+                                            <p className="font-black text-gray-800">{redeemedCoupon.code}</p>
+                                        </div>
+                                        {totalSavings > 0 && (
+                                            <span className="rounded-full bg-green-50 px-3 py-1 text-sm font-black text-green-700">
+                                                Ahorro ${totalSavings.toFixed(2)}
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
                         {availablePaymentMethods.map((method) => {
                             const Icon = getPaymentIcon(method);
                             const accent = getPaymentAccent(method);
