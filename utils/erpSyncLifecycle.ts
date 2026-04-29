@@ -3,7 +3,7 @@ import { extractTerminalConfigRequestedScopes } from './terminalConfigPushScopes
 import { mergeTerminalConfigSnapshots } from './terminalConfigSnapshot';
 import { db } from './db';
 import { DEFAULT_TERMINAL_DOCUMENT_ASSIGNMENTS } from '../constants';
-import { getDefaultRoleConfig, normalizeDeviceRoleValue } from './deviceRoleHelpers';
+import { getDefaultRoleConfig, normalizeDeviceRoleValue, resolveDeviceRoleValue } from './deviceRoleHelpers';
 import {
     AuthLevel,
     BusinessConfig,
@@ -646,9 +646,10 @@ const buildCompatibleDeviceRoleConfig = (
         : currentAllowedModules.length > 0 && !roleChanged
             ? currentAllowedModules
             : defaultAllowedModules;
+    const roleChangedToHeadless = roleChanged && defaults.authLevel === AuthLevel.HEADLESS;
     const touchTargetSize = toFiniteNumber(
-        incoming.touchTargetSize
-        ?? incomingUi.touchTargetSize
+        incomingUi.touchTargetSize
+        ?? (!roleChangedToHeadless ? incoming.touchTargetSize : undefined)
         ?? currentUi.touchTargetSize
         ?? defaults.uiSettings.touchTargetSize
     ) ?? defaults.uiSettings.touchTargetSize;
@@ -664,9 +665,13 @@ const buildCompatibleDeviceRoleConfig = (
         currentUi.navigationLocked,
         defaults.uiSettings.navigationLocked
     ) ?? defaults.uiSettings.navigationLocked;
-    const authLevel = resolveAuthLevel(incoming.authLevel)
-        || (!roleChanged ? resolveAuthLevel(current?.authLevel) : null)
-        || defaults.authLevel;
+    const incomingAuthLevel = resolveAuthLevel(incoming.authLevel);
+    const authLevel =
+        roleChangedToHeadless && incomingAuthLevel === AuthLevel.USER_REQUIRED
+            ? defaults.authLevel
+            : incomingAuthLevel
+            || (!roleChanged ? resolveAuthLevel(current?.authLevel) : null)
+            || defaults.authLevel;
     const defaultRoute = normalizeOptional(String(incoming.defaultRoute || ''))
         || (!roleChanged ? normalizeOptional(String(current?.defaultRoute || '')) : '')
         || defaults.defaultRoute;
@@ -718,54 +723,59 @@ const buildIncomingConfigPushDeviceRole = (
     const snakeRole = asObject<Record<string, unknown>>(incomingConfig.device_role);
     const resolvedCamelRole = asObject<Record<string, unknown>>(resolved.deviceRole);
     const resolvedSnakeRole = asObject<Record<string, unknown>>(resolved.device_role);
-    const roleValue =
-        snapshot.role ??
-        snapshot.device_role ??
-        snapshot.deviceRole ??
-        snapshot.role_code ??
-        snapshot.device_role_code ??
-        resolvedIdentity.role ??
-        resolvedIdentity.device_role ??
-        resolvedIdentity.deviceRole ??
-        resolvedIdentity.role_code ??
-        resolvedIdentity.device_role_code ??
-        resolvedTerminal.role ??
-        resolvedTerminal.device_role ??
-        resolvedTerminal.deviceRole ??
-        resolvedTerminal.role_code ??
-        resolvedTerminal.device_role_code ??
-        resolved.role ??
-        resolved.device_role ??
-        resolved.deviceRole ??
-        resolved.role_code ??
-        resolved.device_role_code ??
-        incomingConfig.role ??
-        incomingConfig.device_role_code ??
-        (typeof incomingConfig.deviceRole === 'string' ? incomingConfig.deviceRole : undefined) ??
-        (typeof incomingConfig.device_role === 'string' ? incomingConfig.device_role : undefined) ??
-        camelRole.role ??
-        camelRole.device_role ??
-        camelRole.role_code ??
-        camelRole.device_role_code ??
-        snakeRole.role ??
-        snakeRole.device_role ??
-        snakeRole.role_code ??
-        snakeRole.device_role_code ??
-        resolvedCamelRole.role ??
-        resolvedCamelRole.device_role ??
-        resolvedCamelRole.role_code ??
-        resolvedCamelRole.device_role_code ??
-        resolvedSnakeRole.role ??
-        resolvedSnakeRole.device_role ??
-        resolvedSnakeRole.role_code ??
-        resolvedSnakeRole.device_role_code;
+    const roleValue = resolveDeviceRoleValue([
+        camelRole.role,
+        camelRole.device_role,
+        camelRole.deviceRole,
+        camelRole.role_code,
+        camelRole.device_role_code,
+        snakeRole.role,
+        snakeRole.device_role,
+        snakeRole.deviceRole,
+        snakeRole.role_code,
+        snakeRole.device_role_code,
+        incomingConfig.deviceRole,
+        incomingConfig.device_role,
+        resolvedCamelRole.role,
+        resolvedCamelRole.device_role,
+        resolvedCamelRole.deviceRole,
+        resolvedCamelRole.role_code,
+        resolvedCamelRole.device_role_code,
+        resolvedSnakeRole.role,
+        resolvedSnakeRole.device_role,
+        resolvedSnakeRole.deviceRole,
+        resolvedSnakeRole.role_code,
+        resolvedSnakeRole.device_role_code,
+        resolvedIdentity.deviceRole,
+        resolvedIdentity.device_role,
+        resolvedIdentity.role_code,
+        resolvedIdentity.device_role_code,
+        resolvedTerminal.deviceRole,
+        resolvedTerminal.device_role,
+        resolvedTerminal.role_code,
+        resolvedTerminal.device_role_code,
+        snapshot.deviceRole,
+        snapshot.device_role,
+        snapshot.role_code,
+        snapshot.device_role_code,
+        resolved.deviceRole,
+        resolved.device_role,
+        resolved.role_code,
+        resolved.device_role_code,
+        incomingConfig.device_role_code,
+        resolvedIdentity.role,
+        resolvedTerminal.role,
+        snapshot.role,
+        resolved.role,
+        incomingConfig.role,
+    ]);
 
     return {
         ...resolvedCamelRole,
         ...resolvedSnakeRole,
         ...camelRole,
         ...snakeRole,
-        ...(roleValue !== undefined && roleValue !== null ? { role: roleValue } : {}),
+        ...(roleValue ? { role: roleValue } : {}),
     };
 };
 
