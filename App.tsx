@@ -5692,6 +5692,7 @@ const AppContent: React.FC = () => {
         return (
           <KioskProductBrowser
             products={products}
+            warehouses={warehouses}
             cart={cart}
             onAddToCart={(product, quantity = 1) => {
               const existing = cart.find(item => item.id === product.id);

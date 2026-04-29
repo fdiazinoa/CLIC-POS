@@ -18,15 +18,88 @@ import {
   CreditCard,
   Sparkles
 } from 'lucide-react';
-import { Product, CartItem, BusinessConfig } from '../../types';
+import { Product, CartItem, BusinessConfig, ProductPrice, Tariff, Warehouse } from '../../types';
 import { hasProductPromotion } from '../../utils/promotionEngine';
 import { parseScaleBarcode } from '../../utils/barcodeParser';
+import { db } from '../../utils/db';
+import { resolveProductImageSrc } from '../../utils/entityImage';
+import { resolveProductActiveWarehouseIds } from '../../utils/masterIdentity';
+import { productIdentityCandidates, resolveOperationalProductId } from '../../utils/productReferences';
 import PromoBottomSheet from '../PromoBottomSheet';
 import SecurityOverlay from './SecurityOverlay';
 import { useKioskSecurityContext } from './KioskContext';
 
+const normalizeToken = (value: unknown): string =>
+  typeof value === 'string' ? value.trim().toLowerCase() : value != null ? String(value).trim().toLowerCase() : '';
+
+const productSalesIdentityKey = (product: Product): string => {
+  const operationalId = resolveOperationalProductId(product);
+  if (operationalId) return `op:${operationalId}`;
+
+  const normalizedId = normalizeToken(product.id);
+  const identityCandidate = productIdentityCandidates(product)
+    .map(normalizeToken)
+    .find((value) => value && value !== normalizedId);
+  if (identityCandidate) return `identity:${identityCandidate}`;
+
+  const barcode = normalizeToken(product.barcode);
+  if (barcode) return `barcode:${barcode}`;
+
+  const sku = normalizeToken((product as any).sku);
+  if (sku) return `sku:${sku}`;
+
+  const code = normalizeToken((product as any).code);
+  if (code) return `code:${code}`;
+
+  const name = normalizeToken(product.name);
+  const category = normalizeToken(product.category);
+  if (name) return `namecat:${name}::${category}`;
+
+  return `id:${normalizedId}`;
+};
+
+const isSeedCatalogProduct = (product: Product): boolean => {
+  const id = normalizeToken(product.id);
+  return /^prod-\d+$/.test(id) || /^p\d+$/.test(id) || /^f\d+$/.test(id);
+};
+
+const productBusinessKeys = (product: Product): string[] => {
+  const keys = new Set<string>();
+  const barcode = normalizeToken(product.barcode);
+  const sku = normalizeToken((product as any).sku);
+  const code = normalizeToken((product as any).code);
+  const itemCode = normalizeToken((product as any).item_code);
+  const name = normalizeToken(product.name);
+  const category = normalizeToken(product.category);
+
+  if (barcode) keys.add(`barcode:${barcode}`);
+  if (sku) keys.add(`sku:${sku}`);
+  if (code) keys.add(`code:${code}`);
+  if (itemCode) keys.add(`item_code:${itemCode}`);
+  if (name) keys.add(`namecat:${name}::${category}`);
+
+  return Array.from(keys);
+};
+
+const scoreProductForSales = (product: Product, warehouses: Warehouse[]): number => {
+  const activeWarehouses = resolveProductActiveWarehouseIds(product, warehouses).length;
+  const stockBalanceCount = Object.keys(product.stockBalances || {}).length;
+  const updatedAtScore = new Date((product as any).updatedAt || (product as any).createdAt || 0).getTime() || 0;
+  const seedPenalty = isSeedCatalogProduct(product) ? -50_000 : 0;
+
+  return (
+    seedPenalty +
+    activeWarehouses * 1000 +
+    stockBalanceCount * 100 +
+    (product.is_sellable !== false ? 10 : 0) +
+    (Number.isFinite(Number(product.price)) ? 1 : 0) +
+    updatedAtScore / 1_000_000_000_000
+  );
+};
+
 interface KioskProductBrowserProps {
   products: Product[];
+  warehouses: Warehouse[];
   cart: CartItem[];
   onAddToCart: (product: Product, quantity?: number) => void;
   onRemoveFromCart: (productId: string) => void;
@@ -39,6 +112,7 @@ interface KioskProductBrowserProps {
 
 const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
   products,
+  warehouses,
   cart,
   onAddToCart,
   onRemoveFromCart,
@@ -125,6 +199,369 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
     }
   }, [weightModalOpen, weighingProduct]);
 
+  const [productPrices, setProductPrices] = useState<ProductPrice[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshProductPrices = async () => {
+      try {
+        const fresh = await db.get('productPrices') as ProductPrice[] | null;
+        if (!cancelled && Array.isArray(fresh)) {
+          setProductPrices(fresh);
+        }
+      } catch (error) {
+        console.warn('⚠️ KioskProductBrowser: Could not load productPrices collection:', error);
+      }
+    };
+
+    void refreshProductPrices();
+    window.addEventListener('productPricesUpdated', refreshProductPrices);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('productPricesUpdated', refreshProductPrices);
+    };
+  }, []);
+
+  const normalizeScopeKey = useCallback((value: unknown) => normalizeToken(value), []);
+  const terminal = (config.terminals || []).find(t => t.id === terminalId);
+  const activeTerminalConfig = terminal?.config;
+  const defaultSalesWarehouseId = activeTerminalConfig?.inventoryScope?.defaultSalesWarehouseId;
+
+  const allowedTariffs = useMemo(() => {
+    const allowedIds = activeTerminalConfig?.pricing?.allowedTariffIds || [];
+    const tariffs = config.tariffs || [];
+    if (allowedIds.length === 0) return tariffs;
+    const filteredTariffs = tariffs.filter(t => allowedIds.includes(t.id));
+    return filteredTariffs.length > 0 ? filteredTariffs : tariffs;
+  }, [activeTerminalConfig?.pricing?.allowedTariffIds, config.tariffs]);
+
+  const activeTariffId = useMemo(
+    () => activeTerminalConfig?.pricing?.defaultTariffId || allowedTariffs[0]?.id || config.tariffs?.[0]?.id || '',
+    [activeTerminalConfig?.pricing?.defaultTariffId, allowedTariffs, config.tariffs]
+  );
+
+  const productPriceIndex = useMemo(() => {
+    const index = new Map<string, number>();
+
+    for (const record of productPrices) {
+      if (!record || typeof record !== 'object') continue;
+      const price = Number(record.price);
+      if (!Number.isFinite(price)) continue;
+
+      const productTokens = [
+        record.productId,
+        record.itemId,
+        record.erpProductId,
+        record.sourceProductId,
+      ].map(normalizeToken).filter(Boolean);
+
+      const tariffTokens = [
+        record.tariffId,
+        record.tariffCode,
+      ].map(normalizeToken).filter(Boolean);
+
+      for (const productToken of productTokens) {
+        for (const tariffToken of tariffTokens) {
+          index.set(`${productToken}::${tariffToken}`, price);
+        }
+      }
+    }
+
+    return index;
+  }, [productPrices]);
+
+  const getTariffPrice = useCallback((product: Product) => {
+    const selectedTariff = (config.tariffs || []).find((tariff) => tariff.id === activeTariffId) as Tariff | undefined;
+    const activeTokens = new Set(
+      [activeTariffId, selectedTariff?.id, (selectedTariff as any)?.code]
+        .map(normalizeToken)
+        .filter(Boolean)
+    );
+
+    const productTokens = new Set(
+      [
+        product.id,
+        resolveOperationalProductId(product),
+        ...productIdentityCandidates(product),
+      ].map(normalizeToken).filter(Boolean)
+    );
+
+    for (const productToken of productTokens) {
+      for (const activeToken of activeTokens) {
+        const indexedPrice = productPriceIndex.get(`${productToken}::${activeToken}`);
+        if (typeof indexedPrice === 'number' && Number.isFinite(indexedPrice)) {
+          return indexedPrice;
+        }
+      }
+    }
+
+    const matchedEntry = (product.tariffs || []).find((entry: any) => {
+      const entryTokens = [
+        entry?.tariffId,
+        entry?.tariff_id,
+        entry?.id,
+        entry?.code,
+        entry?.tariffCode,
+        entry?.tariff_code,
+      ].map(normalizeToken).filter(Boolean);
+
+      return entryTokens.some((token) => activeTokens.has(token));
+    });
+
+    const tariffPrice = matchedEntry?.price;
+    return typeof tariffPrice === 'number' && Number.isFinite(tariffPrice) ? tariffPrice : null;
+  }, [activeTariffId, config.tariffs, productPriceIndex]);
+
+  const productHasActiveTariff = useCallback((product: Product) => getTariffPrice(product) !== null, [getTariffPrice]);
+  const getProductPrice = useCallback((product: Product) => getTariffPrice(product) ?? 0, [getTariffPrice]);
+
+  const categoryLookup = useMemo(() => {
+    const aliasToCanonical = new Map<string, string>();
+    const canonicalToDisplay = new Map<string, string>();
+
+    for (const category of config.posCategories || []) {
+      const aliases = [category.id, category.code, category.name]
+        .map(normalizeScopeKey)
+        .filter(Boolean);
+      const canonical = normalizeScopeKey(category.name || category.code || category.id);
+      const displayName = category.name || category.code || category.id;
+      if (!canonical || !displayName) continue;
+
+      canonicalToDisplay.set(canonical, displayName);
+      aliases.forEach((alias) => aliasToCanonical.set(alias, canonical));
+    }
+
+    return { aliasToCanonical, canonicalToDisplay };
+  }, [config.posCategories, normalizeScopeKey]);
+
+  const canonicalizeCategory = useCallback((value: unknown) => {
+    const normalized = normalizeScopeKey(value);
+    return categoryLookup.aliasToCanonical.get(normalized) || normalized;
+  }, [categoryLookup.aliasToCanonical, normalizeScopeKey]);
+
+  const displayCategory = useCallback((value: unknown) => {
+    const canonical = canonicalizeCategory(value);
+    if (!canonical) return '';
+    return categoryLookup.canonicalToDisplay.get(canonical) || (typeof value === 'string' ? value.trim() : canonical);
+  }, [canonicalizeCategory, categoryLookup.canonicalToDisplay]);
+
+  const effectiveAllowedCategorySet = useMemo(() => {
+    const configuredCategories = new Set(
+      (activeTerminalConfig?.catalog?.allowedCategories || [])
+        .map((category) => canonicalizeCategory(category))
+        .filter(Boolean)
+    );
+    if (configuredCategories.size === 0) return configuredCategories;
+
+    const localSellableCategories = new Set(
+      (products || [])
+        .filter((product) => product && product.is_sellable !== false)
+        .map((product) => canonicalizeCategory(product.category))
+        .filter(Boolean)
+    );
+
+    const matchedCategories = Array.from(configuredCategories).filter((category) => localSellableCategories.has(category));
+    return matchedCategories.length > 0 ? configuredCategories : new Set<string>();
+  }, [activeTerminalConfig?.catalog?.allowedCategories, canonicalizeCategory, products]);
+
+  const warehouseAliasMap = useMemo(() => {
+    const aliasMap = new Map<string, Set<string>>();
+
+    const registerWarehouse = (warehouse?: Partial<Warehouse> | null) => {
+      if (!warehouse) return;
+      const aliases = [
+        warehouse.id,
+        (warehouse as any).warehouseId,
+        (warehouse as any).warehouse_id,
+        (warehouse as any).inventoryLocalId,
+        (warehouse as any).inventory_local_id,
+        (warehouse as any).erpWarehouseId,
+        (warehouse as any).erp_warehouse_id,
+        (warehouse as any).sourceWarehouseId,
+        (warehouse as any).source_warehouse_id,
+        warehouse.code,
+        warehouse.name,
+      ].map(normalizeScopeKey).filter(Boolean);
+      if (aliases.length === 0) return;
+
+      const mergedAliases = new Set(aliases);
+      aliases.forEach((alias) => {
+        const existing = aliasMap.get(alias);
+        existing?.forEach((item) => mergedAliases.add(item));
+      });
+      aliases.forEach((alias) => aliasMap.set(alias, new Set(mergedAliases)));
+    };
+
+    (warehouses || []).forEach(registerWarehouse);
+    (activeTerminalConfig?.inventoryScope?.warehouses || []).forEach(registerWarehouse);
+    registerWarehouse(activeTerminalConfig?.inventoryScope?.defaultWarehouse as Warehouse | undefined);
+
+    return aliasMap;
+  }, [
+    warehouses,
+    activeTerminalConfig?.inventoryScope?.warehouses,
+    activeTerminalConfig?.inventoryScope?.defaultWarehouse,
+    normalizeScopeKey,
+  ]);
+
+  const effectiveWarehouseKeys = useMemo(() => {
+    const keys = new Set<string>();
+    const addWarehouseValue = (value: unknown) => {
+      const normalized = normalizeScopeKey(value);
+      if (!normalized) return;
+      keys.add(normalized);
+      warehouseAliasMap.get(normalized)?.forEach((alias) => keys.add(alias));
+    };
+
+    addWarehouseValue(defaultSalesWarehouseId);
+    addWarehouseValue(activeTerminalConfig?.inventoryScope?.defaultWarehouse?.id);
+    addWarehouseValue(activeTerminalConfig?.inventoryScope?.defaultWarehouse?.code);
+    addWarehouseValue(activeTerminalConfig?.inventoryScope?.defaultWarehouse?.name);
+    (activeTerminalConfig?.inventoryScope?.visibleWarehouseIds || []).forEach(addWarehouseValue);
+
+    return keys;
+  }, [
+    activeTerminalConfig?.inventoryScope?.defaultWarehouse?.code,
+    activeTerminalConfig?.inventoryScope?.defaultWarehouse?.id,
+    activeTerminalConfig?.inventoryScope?.defaultWarehouse?.name,
+    activeTerminalConfig?.inventoryScope?.visibleWarehouseIds,
+    defaultSalesWarehouseId,
+    normalizeScopeKey,
+    warehouseAliasMap,
+  ]);
+
+  const productMatchesTerminalWarehouse = useCallback((product: Product) => {
+    const activeWarehouses = resolveProductActiveWarehouseIds(product, warehouses)
+      .map(normalizeScopeKey)
+      .filter(Boolean);
+    if (activeWarehouses.length === 0) return false;
+    if (effectiveWarehouseKeys.size === 0) return true;
+    return activeWarehouses.some((warehouseId) => effectiveWarehouseKeys.has(warehouseId));
+  }, [effectiveWarehouseKeys, normalizeScopeKey, warehouses]);
+
+  const getScopedProductStock = useCallback((product: Product) => {
+    const matchedEntry = Object.entries(product.stockBalances || {})
+      .find(([warehouseId]) => effectiveWarehouseKeys.has(normalizeScopeKey(warehouseId)));
+    if (matchedEntry) return Number(matchedEntry[1] ?? 0);
+    return Number(product.stock ?? 0);
+  }, [effectiveWarehouseKeys, normalizeScopeKey]);
+
+  const salesCatalogProducts = useMemo(() => {
+    const nonSeedBusinessKeys = new Set<string>();
+
+    for (const product of products) {
+      if (!product || typeof product !== 'object' || Array.isArray(product)) continue;
+      if (isSeedCatalogProduct(product)) continue;
+      productBusinessKeys(product).forEach((key) => nonSeedBusinessKeys.add(key));
+    }
+
+    return products.filter((product) => {
+      if (!product || typeof product !== 'object' || Array.isArray(product)) return false;
+      if (!isSeedCatalogProduct(product)) return true;
+
+      const businessKeys = productBusinessKeys(product);
+      return !businessKeys.some((key) => nonSeedBusinessKeys.has(key));
+    });
+  }, [products]);
+
+  const dedupedSalesProducts = useMemo(() => Array.from(
+    salesCatalogProducts.reduce((map, product) => {
+      if (!product || typeof product !== 'object' || Array.isArray(product)) return map;
+
+      const key = productSalesIdentityKey(product);
+      const existing = map.get(key);
+      if (!existing || scoreProductForSales(product, warehouses) > scoreProductForSales(existing, warehouses)) {
+        map.set(key, product);
+      }
+      return map;
+    }, new Map<string, Product>()).values()
+  ), [salesCatalogProducts, warehouses]);
+
+  const sellableProducts = useMemo(
+    () => dedupedSalesProducts.filter((product) => {
+      if (!product || product.is_sellable === false) return false;
+      if (!productHasActiveTariff(product)) return false;
+      if (resolveProductActiveWarehouseIds(product, warehouses).length === 0) return false;
+
+      const normalizedProductCategory = canonicalizeCategory(product.category);
+      if (effectiveAllowedCategorySet.size > 0 && !effectiveAllowedCategorySet.has(normalizedProductCategory)) return false;
+
+      return true;
+    }),
+    [canonicalizeCategory, dedupedSalesProducts, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]
+  );
+
+  const categories = useMemo(() => {
+    const availableCategoryMap = new Map<string, string>();
+    for (const product of sellableProducts) {
+      const normalizedCategory = canonicalizeCategory(product?.category);
+      const rawCategory = displayCategory(product?.category);
+      if (!rawCategory || availableCategoryMap.has(normalizedCategory)) continue;
+      availableCategoryMap.set(normalizedCategory, rawCategory);
+    }
+
+    return ['Todos', ...Array.from(availableCategoryMap.values()).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))];
+  }, [canonicalizeCategory, displayCategory, sellableProducts]);
+
+  const filteredProducts = useMemo(
+    () => sellableProducts.filter((product) => {
+      const normalizedSearch = searchQuery.trim().toLowerCase();
+      const matchesSearch = !normalizedSearch
+        || (product.name || '').toLowerCase().includes(normalizedSearch)
+        || String(product.barcode || '').toLowerCase().includes(normalizedSearch)
+        || String((product as any).sku || '').toLowerCase().includes(normalizedSearch)
+        || String((product as any).item_code || '').toLowerCase().includes(normalizedSearch)
+        || String((product as any).code || '').toLowerCase().includes(normalizedSearch);
+      const matchesCategory = selectedCategory === 'Todos' || canonicalizeCategory(product.category) === canonicalizeCategory(selectedCategory);
+      return matchesSearch && matchesCategory;
+    }),
+    [canonicalizeCategory, searchQuery, selectedCategory, sellableProducts]
+  );
+
+  const suggestions = useMemo(
+    () => sellableProducts.filter(product => !cart.some(item => item.id === product.id)).slice(0, 4),
+    [sellableProducts, cart]
+  );
+
+  const getProductAvailability = useCallback((product: Product, quantityToAdd = 1) => {
+    if (!productHasActiveTariff(product)) {
+      return { canSell: false, reason: 'No disponible en la tarifa activa', availableStock: 0 };
+    }
+    if (!productMatchesTerminalWarehouse(product)) {
+      return { canSell: false, reason: 'No disponible en este almacén', availableStock: 0 };
+    }
+
+    const trackInventory = product.operationalFlags?.trackInventory ?? config.features.stockTracking;
+    const productAllowsNegative = product.operationalFlags?.allowNegativeStock ?? false;
+    const terminalAllowsNegative = activeTerminalConfig?.workflow?.inventory?.allowNegativeStock ?? false;
+    const allowsNegative = productAllowsNegative && terminalAllowsNegative;
+    const availableStock = getScopedProductStock(product);
+
+    if (trackInventory && !allowsNegative) {
+      const inCartQty = cart
+        .filter(item => item.id === product.id)
+        .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+      if (inCartQty + quantityToAdd > availableStock) {
+        return { canSell: false, reason: `Stock insuficiente. Disponible: ${Math.max(0, availableStock - inCartQty)}`, availableStock };
+      }
+    }
+
+    return { canSell: true, reason: '', availableStock };
+  }, [
+    activeTerminalConfig?.workflow?.inventory?.allowNegativeStock,
+    cart,
+    config.features.stockTracking,
+    getScopedProductStock,
+    productHasActiveTariff,
+    productMatchesTerminalWarehouse,
+  ]);
+
+  const buildPricedProduct = useCallback((product: Product): Product => ({
+    ...product,
+    price: getProductPrice(product),
+  }), [getProductPrice]);
+
   const triggerAddFeedback = (productName: string, productId: string) => {
     setLastScanned(productName);
     setActiveAddProductId(productId);
@@ -135,17 +572,24 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
     setTimeout(() => setLastScanned(null), 2000);
   };
 
-  const handleProductClick = (product: Product) => {
+  const handleProductClick = useCallback((product: Product) => {
+    const availability = getProductAvailability(product);
+    if (!availability.canSell) {
+      triggerAddFeedback(availability.reason, product.id);
+      return;
+    }
+
     if (product.type === 'SERVICE') {
       setWeighingProduct(product);
       setWeightInstructionOpen(true);
       return;
     }
 
-    onAddToCart(product);
-    markNeedsVerification(product);
+    const pricedProduct = buildPricedProduct(product);
+    onAddToCart(pricedProduct);
+    markNeedsVerification(pricedProduct);
     triggerAddFeedback(product.name, product.id);
-  };
+  }, [buildPricedProduct, getProductAvailability, markNeedsVerification, onAddToCart]);
 
   const startWeighingFlow = () => {
     setWeightInstructionOpen(false);
@@ -163,44 +607,20 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
   const confirmWeight = () => {
     if (!weighingProduct) return;
 
-    onAddToCart(weighingProduct, currentWeight);
-    markNeedsVerification(weighingProduct);
+    const availability = getProductAvailability(weighingProduct, currentWeight);
+    if (!availability.canSell) {
+      triggerAddFeedback(availability.reason, weighingProduct.id);
+      return;
+    }
+
+    const pricedProduct = buildPricedProduct(weighingProduct);
+    onAddToCart(pricedProduct, currentWeight);
+    markNeedsVerification(pricedProduct);
     triggerAddFeedback(`${weighingProduct.name} (${currentWeight}kg)`, weighingProduct.id);
 
     setWeightModalOpen(false);
     setWeighingProduct(null);
   };
-
-  const terminal = (config.terminals || []).find(t => t.id === terminalId);
-  const allowedCats = terminal?.config?.catalog?.allowedCategories || [];
-
-  const sellableProducts = useMemo(
-    () => products.filter(p => {
-      if (!p || p.is_sellable === false) return false;
-      if (allowedCats.length > 0 && !allowedCats.includes(p.category)) return false;
-      return true;
-    }),
-    [products, allowedCats]
-  );
-
-  const categories = useMemo(
-    () => ['Todos', ...Array.from(new Set(sellableProducts.map(p => p.category))).sort()],
-    [sellableProducts]
-  );
-
-  const filteredProducts = useMemo(
-    () => sellableProducts.filter(p => {
-      const matchesSearch = (p.name || '').toLowerCase().includes(searchQuery.toLowerCase()) || p.barcode?.includes(searchQuery);
-      const matchesCategory = selectedCategory === 'Todos' || p.category === selectedCategory;
-      return matchesSearch && matchesCategory;
-    }),
-    [sellableProducts, searchQuery, selectedCategory]
-  );
-
-  const suggestions = useMemo(
-    () => sellableProducts.filter(p => !cart.some(c => c.id === p.id)).slice(0, 4),
-    [sellableProducts, cart]
-  );
 
   const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   const total = subtotal;
@@ -258,13 +678,19 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
         );
 
         if (weightedProduct) {
-          const unitPrice = Number(weightedProduct.price || 0);
+          const unitPrice = getProductPrice(weightedProduct);
           const quantity = scaleItem.type === 'WEIGHT'
             ? scaleItem.value
             : (unitPrice > 0 ? scaleItem.value / unitPrice : 1);
+          const availability = getProductAvailability(weightedProduct, quantity);
+          if (!availability.canSell) {
+            triggerAddFeedback(availability.reason, weightedProduct.id);
+            return;
+          }
+          const pricedProduct = buildPricedProduct(weightedProduct);
 
-          onAddToCart(weightedProduct, quantity);
-          markNeedsVerification(weightedProduct);
+          onAddToCart(pricedProduct, quantity);
+          markNeedsVerification(pricedProduct);
           triggerAddFeedback(
             scaleItem.type === 'WEIGHT' || unitPrice > 0
               ? `${weightedProduct.name} (${quantity.toFixed(3)}kg)`
@@ -277,13 +703,19 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
     }
 
     const product = sellableProducts.find(
-      (candidate) => candidate.barcode === code || candidate.id === code
+      (candidate) => (
+        candidate.barcode === code ||
+        candidate.id === code ||
+        (candidate as any).sku === code ||
+        (candidate as any).item_code === code ||
+        (candidate as any).code === code
+      )
     );
 
     if (product) {
       handleProductClick(product);
     }
-  }, [config.scaleLabelConfig, handleProductClick, markNeedsVerification, onAddToCart, sellableProducts, triggerAddFeedback]);
+  }, [buildPricedProduct, config.scaleLabelConfig, getProductAvailability, getProductPrice, handleProductClick, markNeedsVerification, onAddToCart, sellableProducts, triggerAddFeedback]);
 
   useEffect(() => {
     const onHardwareScan = (event: Event) => {
@@ -337,69 +769,83 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
 
         <div className="flex-1 overflow-y-auto p-6 pb-40">
           <div className="grid grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
-            {filteredProducts.slice(0, 30).map(product => (
-              <button
-                key={product.id}
-                onClick={() => handleProductClick(product)}
-                className={`bg-white rounded-3xl border text-left overflow-hidden group flex flex-col h-[360px] transition-all active:scale-[0.98] ${activeAddProductId === product.id ? 'border-emerald-400 ring-4 ring-emerald-100' : 'border-slate-200 hover:border-blue-200 hover:shadow-xl hover:-translate-y-1'}`}
-              >
-                <div className="relative h-[62%] bg-slate-50 border-b border-slate-100 p-5 flex items-center justify-center">
-                  {product.type === 'SERVICE' && (
-                    <div className="absolute top-3 left-3 bg-orange-100 text-orange-700 px-2.5 py-1 rounded-full text-xs font-black flex items-center gap-1">
-                      <Scale size={12} />
-                      Requiere pesaje
-                    </div>
-                  )}
+            {filteredProducts.slice(0, 30).map(product => {
+              const imageSrc = resolveProductImageSrc(product);
+              const price = getProductPrice(product);
+              const availability = getProductAvailability(product);
+              const isUnavailable = !availability.canSell;
 
-                  {hasProductPromotion(product, config, terminalId || 'T1') && (
-                    <div
-                      className="absolute top-0 right-0 cursor-pointer z-20"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedPromoProduct(product);
-                        setShowPromoSheet(true);
-                      }}
-                    >
-                      <div className="bg-red-500 text-white text-xs font-black px-3 py-1.5 rounded-bl-2xl shadow-md flex items-center gap-1.5 animate-in slide-in-from-top-2 hover:bg-red-600 transition-colors">
-                        <Tag size={12} className="fill-white" />
-                        OFERTA
+              return (
+                <button
+                  key={product.id}
+                  onClick={() => handleProductClick(product)}
+                  disabled={isUnavailable}
+                  className={`bg-white rounded-3xl border text-left overflow-hidden group flex flex-col h-[360px] transition-all active:scale-[0.98] ${isUnavailable ? 'opacity-70 cursor-not-allowed grayscale-[0.35]' : ''} ${activeAddProductId === product.id ? 'border-emerald-400 ring-4 ring-emerald-100' : 'border-slate-200 hover:border-blue-200 hover:shadow-xl hover:-translate-y-1'}`}
+                >
+                  <div className="relative h-[62%] bg-slate-50 border-b border-slate-100 p-5 flex items-center justify-center">
+                    {product.type === 'SERVICE' && (
+                      <div className="absolute top-3 left-3 bg-orange-100 text-orange-700 px-2.5 py-1 rounded-full text-xs font-black flex items-center gap-1">
+                        <Scale size={12} />
+                        Requiere pesaje
+                      </div>
+                    )}
+
+                    {isUnavailable && (
+                      <div className="absolute top-3 left-3 z-20 bg-slate-900/80 text-white px-2.5 py-1 rounded-full text-xs font-black">
+                        {availability.reason || 'No disponible'}
+                      </div>
+                    )}
+
+                    {hasProductPromotion(product, config, terminalId || 'T1') && (
+                      <div
+                        className="absolute top-0 right-0 cursor-pointer z-20"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPromoProduct(product);
+                          setShowPromoSheet(true);
+                        }}
+                      >
+                        <div className="bg-red-500 text-white text-xs font-black px-3 py-1.5 rounded-bl-2xl shadow-md flex items-center gap-1.5 animate-in slide-in-from-top-2 hover:bg-red-600 transition-colors">
+                          <Tag size={12} className="fill-white" />
+                          OFERTA
+                        </div>
+                      </div>
+                    )}
+
+                    {imageSrc ? (
+                      <img
+                        src={imageSrc}
+                        alt={product.name}
+                        className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-200"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                          if (e.currentTarget.parentElement) {
+                            e.currentTarget.parentElement.innerHTML += `<span class=\"text-7xl\">${product.category === 'Bebidas' ? '🥤' : '📦'}</span>`;
+                          }
+                        }}
+                      />
+                    ) : (
+                      <span className="text-7xl">{product.category === 'Bebidas' ? '🥤' : '📦'}</span>
+                    )}
+                  </div>
+
+                  <div className="h-[38%] p-5 flex flex-col">
+                    <h3 className="font-black text-slate-800 text-xl leading-tight line-clamp-2">{product.name}</h3>
+                    <p className="text-sm text-slate-400 mt-1">{displayCategory(product.category)}</p>
+
+                    <div className="mt-auto flex items-center justify-between">
+                      <div className="text-2xl font-black text-slate-900">
+                        {formatMoney(price)}
+                        {product.type === 'SERVICE' && <span className="text-xs font-bold text-slate-400 ml-1">/kg</span>}
+                      </div>
+                      <div className={`w-12 h-12 text-white rounded-2xl flex items-center justify-center shadow-md ${isUnavailable ? 'bg-slate-300' : 'bg-blue-600'}`}>
+                        <Plus size={24} />
                       </div>
                     </div>
-                  )}
-
-                  {product.image || product.images?.[0] ? (
-                    <img
-                      src={product.image || product.images?.[0]}
-                      alt={product.name}
-                      className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-200"
-                      onError={(e) => {
-                        e.currentTarget.style.display = 'none';
-                        if (e.currentTarget.parentElement) {
-                          e.currentTarget.parentElement.innerHTML += `<span class=\"text-7xl\">${product.category === 'Bebidas' ? '🥤' : '📦'}</span>`;
-                        }
-                      }}
-                    />
-                  ) : (
-                    <span className="text-7xl">{product.category === 'Bebidas' ? '🥤' : '📦'}</span>
-                  )}
-                </div>
-
-                <div className="h-[38%] p-5 flex flex-col">
-                  <h3 className="font-black text-slate-800 text-xl leading-tight line-clamp-2">{product.name}</h3>
-                  <p className="text-sm text-slate-400 mt-1">{product.category}</p>
-
-                  <div className="mt-auto flex items-center justify-between">
-                    <div className="text-2xl font-black text-slate-900">
-                      {formatMoney(product.price)}
-                      {product.type === 'SERVICE' && <span className="text-xs font-bold text-slate-400 ml-1">/kg</span>}
-                    </div>
-                    <div className="w-12 h-12 bg-blue-600 text-white rounded-2xl flex items-center justify-center shadow-md">
-                      <Plus size={24} />
-                    </div>
                   </div>
-                </div>
-              </button>
-            ))}
+                </button>
+              );
+            })}
           </div>
 
           {filteredProducts.length === 0 && (
@@ -484,7 +930,7 @@ const KioskProductBrowser: React.FC<KioskProductBrowserProps> = ({
                         className="w-full px-3 py-3 rounded-xl bg-slate-50 border border-slate-200 hover:border-blue-200 hover:bg-blue-50 text-left transition-colors"
                       >
                         <p className="font-bold text-slate-800 truncate">{suggestion.name}</p>
-                        <p className="text-sm font-black text-slate-500">{formatMoney(suggestion.price)}</p>
+                        <p className="text-sm font-black text-slate-500">{formatMoney(getProductPrice(suggestion))}</p>
                       </button>
                     ))}
                   </div>
