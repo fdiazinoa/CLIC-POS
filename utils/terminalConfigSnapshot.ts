@@ -610,7 +610,7 @@ export const mergeTerminalConfigSnapshots = (
       ...incomingResolved,
     } as Record<string, any>;
 
-    ['pricing', 'inventory', 'documents', 'catalog', 'loyalty'].forEach((key) => {
+    ['pricing', 'inventory', 'documents', 'catalog', 'loyalty', 'identity', 'terminal', 'deviceRole', 'device_role'].forEach((key) => {
       const cachedSection = asObject(cachedResolved[key]);
       const incomingSection = asObject(incomingResolved[key]);
       if (Object.keys(cachedSection).length > 0 || Object.keys(incomingSection).length > 0) {
@@ -704,7 +704,11 @@ export const applyTerminalConfigSnapshot = (
     effectiveFallbackConfig = asObject(cached?.config);
   }
 
-  const resolvedIdentity = asObject(effectiveSnapshot);
+  const resolvedIdentity = {
+    ...asObject(effectiveSnapshot),
+    ...asObject(effectiveResolved.identity),
+    ...asObject(effectiveResolved.terminal),
+  } as Record<string, any>;
   const resolvedPricing = asObject(effectiveResolved.pricing);
   const resolvedInventory = asObject(effectiveResolved.inventory);
   const resolvedDocuments = asObject(effectiveResolved.documents);
@@ -798,7 +802,10 @@ export const applyTerminalConfigSnapshot = (
   const documentAssignments = normalizeAssignments(resolvedDocuments.assignments);
 
   const terminalTemplate = resolveTerminalTemplate(nextConfig, terminalId);
-  const terminalTerminalId = asString(resolvedIdentity.terminal_id) || terminalId;
+  const terminalTerminalId =
+    asString(resolvedIdentity.terminal_id) ||
+    asString(resolvedIdentity.id) ||
+    terminalId;
   const rawAllowedTariffIds = asArray<string>(resolvedPricing.allowed_tariff_ids).filter(Boolean);
   const rawAllowedWarehouseIds = asArray<string>(resolvedInventory.allowed_warehouse_ids).filter(Boolean);
   const allowedCategories = asArray<any>(resolvedCatalog.allowed_categories)
@@ -840,6 +847,12 @@ export const applyTerminalConfigSnapshot = (
     resolvedIdentity.device_role ??
     resolvedIdentity.deviceRole ??
     resolvedIdentity.role_code ??
+    resolvedIdentity.device_role_code ??
+    effectiveResolved.role ??
+    effectiveResolved.device_role ??
+    effectiveResolved.deviceRole ??
+    effectiveResolved.role_code ??
+    effectiveResolved.device_role_code ??
     effectiveFallbackConfig.role ??
     effectiveFallbackConfig.device_role ??
     effectiveFallbackConfig.deviceRole ??
@@ -1004,7 +1017,18 @@ export const applyTerminalConfigSnapshot = (
         normalizeStationNumber(resolvedIdentity.station_number) ||
         terminalTemplate.erpBinding?.stationNumber,
       role:
-        asString(resolvedIdentity.role ?? resolvedIdentity.device_role ?? resolvedIdentity.role_code) ||
+        asString(
+          resolvedIdentity.role ??
+          resolvedIdentity.device_role ??
+          resolvedIdentity.deviceRole ??
+          resolvedIdentity.role_code ??
+          resolvedIdentity.device_role_code ??
+          effectiveResolved.role ??
+          effectiveResolved.device_role ??
+          effectiveResolved.deviceRole ??
+          effectiveResolved.role_code ??
+          effectiveResolved.device_role_code
+        ) ||
         terminalTemplate.erpBinding?.role,
     },
     erpSnapshot: effectiveSnapshot || undefined,

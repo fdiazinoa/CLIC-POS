@@ -454,6 +454,13 @@ export interface TerminalConfigResolvedLoyaltySnapshot {
 }
 
 export interface TerminalConfigResolvedSnapshot {
+  identity?: Record<string, any>;
+  terminal?: Record<string, any>;
+  deviceRole?: Record<string, any> | string;
+  device_role?: Record<string, any> | string;
+  role?: string;
+  role_code?: string;
+  device_role_code?: string;
   pricing?: TerminalConfigResolvedPricingSnapshot;
   inventory?: TerminalConfigResolvedInventorySnapshot;
   documents?: TerminalConfigResolvedDocumentsSnapshot;
