@@ -56,7 +56,7 @@ import { applyPromotions, hasProductPromotion } from './utils/promotionEngine';
 import { calculateTransactionTaxSummary } from './utils/taxSummary';
 import { calculateTransactionFiscalSummary } from './utils/fiscalBreakdown';
 import { extractTerminalOperationalDocumentState } from './utils/terminalConfigSnapshot';
-import { resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
+import { mergeDocumentSeriesCollection, resolveDocumentAssignmentId } from './utils/documentSeriesIdentity';
 import { ZReportRecoveryService } from './services/recovery/ZReportRecoveryService';
 
 // Component Imports
@@ -4109,9 +4109,24 @@ const AppContent: React.FC = () => {
   };
 
   const handleZReport = async (cashCounted: number, notes: string, reportData?: any) => {
-    // 1. Robust Terminal ID Discovery
-    const currentTerminal = (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
-    const terminalId = currentTerminal?.id || 'T1';
+    // 1. Robust Terminal ID Discovery.
+    // The Z modal already knows the active terminal; prefer it over rediscovering by deviceId
+    // because stale bindings can otherwise route Caja 2 closures through T1.
+    const requestedTerminalId = typeof reportData?.terminalId === 'string' ? reportData.terminalId.trim() : '';
+    const findTerminalById = (id?: string) => {
+      const normalized = (id || '').trim();
+      if (!normalized) return undefined;
+      return (config.terminals || []).find((terminal) =>
+        terminal.id === normalized ||
+        terminal.config?.erpTerminalId === normalized ||
+        terminal.config?.erpBinding?.terminalId === normalized
+      );
+    };
+    const currentTerminal =
+      findTerminalById(requestedTerminalId)
+      || getCurrentTerminal()
+      || (config.terminals || []).find(t => t.config?.currentDeviceId === deviceId);
+    const terminalId = currentTerminal?.id || requestedTerminalId || 'T1';
 
     try {
       console.log(`📊 Z-Report: Starting closure for terminal ${terminalId} (Device: ${deviceId})`);
@@ -4199,34 +4214,53 @@ const AppContent: React.FC = () => {
       let sequenceNumber = '';
       let zReportId = `ZR-${Date.now()}`;
 
+      let zReportSeriesId: string | undefined;
+      let zReportSeriesNumber: number | undefined;
+
       // DOCUMENT SERIES LOGIC
-      // Attempt to find an assigned series for Z_REPORT
-      const zReportSeriesId = currentTerminal?.config?.documentAssignments?.['Z_REPORT'];
-      // Series are stored inside the terminal config
+      // internalSequences is the persistent source of truth. Terminal config keeps a mirror
+      // for UI/offline lookup, but must not be the only place where nextNumber advances.
+      const rawInternalSequences = ((await db.get('internalSequences')) as DocumentSeries[]) || [];
       const terminalSeriesList = currentTerminal?.config?.documentSeries || [];
-      const zReportSeries = zReportSeriesId
-        ? terminalSeriesList.find(s => s.id === zReportSeriesId)
+      const availableSeries = mergeDocumentSeriesCollection([
+        ...rawInternalSequences,
+        ...terminalSeriesList
+      ]);
+      const assignedSeriesId = currentTerminal?.config?.documentAssignments?.['Z_REPORT'];
+      const resolvedSeriesId = resolveDocumentAssignmentId('Z_REPORT', availableSeries, assignedSeriesId);
+      const zReportSeries = resolvedSeriesId
+        ? availableSeries.find(s => s.id === resolvedSeriesId)
         : undefined;
 
       if (zReportSeries) {
         // Use the Series
         const prefix = zReportSeries.prefix || '';
-        const num = zReportSeries.nextNumber || 1;
+        const num = Math.max(1, Number(zReportSeries.nextNumber) || 1);
         const padding = zReportSeries.padding || 8;
         sequenceNumber = `${prefix}${num.toString().padStart(padding, '0')}`;
+        zReportSeriesId = zReportSeries.id;
+        zReportSeriesNumber = num;
 
         console.log(`🎫 Generating Z-Report using Series ${zReportSeries.name}: ${sequenceNumber}`);
 
-        // Increment Series locally
+        // Increment Series locally in the persistent collection.
         const updatedSeries = {
           ...zReportSeries,
           nextNumber: num + 1
         };
 
-        // Update the list of series for this terminal
-        const updatedTerminalSeries = terminalSeriesList.map(s => s.id === zReportSeries.id ? updatedSeries : s);
+        const updatedSequences = mergeDocumentSeriesCollection([
+          ...rawInternalSequences,
+          updatedSeries
+        ]);
+        setInternalSequences(updatedSequences);
+        await db.save('internalSequences', updatedSequences);
 
-        // We need to update the global config object to reflect this change inside the specific terminal
+        // Update the terminal mirror so settings screens show the same next number immediately.
+        const hasTerminalSeries = terminalSeriesList.some(s => s.id === zReportSeries.id);
+        const updatedTerminalSeries = hasTerminalSeries
+          ? terminalSeriesList.map(s => s.id === zReportSeries.id ? updatedSeries : s)
+          : [...terminalSeriesList, updatedSeries];
         const updatedTerminals = (config.terminals || []).map(t => {
           if (t.id === terminalId) {
             return {
@@ -4248,11 +4282,12 @@ const AppContent: React.FC = () => {
         // Persist to DB
         await db.save('config', updatedConfig);
 
-        // If Master, we should push this update to others?
-        // Series updates are critical.
         if (permissionService.isMasterTerminal()) {
-          // TODO: Implement specific sync for series if needed, or rely on config sync.
-          // For now, simple persistence is key.
+          try {
+            await syncManager.pushCatalog('internalSequences');
+          } catch (sequenceSyncError) {
+            console.warn('⚠️ [App.tsx] Z-Report sequence push failed; local counter is already advanced:', sequenceSyncError);
+          }
         }
 
       } else {
@@ -4266,6 +4301,9 @@ const AppContent: React.FC = () => {
         id: zReportId,
         terminalId,
         sequenceNumber,
+        seriesId: zReportSeriesId,
+        seriesNumber: zReportSeriesNumber,
+        source_terminal_id: terminalId,
         openedAt,
         closedAt: new Date().toISOString(),
         closedByUserId: currentUser?.id || 'sys',

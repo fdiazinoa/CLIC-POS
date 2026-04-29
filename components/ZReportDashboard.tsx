@@ -257,6 +257,7 @@ const ZReportDashboard: React.FC<ZReportDashboardProps> = ({ transactions, cashM
 
             // Pass base currency cash counted for backwards compatibility, plus full report data
             const reportData = {
+               terminalId: currentTerminalId,
                transactionIds: filteredTransactions.map(t => t.id),
                cashMovementIds: filteredCashMovements.map(m => m.id),
                cashCountedByCurrency: cashCountedData,

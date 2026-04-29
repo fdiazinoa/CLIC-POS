@@ -2142,6 +2142,8 @@ export interface ZReport {
   id: string;
   terminalId: string;
   sequenceNumber: string; // e.g., Z-0001
+  seriesId?: string;
+  seriesNumber?: number;
   source_channel?: 'POS';
   source_z_report_id?: string;
   source_terminal_id?: string;
