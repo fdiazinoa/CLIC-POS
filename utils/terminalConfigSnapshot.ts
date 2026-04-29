@@ -28,7 +28,7 @@ import {
   resolveDocumentAssignmentId,
   resolveDocumentSeriesDisplayPrefix,
 } from './documentSeriesIdentity';
-import { normalizeDeviceRoleValue } from './deviceRoleHelpers';
+import { getDefaultRoleConfig, normalizeDeviceRoleValue } from './deviceRoleHelpers';
 import { resolveTariffId, resolveWarehouseId } from './masterIdentity';
 
 const asObject = (value: unknown): Record<string, any> => {
@@ -863,6 +863,13 @@ export const applyTerminalConfigSnapshot = (
     terminalTemplate.deviceRole?.role,
     terminalTemplate.deviceRole?.role || DeviceRole.STANDARD_POS
   );
+  const deviceRoleDefaults = getDefaultRoleConfig(effectiveDeviceRole);
+  const templateDeviceRole = terminalTemplate.deviceRole;
+  const deviceRoleChanged = Boolean(templateDeviceRole?.role) && templateDeviceRole.role !== effectiveDeviceRole;
+  const templateDeviceRoleUi = !deviceRoleChanged ? asObject(templateDeviceRole?.uiSettings) : {};
+  const templateDeviceRoleHardware = !deviceRoleChanged ? asObject(templateDeviceRole?.hardwareConfig) : {};
+  const fallbackAllowedModules = asArray<string>(fallbackDeviceRole.allowedModules);
+  const fallbackAllowedModulesSnake = asArray<string>(fallbackDeviceRoleSnake.allowedModules);
 
   const effectiveDocumentSeries = mergeDocumentSeriesCollection(
     documentSeries.length > 0 ? documentSeries : terminalTemplate.documentSeries || DEFAULT_DOCUMENT_SERIES
@@ -902,29 +909,32 @@ export const applyTerminalConfigSnapshot = (
       terminalTemplate.stationNumber ||
       null,
     deviceRole: {
-      ...(terminalTemplate.deviceRole || {}),
+      ...deviceRoleDefaults,
+      ...(deviceRoleChanged ? {} : terminalTemplate.deviceRole || {}),
       role: effectiveDeviceRole,
       authLevel:
         fallbackDeviceRole.authLevel ||
         fallbackDeviceRoleSnake.authLevel ||
-        terminalTemplate.deviceRole?.authLevel ||
-        'USER_REQUIRED',
+        (!deviceRoleChanged ? terminalTemplate.deviceRole?.authLevel : undefined) ||
+        deviceRoleDefaults.authLevel,
       uiSettings: {
-        ...(terminalTemplate.deviceRole?.uiSettings || {}),
+        ...deviceRoleDefaults.uiSettings,
+        ...templateDeviceRoleUi,
         ...asObject(fallbackDeviceRole.uiSettings),
         ...asObject(fallbackDeviceRoleSnake.uiSettings),
       },
       hardwareConfig: {
-        ...(terminalTemplate.deviceRole?.hardwareConfig || {}),
+        ...deviceRoleDefaults.hardwareConfig,
+        ...templateDeviceRoleHardware,
         ...asObject(fallbackDeviceRole.hardwareConfig),
         ...asObject(fallbackDeviceRoleSnake.hardwareConfig),
       },
       allowedModules:
-        asArray<string>(fallbackDeviceRole.allowedModules).length > 0
-          ? asArray<string>(fallbackDeviceRole.allowedModules)
-          : asArray<string>(fallbackDeviceRoleSnake.allowedModules).length > 0
-            ? asArray<string>(fallbackDeviceRoleSnake.allowedModules)
-            : terminalTemplate.deviceRole?.allowedModules || [],
+        fallbackAllowedModules.length > 0
+          ? fallbackAllowedModules
+          : fallbackAllowedModulesSnake.length > 0
+            ? fallbackAllowedModulesSnake
+            : (!deviceRoleChanged ? terminalTemplate.deviceRole?.allowedModules : undefined) || deviceRoleDefaults.allowedModules,
       apiToken:
         asString(fallbackDeviceRole.apiToken) ||
         asString(fallbackDeviceRoleSnake.apiToken) ||
@@ -932,7 +942,8 @@ export const applyTerminalConfigSnapshot = (
       defaultRoute:
         asString(fallbackDeviceRole.defaultRoute) ||
         asString(fallbackDeviceRoleSnake.defaultRoute) ||
-        terminalTemplate.deviceRole?.defaultRoute,
+        (!deviceRoleChanged ? terminalTemplate.deviceRole?.defaultRoute : undefined) ||
+        deviceRoleDefaults.defaultRoute,
     },
     fiscal: {
       ...terminalTemplate.fiscal,
