@@ -124,16 +124,76 @@ const productTimestamp = (product?: Product | null): number => {
    return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const normalizeCatalogIdentityValue = (value: unknown): string => {
+   if (value === null || value === undefined) return '';
+   return String(value).trim().toLowerCase();
+};
+
+const firstCatalogFieldValue = (product: Product | null | undefined, fields: string[]): string => {
+   if (!product) return '';
+   const record = product as unknown as Record<string, unknown>;
+   for (const field of fields) {
+      const normalized = normalizeCatalogIdentityValue(record[field]);
+      if (normalized) return normalized;
+   }
+   return '';
+};
+
+const productImageVersion = (product?: Product | null): number => {
+   const raw = (product as any)?.imageVersion || (product as any)?.image_version || '';
+   const parsed = Number(String(raw).replace(/[^\d.-]/g, ''));
+   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const productPositiveStockWarehouses = (product?: Product | null): number => {
+   return Object.values(product?.stockBalances || {})
+      .filter((quantity) => Number(quantity || 0) > 0)
+      .length;
+};
+
+const catalogEditorIdentity = (product?: Product | null): string => {
+   const operationalIdentity = firstCatalogFieldValue(product, [
+      'sourceItemId',
+      'source_item_id',
+      'itemId',
+      'item_id',
+      'erpProductId',
+      'erp_product_id',
+      'sourceProductId',
+      'source_product_id',
+      'productId',
+      'product_id',
+   ]);
+   if (operationalIdentity) return `operational:${operationalIdentity}`;
+
+   const commerceIdentity = firstCatalogFieldValue(product, [
+      'sku',
+      'item_code',
+      'code',
+      'barcode',
+   ]);
+   if (commerceIdentity) return `commerce:${commerceIdentity}`;
+
+   const canonicalIdentity = productIdentityCandidates(product)[0];
+   const normalizedCanonical = normalizeCatalogIdentityValue(canonicalIdentity);
+   if (normalizedCanonical) return `canonical:${normalizedCanonical}`;
+
+   return '';
+};
+
 const productCompletenessScore = (product?: Product | null): number => {
    if (!product) return 0;
    let score = 0;
    if (product.name) score += 4;
    if (product.barcode) score += 2;
    if ((product as any).sku || (product as any).code || (product as any).item_code) score += 2;
+   if (resolveProductImageSrc(product)) score += 3;
    if (Array.isArray(product.images) && product.images.length > 0) score += 3;
+   if (productImageVersion(product) > 0) score += 1;
    if (Array.isArray(product.tariffs) && product.tariffs.length > 0) score += 3;
    if (Array.isArray(product.variants) && product.variants.length > 0) score += 1;
    score += Object.keys(product.stockBalances || {}).length;
+   score += productPositiveStockWarehouses(product);
    return score;
 };
 
@@ -141,12 +201,10 @@ const dedupeCatalogProducts = (items: Product[]): Product[] => {
    const byIdentity = new Map<string, Product>();
 
    for (const product of items) {
-      const identity =
-         productIdentityCandidates(product)[0]
-         || String(product?.id || '').trim();
+      const identity = catalogEditorIdentity(product);
       if (!identity) continue;
 
-      const key = identity.toLowerCase();
+      const key = identity;
       const existing = byIdentity.get(key);
       if (!existing) {
          byIdentity.set(key, product);
@@ -155,9 +213,17 @@ const dedupeCatalogProducts = (items: Product[]): Product[] => {
 
       const existingScore = productCompletenessScore(existing);
       const incomingScore = productCompletenessScore(product);
+      const existingImageVersion = productImageVersion(existing);
+      const incomingImageVersion = productImageVersion(product);
       const shouldReplace =
          incomingScore > existingScore
-         || (incomingScore === existingScore && productTimestamp(product) >= productTimestamp(existing));
+         || (
+            incomingScore === existingScore
+            && (
+               incomingImageVersion > existingImageVersion
+               || (incomingImageVersion === existingImageVersion && productTimestamp(product) >= productTimestamp(existing))
+            )
+         );
 
       byIdentity.set(key, shouldReplace ? product : existing);
    }
