@@ -4,11 +4,23 @@ import {
     FileText, Tag, Briefcase, CheckCircle,
     AlertCircle, Users, Building2, Package,
     Search, Plus, Trash2, CreditCard, DollarSign,
-    ChevronRight, MessageSquare
+    ChevronRight, MessageSquare, HandCoins
 } from 'lucide-react';
-import { Activity, ActivityNature, ActivityType, Customer, Room, User as UserType, ServiceType, Product, CartItem } from '../types';
+import {
+    Activity,
+    BookingSalesDocumentType,
+    CollectionMethod,
+    Customer,
+    Opportunity,
+    Room,
+    User as UserType,
+    ServiceType,
+    Product,
+    CartItem
+} from '../types';
 import { db } from '../utils/db';
 import { format } from 'date-fns';
+import { agendaService } from '../services/AgendaService';
 
 interface ActivityModalProps {
     isOpen: boolean;
@@ -20,8 +32,11 @@ interface ActivityModalProps {
     rooms: Room[];
     users: UserType[];
     serviceTypes: ServiceType[];
+    currentUser?: UserType;
+    terminalId?: string;
     onSave: (activity: Partial<Activity>) => Promise<void>;
     onDelete: (id: string) => Promise<void>;
+    onActivityUpdated?: () => void;
     onUpdateRooms?: (rooms: Room[]) => void;
 }
 
@@ -35,8 +50,11 @@ const ActivityModal: React.FC<ActivityModalProps> = ({
     rooms,
     users,
     serviceTypes,
+    currentUser,
+    terminalId = 'T1',
     onSave,
     onDelete,
+    onActivityUpdated,
     onUpdateRooms
 }) => {
     const [formData, setFormData] = useState<Partial<Activity>>({
@@ -59,6 +77,12 @@ const ActivityModal: React.FC<ActivityModalProps> = ({
     // Follow-up state
     const [showFollowUpDialog, setShowFollowUpDialog] = useState(false);
     const [suggestedAction, setSuggestedAction] = useState<{ type: ServiceType, date: Date } | null>(null);
+    const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
+    const [showDocumentDialog, setShowDocumentDialog] = useState(false);
+    const [showAdvanceDialog, setShowAdvanceDialog] = useState(false);
+    const [advanceAmount, setAdvanceAmount] = useState(0);
+    const [advanceMethod, setAdvanceMethod] = useState<CollectionMethod>('CASH');
+    const [commercialActionBusy, setCommercialActionBusy] = useState(false);
 
     const getNextActionDate = (baseDate: Date, interval: number, unit: 'HOURS' | 'DAYS') => {
         const date = new Date(baseDate);
@@ -91,7 +115,7 @@ const ActivityModal: React.FC<ActivityModalProps> = ({
                     startDate: now.toISOString(),
                     endDate: end.toISOString(),
                     spaceId: inferredSpace ? inferredSpace.id : undefined,
-                    spaceName: inferredSpace ? inferredSpace.name : undefined,
+                    spaceName: inferredSpace ? inferredSpace.name || inferredSpace.nombre : undefined,
                     assignedToId: inferredUser ? inferredUser.id : undefined,
                     assignedToName: inferredUser ? inferredUser.name : undefined,
                     items: [],
@@ -101,6 +125,7 @@ const ActivityModal: React.FC<ActivityModalProps> = ({
                 });
             }
             fetchCatalog();
+            fetchOpportunities();
         }
     }, [isOpen, activity, initialDate, initialResourceId, rooms, users]);
 
@@ -116,6 +141,74 @@ const ActivityModal: React.FC<ActivityModalProps> = ({
             }
         } catch (error) {
             console.error("Error fetching catalog:", error);
+        }
+    };
+
+    const fetchOpportunities = async () => {
+        try {
+            setOpportunities(await agendaService.getOpportunities());
+        } catch (error) {
+            console.error("Error fetching opportunities:", error);
+        }
+    };
+
+    const handleGenerateDocument = async (documentType: BookingSalesDocumentType) => {
+        if (!activity?.id) return;
+        setCommercialActionBusy(true);
+        try {
+            const doc = await agendaService.generateSalesDocumentFromBooking(
+                activity.id,
+                documentType,
+                rooms,
+                currentUser,
+                terminalId
+            );
+            setFormData(prev => ({
+                ...prev,
+                linked_document_id: doc.id,
+                linkedDocumentId: doc.id,
+                linkedTransactionId: doc.id,
+                linkedDocumentType: doc.documentType,
+                linkedDocumentDisplayId: doc.displayId
+            }));
+            setShowDocumentDialog(false);
+            onActivityUpdated?.();
+            alert(`Documento generado: ${doc.displayId}`);
+        } catch (error) {
+            console.error("Error generating booking document:", error);
+            alert(error instanceof Error ? error.message : "No se pudo generar el documento");
+        } finally {
+            setCommercialActionBusy(false);
+        }
+    };
+
+    const handleRegisterAdvance = async () => {
+        if (!activity?.id || !currentUser) return;
+        setCommercialActionBusy(true);
+        try {
+            const collection = await agendaService.registerBookingAdvance(
+                activity.id,
+                advanceAmount,
+                advanceMethod,
+                currentUser,
+                terminalId
+            );
+            const currentBalance = Number(formData.current_balance || 0) + advanceAmount;
+            const requiredDeposit = Number(formData.required_deposit || 0);
+            setFormData(prev => ({
+                ...prev,
+                status: 'CONFIRMED',
+                current_balance: currentBalance,
+                payment_status: requiredDeposit > 0 && currentBalance >= requiredDeposit ? 'PAID' : 'PARTIAL'
+            }));
+            setShowAdvanceDialog(false);
+            onActivityUpdated?.();
+            alert(`Anticipo registrado: ${collection.displayId}`);
+        } catch (error) {
+            console.error("Error registering booking advance:", error);
+            alert(error instanceof Error ? error.message : "No se pudo registrar el anticipo");
+        } finally {
+            setCommercialActionBusy(false);
         }
     };
 
@@ -220,6 +313,10 @@ const ActivityModal: React.FC<ActivityModalProps> = ({
 
     // Calculate total items cost
     const itemsTotal = formData.items?.reduce((sum, i) => sum + (i.quantity * i.price), 0) || 0;
+    const linkedOpportunity = opportunities.find(o => o.id === formData.opportunityId);
+    const canGenerateDocument = Boolean(activity?.id && formData.nature === 'BOOKING');
+    const hasLinkedDocument = Boolean(formData.linked_document_id || formData.linkedDocumentId);
+    const remainingDeposit = Math.max(0, Number(formData.required_deposit || 0) - Number(formData.current_balance || 0));
 
     // Financial integrity logic (Recommend 20% deposit)
     useEffect(() => {
@@ -560,19 +657,92 @@ const ActivityModal: React.FC<ActivityModalProps> = ({
                                         {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                                     </select>
                                     <select
+                                        value={formData.opportunityId || ''}
+                                        onChange={e => {
+                                            const opp = opportunities.find(o => o.id === e.target.value);
+                                            setFormData({
+                                                ...formData,
+                                                opportunityId: opp?.id,
+                                                opportunityTitle: opp?.title
+                                            });
+                                        }}
+                                        className="w-full bg-gray-50 border-none rounded-lg text-xs font-bold text-gray-700 py-2.5 px-3 outline-none"
+                                    >
+                                        <option value="">-- Oportunidad: Ninguna --</option>
+                                        {opportunities.map(o => (
+                                            <option key={o.id} value={o.id}>
+                                                {o.title} · {o.stage} · RD${Number(o.amount || 0).toLocaleString()}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <select
                                         value={formData.spaceId || ''}
                                         onChange={e => {
                                             const room = rooms.find(r => r.id === e.target.value);
-                                            setFormData({ ...formData, spaceId: room?.id, spaceName: room?.name });
+                                            setFormData({ ...formData, spaceId: room?.id, spaceName: room?.name || room?.nombre });
                                         }}
                                         className="w-full bg-gray-50 border-none rounded-lg text-xs font-bold text-gray-700 py-2.5 px-3 outline-none"
                                     >
                                         <option value="">-- Espacio: Ninguno --</option>
-                                        {rooms.map(r => <option key={r.id} value={r.id}>{r.name} ({r.capacity}p)</option>)}
+                                        {rooms.map(r => <option key={r.id} value={r.id}>{r.name || r.nombre} ({r.capacity || r.capacidad_pax || r.capacidad_personas || 0}p)</option>)}
                                     </select>
+                                    {linkedOpportunity && (
+                                        <div className="rounded-xl border border-blue-100 bg-blue-50 p-3">
+                                            <p className="text-[9px] font-black uppercase tracking-widest text-blue-400">Pipeline</p>
+                                            <p className="text-xs font-black text-blue-900">{linkedOpportunity.title}</p>
+                                            <p className="text-[10px] font-bold text-blue-600">{linkedOpportunity.stage} · {linkedOpportunity.probability}%</p>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>
+
+                        {formData.nature === 'BOOKING' && (
+                            <div className="bg-white p-5 rounded-2xl shadow-sm border border-blue-100">
+                                <h3 className="text-xs font-black text-gray-900 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                    <FileText size={14} className="text-blue-500" />
+                                    Ciclo Comercial
+                                </h3>
+                                <div className="space-y-3">
+                                    {hasLinkedDocument ? (
+                                        <div className="rounded-xl bg-blue-50 p-3 border border-blue-100">
+                                            <p className="text-[9px] font-black uppercase tracking-widest text-blue-400">Documento vinculado</p>
+                                            <p className="text-sm font-black text-blue-900">{formData.linkedDocumentDisplayId || formData.linked_document_id || formData.linkedDocumentId}</p>
+                                            <p className="text-[10px] font-bold text-blue-600">{formData.linkedDocumentType || 'DOCUMENTO'}</p>
+                                        </div>
+                                    ) : (
+                                        <p className="text-[11px] font-bold text-gray-400 leading-relaxed">
+                                            Genera una cotización, pedido o factura con el salón y los servicios vinculados.
+                                        </p>
+                                    )}
+
+                                    <button
+                                        type="button"
+                                        disabled={!canGenerateDocument || commercialActionBusy}
+                                        onClick={() => setShowDocumentDialog(true)}
+                                        className="w-full py-3 rounded-xl bg-blue-600 text-white text-xs font-black uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <FileText size={15} />
+                                        {hasLinkedDocument ? 'Generar Otro Documento' : 'Generar Documento'}
+                                    </button>
+
+                                    {hasLinkedDocument && (
+                                        <button
+                                            type="button"
+                                            disabled={!currentUser || commercialActionBusy}
+                                            onClick={() => {
+                                                setAdvanceAmount(remainingDeposit || Number(formData.required_deposit || 0) || 0);
+                                                setShowAdvanceDialog(true);
+                                            }}
+                                            className="w-full py-3 rounded-xl bg-emerald-600 text-white text-xs font-black uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2"
+                                        >
+                                            <HandCoins size={15} />
+                                            Registrar Anticipo
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
 
                         {/* Financial Integrity */}
                         <div className="bg-white p-5 rounded-2xl shadow-sm border border-emerald-100">
@@ -603,7 +773,12 @@ const ActivityModal: React.FC<ActivityModalProps> = ({
                                     </div>
                                     <button
                                         type="button"
-                                        className="p-2 bg-emerald-500 text-white rounded-lg shadow-sm hover:bg-emerald-600"
+                                        onClick={() => {
+                                            setAdvanceAmount(remainingDeposit || Number(formData.required_deposit || 0) || 0);
+                                            setShowAdvanceDialog(true);
+                                        }}
+                                        disabled={formData.nature !== 'BOOKING' || !activity?.id || !currentUser || commercialActionBusy}
+                                        className="p-2 bg-emerald-500 text-white rounded-lg shadow-sm hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed"
                                         title="Registrar Anticipo"
                                     >
                                         <CreditCard size={14} />
@@ -710,6 +885,98 @@ const ActivityModal: React.FC<ActivityModalProps> = ({
                                     No por ahora
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showDocumentDialog && (
+                <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/40 backdrop-blur-md p-4">
+                    <div className="bg-white rounded-3xl w-full max-w-lg p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+                        <div className="flex items-start justify-between gap-4 mb-6">
+                            <div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-blue-500 mb-2">Booking to Sales</p>
+                                <h3 className="text-2xl font-black text-gray-900">Generar Documento</h3>
+                                <p className="text-sm font-medium text-gray-500 mt-2">
+                                    Se crearán renglones con el salón/espacio y los servicios vinculados.
+                                </p>
+                            </div>
+                            <button onClick={() => setShowDocumentDialog(false)} className="p-2 rounded-xl hover:bg-gray-100 text-gray-400">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-3">
+                            {[
+                                { type: 'QUOTE' as BookingSalesDocumentType, title: 'Cotización', desc: 'Documento comercial inicial para aprobación del cliente.' },
+                                { type: 'SALES_ORDER' as BookingSalesDocumentType, title: 'Pedido de Venta', desc: 'Reserva comercial aprobada pendiente de facturación.' },
+                                { type: 'INVOICE' as BookingSalesDocumentType, title: 'Factura', desc: 'Factura directamente desde la reserva.' }
+                            ].map(option => (
+                                <button
+                                    key={option.type}
+                                    type="button"
+                                    disabled={commercialActionBusy}
+                                    onClick={() => handleGenerateDocument(option.type)}
+                                    className="text-left p-5 rounded-2xl border border-gray-100 bg-gray-50 hover:bg-blue-50 hover:border-blue-200 transition-all disabled:opacity-50"
+                                >
+                                    <p className="font-black text-gray-900">{option.title}</p>
+                                    <p className="text-xs font-bold text-gray-400 mt-1">{option.desc}</p>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showAdvanceDialog && (
+                <div className="fixed inset-0 z-[75] flex items-center justify-center bg-emerald-950/40 backdrop-blur-md p-4">
+                    <div className="bg-white rounded-3xl w-full max-w-md p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+                        <div className="flex items-start justify-between gap-4 mb-6">
+                            <div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500 mb-2">Anticipo de Cliente</p>
+                                <h3 className="text-2xl font-black text-gray-900">Registrar Anticipo</h3>
+                                <p className="text-sm font-medium text-gray-500 mt-2">
+                                    El recibo se guardará como pago no aplicado y confirmará el booking.
+                                </p>
+                            </div>
+                            <button onClick={() => setShowAdvanceDialog(false)} className="p-2 rounded-xl hover:bg-gray-100 text-gray-400">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Monto</label>
+                                <input
+                                    type="number"
+                                    value={advanceAmount || ''}
+                                    onChange={e => setAdvanceAmount(Number(e.target.value))}
+                                    className="mt-2 w-full rounded-2xl bg-gray-50 px-5 py-4 text-2xl font-black text-gray-900 outline-none focus:ring-2 focus:ring-emerald-200"
+                                    placeholder="0.00"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Método</label>
+                                <select
+                                    value={advanceMethod}
+                                    onChange={e => setAdvanceMethod(e.target.value as CollectionMethod)}
+                                    className="mt-2 w-full rounded-2xl bg-gray-50 px-5 py-4 text-sm font-black text-gray-700 outline-none"
+                                >
+                                    <option value="CASH">Efectivo</option>
+                                    <option value="CARD">Tarjeta</option>
+                                    <option value="TRANSFER">Transferencia</option>
+                                    <option value="CHECK">Cheque</option>
+                                    <option value="WALLET">Wallet</option>
+                                </select>
+                            </div>
+                            <button
+                                type="button"
+                                disabled={commercialActionBusy || advanceAmount <= 0}
+                                onClick={handleRegisterAdvance}
+                                className="w-full py-4 rounded-2xl bg-emerald-600 text-white font-black uppercase tracking-widest text-xs hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                Confirmar Anticipo
+                            </button>
                         </div>
                     </div>
                 </div>

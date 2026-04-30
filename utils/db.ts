@@ -198,7 +198,10 @@ const SEED_DATA = {
   tables: [] as any[],
   collections: [] as any[],
   paymentMethods: [] as PaymentMethodDefinition[],
+  serviceTypes: [] as any[],
   activities: [] as any[],
+  crmOpportunities: [] as any[],
+  erp_sales_documents: [] as any[],
   wallet_transactions: [] as any[],
   loyalty_events: [] as any[],
   productionAreas: [] as any[]
@@ -605,7 +608,10 @@ export const db = {
         'reservations',
         'inventoryCommitments',
         'collections',
-        'activities'
+        'serviceTypes',
+        'activities',
+        'crmOpportunities',
+        'erp_sales_documents'
       ].includes(key);
 
     const isDeferredHeavyCollection = (key: string) =>

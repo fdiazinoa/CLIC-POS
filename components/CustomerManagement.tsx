@@ -8,7 +8,7 @@ import {
    Globe, Calendar, Map, Navigation, CheckSquare, Clock, Landmark, ShieldCheck, Zap, Gift,
    Loader2, AlertOctagon, Printer, DollarSign, Banknote, QrCode, ArrowRightLeft
 } from 'lucide-react';
-import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType, Wallet, LoyaltyCard, Transaction, User, Collection, Activity, WalletTransaction } from '../types';
+import { Customer, BusinessConfig, CustomerTransaction, CustomerAddress, NCFType, Wallet, LoyaltyCard, Transaction, User, Collection, Activity, WalletTransaction, ServiceType } from '../types';
 import { dgiiService, DGIIResponse } from '../services/dgii/DGIIValidationService';
 import { printTicket } from '../utils/printer';
 import AccountReceivableModal from './AccountReceivableModal';
@@ -73,6 +73,7 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
 
    // Agenda State
    const [customerActivities, setCustomerActivities] = useState<Activity[]>([]);
+   const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
    const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
    const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null);
    const [prefilledDate, setPrefilledDate] = useState<Date | null>(null);
@@ -703,12 +704,24 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
       }
    }, [selectedCustomer?.id]);
 
+   const fetchServiceTypes = useCallback(async () => {
+      try {
+         setServiceTypes(await agendaService.getServiceTypes());
+      } catch (e) {
+         console.error("Failed to load service types:", e);
+      }
+   }, []);
+
    // --- LOAD CUSTOMER DATA ---
    useEffect(() => {
       loadCustomerTransactions();
       fetchActivities();
       loadWalletMovements();
    }, [loadCustomerTransactions, fetchActivities, loadWalletMovements, customers]);
+
+   useEffect(() => {
+      fetchServiceTypes();
+   }, [fetchServiceTypes]);
 
    useEffect(() => {
       return () => {
@@ -2175,12 +2188,15 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                   fetchActivities();
                }}
                activity={selectedActivity}
-               initialDate={prefilledDate || undefined}
-               initialResourceId={undefined}
-               serviceTypes={[]} // TODO: Fetch service types
+               initialDate={prefilledDate}
+               initialResourceId={null}
+               serviceTypes={serviceTypes}
                customers={[selectedCustomer]}
                rooms={rooms}
                users={users}
+               currentUser={currentUser}
+               terminalId={terminalId}
+               onActivityUpdated={fetchActivities}
                onSave={async (activity) => {
                   if (selectedActivity) {
                      await agendaService.updateActivity(selectedActivity.id, activity);
@@ -2188,7 +2204,8 @@ const CustomerManagement: React.FC<CustomerManagementProps> = ({
                      await agendaService.createActivity({
                         ...activity,
                         customerId: selectedCustomer.id,
-                        customerName: selectedCustomer.name
+                        customerName: selectedCustomer.name,
+                        terminalId
                      });
                   }
                   setIsActivityModalOpen(false);

@@ -856,8 +856,8 @@ const Settings: React.FC<SettingsProps> = (props) => {
                   <SettingsCard icon={Wallet} label="Wallet Keys" description="Apple & Google Pay" color="bg-slate-800" onClick={() => setCurrentView('WALLET_KEYS')} locked={!hasPermission('SETTINGS_ACCESS')} />
                   <SettingsCard
                     icon={Calendar}
-                    label="Agenda & Reservas"
-                    description="CRM, Citas y Salones"
+                    label="CRM & Ventas"
+                    description="Pipeline, Agenda y Salones"
                     color="bg-sky-600"
                     onClick={() => setCurrentView('AGENDA')}
                     locked={!hasPermission('CUSTOMER_MANAGE')}

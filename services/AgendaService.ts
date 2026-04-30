@@ -1,8 +1,28 @@
 import { db } from '../utils/db';
-import { Activity, ActivityNature, ActivityStatus, ServiceType } from '../types';
+import {
+    Activity,
+    BookingSalesDocument,
+    BookingSalesDocumentLine,
+    BookingSalesDocumentType,
+    Collection,
+    CollectionMethod,
+    Opportunity,
+    OpportunityStage,
+    Room,
+    ServiceType,
+    User,
+} from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
 class AgendaService {
+    private readonly stageProbability: Record<OpportunityStage, number> = {
+        NEW: 10,
+        CONTACTED: 30,
+        QUOTED: 60,
+        WON: 100,
+        LOST: 0
+    };
+
     /**
      * Get all service types
      */
@@ -34,6 +54,81 @@ class AgendaService {
      */
     async deleteServiceType(id: string): Promise<void> {
         await db.deleteDocument('serviceTypes' as any, id);
+    }
+
+    async getOpportunities(): Promise<Opportunity[]> {
+        const opportunities = await db.get('crmOpportunities' as any) as Opportunity[] || [];
+        return opportunities.sort((a, b) => {
+            const left = new Date(a.expected_close_date || a.expectedCloseDate || a.updated_at || a.updatedAt || 0).getTime();
+            const right = new Date(b.expected_close_date || b.expectedCloseDate || b.updated_at || b.updatedAt || 0).getTime();
+            return right - left;
+        });
+    }
+
+    async createOpportunity(opportunity: Partial<Opportunity>): Promise<Opportunity> {
+        const now = new Date().toISOString();
+        const stage = opportunity.stage || 'NEW';
+        const normalized: Opportunity = {
+            id: opportunity.id || uuidv4(),
+            title: opportunity.title || 'Nueva oportunidad',
+            customer_id: opportunity.customer_id || opportunity.customerId,
+            customerId: opportunity.customerId || opportunity.customer_id,
+            customer_name: opportunity.customer_name || opportunity.customerName,
+            customerName: opportunity.customerName || opportunity.customer_name,
+            assigned_user_id: opportunity.assigned_user_id || opportunity.assignedUserId,
+            assignedUserId: opportunity.assignedUserId || opportunity.assigned_user_id,
+            assigned_user_name: opportunity.assigned_user_name || opportunity.assignedUserName,
+            assignedUserName: opportunity.assignedUserName || opportunity.assigned_user_name,
+            stage,
+            amount: Number(opportunity.amount || 0),
+            probability: Number(opportunity.probability ?? this.stageProbability[stage]),
+            expected_close_date: opportunity.expected_close_date || opportunity.expectedCloseDate,
+            expectedCloseDate: opportunity.expectedCloseDate || opportunity.expected_close_date,
+            source: opportunity.source || 'POS',
+            notes: opportunity.notes,
+            created_at: opportunity.created_at || opportunity.createdAt || now,
+            createdAt: opportunity.createdAt || opportunity.created_at || now,
+            updated_at: now,
+            updatedAt: now,
+            syncStatus: 'PENDING'
+        };
+
+        await db.saveDocument('crmOpportunities' as any, normalized);
+        return normalized;
+    }
+
+    async updateOpportunity(id: string, updates: Partial<Opportunity>): Promise<Opportunity> {
+        const existing = await db.getDocument('crmOpportunities' as any, id) as Opportunity | null;
+        if (!existing) throw new Error('Oportunidad no encontrada');
+
+        const stage = updates.stage || existing.stage;
+        const updated: Opportunity = {
+            ...existing,
+            ...updates,
+            customer_id: updates.customer_id || updates.customerId || existing.customer_id || existing.customerId,
+            customerId: updates.customerId || updates.customer_id || existing.customerId || existing.customer_id,
+            assigned_user_id: updates.assigned_user_id || updates.assignedUserId || existing.assigned_user_id || existing.assignedUserId,
+            assignedUserId: updates.assignedUserId || updates.assigned_user_id || existing.assignedUserId || existing.assigned_user_id,
+            stage,
+            probability: Number(updates.probability ?? existing.probability ?? this.stageProbability[stage]),
+            expected_close_date: updates.expected_close_date || updates.expectedCloseDate || existing.expected_close_date || existing.expectedCloseDate,
+            expectedCloseDate: updates.expectedCloseDate || updates.expected_close_date || existing.expectedCloseDate || existing.expected_close_date,
+            updated_at: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            syncStatus: 'PENDING'
+        };
+
+        await db.saveDocument('crmOpportunities' as any, updated);
+        return updated;
+    }
+
+    async deleteOpportunity(id: string): Promise<void> {
+        await db.deleteDocument('crmOpportunities' as any, id);
+    }
+
+    async getOpportunityActivities(opportunityId: string): Promise<Activity[]> {
+        const all = await db.get('activities' as any) as Activity[] || [];
+        return all.filter(activity => activity.opportunityId === opportunityId);
     }
 
     /**
@@ -124,6 +219,8 @@ class AgendaService {
             terminalId: activity.terminalId || 'T1',
             customerId: activity.customerId,
             customerName: activity.customerName,
+            opportunityId: activity.opportunityId,
+            opportunityTitle: activity.opportunityTitle,
             spaceId: activity.spaceId,
             spaceName: activity.spaceName,
             createdAt: new Date().toISOString(),
@@ -287,6 +384,157 @@ class AgendaService {
 
             return { type: 'PARKED', id: parked.id };
         }
+    }
+
+    private buildBookingDocumentLines(activity: Activity, rooms: Room[] = []): BookingSalesDocumentLine[] {
+        const lines: BookingSalesDocumentLine[] = [];
+        const room = rooms.find(r => r.id === activity.spaceId);
+        const roomName = activity.spaceName || room?.name || room?.nombre;
+        const roomPrice = Number(room?.base_price || room?.consumo_minimo || 0);
+
+        if (activity.spaceId || roomName) {
+            lines.push({
+                id: uuidv4(),
+                itemId: activity.spaceId ? `space:${activity.spaceId}` : undefined,
+                name: roomName ? `Espacio: ${roomName}` : 'Espacio / Salón',
+                description: `Reserva ${activity.displayId} del ${new Date(activity.startDate).toLocaleString()}`,
+                quantity: 1,
+                unitPrice: roomPrice,
+                total: roomPrice,
+                source: 'SPACE'
+            });
+        }
+
+        for (const item of activity.items || []) {
+            const quantity = Number(item.quantity || 1);
+            const unitPrice = Number(item.price || 0);
+            lines.push({
+                id: uuidv4(),
+                itemId: item.id,
+                name: item.name,
+                description: item.description,
+                quantity,
+                unitPrice,
+                total: quantity * unitPrice,
+                source: 'ITEM'
+            });
+        }
+
+        return lines;
+    }
+
+    async generateSalesDocumentFromBooking(
+        activityId: string,
+        documentType: BookingSalesDocumentType,
+        rooms: Room[] = [],
+        currentUser?: User,
+        terminalId = 'T1'
+    ): Promise<BookingSalesDocument> {
+        const activity = await db.getDocument('activities' as any, activityId) as Activity | null;
+        if (!activity) throw new Error('Booking no encontrado');
+        if (activity.nature !== 'BOOKING') throw new Error('Solo los bookings pueden generar documentos comerciales');
+
+        const lines = this.buildBookingDocumentLines(activity, rooms);
+        const subtotal = lines.reduce((sum, line) => sum + Number(line.total || 0), 0);
+        const prefix: Record<BookingSalesDocumentType, string> = {
+            QUOTE: 'COT',
+            SALES_ORDER: 'PED',
+            INVOICE: 'FAC'
+        };
+
+        const document: BookingSalesDocument = {
+            id: uuidv4(),
+            displayId: `${prefix[documentType]}-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`,
+            documentType,
+            status: documentType === 'INVOICE' ? 'INVOICED' : 'DRAFT',
+            bookingActivityId: activity.id,
+            opportunityId: activity.opportunityId,
+            customerId: activity.customerId,
+            customerName: activity.customerName,
+            date: new Date().toISOString(),
+            expectedDate: activity.startDate,
+            subtotal,
+            total: subtotal,
+            lines,
+            notes: `Generado desde booking ${activity.displayId}: ${activity.title}`,
+            createdBy: currentUser?.id,
+            terminalId,
+            syncStatus: 'PENDING'
+        };
+
+        await db.saveDocument('erp_sales_documents' as any, document);
+        await this.updateActivity(activity.id, {
+            linked_document_id: document.id,
+            linkedDocumentId: document.id,
+            linkedTransactionId: document.id,
+            linkedDocumentType: document.documentType,
+            linkedDocumentDisplayId: document.displayId
+        });
+
+        if (activity.opportunityId) {
+            await this.updateOpportunity(activity.opportunityId, {
+                stage: documentType === 'INVOICE' ? 'WON' : 'QUOTED',
+                amount: subtotal
+            });
+        }
+
+        return document;
+    }
+
+    async registerBookingAdvance(
+        activityId: string,
+        amount: number,
+        method: CollectionMethod,
+        currentUser: User,
+        terminalId = 'T1',
+        reference?: string
+    ): Promise<Collection> {
+        const activity = await db.getDocument('activities' as any, activityId) as Activity | null;
+        if (!activity) throw new Error('Booking no encontrado');
+        if (activity.nature !== 'BOOKING') throw new Error('Solo los bookings pueden registrar anticipos');
+        if (!activity.customerId || !activity.customerName) {
+            throw new Error('Debe asignar un cliente antes de registrar un anticipo');
+        }
+        if (!Number.isFinite(amount) || amount <= 0) {
+            throw new Error('El monto del anticipo debe ser mayor que cero');
+        }
+
+        const collectionId = uuidv4();
+        const collection: Collection = {
+            id: collectionId,
+            displayId: `ANT-${Date.now().toString().slice(-6)}`,
+            customerId: activity.customerId,
+            customerName: activity.customerName,
+            date: new Date().toISOString(),
+            totalAmount: amount,
+            method,
+            currencyCode: 'DOP',
+            exchangeRate: 1,
+            receivedAmountOriginal: amount,
+            receivedAmountBase: amount,
+            appliedAmountBase: 0,
+            unappliedAmountBase: amount,
+            reference: reference || activity.linkedDocumentDisplayId || activity.displayId,
+            userId: currentUser.id,
+            userName: currentUser.name,
+            terminalId,
+            bookingActivityId: activity.id,
+            opportunityId: activity.opportunityId,
+            allocations: [],
+            notes: `Anticipo de cliente para booking ${activity.displayId}${activity.linkedDocumentDisplayId ? ` / ${activity.linkedDocumentDisplayId}` : ''}`,
+            syncStatus: 'PENDING'
+        };
+
+        await db.saveDocument('collections' as any, collection);
+        const currentBalance = Number(activity.current_balance || 0) + amount;
+        const requiredDeposit = Number(activity.required_deposit || 0);
+        await this.updateActivity(activity.id, {
+            status: 'CONFIRMED',
+            current_balance: currentBalance,
+            payment_status: requiredDeposit > 0 && currentBalance >= requiredDeposit ? 'PAID' : 'PARTIAL'
+        });
+
+        return collection;
     }
 
     /**

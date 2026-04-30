@@ -1,7 +1,7 @@
 import { DatabaseAdapter } from '../DatabaseAdapter';
 
 const DB_NAME = 'clic_pos_indexeddb';
-const DB_VERSION = 16; // Keep aligned with deployed local schemas and avoid web downgrades
+const DB_VERSION = 17; // Keep aligned with deployed local schemas and avoid web downgrades
 const OLD_DB_KEY = 'clic_pos_db_v1';
 const OPEN_TIMEOUT_MS = 15000;
 const CURSOR_IDLE_TIMEOUT_MS = 3000;
@@ -19,7 +19,8 @@ const STORES = [
     'watchlists', 'syncMetadata', 'inventorySnapshots', 'inventoryAuditLogs', 'inventoryCounts',
     'offline_receptions', 'offline_reception_queue', 'offline_reception_conflicts',
     'offline_inventory_counts', 'offline_inventory_count_queue', 'offline_inventory_count_conflicts',
-    'offline_print_queue', 'reservations', 'inventoryCommitments', 'activities', 'collections'
+    'offline_print_queue', 'reservations', 'inventoryCommitments', 'serviceTypes', 'activities', 'collections',
+    'crmOpportunities', 'erp_sales_documents'
 ];
 
 export class IndexedDBAdapter implements DatabaseAdapter {
