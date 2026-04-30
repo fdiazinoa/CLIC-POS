@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
     Calendar, Users, Building2, Plus, ChevronLeft,
     Search, Filter, MoreVertical, Layout, Grid,
@@ -11,14 +11,15 @@ import {
     Room,
     Activity,
     Warehouse,
-    ServiceType
+    ServiceType,
+    Opportunity
 } from '../types';
 import AdvancedCalendar from './AdvancedCalendar';
 import ActivityModal from './ActivityModal';
-import SpacesManager from './SpacesManager';
 import ServiceTypeManager from './ServiceTypeManager'; // Import the new component
 import SpaceTimelineView from './SpaceTimelineView';
 import TeamTimelineView from './TeamTimelineView';
+import PipelineKanban from './PipelineKanban';
 import { agendaService } from '../services/AgendaService';
 import { startOfMonth, endOfMonth, addMonths, subMonths, format, startOfDay, endOfDay } from 'date-fns';
 import { AttendanceLog } from '../types';
@@ -44,10 +45,11 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
     onUpdateRooms,
     onClose
 }) => {
-    const [activeTab, setActiveTab] = useState<'CALENDAR' | 'SPACES' | 'TYPES'>('CALENDAR');
+    const [activeTab, setActiveTab] = useState<'PIPELINE' | 'CALENDAR' | 'SPACES' | 'TYPES'>('PIPELINE');
     const [viewMode, setViewMode] = useState<'MONTH' | 'WEEK' | 'RESOURCE' | 'TEAM'>('MONTH');
     const [currentDate, setCurrentDate] = useState(new Date());
     const [activities, setActivities] = useState<Activity[]>([]);
+    const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
     const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]); // New state
     const [attendanceLogs, setAttendanceLogs] = useState<AttendanceLog[]>([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -89,10 +91,19 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
         }
     }, []);
 
+    const fetchOpportunities = useCallback(async () => {
+        try {
+            setOpportunities(await agendaService.getOpportunities());
+        } catch (error) {
+            console.error("Failed to fetch opportunities:", error);
+        }
+    }, []);
+
     useEffect(() => {
         fetchActivities();
         fetchServiceTypes();
-    }, [fetchActivities, fetchServiceTypes]);
+        fetchOpportunities();
+    }, [fetchActivities, fetchServiceTypes, fetchOpportunities]);
 
     // HANDLERS
     const handleSaveActivity = async (activityData: Partial<Activity>) => {
@@ -105,7 +116,25 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
             });
         }
         fetchActivities();
+        fetchOpportunities();
     };
+
+    const handleCreateOpportunity = async (opportunityData: Partial<Opportunity>) => {
+        await agendaService.createOpportunity(opportunityData);
+        await fetchOpportunities();
+    };
+
+    const handleUpdateOpportunity = async (id: string, updates: Partial<Opportunity>) => {
+        await agendaService.updateOpportunity(id, updates);
+        await fetchOpportunities();
+    };
+
+    const activityCountsByOpportunity = useMemo(() => activities.reduce<Record<string, number>>((acc, activity) => {
+        if (activity.opportunityId) acc[activity.opportunityId] = (acc[activity.opportunityId] || 0) + 1;
+        return acc;
+    }, {}), [activities]);
+
+    const activeTerminalId = config.terminals[0]?.id || 'T1';
 
     const handleDeleteActivity = async (id: string) => {
         await agendaService.deleteActivity(id);
@@ -152,14 +181,21 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
                             <Calendar size={20} />
                         </div>
                         <div>
-                            <h1 className="text-xl font-black text-gray-900 tracking-tight leading-none mb-1">Agenda Avanzada</h1>
-                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">CRM & Bookings</p>
+                            <h1 className="text-xl font-black text-gray-900 tracking-tight leading-none mb-1">CRM & Ventas</h1>
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Pipeline, Agenda & Bookings</p>
                         </div>
                     </div>
                 </div>
 
                 {/* View Switcher */}
                 <div className="flex bg-gray-100 p-1 rounded-2xl border border-gray-200 shadow-inner">
+                    <button
+                        onClick={() => setActiveTab('PIPELINE')}
+                        className={`flex items-center gap-2 px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'PIPELINE' ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                        <Target size={14} />
+                        <span className="hidden md:inline">Pipeline</span>
+                    </button>
                     <button
                         onClick={() => setActiveTab('CALENDAR')}
                         className={`flex items-center gap-2 px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'CALENDAR' ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200' : 'text-gray-400 hover:text-gray-600'}`}
@@ -210,7 +246,10 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
 
                 <div className="flex items-center gap-3">
                     <button
-                        onClick={fetchActivities}
+                        onClick={() => {
+                            fetchActivities();
+                            fetchOpportunities();
+                        }}
                         className={`p-2.5 bg-gray-100 text-gray-500 rounded-xl hover:bg-gray-200 transition-all ${isLoading ? 'animate-spin' : ''}`}
                     >
                         <RefreshCw size={18} />
@@ -230,7 +269,16 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
             </header>
 
             <main className="flex-1 overflow-hidden p-8 flex gap-8">
-                {activeTab === 'CALENDAR' ? (
+                {activeTab === 'PIPELINE' ? (
+                    <PipelineKanban
+                        opportunities={opportunities}
+                        customers={customers}
+                        users={users}
+                        activityCounts={activityCountsByOpportunity}
+                        onCreateOpportunity={handleCreateOpportunity}
+                        onUpdateOpportunity={handleUpdateOpportunity}
+                    />
+                ) : activeTab === 'CALENDAR' ? (
                     <>
                         {/* Main Calendar Area */}
                         <div className="flex-1 bg-white/60 backdrop-blur-md rounded-[2.5rem] border border-white shadow-2xl shadow-gray-200/50 overflow-hidden flex flex-col relative text-gray-900">
@@ -391,11 +439,19 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
                     </>
                 ) : activeTab === 'SPACES' ? (
                     <div className="flex-1 bg-white/60 backdrop-blur-md rounded-[2.5rem] border border-white shadow-2xl shadow-gray-200/50 overflow-hidden">
-                        <SpacesManager
+                        <SpaceTimelineView
+                            activities={activities}
                             rooms={rooms}
-                            warehouses={warehouses}
-                            onUpdateRooms={onUpdateRooms || (() => { })}
-                            onClose={() => setActiveTab('CALENDAR')}
+                            onActivityClick={(act) => {
+                                setSelectedActivity(act);
+                                setShowActivityModal(true);
+                            }}
+                            onAddActivity={(date, spaceId) => {
+                                setSelectedActivity(null);
+                                setPrefilledDate(date);
+                                setPrefilledResourceId(spaceId);
+                                setShowActivityModal(true);
+                            }}
                         />
                     </div>
                 ) : (
@@ -424,8 +480,14 @@ const AgendaManager: React.FC<AgendaManagerProps> = ({
                 rooms={rooms}
                 users={users}
                 serviceTypes={serviceTypes}
+                currentUser={currentUser}
+                terminalId={activeTerminalId}
                 onSave={handleSaveActivity}
                 onDelete={handleDeleteActivity}
+                onActivityUpdated={() => {
+                    fetchActivities();
+                    fetchOpportunities();
+                }}
                 onUpdateRooms={onUpdateRooms}
             />
         </div>

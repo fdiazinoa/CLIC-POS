@@ -33,6 +33,68 @@ export interface ServiceType {
   suggested_interval_unit?: 'HOURS' | 'DAYS';
 }
 
+export type OpportunityStage = 'NEW' | 'CONTACTED' | 'QUOTED' | 'WON' | 'LOST';
+
+export interface Opportunity {
+  id: string;
+  title: string;
+  customer_id?: string;
+  customerId?: string;
+  customer_name?: string;
+  customerName?: string;
+  assigned_user_id?: string;
+  assignedUserId?: string;
+  assigned_user_name?: string;
+  assignedUserName?: string;
+  stage: OpportunityStage;
+  amount: number;
+  probability: number;
+  expected_close_date?: string;
+  expectedCloseDate?: string;
+  source?: 'POS' | 'ERP' | 'WEB' | 'MANUAL';
+  notes?: string;
+  lost_reason?: string;
+  lostReason?: string;
+  created_at?: string;
+  createdAt?: string;
+  updated_at?: string;
+  updatedAt?: string;
+  syncStatus?: SyncStatus;
+}
+
+export type BookingSalesDocumentType = 'QUOTE' | 'SALES_ORDER' | 'INVOICE';
+
+export interface BookingSalesDocumentLine {
+  id: string;
+  itemId?: string;
+  name: string;
+  description?: string;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+  source: 'SPACE' | 'ITEM' | 'SERVICE';
+}
+
+export interface BookingSalesDocument {
+  id: string;
+  displayId: string;
+  documentType: BookingSalesDocumentType;
+  status: 'DRAFT' | 'APPROVED' | 'INVOICED' | 'CANCELLED';
+  bookingActivityId: string;
+  opportunityId?: string;
+  customerId?: string;
+  customerName?: string;
+  date: string;
+  expectedDate?: string;
+  subtotal: number;
+  total: number;
+  lines: BookingSalesDocumentLine[];
+  notes?: string;
+  createdBy?: string;
+  terminalId?: string;
+  syncStatus?: SyncStatus;
+}
+
 // --- SYNC CONFIGURATION TYPES ---
 export type SyncMode = 'MASTER' | 'SLAVE';
 export type SyncStatus = 'PENDING' | 'SYNCING' | 'COMPLETED' | 'ERROR';
@@ -2227,6 +2289,8 @@ export interface Collection {
   userId: string;
   userName: string;
   terminalId: string;
+  bookingActivityId?: string;
+  opportunityId?: string;
   allocations: CollectionAllocation[];
   notes?: string;
   syncStatus?: SyncStatus;
@@ -2304,6 +2368,8 @@ export interface Activity {
   // Relationships
   customerId?: string;
   customerName?: string;
+  opportunityId?: string;
+  opportunityTitle?: string;
   assignedToId: string; // Employee/User assigned
   assignedToName: string;
   spaceId?: string; // Room ID if BOOKING
@@ -2311,6 +2377,10 @@ export interface Activity {
 
   // Integration
   linkedTransactionId?: string; // To Quote/Invoice
+  linked_document_id?: string; // ERP sales document id for BOOKING flows
+  linkedDocumentId?: string;
+  linkedDocumentType?: BookingSalesDocumentType;
+  linkedDocumentDisplayId?: string;
   reservationId?: string;
   items?: CartItem[]; // Linked products/services
   required_deposit?: number;
