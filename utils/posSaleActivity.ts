@@ -13,15 +13,16 @@ const defaultState: PosSaleActivityState = {
 };
 
 let currentState: PosSaleActivityState = defaultState;
+let inputHoldUntil = 0;
+let inputHoldTimer: number | null = null;
 
-export const getPosSaleActivity = (): PosSaleActivityState => currentState;
+const computeActive = (cartCount: number = currentState.cartCount): boolean =>
+  cartCount > 0 || Date.now() < inputHoldUntil;
 
-export const isPosSaleActive = (): boolean => currentState.active;
-
-export const setPosSaleActivity = (next: { active: boolean; cartCount?: number }): void => {
+const publishState = (cartCount: number = currentState.cartCount): void => {
   const nextState: PosSaleActivityState = {
-    active: Boolean(next.active),
-    cartCount: Math.max(0, Number(next.cartCount || 0)),
+    active: computeActive(cartCount),
+    cartCount: Math.max(0, Number(cartCount || 0)),
     updatedAt: new Date().toISOString(),
   };
 
@@ -36,4 +37,34 @@ export const setPosSaleActivity = (next: { active: boolean; cartCount?: number }
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(POS_SALE_ACTIVITY_EVENT, { detail: currentState }));
   }
+};
+
+const scheduleInputHoldRelease = (): void => {
+  if (typeof window === 'undefined') return;
+  if (inputHoldTimer) {
+    window.clearTimeout(inputHoldTimer);
+    inputHoldTimer = null;
+  }
+
+  const delay = Math.max(0, inputHoldUntil - Date.now() + 25);
+  inputHoldTimer = window.setTimeout(() => {
+    inputHoldTimer = null;
+    publishState();
+  }, delay);
+};
+
+export const getPosSaleActivity = (): PosSaleActivityState => currentState;
+
+export const isPosSaleActive = (): boolean => computeActive();
+
+export const setPosSaleActivity = (next: { active: boolean; cartCount?: number }): void => {
+  const cartCount = next.active ? Math.max(0, Number(next.cartCount || 0)) : 0;
+  publishState(cartCount);
+};
+
+export const markPosInteractionActivity = (holdMs = 1500): void => {
+  if (typeof window === 'undefined') return;
+  inputHoldUntil = Math.max(inputHoldUntil, Date.now() + Math.max(250, holdMs));
+  publishState();
+  scheduleInputHoldRelease();
 };

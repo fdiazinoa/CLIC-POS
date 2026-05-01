@@ -80,7 +80,7 @@ import TerminalModeSelector from './components/TerminalModeSelector';
 import TerminalBindingScreen from './components/TerminalBindingScreen';
 import CustomerVisor from './components/CustomerVisor';
 import { visorSync } from './utils/visorSync';
-import { setPosSaleActivity } from './utils/posSaleActivity';
+import { markPosInteractionActivity, setPosSaleActivity } from './utils/posSaleActivity';
 
 // Layout imports
 import StandardPOSLayout from './components/layouts/StandardPOSLayout';
@@ -1551,6 +1551,32 @@ const AppContent: React.FC = () => {
     setPosSaleActivity({ active: cart.length > 0, cartCount: cart.length });
     return () => setPosSaleActivity({ active: false, cartCount: 0 });
   }, [cart.length]);
+
+  useEffect(() => {
+    const inputSensitiveViews = new Set<ViewState>([
+      'LOGIN',
+      'POS',
+      'TABLE_MAP',
+      'KIOSK_WELCOME',
+      'KIOSK_BROWSER',
+      'KIOSK_PAYMENT',
+    ]);
+    if (!inputSensitiveViews.has(currentView)) return;
+
+    const markInteraction = () => markPosInteractionActivity(1500);
+    const pointerOptions: AddEventListenerOptions = { capture: true, passive: true };
+    const keyOptions: AddEventListenerOptions = { capture: true };
+
+    window.addEventListener('pointerdown', markInteraction, pointerOptions);
+    window.addEventListener('touchstart', markInteraction, pointerOptions);
+    window.addEventListener('keydown', markInteraction, keyOptions);
+
+    return () => {
+      window.removeEventListener('pointerdown', markInteraction, pointerOptions);
+      window.removeEventListener('touchstart', markInteraction, pointerOptions);
+      window.removeEventListener('keydown', markInteraction, keyOptions);
+    };
+  }, [currentView]);
 
   useEffect(() => {
     if (!selectedCustomer?.id) return;
