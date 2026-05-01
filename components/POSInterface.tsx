@@ -273,15 +273,17 @@ const buildCartDigest = (items: CartItem[] = []): string =>
 
 interface ProductGridCardProps {
    product: Product;
+   finalPrice: number;
+   formattedPrice: string;
+   hasPromotion: boolean;
+   imageSrc: string;
+   warehouseSaleBlocked: boolean;
+   terminalWarehouseName: string;
    usesSupermarketLayout: boolean;
    usesExpandedCatalog: boolean;
    isMobile: boolean;
    showProductImages: boolean;
    baseCurrencySymbol: string;
-   isProductWarehouseBlockedForSale: (product: Product) => boolean;
-   getTerminalWarehouseName: () => string;
-   getProductPrice: (product: Product) => number;
-   hasPromotionForProduct: (product: Product) => boolean;
    onProductClick: (product: Product) => void;
    onOpenPromotion: (product: Product) => void;
    onProductTouchStart: (product: Product, clientX: number, clientY: number) => void;
@@ -290,17 +292,28 @@ interface ProductGridCardProps {
    onProductContextMenu: (product: Product, event: React.MouseEvent<HTMLDivElement>) => void;
 }
 
+interface ProductCatalogViewModel {
+   product: Product;
+   finalPrice: number;
+   formattedPrice: string;
+   hasPromotion: boolean;
+   imageSrc: string;
+   warehouseSaleBlocked: boolean;
+   availableStock: number;
+}
+
 const ProductGridCard = React.memo(({
    product,
+   formattedPrice,
+   hasPromotion,
+   imageSrc,
+   warehouseSaleBlocked,
+   terminalWarehouseName,
    usesSupermarketLayout,
    usesExpandedCatalog,
    isMobile,
    showProductImages,
    baseCurrencySymbol,
-   isProductWarehouseBlockedForSale,
-   getTerminalWarehouseName,
-   getProductPrice,
-   hasPromotionForProduct,
    onProductClick,
    onOpenPromotion,
    onProductTouchStart,
@@ -312,10 +325,6 @@ const ProductGridCard = React.memo(({
    const isWeighted = product.type === 'SERVICE' || productName.toLowerCase().includes('(peso)');
    const hasVariants = product.attributes && product.attributes.length > 0;
    const isCompactMobileCard = isMobile && !usesExpandedCatalog;
-   const warehouseSaleBlocked = isProductWarehouseBlockedForSale(product);
-   const imageSrc = showProductImages ? resolveProductImageSrc(product) : '';
-   const hasPromotion = hasPromotionForProduct(product);
-   const price = getProductPrice(product);
 
    const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
       const touch = e.touches[0];
@@ -338,7 +347,7 @@ const ProductGridCard = React.memo(({
       <div
          title={
             warehouseSaleBlocked
-               ? `No vendible en ${getTerminalWarehouseName()}: habilite este artículo en el almacén de ventas de esta caja (ERP).`
+               ? `No vendible en ${terminalWarehouseName}: habilite este artículo en el almacén de ventas de esta caja (ERP).`
                : undefined
          }
          onClick={() => onProductClick(product)}
@@ -400,7 +409,7 @@ const ProductGridCard = React.memo(({
                <h3 className={`font-bold text-gray-800 dark:text-white leading-tight line-clamp-2 ${usesSupermarketLayout ? 'text-[1.22rem] min-h-[3rem]' : usesExpandedCatalog ? 'text-[1.05rem] min-h-[2.3rem]' : isCompactMobileCard ? 'text-[1.05rem] min-h-[2.8rem]' : 'text-sm min-h-[2.5rem]'}`}>{product.name}</h3>
             </div>
             <div className={`${usesSupermarketLayout ? 'mt-2 pt-2 border-t border-gray-100 dark:border-slate-700' : usesExpandedCatalog ? 'mt-1 pt-1 border-t border-gray-100 dark:border-slate-700' : 'mt-auto pt-2 border-t border-gray-50 dark:border-slate-700'}`}>
-               <span className={`font-black text-gray-900 dark:text-white leading-none ${usesSupermarketLayout ? 'text-[2rem]' : usesExpandedCatalog ? 'text-[1.75rem]' : isCompactMobileCard ? 'text-[1.95rem]' : 'text-lg'}`}>{baseCurrencySymbol}{price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+               <span className={`font-black text-gray-900 dark:text-white leading-none ${usesSupermarketLayout ? 'text-[2rem]' : usesExpandedCatalog ? 'text-[1.75rem]' : isCompactMobileCard ? 'text-[1.95rem]' : 'text-lg'}`}>{baseCurrencySymbol}{formattedPrice}</span>
             </div>
          </div>
          {warehouseSaleBlocked && (
@@ -2037,12 +2046,39 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       // Defensive: Ensure unique IDs to prevent React key warnings
       const seenIds = new Set();
-         return filtered.filter(p => {
-            if (seenIds.has(p.id)) return false;
-            seenIds.add(p.id);
-            return true;
-         });
+      return filtered.filter(p => {
+         if (seenIds.has(p.id)) return false;
+         seenIds.add(p.id);
+         return true;
+      });
    }, [salesCatalogProducts, searchTerm, categoryFilter, canonicalizeCategory, effectiveAllowedCategorySet, productHasActiveTariff, warehouses]);
+
+   const terminalWarehouseName = useMemo(() => getTerminalWarehouseName(), [getTerminalWarehouseName]);
+
+   const filteredProductCards = useMemo<ProductCatalogViewModel[]>(() => {
+      return filteredProducts.map((product) => {
+         const finalPrice = getProductPrice(product);
+         return {
+            product,
+            finalPrice,
+            formattedPrice: finalPrice.toLocaleString('en-US', {
+               minimumFractionDigits: 2,
+               maximumFractionDigits: 2
+            }),
+            hasPromotion: hasPromotionForProduct(product),
+            imageSrc: uxConfig.showProductImages ? resolveProductImageSrc(product) : '',
+            warehouseSaleBlocked: isProductWarehouseBlockedForSale(product),
+            availableStock: getScopedProductStock(product),
+         };
+      });
+   }, [
+      filteredProducts,
+      getProductPrice,
+      getScopedProductStock,
+      hasPromotionForProduct,
+      isProductWarehouseBlockedForSale,
+      uxConfig.showProductImages,
+   ]);
 
    const handleRetailSearchSubmit = useCallback(() => {
       const trimmed = (searchTerm || '').trim();
@@ -3779,19 +3815,21 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                style={bottomAwareScrollStyle}
             >
                <div className={gridClass}>
-                  {filteredProducts.map((product, idx) => (
+                  {filteredProductCards.map((card, idx) => (
                      <ProductGridCard
-                        key={product.id || `prod-${idx}`}
-                        product={product}
+                        key={card.product.id || `prod-${idx}`}
+                        product={card.product}
+                        finalPrice={card.finalPrice}
+                        formattedPrice={card.formattedPrice}
+                        hasPromotion={card.hasPromotion}
+                        imageSrc={card.imageSrc}
+                        warehouseSaleBlocked={card.warehouseSaleBlocked}
+                        terminalWarehouseName={terminalWarehouseName}
                         usesSupermarketLayout={usesSupermarketLayout}
                         usesExpandedCatalog={usesExpandedCatalog}
                         isMobile={isMobile}
                         showProductImages={uxConfig.showProductImages}
                         baseCurrencySymbol={baseCurrency.symbol}
-                        isProductWarehouseBlockedForSale={isProductWarehouseBlockedForSale}
-                        getTerminalWarehouseName={getTerminalWarehouseName}
-                        getProductPrice={getProductPrice}
-                        hasPromotionForProduct={hasPromotionForProduct}
                         onProductClick={handleProductCardClick}
                         onOpenPromotion={openProductPromotionSheet}
                         onProductTouchStart={handleProductCardTouchStart}
@@ -3989,16 +4027,17 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                         </button>
 
                         {/* SEARCH RESULTS DROPDOWN */}
-                        {searchTerm && filteredProducts.length > 0 && (
+                        {searchTerm && filteredProductCards.length > 0 && (
                            <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-2xl border border-gray-100 max-h-[60vh] overflow-y-auto z-50">
-                              {filteredProducts.map((product, idx) => {
-                                 const whBlocked = isProductWarehouseBlockedForSale(product);
+                              {filteredProductCards.map((card, idx) => {
+                                 const { product } = card;
+                                 const whBlocked = card.warehouseSaleBlocked;
                                  return (
                                     <div
                                        key={product.id || `search-prod-${idx}`}
                                        title={
                                           whBlocked
-                                             ? `No vendible en ${getTerminalWarehouseName()}: ajuste almacenes en el ERP.`
+                                             ? `No vendible en ${terminalWarehouseName}: ajuste almacenes en el ERP.`
                                              : undefined
                                        }
                                        onClick={() => {
@@ -4033,10 +4072,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                                           className={`shrink-0 font-black ${whBlocked ? 'text-gray-600' : 'text-gray-900'}`}
                                        >
                                           {baseCurrency.symbol}
-                                          {getProductPrice(product).toLocaleString('en-US', {
-                                             minimumFractionDigits: 2,
-                                             maximumFractionDigits: 2
-                                          })}
+                                          {card.formattedPrice}
                                        </span>
                                     </div>
                                  );
