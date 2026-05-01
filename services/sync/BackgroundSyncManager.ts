@@ -3,6 +3,7 @@ import { dbAdapter } from '../db';
 import { apiSyncAdapter } from './ApiSyncAdapter';
 import { permissionService } from './PermissionService';
 import { InventoryLedgerEntry, CashMovement, ZReport, SyncStatus } from '../../types';
+import { isPosSaleActive, POS_SALE_ACTIVITY_EVENT } from '../../utils/posSaleActivity';
 
 export interface SyncState {
     pendingCount: number;
@@ -21,6 +22,7 @@ class BackgroundSyncManager {
     private offlineHandler: (() => void) | null = null;
     private focusHandler: (() => void) | null = null;
     private visibilityHandler: (() => void) | null = null;
+    private saleActivityHandler: (() => void) | null = null;
     private nextRetryDelayMs: number | null = null;
     private state: SyncState = {
         pendingCount: 0,
@@ -83,10 +85,16 @@ class BackgroundSyncManager {
             this.scheduleSync(0);
         };
 
+        this.saleActivityHandler = () => {
+            if (isPosSaleActive() || !navigator.onLine) return;
+            this.scheduleSync(1000);
+        };
+
         window.addEventListener('online', this.onlineHandler);
         window.addEventListener('offline', this.offlineHandler);
         window.addEventListener('focus', this.focusHandler);
         document.addEventListener('visibilitychange', this.visibilityHandler);
+        window.addEventListener(POS_SALE_ACTIVITY_EVENT, this.saleActivityHandler);
     }
 
     private startWorker() {
@@ -215,6 +223,7 @@ class BackgroundSyncManager {
 
         const collectionErrors: string[] = [];
         let shouldRetrySoon = false;
+        let pausedForSaleActivity = false;
 
         try {
             // 1) Transactions first to prioritize sales visibility at central terminal.
@@ -223,6 +232,17 @@ class BackgroundSyncManager {
             }).catch((error: any) => {
                 collectionErrors.push(`transactions: ${error?.message || 'unknown error'}`);
             });
+
+            if (isPosSaleActive()) {
+                pausedForSaleActivity = true;
+                this.updateState({
+                    isSyncing: false,
+                    hasError: collectionErrors.length > 0,
+                    lastSyncTime: new Date().toISOString()
+                });
+                console.log('⏸️ BackgroundSyncManager: Heavy sync paused while sale cart is active.');
+                return;
+            }
 
             // 2) Inventory Ledger
             await this.processCollection<InventoryLedgerEntry>('inventoryLedger', async (item) => {
@@ -277,8 +297,9 @@ class BackgroundSyncManager {
             shouldRetrySoon = true;
         } finally {
             this.isProcessing = false;
-            await this.updatePendingCount();
+            await this.updatePendingCount(pausedForSaleActivity ? ['transactions'] : undefined);
             if (navigator.onLine && (shouldRetrySoon || this.state.pendingCount > 0)) {
+                if (pausedForSaleActivity && this.state.pendingCount === 0) return;
                 this.scheduleSync(this.nextRetryDelayMs ?? this.FAST_RETRY_DELAY_MS);
             }
         }
@@ -401,9 +422,9 @@ class BackgroundSyncManager {
         }
     }
 
-    private async updatePendingCount() {
+    private async updatePendingCount(collectionOverride?: string[]) {
         let count = 0;
-        const collections = ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
+        const collections = collectionOverride || ['inventoryLedger', 'cashMovements', 'zReports', 'transactions', 'wallet_transactions', 'loyalty_events'];
 
         for (const col of collections) {
             const data = await db.get(col as any) || [];

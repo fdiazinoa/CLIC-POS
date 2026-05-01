@@ -3,6 +3,23 @@ import type { DatabaseAdapter } from '../DatabaseAdapter';
 
 const DB_NAME = 'clic_pos_native';
 const DB_VERSION = 1;
+const DOCUMENT_SCHEMA_MIGRATION_KEY = 'documents_schema_v2_migrated';
+const DOCUMENT_UPSERT_SQL = `
+    INSERT INTO documents (collection_name, doc_id, data, sort_order, updatedAt)
+    VALUES (
+        ?,
+        ?,
+        ?,
+        COALESCE(
+            (SELECT sort_order FROM documents WHERE collection_name = ? AND doc_id = ?),
+            (SELECT COALESCE(MAX(sort_order) + 1, 0) FROM documents WHERE collection_name = ?)
+        ),
+        ?
+    )
+    ON CONFLICT(collection_name, doc_id) DO UPDATE SET
+        data = excluded.data,
+        updatedAt = excluded.updatedAt
+`;
 
 type SQLiteBridgeModule = typeof import('@capacitor-community/sqlite');
 type SQLiteConnectionInstance = InstanceType<SQLiteBridgeModule['SQLiteConnection']>;
@@ -66,38 +83,16 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     async saveCollection<T>(collectionName: string, data: T[]): Promise<void> {
         const docs = this.toStoredDocuments(collectionName, data);
-        await this.writeStoredDocuments(collectionName, docs);
+        await this.replaceStoredDocuments(collectionName, docs);
     }
 
     async saveDocument<T extends { id: string }>(collectionName: string, doc: T): Promise<void> {
-        const docs = await this.readStoredDocuments(collectionName);
-        const nextDocs = Array.isArray(docs) ? [...docs] : [];
-        const index = nextDocs.findIndex((item: T) => item.id === doc.id);
-
-        if (index >= 0) {
-            nextDocs[index] = doc;
-        } else {
-            nextDocs.push(doc);
-        }
-
-        await this.writeStoredDocuments(collectionName, nextDocs);
+        await this.upsertStoredDocuments(collectionName, [doc]);
     }
 
     async bulkUpsert<T extends { id: string }>(collectionName: string, docs: T[]): Promise<void> {
         if (!docs || docs.length === 0) return;
-
-        const storedDocs = await this.readStoredDocuments(collectionName);
-        const docMap = new Map<string, T>();
-
-        (storedDocs as T[]).forEach((doc) => {
-            docMap.set(doc.id, doc);
-        });
-
-        docs.forEach((doc) => {
-            docMap.set(doc.id, doc);
-        });
-
-        await this.writeStoredDocuments(collectionName, Array.from(docMap.values()));
+        await this.upsertStoredDocuments(collectionName, docs);
     }
 
     async bulkUpdateProducts(productIds: string[], updates: any, _userId?: string, _userName?: string): Promise<void> {
@@ -106,8 +101,8 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
         const idSet = new Set(productIds || []);
         const now = new Date().toISOString();
-        const updatedProducts = products.map((product: any) => {
-            if (!idSet.has(product.id)) return product;
+        const updatedProducts = products.reduce((acc: any[], product: any) => {
+            if (!idSet.has(product.id)) return acc;
 
             const next = { ...product };
             if (updates?.flags) {
@@ -161,24 +156,34 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
                 next.activeInWarehouses = Array.from(activeInWarehouses);
             }
             next.updatedAt = now;
-            return next;
-        });
+            acc.push(next);
+            return acc;
+        }, []);
 
-        await this.saveCollection('products', updatedProducts);
+        await this.bulkUpsert('products', updatedProducts);
     }
 
     async getDocument<T>(collectionName: string, id: string): Promise<T | null> {
-        const docs = await this.readStoredDocuments(collectionName);
-        if (!Array.isArray(docs)) return null;
-        return docs.find((doc: T) => (doc as any).id === id) || null;
+        const db = this.ensureDb();
+        const result = await db.query(
+            'SELECT data FROM documents WHERE collection_name = ? AND doc_id = ? LIMIT 1',
+            [collectionName, id]
+        );
+        const row = Array.isArray(result?.values) ? result.values[0] : null;
+        const rawValue = row && typeof row === 'object' ? (row as Record<string, unknown>).data : null;
+        if (typeof rawValue !== 'string' || !rawValue.trim()) return null;
+
+        try {
+            return JSON.parse(rawValue) as T;
+        } catch (error) {
+            console.warn(`[CapacitorSQLiteAdapter] Failed to parse ${collectionName}/${id}:`, error);
+            return null;
+        }
     }
 
     async deleteDocument(collectionName: string, id: string): Promise<void> {
-        const docs = await this.readStoredDocuments(collectionName);
-        if (!Array.isArray(docs)) return;
-
-        const nextDocs = docs.filter((doc: any) => doc?.id !== id);
-        await this.writeStoredDocuments(collectionName, nextDocs);
+        const db = this.ensureDb();
+        await db.run('DELETE FROM documents WHERE collection_name = ? AND doc_id = ?', [collectionName, id]);
     }
 
     async executeSQL(query: string, params: any[] = []): Promise<any> {
@@ -237,7 +242,17 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
         const db = this.ensureDb();
         await db.execute(`
             PRAGMA foreign_keys = ON;
-            CREATE TABLE IF NOT EXISTS collections (
+            CREATE TABLE IF NOT EXISTS documents (
+                collection_name TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                data TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                updatedAt TEXT NOT NULL,
+                PRIMARY KEY (collection_name, doc_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_documents_collection_sort
+            ON documents(collection_name, sort_order, updatedAt);
+            CREATE TABLE IF NOT EXISTS storage_meta (
                 key TEXT PRIMARY KEY NOT NULL,
                 value TEXT NOT NULL,
                 updatedAt TEXT NOT NULL
@@ -254,33 +269,124 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             CREATE INDEX IF NOT EXISTS idx_sync_queue_status_created_at
             ON sync_queue(status, createdAt);
         `);
+        await this.migrateLegacyCollectionsBlobTable();
     }
 
     private async readStoredDocuments(collectionName: string): Promise<any[]> {
         const db = this.ensureDb();
-        const result = await db.query('SELECT value FROM collections WHERE key = ?', [collectionName]);
-        const row = Array.isArray(result?.values) ? result.values[0] : null;
-        const rawValue = row && typeof row === 'object' ? (row as Record<string, unknown>).value : null;
+        const result = await db.query(
+            'SELECT data FROM documents WHERE collection_name = ? ORDER BY sort_order ASC, updatedAt ASC',
+            [collectionName]
+        );
+        const rows = Array.isArray(result?.values) ? result.values : [];
+        const docs: any[] = [];
 
-        if (typeof rawValue !== 'string' || !rawValue.trim()) {
-            return [];
+        for (const row of rows) {
+            const rawValue = row && typeof row === 'object' ? (row as Record<string, unknown>).data : null;
+            if (typeof rawValue !== 'string' || !rawValue.trim()) continue;
+            try {
+                docs.push(JSON.parse(rawValue));
+            } catch (error) {
+                console.warn(`[CapacitorSQLiteAdapter] Failed to parse ${collectionName} row:`, error);
+            }
         }
 
+        return docs;
+    }
+
+    private async replaceStoredDocuments(collectionName: string, docs: any[]): Promise<void> {
+        const db = this.ensureDb();
+        const now = new Date().toISOString();
+        const statements = [
+            {
+                statement: 'DELETE FROM documents WHERE collection_name = ?',
+                values: [collectionName],
+            },
+            ...this.toDocumentRows(collectionName, docs).map((row, index) => ({
+                statement: `
+                    INSERT INTO documents (collection_name, doc_id, data, sort_order, updatedAt)
+                    VALUES (?, ?, ?, ?, ?)
+                `,
+                values: [collectionName, row.docId, row.data, index, now],
+            })),
+        ];
+
+        await this.executeSetOrRun(statements);
+    }
+
+    private async upsertStoredDocuments(collectionName: string, docs: any[]): Promise<void> {
+        if (!Array.isArray(docs) || docs.length === 0) return;
+
+        const now = new Date().toISOString();
+        const statements = this.toDocumentRows(collectionName, docs).map((row) => ({
+            statement: DOCUMENT_UPSERT_SQL,
+            values: [
+                collectionName,
+                row.docId,
+                row.data,
+                collectionName,
+                row.docId,
+                collectionName,
+                now,
+            ],
+        }));
+
+        await this.executeSetOrRun(statements);
+    }
+
+    private toDocumentRows(collectionName: string, docs: any[]): Array<{ docId: string; data: string }> {
+        return (Array.isArray(docs) ? docs : [])
+            .map((doc, index) => {
+                const docId = this.resolveDocumentId(collectionName, doc, index);
+                if (!docId) return null;
+                const payload = doc && typeof doc === 'object'
+                    ? { ...doc, id: doc?.id || docId }
+                    : { id: docId, value: doc };
+                return {
+                    docId,
+                    data: JSON.stringify(payload),
+                };
+            })
+            .filter((row): row is { docId: string; data: string } => Boolean(row));
+    }
+
+    private async executeSetOrRun(statements: Array<{ statement: string; values: any[] }>): Promise<void> {
+        if (!statements.length) return;
+        const db = this.ensureDb();
+        const executable = statements.map((entry) => ({
+            statement: entry.statement.trim(),
+            values: entry.values,
+        }));
+
+        if (typeof (db as any).executeSet === 'function') {
+            await (db as any).executeSet(executable, true, 'no');
+            return;
+        }
+
+        await db.execute('BEGIN TRANSACTION;');
         try {
-            const parsed = JSON.parse(rawValue);
-            return this.toStoredDocuments(collectionName, parsed);
+            for (const entry of executable) {
+                await db.run(entry.statement, entry.values);
+            }
+            await db.execute('COMMIT;');
         } catch (error) {
-            console.warn(`[CapacitorSQLiteAdapter] Failed to parse ${collectionName}:`, error);
-            return [];
+            await db.execute('ROLLBACK;').catch(() => undefined);
+            throw error;
         }
     }
 
-    private async writeStoredDocuments(collectionName: string, docs: any[]): Promise<void> {
-        const db = this.ensureDb();
-        await db.run(
-            'INSERT OR REPLACE INTO collections (key, value, updatedAt) VALUES (?, ?, ?)',
-            [collectionName, JSON.stringify(Array.isArray(docs) ? docs : []), new Date().toISOString()]
-        );
+    private resolveDocumentId(collectionName: string, doc: any, index: number): string {
+        if (collectionName === 'config') {
+            return String(doc?.id || 'current');
+        }
+        if (collectionName === 'globalSequenceCounter') {
+            return 'value';
+        }
+        const explicitId = doc?.id ?? doc?._id ?? doc?.uuid;
+        if (explicitId !== undefined && explicitId !== null && String(explicitId).trim()) {
+            return String(explicitId);
+        }
+        return `${collectionName}_${index}`;
     }
 
     private toStoredDocuments(collectionName: string, data: any): any[] {
@@ -297,9 +403,10 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
 
     private fromStoredDocuments(collectionName: string, docs: any[]): any {
         if (collectionName === 'config') {
-            if (!docs.length) return {};
-            const current = docs.find((doc: any) => doc?.id === 'current');
-            return current || docs[0] || {};
+            const realDocs = docs.filter((doc: any) => doc?.id !== '_db_initialized' && doc?.id !== 'config_metadata');
+            if (!realDocs.length) return {};
+            const current = realDocs.find((doc: any) => doc?.id === 'current');
+            return current || realDocs[0] || {};
         }
 
         if (collectionName === 'globalSequenceCounter') {
@@ -317,5 +424,81 @@ export class CapacitorSQLiteAdapter implements DatabaseAdapter {
             return Number((row as Record<string, unknown>)[key] || 0);
         }
         return 0;
+    }
+
+    private async migrateLegacyCollectionsBlobTable(): Promise<void> {
+        const db = this.ensureDb();
+        const migrated = await this.getMetaValue(DOCUMENT_SCHEMA_MIGRATION_KEY);
+        if (migrated === '1') return;
+
+        const hasLegacyTable = await this.hasLegacyCollectionsBlobTable();
+        if (!hasLegacyTable) {
+            await this.setMetaValue(DOCUMENT_SCHEMA_MIGRATION_KEY, '1');
+            return;
+        }
+
+        const existingDocsCount = this.readNumericResult(
+            (await db.query('SELECT COUNT(*) as count FROM documents'))?.values,
+            'count'
+        );
+        if (existingDocsCount > 0) {
+            await this.setMetaValue(DOCUMENT_SCHEMA_MIGRATION_KEY, '1');
+            return;
+        }
+
+        console.log('[CapacitorSQLiteAdapter] Migrating legacy collection blobs to document rows...');
+        const result = await db.query('SELECT key, value FROM collections');
+        const rows = Array.isArray(result?.values) ? result.values : [];
+        let migratedRows = 0;
+
+        for (const row of rows) {
+            const collectionName = row && typeof row === 'object' ? String((row as Record<string, unknown>).key || '') : '';
+            const rawValue = row && typeof row === 'object' ? (row as Record<string, unknown>).value : null;
+            if (!collectionName || typeof rawValue !== 'string' || !rawValue.trim()) continue;
+
+            try {
+                const parsed = JSON.parse(rawValue);
+                const docs = this.toStoredDocuments(collectionName, parsed);
+                await this.replaceStoredDocuments(collectionName, docs);
+                migratedRows += docs.length;
+            } catch (error) {
+                console.warn(`[CapacitorSQLiteAdapter] Failed to migrate ${collectionName}:`, error);
+            }
+        }
+
+        await this.setMetaValue(DOCUMENT_SCHEMA_MIGRATION_KEY, '1');
+        console.log(`[CapacitorSQLiteAdapter] Migrated ${migratedRows} documents from legacy blobs.`);
+    }
+
+    private async hasLegacyCollectionsBlobTable(): Promise<boolean> {
+        const db = this.ensureDb();
+        const tableResult = await db.query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='collections'"
+        );
+        if (!Array.isArray(tableResult?.values) || tableResult.values.length === 0) return false;
+
+        const pragmaResult = await db.query('PRAGMA table_info(collections);');
+        const columns = new Set(
+            (Array.isArray(pragmaResult?.values) ? pragmaResult.values : [])
+                .map((row: any) => String(row?.name || ''))
+                .filter(Boolean)
+        );
+        return columns.has('key') && columns.has('value');
+    }
+
+    private async getMetaValue(key: string): Promise<string | null> {
+        const db = this.ensureDb();
+        const result = await db.query('SELECT value FROM storage_meta WHERE key = ? LIMIT 1', [key]);
+        const row = Array.isArray(result?.values) ? result.values[0] : null;
+        const value = row && typeof row === 'object' ? (row as Record<string, unknown>).value : null;
+        return typeof value === 'string' ? value : null;
+    }
+
+    private async setMetaValue(key: string, value: string): Promise<void> {
+        const db = this.ensureDb();
+        await db.run(
+            'INSERT OR REPLACE INTO storage_meta (key, value, updatedAt) VALUES (?, ?, ?)',
+            [key, value, new Date().toISOString()]
+        );
     }
 }
