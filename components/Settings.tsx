@@ -30,37 +30,46 @@ import {
   Room
 } from '../types';
 
-// Component Imports
-import AgendaManager from './AgendaManager';
-import SpacesManager from './SpacesManager';
-import WarehouseManager from './WarehouseManager';
-import CatalogManager from './CatalogManager';
-import TerminalSettings from './TerminalSettings';
-import HardwareSettings from './HardwareSettings';
-import CurrencySettings from './CurrencySettings';
-import ReceiptDesigner from './ReceiptDesigner';
-import EmailSettings from './EmailSettings';
-import TipsSettings from './TipsSettings';
-import DataSecurityHub from './DataSecurityHub';
-import AuditLogViewer from './AuditLogViewer';
-import TeamHub from './TeamHub';
-import PaymentSettings from './PaymentSettings';
-import IntegrationSettings from './IntegrationSettings';
-import DocumentSettings from './DocumentSettings';
-import TaxSettings from './TaxSettings';
-import PromotionBuilder from './PromotionBuilder';
-import { ImportWizard } from './ImportWizard/ImportWizard';
-import LoyaltySettings from './LoyaltySettings';
-import WalletIntegrations from './WalletIntegrations';
-import SyncSettings from './SyncSettings';
-import ProductionAreaManager from './ProductionAreaManager';
-import LabelDesigner from './LabelDesigner';
-import CustomerManagement from './CustomerManagement';
-import ReportDashboard from './ReportDashboard';
-import ReportViewer from './ReportViewer';
-import SourcingIntelligence from './SourcingIntelligence';
-import CompanySettings from './CompanySettings';
 import { getInventorySnapshotAtDate, getLeadTimePerformance, getABCRanking, getHRPerformance } from './AnalyticsLogic';
+
+const AgendaManager = React.lazy(() => import('./AgendaManager'));
+const SpacesManager = React.lazy(() => import('./SpacesManager'));
+const WarehouseManager = React.lazy(() => import('./WarehouseManager'));
+const CatalogManager = React.lazy(() => import('./CatalogManager'));
+const TerminalSettings = React.lazy(() => import('./TerminalSettings'));
+const HardwareSettings = React.lazy(() => import('./HardwareSettings'));
+const CurrencySettings = React.lazy(() => import('./CurrencySettings'));
+const ReceiptDesigner = React.lazy(() => import('./ReceiptDesigner'));
+const EmailSettings = React.lazy(() => import('./EmailSettings'));
+const TipsSettings = React.lazy(() => import('./TipsSettings'));
+const DataSecurityHub = React.lazy(() => import('./DataSecurityHub'));
+const AuditLogViewer = React.lazy(() => import('./AuditLogViewer'));
+const TeamHub = React.lazy(() => import('./TeamHub'));
+const PaymentSettings = React.lazy(() => import('./PaymentSettings'));
+const IntegrationSettings = React.lazy(() => import('./IntegrationSettings'));
+const DocumentSettings = React.lazy(() => import('./DocumentSettings'));
+const TaxSettings = React.lazy(() => import('./TaxSettings'));
+const PromotionBuilder = React.lazy(() => import('./PromotionBuilder'));
+const ImportWizard = React.lazy(() => import('./ImportWizard/ImportWizard').then((module) => ({ default: module.ImportWizard })));
+const LoyaltySettings = React.lazy(() => import('./LoyaltySettings'));
+const WalletIntegrations = React.lazy(() => import('./WalletIntegrations'));
+const SyncSettings = React.lazy(() => import('./SyncSettings'));
+const ProductionAreaManager = React.lazy(() => import('./ProductionAreaManager'));
+const LabelDesigner = React.lazy(() => import('./LabelDesigner'));
+const CustomerManagement = React.lazy(() => import('./CustomerManagement'));
+const ReportDashboard = React.lazy(() => import('./ReportDashboard'));
+const ReportViewer = React.lazy(() => import('./ReportViewer'));
+const SourcingIntelligence = React.lazy(() => import('./SourcingIntelligence'));
+const CompanySettings = React.lazy(() => import('./CompanySettings'));
+
+const SettingsModuleFallback: React.FC = () => (
+  <div className="flex h-full min-h-[280px] items-center justify-center bg-slate-50">
+    <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-4 text-slate-700 shadow-sm">
+      <div className="h-5 w-5 rounded-full border-2 border-blue-600 border-t-transparent animate-spin" />
+      <span className="text-sm font-black uppercase tracking-[0.18em]">Cargando sección...</span>
+    </div>
+  </div>
+);
 
 
 interface SettingsProps {
@@ -906,7 +915,9 @@ const Settings: React.FC<SettingsProps> = (props) => {
         className={usesPageScroll ? 'min-h-[100dvh] flex flex-1 flex-col' : 'flex min-h-0 flex-1 flex-col'}
         style={usesPageScroll ? { minHeight: '100dvh' } : undefined}
       >
-        {renderContent()}
+        <React.Suspense fallback={<SettingsModuleFallback />}>
+          {renderContent()}
+        </React.Suspense>
       </div>
     </div>
   );

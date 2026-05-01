@@ -131,6 +131,11 @@ type ProductionAreaConfig = {
    printer_ip?: string;
 };
 
+const buildModifierSignature = (modifiers?: unknown[]): string => {
+   if (!Array.isArray(modifiers) || modifiers.length === 0) return '';
+   return modifiers.map((modifier) => String(modifier ?? '')).sort().join('|');
+};
+
 const normalizeProductionMode = (value: unknown): 'KDS' | 'PRINTER' | 'AMBOS' => {
    const normalized = String(value || '').trim().toUpperCase();
    if (normalized === 'PRINTER' || normalized === 'TICKET') return 'PRINTER';
@@ -537,6 +542,13 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
    const activeTerminal = (config.terminals || []).find(t => t.id === activeTerminalId) || (config.terminals || [])[0];
    const activeTerminalConfig = activeTerminal?.config;
    const terminalId = activeTerminal?.id || 'T1';
+   const productById = useMemo(() => {
+      const index = new Map<string, Product>();
+      for (const product of products || []) {
+         if (product?.id) index.set(product.id, product);
+      }
+      return index;
+   }, [products]);
    const salesUsers = useMemo(() => getTerminalSnapshotSellers(config, terminalId), [config, terminalId]);
    const resolveSalespersonLabel = useCallback((salespersonId?: string | null) => {
       return resolveTerminalSellerName(salespersonId, config, terminalId, users) || 'Vendedor';
@@ -1428,6 +1440,38 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
    const getProductPrice = useCallback((p: Product) => getTariffPrice(p) ?? 0, [getTariffPrice]);
 
+   const productCodeIndex = useMemo(() => {
+      const index = new Map<string, { product: Product; price: number; modifiers: string[] }>();
+      const addCode = (code: unknown, value: { product: Product; price: number; modifiers: string[] }) => {
+         const normalized = String(code || '').trim();
+         if (!normalized || index.has(normalized)) return;
+         index.set(normalized, value);
+      };
+
+      for (const product of products || []) {
+         if (!product || !productHasActiveTariff(product)) continue;
+         const baseMatch = { product, price: getProductPrice(product), modifiers: [] as string[] };
+         addCode(product.id, baseMatch);
+         addCode(product.barcode, baseMatch);
+         addCode((product as any).sku, baseMatch);
+         addCode((product as any).item_code, baseMatch);
+         addCode((product as any).code, baseMatch);
+
+         for (const variant of product.variants || []) {
+            const modifiersList = Object.values(variant.attributeValues || {}).map((value) => String(value || ''));
+            const variantMatch = {
+               product,
+               price: variant.price || baseMatch.price,
+               modifiers: modifiersList,
+            };
+            addCode(variant.sku, variantMatch);
+            addCode(variant.barcode, variantMatch);
+         }
+      }
+
+      return index;
+   }, [getProductPrice, productHasActiveTariff, products]);
+
    const handleLoyaltyScan = useCallback((code: string) => {
       // Find customer by loyalty card or gift card
       const customer = (customers || []).find(c =>
@@ -1460,6 +1504,20 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       return demand;
    }, [products]);
+
+   const cartInventoryDemandByProduct = useMemo(
+      () => getCartInventoryDemandByProduct(cart as CartItem[]),
+      [cart, getCartInventoryDemandByProduct]
+   );
+
+   const cartQuantityByProduct = useMemo(() => {
+      const quantities: Record<string, number> = {};
+      for (const item of cart || []) {
+         if (!item?.id) continue;
+         quantities[item.id] = (quantities[item.id] || 0) + Number(item.quantity || 0);
+      }
+      return quantities;
+   }, [cart]);
 
    const canAddItemToCart = useCallback((product: Product, quantityToAdd: number = 1): boolean => {
       // 0. Sellable check
@@ -1494,7 +1552,6 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       if (trackInventory) {
          const consumptionMode = resolveInventoryConsumptionMode(product);
          if (consumptionMode === 'COMPONENTS' && quantityToAdd > 0) {
-            const currentCartDemand = getCartInventoryDemandByProduct(cart as CartItem[]);
             const componentDeductions = calculateInventoryDeductions(product, quantityToAdd, products);
             const consolidatedDemand = componentDeductions.reduce<Record<string, number>>((acc, row) => {
                acc[row.productId] = (acc[row.productId] || 0) + Math.max(0, Number(row.quantityToDeduct || 0));
@@ -1502,7 +1559,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }, {});
 
             for (const [componentId, qtyNeeded] of Object.entries(consolidatedDemand)) {
-               const component = products.find((candidate) => candidate.id === componentId);
+               const component = productById.get(componentId);
                if (!component) {
                   setErrorToast(`El kit ${product.name} no tiene completos sus componentes en POS.`);
                   setTimeout(() => setErrorToast(null), 3500);
@@ -1511,7 +1568,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
                const currentStock = getScopedProductStock(component);
                const committedQty = committedByProduct[componentId] || 0;
-               const inCartQty = currentCartDemand[componentId] || 0;
+               const inCartQty = cartInventoryDemandByProduct[componentId] || 0;
                const availableStock = Math.max(0, currentStock - committedQty);
                const totalRequested = inCartQty + qtyNeeded;
 
@@ -1533,7 +1590,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             const currentStock = getScopedProductStock(product);
             const committedQty = committedByProduct[product.id] || 0;
             const availableStock = Math.max(0, currentStock - committedQty);
-            const inCartQty = cart.filter(item => item.id === product.id).reduce((sum, item) => sum + item.quantity, 0);
+            const inCartQty = cartQuantityByProduct[product.id] || 0;
             const totalRequested = inCartQty + quantityToAdd;
 
             if (totalRequested > availableStock) {
@@ -1545,7 +1602,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       return true;
-   }, [config.features.stockTracking, activeTerminalConfig, cart, committedByProduct, getCartInventoryDemandByProduct, getScopedProductStock, getTerminalWarehouseName, productHasActiveTariff, productMatchesTerminalWarehouse, products]);
+   }, [activeTerminalConfig, cartInventoryDemandByProduct, cartQuantityByProduct, committedByProduct, config.features.stockTracking, getScopedProductStock, getTerminalWarehouseName, productById, productHasActiveTariff, productMatchesTerminalWarehouse, products, warehouses]);
 
    const [lastAddedCartId, setLastAddedCartId] = useState<string | null>(null);
 
@@ -1561,14 +1618,14 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
       }
 
       const finalPrice = priceOverride || getProductPrice(product);
-      const modifiersString = modifiers ? modifiers.sort().join('|') : '';
+      const modifiersString = buildModifierSignature(modifiers);
       const effectiveTaxIds = resolveEffectiveTaxIds(product.appliedTaxIds, activeTerminalConfig);
       const taxSignature = effectiveTaxIds.slice().sort().join('|');
 
       // We look for existing item in the stable 'cart' prop/state instead of inside the setter
       // to avoid using setter for logic that triggers side effects.
       const existing = (cart || []).find(i => {
-         const iMods = i.modifiers ? i.modifiers.sort().join('|') : '';
+         const iMods = buildModifierSignature(i.modifiers);
          const existingTaxSignature = resolveEffectiveTaxIds(i.appliedTaxIds, activeTerminalConfig).slice().sort().join('|');
          return i.id === product.id && iMods === modifiersString && i.price === finalPrice && existingTaxSignature === taxSignature;
       });
@@ -1702,6 +1759,16 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
 
       if (!searchCode) return null;
 
+      const indexedMatch = productCodeIndex.get(searchCode);
+      if (indexedMatch) {
+         return {
+            product: indexedMatch.product,
+            quantity,
+            price: indexedMatch.price,
+            modifiers: indexedMatch.modifiers,
+         };
+      }
+
       for (const p of products) {
          // A. Check Variants (SKU or Barcode)
          if (p.variants && p.variants.length > 0) {
@@ -1728,7 +1795,7 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
          }
       }
       return null;
-   }, [products, getProductPrice, productHasActiveTariff]);
+   }, [getProductPrice, productCodeIndex, productHasActiveTariff, products]);
 
    const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter') {
