@@ -63,10 +63,104 @@ def send_text_to_network_printer(printer_ip: str, content: str, port: int = 9100
     with socket.create_connection((printer_ip, port), timeout=timeout) as sock:
         sock.sendall(payload)
 
+def normalize_direct_kds_item(item: dict, index: int) -> dict:
+    quantity = item.get("quantity", item.get("cantidad", 1))
+    try:
+        quantity = float(quantity)
+    except (TypeError, ValueError):
+        quantity = 1
+
+    modifiers = item.get("modifiers", item.get("modificadores", []))
+    if modifiers is None:
+        modifiers = []
+    if not isinstance(modifiers, list):
+        modifiers = [str(modifiers)]
+
+    product_id = item.get("producto_id") or item.get("productId") or item.get("id") or f"item-{index}"
+    name = item.get("nombre") or item.get("name") or item.get("description") or "Producto"
+
+    return {
+        "id": str(item.get("id") or item.get("cartId") or f"{product_id}-{index}"),
+        "producto_id": str(product_id),
+        "name": str(name),
+        "quantity": quantity,
+        "modifiers": modifiers,
+    }
+
+def upsert_direct_kds_order(conn, orden_id: str, payload: dict):
+    items = [normalize_direct_kds_item(item, index) for index, item in enumerate(payload.get("items") or [])]
+    now = payload.get("date") or datetime.now().isoformat()
+    total = payload.get("total") or sum((item["quantity"] for item in items))
+    display_id = payload.get("displayId") or orden_id
+    user_name = payload.get("userName") or ""
+    customer_name = payload.get("customerName") or "Cliente General"
+    customer_id = payload.get("customerId") or ""
+
+    try:
+        conn.execute(
+            """
+            INSERT INTO transactions (id, displayId, status, items, total, date, userName, customerName, customerId)
+            VALUES (?, ?, 'EN_COCINA', ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                displayId = excluded.displayId,
+                status = 'EN_COCINA',
+                items = excluded.items,
+                total = excluded.total,
+                userName = excluded.userName,
+                customerName = excluded.customerName,
+                customerId = excluded.customerId
+            """,
+            (orden_id, display_id, json.dumps(items), total, now, user_name, customer_name, customer_id)
+        )
+    except sqlite3.OperationalError:
+        # Older local KDS databases may not have all metadata columns yet.
+        conn.execute(
+            """
+            INSERT INTO transactions (id, status, items, total, date)
+            VALUES (?, 'EN_COCINA', ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                status = 'EN_COCINA',
+                items = excluded.items,
+                total = excluded.total
+            """,
+            (orden_id, json.dumps(items), total, now)
+        )
+
+    area = payload.get("area") or {}
+    area_id = str(area.get("id") or "GENERAL")
+    dispatched_count = 0
+
+    for index, item in enumerate(items):
+        detail_id = f"{orden_id}_{area_id}_{item['id']}_{index}"
+        exists = conn.execute("SELECT 1 FROM ordenes_detalles WHERE id = ?", (detail_id,)).fetchone()
+        if exists:
+            continue
+
+        conn.execute(
+            "INSERT INTO ordenes_detalles (id, orden_id, producto_id, nombre, cantidad, modificadores, estado_cocina) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                detail_id,
+                orden_id,
+                item["producto_id"],
+                item["name"],
+                item["quantity"],
+                json.dumps(item["modifiers"]),
+                "PENDIENTE",
+            )
+        )
+        dispatched_count += 1
+
+    return dispatched_count
+
 @app.post("/api/ordenes/enviar-comanda/{orden_id}")
-def dispatch_command(orden_id: str):
+def dispatch_command(orden_id: str, payload: Optional[dict] = None):
     conn = get_db_connection()
     try:
+        if payload and payload.get("items"):
+            dispatched_count = upsert_direct_kds_order(conn, orden_id, payload)
+            conn.commit()
+            return {"status": "success", "dispatched": dispatched_count, "mode": "direct_payload"}
+
         # 1. Check if kitchen module is enabled
         config = conn.execute("SELECT usa_modulos_cocina FROM parametros_operativos LIMIT 1").fetchone()
         if not config or not config['usa_modulos_cocina']:

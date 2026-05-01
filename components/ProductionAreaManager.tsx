@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Save, Printer, Monitor, Layers, Server, AlertCircle, ChefHat } from 'lucide-react';
-import { BusinessConfig, DeviceRole } from '../types';
+import { BusinessConfig } from '../types';
 import { db } from '../utils/db';
-import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
+import { getKdsTerminalTargets } from '../utils/kdsRouting';
 
 interface ProductionArea {
     id: string;
@@ -25,54 +25,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [kitchenEnabled, setKitchenEnabled] = useState(false);
-    const kdsTerminals = terminals.filter((terminal) => {
-        const terminalConfig = terminal?.config || {};
-        const terminalSnapshots = (config as any)?.terminalSnapshots || {};
-        const erpTerminalId = terminalConfig.erpTerminalId || terminalConfig.erpBinding?.terminalId;
-        const snapshot = terminalSnapshots[terminal?.id] || (erpTerminalId ? terminalSnapshots[erpTerminalId] : null) || terminalConfig.erpSnapshot;
-        const snapshotConfig = snapshot?.config || {};
-        const snapshotResolved = snapshot?.resolved || {};
-        const snapshotIdentity = snapshotResolved?.identity || {};
-        const snapshotTerminal = snapshotResolved?.terminal || {};
-        const role = resolveDeviceRoleValue([
-            terminalConfig.deviceRole,
-            terminalConfig.deviceRole?.role,
-            terminalConfig.device_role,
-            terminalConfig.device_role_code,
-            terminalConfig.role_code,
-            terminalConfig.role,
-            terminalConfig.erpBinding?.role,
-            terminal?.deviceRole,
-            terminal?.device_role,
-            terminal?.role_code,
-            terminal?.device_role_code,
-            terminal?.role,
-            snapshot?.deviceRole,
-            snapshot?.device_role,
-            snapshot?.role_code,
-            snapshot?.device_role_code,
-            snapshot?.role,
-            snapshotConfig?.deviceRole,
-            snapshotConfig?.device_role,
-            snapshotConfig?.role_code,
-            snapshotConfig?.device_role_code,
-            snapshotConfig?.role,
-            snapshotResolved?.deviceRole,
-            snapshotResolved?.device_role,
-            snapshotResolved?.role_code,
-            snapshotResolved?.device_role_code,
-            snapshotResolved?.role,
-            snapshotIdentity?.deviceRole,
-            snapshotIdentity?.device_role,
-            snapshotIdentity?.role_code,
-            snapshotIdentity?.device_role_code,
-            snapshotTerminal?.deviceRole,
-            snapshotTerminal?.device_role,
-            snapshotTerminal?.role_code,
-            snapshotTerminal?.device_role_code,
-        ]);
-        return role === DeviceRole.KITCHEN_DISPLAY;
-    });
+    const kdsTerminals = getKdsTerminalTargets(config, terminals);
 
     useEffect(() => {
         fetchAreas();
@@ -146,6 +99,15 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
 
     const handleUpdateArea = (id: string, updates: Partial<ProductionArea>) => {
         setAreas(areas.map(a => a.id === id ? { ...a, ...updates } : a));
+    };
+
+    const handleSelectKdsTerminal = (area: ProductionArea, targetId: string) => {
+        const target = kdsTerminals.find((candidate) => candidate.id === targetId);
+        handleUpdateArea(area.id, {
+            target_terminal_id: targetId || undefined,
+            kds_host: target?.host || area.kds_host,
+            kds_port: target?.port || area.kds_port || '8001',
+        });
     };
 
     const handleDeleteArea = (id: string) => {
@@ -281,17 +243,24 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                                     <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Pantalla Destino (Terminal)</label>
                                     <select
                                         value={area.target_terminal_id || ''}
-                                        onChange={(e) => handleUpdateArea(area.id, { target_terminal_id: e.target.value })}
+                                        onChange={(e) => handleSelectKdsTerminal(area, e.target.value)}
                                         className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl px-4 py-3 text-sm font-bold text-slate-700 focus:border-blue-500 outline-none"
                                     >
                                         <option value="">Manual por IP / sin terminal ERP</option>
                                         {kdsTerminals.map(t => (
-                                            <option key={t.id} value={t.id}>{t.config?.terminalName || t.name || t.nombre || t.id} (KDS)</option>
+                                            <option key={t.id} value={t.id}>
+                                                {t.label}{t.host ? ` (${t.host}:${t.port || '8001'})` : ' (sin IP reportada)'}
+                                            </option>
                                         ))}
                                     </select>
                                     {kdsTerminals.length === 0 && (
                                         <p className="mt-2 text-[11px] font-bold text-amber-600">
-                                            No hay terminales KDS sincronizadas. Puedes usar el modo manual colocando IP/Host del equipo KDS.
+                                            No llegó ninguna terminal con rol KDS desde ERP. Puedes usar el modo manual colocando la IP/Host del equipo KDS.
+                                        </p>
+                                    )}
+                                    {area.target_terminal_id && !area.kds_host && (
+                                        <p className="mt-2 text-[11px] font-bold text-amber-600">
+                                            La terminal KDS seleccionada no reportó IP LAN. Escribe la IP/Host manualmente para poder enviar comandas.
                                         </p>
                                     )}
                                     <div className="mt-3 grid grid-cols-[1fr_6rem] gap-2">

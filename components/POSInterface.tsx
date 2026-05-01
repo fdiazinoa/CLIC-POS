@@ -79,6 +79,7 @@ import { buildTransactionSettlementFields } from '../utils/paymentSettlement';
 import SplitTicketModal from './SplitTicketModal';
 import { getTerminalSnapshotSellers, resolveTerminalSellerName } from '../utils/terminalSnapshotSellers';
 import { productIdentityCandidates, resolveOperationalProductId } from '../utils/productReferences';
+import { resolveKdsBaseUrl } from '../utils/kdsRouting';
 
 // ... existing imports
 
@@ -130,27 +131,11 @@ type ProductionAreaConfig = {
    printer_ip?: string;
 };
 
-const DEFAULT_KDS_PORT = '8001';
-
 const normalizeProductionMode = (value: unknown): 'KDS' | 'PRINTER' | 'AMBOS' => {
    const normalized = String(value || '').trim().toUpperCase();
    if (normalized === 'PRINTER' || normalized === 'TICKET') return 'PRINTER';
    if (normalized === 'AMBOS' || normalized === 'BOTH') return 'AMBOS';
    return 'KDS';
-};
-
-const buildKdsBaseUrl = (area: ProductionAreaConfig): string | null => {
-   const rawHost = String(area.kds_host || '').trim();
-   if (!rawHost) return null;
-
-   if (/^https?:\/\//i.test(rawHost)) {
-      return rawHost.replace(/\/+$/, '');
-   }
-
-   const host = rawHost.replace(/^\/+|\/+$/g, '');
-   const port = String(area.kds_port || DEFAULT_KDS_PORT).trim();
-   const hasExplicitPort = /:\d+$/.test(host);
-   return `http://${host}${hasExplicitPort ? '' : `:${port}`}`;
 };
 
 const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 5000) => {
@@ -173,6 +158,22 @@ const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 50
       window.clearTimeout(timeoutId);
    }
 };
+
+const buildKdsDispatchItems = (items: CartItem[]) => items.map((item, index) => ({
+   id: item.cartId || `${item.id}-${index}`,
+   producto_id: item.id,
+   productId: item.id,
+   sku: (item as any).sku || (item as any).code || '',
+   name: item.name,
+   nombre: item.name,
+   quantity: Number(item.quantity || 0),
+   cantidad: Number(item.quantity || 0),
+   modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
+   modificadores: Array.isArray(item.modifiers) ? item.modifiers : [],
+   note: item.note || '',
+   production_area_id: (item as any).production_area_id || '',
+   variantInfo: item.variantInfo || '',
+}));
 
 const queuePendingKdsDispatch = async (payload: Record<string, unknown>) => {
    try {
@@ -3109,7 +3110,9 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
             }
 
             if (shouldSendKds) {
-               const kdsBaseUrl = buildKdsBaseUrl(areaData.area);
+               const kdsBaseUrl = resolveKdsBaseUrl(areaData.area, config);
+               const kdsItems = buildKdsDispatchItems(areaData.items);
+               const areaTotal = areaData.items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
                const kdsPayload = {
                   orderId,
                   displayId: orderId,
@@ -3126,7 +3129,8 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                      name: areaData.title,
                      targetTerminalId: areaData.area.target_terminal_id || null,
                   },
-                  items: areaData.items,
+                  items: kdsItems,
+                  total: areaTotal,
                };
 
                if (!kdsBaseUrl) {
@@ -3139,6 +3143,15 @@ const POSInterface: React.FC<POSInterfaceProps> = ({
                   });
                } else {
                   try {
+                     await postJsonWithTimeout(`${kdsBaseUrl}/api/ordenes/${encodeURIComponent(orderId)}`, {
+                        items: kdsItems,
+                        total: areaTotal,
+                        status: 'OCCUPIED',
+                        displayId: orderId,
+                        terminalId: activeTerminalId,
+                        userName: currentUser.name,
+                        customerName: selectedCustomer?.name || 'Cliente General',
+                     });
                      const endpoint = `${kdsBaseUrl}/api/ordenes/enviar-comanda/${encodeURIComponent(orderId)}`;
                      await postJsonWithTimeout(endpoint, kdsPayload);
                      sentKdsCount += 1;
