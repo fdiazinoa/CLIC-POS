@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Save, Printer, Monitor, Layers, Server, AlertCircle, ChefHat } from 'lucide-react';
-import { BusinessConfig, TerminalConfig } from '../types';
+import { BusinessConfig } from '../types';
 import { db } from '../utils/db';
 
 interface ProductionArea {
@@ -13,9 +13,11 @@ interface ProductionArea {
 
 interface ProductionAreaManagerProps {
     terminals: any[];
+    config: BusinessConfig;
+    onUpdateConfig: (config: BusinessConfig, restart?: boolean) => void;
 }
 
-const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals }) => {
+const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals, config, onUpdateConfig }) => {
     const [areas, setAreas] = useState<ProductionArea[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -26,67 +28,28 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
         fetchConfig();
     }, []);
 
-    const resolveErpBaseUrl = () => {
-        const env = (import.meta as any)?.env || {};
-        const candidates = [
-            localStorage.getItem('CLIC_ERP_BASE_URL'),
-            localStorage.getItem('CLIC_POS_MASTER_URL'),
-            localStorage.getItem('CLIC_ERP_SYNC_URL'),
-            env.VITE_ERP_BASE_URL,
-            env.VITE_ERP_SYNC_API_URL
-        ].filter(Boolean) as string[];
-
-        for (const candidate of candidates) {
-            const normalized = candidate.replace(/\/$/, '');
-            if (normalized.includes('/api/sync')) {
-                return normalized.replace(/\/api\/sync$/, '');
-            }
-            if (normalized.endsWith('/api')) {
-                return normalized.replace(/\/api$/, '');
-            }
-            return normalized;
-        }
-
-        return null;
+    const resolveLocalConfig = async (): Promise<BusinessConfig> => {
+        const rawConfig = await db.get('config' as any) as BusinessConfig | BusinessConfig[];
+        const configDoc = Array.isArray(rawConfig)
+            ? (rawConfig.find((c: any) => c.id === 'current') || rawConfig[0])
+            : rawConfig;
+        return configDoc?.operational ? configDoc : config;
     };
 
     const fetchConfig = async () => {
         try {
-            const baseUrl = resolveErpBaseUrl();
-            if (baseUrl) {
-                const res = await fetch(`${baseUrl}/api/config/operativa`);
-                const data = await res.json();
-                setKitchenEnabled(Boolean(data.usa_modulos_cocina));
-                return;
-            }
-
-            const rawConfig = await db.get('config' as any) as BusinessConfig | BusinessConfig[];
-            const configDoc = Array.isArray(rawConfig)
-                ? (rawConfig.find((c: any) => c.id === 'current') || rawConfig[0])
-                : rawConfig;
-            setKitchenEnabled(Boolean(configDoc?.operational?.usa_modulos_cocina));
+            const configDoc = await resolveLocalConfig();
+            setKitchenEnabled(Boolean(configDoc?.operational?.usa_modulos_cocina ?? config?.operational?.usa_modulos_cocina));
         } catch (e) {
             console.error("Failed to fetch operational config", e);
+            setKitchenEnabled(Boolean(config?.operational?.usa_modulos_cocina));
         }
     };
 
     const toggleKitchen = async (val: boolean) => {
         setKitchenEnabled(val);
         try {
-            const baseUrl = resolveErpBaseUrl();
-            if (baseUrl) {
-                await fetch(`${baseUrl}/api/config/operativa`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ usa_modulos_cocina: val })
-                });
-                return;
-            }
-
-            const rawConfig = await db.get('config' as any) as BusinessConfig | BusinessConfig[];
-            const configDoc = Array.isArray(rawConfig)
-                ? (rawConfig.find((c: any) => c.id === 'current') || rawConfig[0])
-                : rawConfig;
+            const configDoc = await resolveLocalConfig();
             if (!configDoc) return;
             const nextOperational = {
                 vertical_negocio: configDoc.vertical,
@@ -102,6 +65,7 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                 operational: nextOperational
             };
             await db.save('config' as any, nextConfig);
+            onUpdateConfig(nextConfig);
         } catch (e) {
             console.error("Failed to update kitchen module status", e);
             setKitchenEnabled(!val); // Revert on failure
@@ -110,14 +74,6 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
 
     const fetchAreas = async () => {
         try {
-            const baseUrl = resolveErpBaseUrl();
-            if (baseUrl) {
-                const res = await fetch(`${baseUrl}/api/produccion/areas`);
-                const data = await res.json();
-                setAreas(Array.isArray(data) ? data : []);
-                return;
-            }
-
             const localAreas = await db.get('productionAreas' as any) as ProductionArea[] || [];
             setAreas(Array.isArray(localAreas) ? localAreas : []);
         } catch (e) {
@@ -142,30 +98,30 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
 
     const handleDeleteArea = (id: string) => {
         if (confirm("¿Está seguro de eliminar esta área de producción?")) {
-            setAreas(areas.filter(a => a.id !== id));
-            // Note: Ideally call DELETE endpoint, but for now we'll just save the list
+            const nextAreas = areas.filter(a => a.id !== id);
+            setAreas(nextAreas);
+            db.save('productionAreas' as any, nextAreas).catch((error) => {
+                console.error("Failed to delete production area", error);
+                alert("Error al eliminar área");
+            });
         }
     };
 
     const handleSave = async (area: ProductionArea) => {
         setSaving(true);
         try {
-            const baseUrl = resolveErpBaseUrl();
-            if (baseUrl) {
-                const res = await fetch(`${baseUrl}/api/produccion/areas`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(area)
-                });
-                if (res.ok) {
-                    alert("Área guardada correctamente");
-                }
-                return;
-            }
-
-            await db.save('productionAreas' as any, areas);
+            const normalizedArea: ProductionArea = {
+                ...area,
+                nombre: area.nombre?.trim() || 'Nueva Área'
+            };
+            const nextAreas = areas.some(existing => existing.id === normalizedArea.id)
+                ? areas.map(existing => existing.id === normalizedArea.id ? normalizedArea : existing)
+                : [...areas, normalizedArea];
+            setAreas(nextAreas);
+            await db.save('productionAreas' as any, nextAreas);
             alert("Área guardada correctamente");
         } catch (e) {
+            console.error("Failed to save production area", e);
             alert("Error al guardar área");
         } finally {
             setSaving(false);
