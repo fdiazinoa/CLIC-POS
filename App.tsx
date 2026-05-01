@@ -1,6 +1,5 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { flushSync } from 'react-dom';
 import { Capacitor } from '@capacitor/core';
 import { Layout } from 'lucide-react';
 import {
@@ -65,17 +64,9 @@ import ModernLoginScreen from './components/ModernLoginScreen';
 import LoginScreen from './components/LoginScreen';
 import ErrorBoundary from './components/ErrorBoundary';
 import POSInterface from './components/POSInterface';
-import AgendaManager from './components/AgendaManager';
-import Settings from './components/Settings';
-import CustomerManagement from './components/CustomerManagement';
-import TicketHistory from './components/TicketHistory';
-import FinanceDashboard from './components/FinanceDashboard';
-import ZReportDashboard from './components/ZReportDashboard';
-import SupplyChainManager from './components/SupplyChainManager';
 import VerticalSelector from './components/VerticalSelector';
 import SetupWizard from './components/SetupWizard';
 import ActivationScreen from './components/ActivationScreen';
-import FranchiseDashboard from './components/FranchiseDashboard';
 import TerminalModeSelector from './components/TerminalModeSelector';
 import TerminalBindingScreen from './components/TerminalBindingScreen';
 import CustomerVisor from './components/CustomerVisor';
@@ -104,6 +95,23 @@ import InventoryLabelsMobile from './components/inventory/InventoryLabelsMobile'
 import InventoryTracking from './components/InventoryTracking';
 import KitchenDisplay from './components/kds/KitchenDisplay';
 import InventoryAuditClosure from './components/inventory/InventoryAuditClosure';
+
+const Settings = React.lazy(() => import('./components/Settings'));
+const CustomerManagement = React.lazy(() => import('./components/CustomerManagement'));
+const TicketHistory = React.lazy(() => import('./components/TicketHistory'));
+const FinanceDashboard = React.lazy(() => import('./components/FinanceDashboard'));
+const ZReportDashboard = React.lazy(() => import('./components/ZReportDashboard'));
+const SupplyChainManager = React.lazy(() => import('./components/SupplyChainManager'));
+const FranchiseDashboard = React.lazy(() => import('./components/FranchiseDashboard'));
+
+const RouteLoadingFallback: React.FC = () => (
+  <div className="h-full min-h-[240px] w-full flex items-center justify-center bg-slate-50 text-slate-700">
+    <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+      <div className="h-5 w-5 rounded-full border-2 border-blue-600 border-t-transparent animate-spin" />
+      <span className="text-sm font-black uppercase tracking-[0.18em]">Cargando módulo...</span>
+    </div>
+  </div>
+);
 
 
 import { seriesSyncService } from './services/sync/SeriesSyncService';
@@ -2191,7 +2199,9 @@ const AppContent: React.FC = () => {
       fetchTables().catch((error) => console.error('Failed to refresh tables on TABLE_MAP view:', error));
     }
     setViewData(nextData);
-    setCurrentView(view);
+    React.startTransition(() => {
+      setCurrentView(view);
+    });
   };
 
   const validateSupervisorPin = React.useCallback((pin: string): boolean => {
@@ -3382,12 +3392,7 @@ const AppContent: React.FC = () => {
 
       const freshData = await db.init();
       const hydratedConfig = resolvePersistedBusinessConfig(await db.get('config') as unknown) || postSyncConfig;
-      flushSync(() => {
-        setConfig(hydratedConfig);
-        if (Array.isArray(freshData.users)) {
-          setUsers(freshData.users);
-        }
-      });
+      setConfig(hydratedConfig);
       if (Array.isArray(freshData.users)) setUsers(freshData.users);
       if (Array.isArray(freshData.roles)) setRoles(freshData.roles);
       if (Array.isArray(freshData.customers)) setCustomers(freshData.customers);
@@ -6578,7 +6583,9 @@ const AppContent: React.FC = () => {
               : {})
           }}
         >
-          {renderWithLayout()}
+          <React.Suspense fallback={<RouteLoadingFallback />}>
+            {renderWithLayout()}
+          </React.Suspense>
         </div>
       </>
     </ErrorBoundary>

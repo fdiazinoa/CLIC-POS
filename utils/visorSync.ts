@@ -81,7 +81,7 @@ const stripStateForVisor = (state: VisorStateInput): VisorState => ({
 
 class VisorSyncService {
     private channel: BroadcastChannel | null = null;
-    private pendingState: VisorState | null = null;
+    private pendingStateInput: VisorStateInput | null = null;
     private writeTimer: number | null = null;
 
     constructor() {
@@ -96,7 +96,9 @@ class VisorSyncService {
     public pushState(state: VisorStateInput) {
         if (typeof window === 'undefined') return;
 
-        this.pendingState = stripStateForVisor(state);
+        // Keep the hot path light: stripping + JSON.stringify happen after the
+        // UI has had a chance to render the cart update.
+        this.pendingStateInput = state;
 
         if (this.writeTimer) {
             window.clearTimeout(this.writeTimer);
@@ -125,10 +127,11 @@ class VisorSyncService {
     }
 
     private flushPendingState() {
-        if (typeof window === 'undefined' || !this.pendingState) return;
+        if (typeof window === 'undefined' || !this.pendingStateInput) return;
 
-        const state = this.pendingState;
-        this.pendingState = null;
+        const input = this.pendingStateInput;
+        this.pendingStateInput = null;
+        const state = stripStateForVisor(input);
 
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -204,7 +207,7 @@ class VisorSyncService {
             window.clearTimeout(this.writeTimer);
             this.writeTimer = null;
         }
-        this.pendingState = null;
+        this.pendingStateInput = null;
         this.channel?.close();
     }
 }

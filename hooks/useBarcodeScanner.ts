@@ -43,6 +43,16 @@ export const useBarcodeScanner = ({
     const buffer = useRef<string>('');
     const lastKeyTime = useRef<number>(0);
     const idleTimer = useRef<NodeJS.Timeout | null>(null);
+    const onScanRef = useRef(onScan);
+    const onTicketScanRef = useRef(onTicketScan);
+
+    useEffect(() => {
+        onScanRef.current = onScan;
+    }, [onScan]);
+
+    useEffect(() => {
+        onTicketScanRef.current = onTicketScan;
+    }, [onTicketScan]);
 
     useEffect(() => {
         if (!enabled) return;
@@ -80,11 +90,11 @@ export const useBarcodeScanner = ({
                     console.log(`[Scanner] Detected code: ${buffer.current}`);
 
                     const ticketId = detectTicketPattern(buffer.current);
-                    if (ticketId && onTicketScan) {
+                    if (ticketId && onTicketScanRef.current) {
                         console.log(`[Scanner] 🎫 Ticket Match: ${ticketId}`);
-                        onTicketScan(ticketId);
+                        onTicketScanRef.current(ticketId);
                     } else {
-                        onScan(buffer.current);
+                        onScanRef.current(buffer.current);
                     }
 
                     buffer.current = '';
@@ -120,5 +130,5 @@ export const useBarcodeScanner = ({
             window.removeEventListener('keydown', handleGlobalKeyDown, true);
             if (idleTimer.current) clearTimeout(idleTimer.current);
         };
-    }, [enabled, onScan, onTicketScan, prefixTimeout, idleTimeout]);
+    }, [enabled, prefixTimeout, idleTimeout]);
 };
