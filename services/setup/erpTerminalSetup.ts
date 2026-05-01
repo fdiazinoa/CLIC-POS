@@ -1,4 +1,5 @@
 import { BusinessConfig, Product, TerminalConfig } from '../../types';
+import { getDefaultRoleConfig, resolveDeviceRoleValue } from '../../utils/deviceRoleHelpers';
 
 export interface RuntimeTerminalCard {
   id: string;
@@ -371,6 +372,92 @@ const resolveTerminalName = (terminal: any, fallbackId: string): string => {
   return asString(terminal?.name) || fallbackId;
 };
 
+const resolveErpTerminalDeviceRole = (terminal: any) => {
+  const config = asObject(terminal?.config);
+  const metadata = asObject(terminal?.metadata);
+  const terminalConfig = asObject(terminal?.terminal_config);
+  const resolved = asObject(terminalConfig.resolved);
+  const identity = asObject(resolved.identity);
+  const resolvedTerminal = asObject(resolved.terminal);
+  const deviceRole = asObject(config.deviceRole ?? config.device_role);
+
+  return resolveDeviceRoleValue([
+    terminal?.deviceRole,
+    terminal?.device_role,
+    terminal?.deviceRoleCode,
+    terminal?.device_role_code,
+    terminal?.roleCode,
+    terminal?.role_code,
+    terminal?.role,
+    config.deviceRole,
+    config.device_role,
+    config.deviceRoleCode,
+    config.device_role_code,
+    config.roleCode,
+    config.role_code,
+    config.role,
+    deviceRole.role,
+    deviceRole.deviceRole,
+    deviceRole.device_role,
+    deviceRole.role_code,
+    deviceRole.device_role_code,
+    metadata.deviceRole,
+    metadata.device_role,
+    metadata.role_code,
+    metadata.device_role_code,
+    identity.deviceRole,
+    identity.device_role,
+    identity.role_code,
+    identity.device_role_code,
+    resolvedTerminal.deviceRole,
+    resolvedTerminal.device_role,
+    resolvedTerminal.role_code,
+    resolvedTerminal.device_role_code,
+    resolved.deviceRole,
+    resolved.device_role,
+    resolved.role_code,
+    resolved.device_role_code,
+  ]);
+};
+
+const applyErpTerminalDeviceRole = (terminalConfig: TerminalConfig, erpTerminal: any): TerminalConfig => {
+  const role = resolveErpTerminalDeviceRole(erpTerminal);
+  if (!role) return terminalConfig;
+
+  const defaults = getDefaultRoleConfig(role);
+  const currentDeviceRole = terminalConfig.deviceRole || defaults;
+
+  return {
+    ...terminalConfig,
+    deviceRole: {
+      ...defaults,
+      ...currentDeviceRole,
+      role,
+      authLevel: role === currentDeviceRole.role
+        ? currentDeviceRole.authLevel || defaults.authLevel
+        : defaults.authLevel,
+      allowedModules: role === currentDeviceRole.role
+        ? currentDeviceRole.allowedModules || defaults.allowedModules
+        : defaults.allowedModules,
+      defaultRoute: role === currentDeviceRole.role
+        ? currentDeviceRole.defaultRoute || defaults.defaultRoute
+        : defaults.defaultRoute,
+      uiSettings: {
+        ...defaults.uiSettings,
+        ...(role === currentDeviceRole.role ? currentDeviceRole.uiSettings || {} : {}),
+      },
+      hardwareConfig: {
+        ...defaults.hardwareConfig,
+        ...(role === currentDeviceRole.role ? currentDeviceRole.hardwareConfig || {} : {}),
+      },
+    },
+    erpBinding: {
+      ...(terminalConfig.erpBinding || {}),
+      role,
+    },
+  };
+};
+
 const createTerminalTemplate = (currentConfig: BusinessConfig, terminalId: string, erpTerminalId?: string) => {
   const terminals = Array.isArray(currentConfig?.terminals) ? currentConfig.terminals : [];
   const existing = terminals.find((terminal: any) =>
@@ -424,7 +511,10 @@ const buildBoundConfig = (input: {
         || currentConfig.terminals.find((item: any) => asString(item?.config?.erpTerminalId) === erpTerminalId)
       : null;
 
-    const baseConfig = createTerminalTemplate(currentConfig, terminalId, erpTerminalId);
+    const baseConfig = applyErpTerminalDeviceRole(
+      createTerminalTemplate(currentConfig, terminalId, erpTerminalId),
+      terminal
+    );
     const occupiedDeviceId = resolveOccupiedDeviceId(terminal, profilesByTerminalId.get(erpTerminalId));
     const nextCurrentDeviceId =
       erpTerminalId === selectedTerminalErpId
@@ -507,7 +597,7 @@ export const listTerminalsFromErp = async (input: {
       currentDeviceId: currentDeviceId || undefined,
       config:
         Array.isArray(input.currentConfig?.terminals) && input.currentConfig.terminals.length > 0
-          ? createTerminalTemplate(input.currentConfig, terminalId, erpTerminalId)
+          ? applyErpTerminalDeviceRole(createTerminalTemplate(input.currentConfig, terminalId, erpTerminalId), terminal)
           : ({} as TerminalConfig),
     };
   });

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Save, Printer, Monitor, Layers, Server, AlertCircle, ChefHat } from 'lucide-react';
-import { BusinessConfig } from '../types';
+import { BusinessConfig, DeviceRole } from '../types';
 import { db } from '../utils/db';
+import { resolveDeviceRoleValue } from '../utils/deviceRoleHelpers';
 
 interface ProductionArea {
     id: string;
@@ -22,6 +23,24 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [kitchenEnabled, setKitchenEnabled] = useState(false);
+    const kdsTerminals = terminals.filter((terminal) => {
+        const terminalConfig = terminal?.config || {};
+        const role = resolveDeviceRoleValue([
+            terminalConfig.deviceRole,
+            terminalConfig.deviceRole?.role,
+            terminalConfig.device_role,
+            terminalConfig.device_role_code,
+            terminalConfig.role_code,
+            terminalConfig.role,
+            terminalConfig.erpBinding?.role,
+            terminal?.deviceRole,
+            terminal?.device_role,
+            terminal?.role_code,
+            terminal?.device_role_code,
+            terminal?.role,
+        ]);
+        return role === DeviceRole.KITCHEN_DISPLAY;
+    });
 
     useEffect(() => {
         fetchAreas();
@@ -229,10 +248,18 @@ const ProductionAreaManager: React.FC<ProductionAreaManagerProps> = ({ terminals
                                         className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl px-4 py-3 text-sm font-bold text-slate-700 focus:border-blue-500 outline-none"
                                     >
                                         <option value="">Seleccionar terminal...</option>
-                                        {terminals.filter(t => t.config?.deviceRole?.role === 'KITCHEN_DISPLAY').map(t => (
-                                            <option key={t.id} value={t.id}>{t.nombre || t.id} (KDS)</option>
+                                        {kdsTerminals.length === 0 && (
+                                            <option value="" disabled>No hay pantallas KDS configuradas</option>
+                                        )}
+                                        {kdsTerminals.map(t => (
+                                            <option key={t.id} value={t.id}>{t.config?.terminalName || t.name || t.nombre || t.id} (KDS)</option>
                                         ))}
                                     </select>
+                                    {kdsTerminals.length === 0 && (
+                                        <p className="mt-2 text-[11px] font-bold text-amber-600">
+                                            Configura una terminal como Pantalla de Cocina en ERP y sincroniza la configuración.
+                                        </p>
+                                    )}
                                 </div>
                             )}
 

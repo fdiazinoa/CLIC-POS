@@ -74,6 +74,14 @@ const normalizeKnownDeviceRole = (normalized: string): DeviceRole | null => {
         case 'KDS':
         case 'COCINA':
         case 'PANTALLA_COCINA':
+        case 'PANTALLA_DE_COCINA':
+        case 'PANTALLA_EN_COCINA':
+        case 'DISPLAY_COCINA':
+        case 'DISPLAY_DE_COCINA':
+        case 'DISPLAY_EN_COCINA':
+        case 'MONITOR_COCINA':
+        case 'MONITOR_DE_COCINA':
+        case 'MONITOR_EN_COCINA':
             return DeviceRole.KITCHEN_DISPLAY;
 
         case 'STANDARD_POS':
